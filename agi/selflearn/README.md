@@ -461,3 +461,7 @@ guard 现在还会检查相对时间词是否有上下文依据，并把“保�
 ### 盲测 + 二源
 
 `blind.create` 只把问题给学习者，expected_terms 隐藏；`blind.verify_with_blind` 要求至少 2 个来源 + 盲测通过，才调用 verify_and_unlock。
+
+### NLI 高风险接线
+
+guard 报 L1/L2 时才调用 `nli.verify`，若支持率 <0.5 直接降级安全回复；L0 不增加额外延迟。

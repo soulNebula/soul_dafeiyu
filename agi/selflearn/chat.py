@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import affect, claim_ingest, context, db, errors, generation, guard, image_understanding, live_ingest, media, memory, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, trust
+from . import affect, claim_ingest, context, db, errors, generation, guard, image_understanding, live_ingest, media, memory, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -265,6 +265,16 @@ class SelfLearnAgent:
             guard_ctx = "\n".join([text] + [str(m.get("content") or "") for m in mems]
                                    + [str(m.get("text") or "") for m in recent[-6:]])
             guard_info = guard.check(reply, self.path, context=guard_ctx)
+            if guard_info.get("level") in ("L1", "L2") and guard_info.get("issues") and self.client.available():
+                try:
+                    judged = nli.verify(reply, [guard_ctx], self.client)
+                    guard_info["nli"] = judged
+                    if judged.get("ok") and float(judged.get("rate") or 0) < 0.5:
+                        reply = "这个我不太确定，先不瞎说。你可以再告诉我一点吗？"
+                        guard_info["level"] = "L2"
+                        guard_info["issues"].append("nli_low_support")
+                except Exception:  # noqa: BLE001
+                    pass
             reply = guard_info["reply"][:800]
             if not image:
                 reply = style_profile.tune_reply(text, reply)

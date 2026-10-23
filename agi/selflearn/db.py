@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS wake_runs(
   finished_at REAL
 );
 
+CREATE TABLE IF NOT EXISTS goals(
+  id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+  priority REAL NOT NULL DEFAULT 0.5, progress REAL NOT NULL DEFAULT 0.0,
+  parent_id TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS learning_proposals(
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, target TEXT NOT NULL,
   payload_json TEXT NOT NULL, evidence_json TEXT NOT NULL DEFAULT '[]',
@@ -199,7 +205,7 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
 def counts(path: Path | str = DB_PATH) -> dict[str, int]:
     con = connect(path)
     try:
-        names = ["messages", "user_memories", "turns", "feedback", "persona", "persona_candidates", "skills", "variants", "reflections", "trust_events", "errors", "lessons", "weak_checks", "proactive", "intents", "conflicts", "attachments", "summaries", "skill_nodes", "learn_tasks", "claims", "skill_cards", "practice_runs", "raw_events", "sessions", "session_segments", "media_understanding", "user_profile", "emoji_archive", "emoji_usage", "score_records", "learning_proposals", "weak_rechecks", "wake_runs"]
+        names = ["messages", "user_memories", "turns", "feedback", "persona", "persona_candidates", "skills", "variants", "reflections", "trust_events", "errors", "lessons", "weak_checks", "proactive", "intents", "conflicts", "attachments", "summaries", "skill_nodes", "learn_tasks", "claims", "skill_cards", "practice_runs", "raw_events", "sessions", "session_segments", "media_understanding", "user_profile", "emoji_archive", "emoji_usage", "score_records", "learning_proposals", "weak_rechecks", "wake_runs", "goals"]
         return {name: int(con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]) for name in names}
     finally:
         con.close()

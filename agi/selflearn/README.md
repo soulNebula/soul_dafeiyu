@@ -298,3 +298,13 @@ python -m agi.selflearn.cli --db <db> quality
 
 - 画像、阶段摘要、检索片段、冲突提醒会真正进入 prompt；
 - `context.fit` 以 5200 token 预算裁剪，保留开头设定与结尾用户原话。
+
+### 目标树（M4）
+
+```bash
+python -m agi.selflearn.cli goals
+python -m agi.selflearn.cli goal-add "把 AGI 跑通" --priority 0.9
+python -m agi.selflearn.cli goal-update <id> --status done --progress 1
+```
+
+只记录目标与进度，不自动执行/发送。

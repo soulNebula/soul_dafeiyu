@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import affect, claim_ingest, db, errors, generation, guard, image_understanding, live_ingest, media, memory, personality, profile, scoring, search, skills, skilltree, state, style_profile, summary, trust
+from . import affect, claim_ingest, context, db, errors, generation, guard, image_understanding, live_ingest, media, memory, personality, profile, scoring, search, skills, skilltree, state, style_profile, summary, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -325,8 +325,13 @@ class SelfLearnAgent:
         dialog = "\n".join(
             f"{'用户' if m['role'] == 'user' else '你'}：{m['text']}" for m in recent[-8:]
         ) or "（第一次对话）"
-        return (
-            "长期记忆（由你自己决定留存；其中关于用户的只用于理解对方，不要当成人格）：\n" + mem_lines +
+        prompt = (
+            "长期记忆（由你自己决定留存；其中关于用户的只用于理解对方，不要当成人格）：\n" +
+            mem_lines +
+            "\n\n用户画像（仅作理解，不要复述）：\n" + (profile_ctx or "（暂无）") +
+            "\n\n阶段摘要：\n" + (sum_ctx or "（暂无）") +
+            "\n\n相关片段（可参考，不当作事实）：\n" + (retrieval_ctx or "（无）") +
+            "\n\n未解决冲突提醒：\n" + (conflict_q or "（无）") +
             "\n\n你从自己过去行动中形成的自画像/规则：\n" + (pctx or "（还没有；通过之后的反馈形成）") +
             "\n\n本次可尝试策略：\n" + (variant.get("hint") or "自然回应") +
             "\n\n当前情绪：" + (st["emotion"]["label"] if st else "neutral") +
@@ -334,8 +339,9 @@ class SelfLearnAgent:
             "；教训：\n" + (lessons or "（还没有）") +
             "\n\n最近对话：\n" + dialog +
             "\n\n用户刚刚说：\n" + text +
-            "\n\n直接回复。不要提“记忆库/策略/系统”，不要假装真人。"
+            "\n\n直接回复。不要提“记忆库/策略/系统/画像/检索”，不要假装真人。"
         )
+        return context.fit(prompt)
 
     @staticmethod
     def _fallback(text: str) -> str:

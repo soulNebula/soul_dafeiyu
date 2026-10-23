@@ -293,3 +293,8 @@ python -m agi.selflearn.cli --db <db> quality
 ### LLM reasoning 预算
 
 `deepseek-flash` 的 reasoning tokens 可能吃满 max_tokens，导致正文为空；`llm.Client` 现在检测 `reasoning_tokens >= 80%` 或 `finish_reason=length` 时自动扩容重试一次（4096/8192 上限）。
+
+### 上下文注入与预算
+
+- 画像、阶段摘要、检索片段、冲突提醒会真正进入 prompt；
+- `context.fit` 以 5200 token 预算裁剪，保留开头设定与结尾用户原话。

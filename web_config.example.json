@@ -1,0 +1,7 @@
+{
+  "llm": {
+    "api_key": "<redacted-local-only>",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com"
+  }
+}

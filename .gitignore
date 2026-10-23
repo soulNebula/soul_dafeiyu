@@ -25,3 +25,6 @@ node_modules/
 ~$*
 *.tmp
 *.log
+
+# local secrets
+web_config.json

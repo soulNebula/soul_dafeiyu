@@ -465,3 +465,7 @@ guard 现在还会检查相对时间词是否有上下文依据，并把“保�
 ### NLI 高风险接线
 
 guard 报 L1/L2 时才调用 `nli.verify`，若支持率 <0.5 直接降级安全回复；L0 不增加额外延迟。
+
+### 自动拆解
+
+`learn_plan.apply` 把目标拆成 3 步并写入目标树（goals），CLI `learn-plan "目标"`。

@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import acceptance, affect, backfill, blind, db, drift, emoji, emoji_profile, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_flow, learn_loop, learn_practice, media, memory, nightly, personality, pii, proactive, production, production_contacts, profile, proposals, quality, report, research, retrieval, scheduler, scoring, skills, state, summary, tools, trust, wake, weak_validation
+from . import acceptance, affect, backfill, blind, db, drift, emoji, emoji_profile, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_flow, learn_loop, learn_plan, learn_practice, media, memory, nightly, personality, pii, proactive, production, production_contacts, profile, proposals, quality, report, research, retrieval, scheduler, scoring, skills, state, summary, tools, trust, wake, weak_validation
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 from .llm import Client
@@ -88,6 +88,7 @@ def main(argv=None) -> int:
     p_ba.add_argument("--answer", required=True)
     p_bv = sub.add_parser("blind-verify"); p_bv.add_argument("--task", required=True)
     p_bv.add_argument("--token", required=True); p_bv.add_argument("--answer", required=True)
+    p_lp = sub.add_parser("learn-plan"); p_lp.add_argument("goal")
     p_ingest = sub.add_parser("ingest-jsonl")
     p_ingest.add_argument("--file", required=True); p_ingest.add_argument("--source", default="jsonl")
     p_sessions = sub.add_parser("sessions"); p_sessions.add_argument("--friend", default="")
@@ -312,6 +313,8 @@ def main(argv=None) -> int:
                                         args.error)); return 0
     if args.cmd == "learn-verify":
         _out(learn_loop.verify_and_unlock(path, args.task, bool(args.passed), args.note)); return 0
+    if args.cmd == "learn-plan":
+        _out(learn_plan.apply(path, args.goal, Client())); return 0
     if args.cmd == "blind-create":
         _out(blind.create(path, args.skill, args.question,
                           [x for x in args.terms.split(",") if x])); return 0

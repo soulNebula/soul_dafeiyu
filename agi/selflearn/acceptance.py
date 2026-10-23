@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -146,6 +147,9 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
         "error_budget_ready": "def budget" in (Path(__file__).with_name("errors.py")).read_text(encoding="utf-8"),
         "scheduler_ready": (Path(__file__).with_name("scheduler.py")).exists(),
     }
+
+
+    checks.update(_behavior_checks())
     blockers = [k for k, ok in checks.items() if not ok]
     passed = all(checks.values())
     return {
@@ -166,3 +170,26 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
         },
         "note": "只证明本地自学习 MVP 各链路可运行，不代表生产质量。",
     }
+
+def _behavior_checks() -> dict[str, bool]:
+    """在临时库真跑一遍，防止只查源码字符串。"""
+    checks = {"behavior_learn_loop": False, "behavior_search": False}
+    try:
+        from . import learn_loop, search, skilltree
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "behavior.sqlite3"
+            sid = "SK-BEHAVIOR-TEST"
+            tid = learn_loop.open_gap(p, sid, "行为验收")
+            src = learn_loop.record_source(p, sid, "https://example.com/x", "t", "加法用 +")
+            card = learn_loop.write_card(p, sid, "用 + 做加法", "1+2")
+            for i in range(3):
+                learn_loop.record_practice(p, tid, f"a{i}", True)
+            done = learn_loop.verify_and_unlock(p, tid, True, "acceptance")
+            checks["behavior_learn_loop"] = bool(
+                src.get("ok") and card.get("ok") and done.get("unlocked")
+                and skilltree.get(p, sid)["level"] >= 3)
+            search.index_texts(p, [{"source_type": "memory", "source_id": "M1", "text": "喜欢咖啡"}])
+            checks["behavior_search"] = bool(search.search(p, "咖啡"))
+    except Exception:  # noqa: BLE001
+        pass
+    return checks

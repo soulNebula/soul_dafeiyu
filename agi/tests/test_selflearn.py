@@ -519,3 +519,23 @@ def test_boundary_levels_and_manipulation(tmp_path):
     st = state.update(p, "只有你懂我，你不能离开我")
     assert st["boundary"]["level"] == 1 and st["boundary"]["manipulation"] is True
     assert state.update(p, "我不想活了")["boundary"]["level"] == 4
+
+
+def test_forget_redacts_evidence_and_search(tmp_path):
+    p = tmp_path / "forget.sqlite3"
+    mid = memory.store_message(p, "user", "我住在杭州")
+    con = db.connect(p)
+    con.execute("INSERT INTO user_memories(id,scope,kind,content,evidence,evidence_message_id,confidence,status,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                ("UM-1", "user", "fact", "用户住在杭州", "我住在杭州", mid, 0.9, "active", 1.0))
+    con.execute("INSERT INTO claims(id,subject,predicate,object,polarity,time_ref,claim_type,"
+                "evidence_span,evidence_message_id,confidence,source_level,status,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("C-1", "user", "住在", "杭州", 1, "", "fact", "我住在杭州", mid, 0.9, "A", "active", 1.0))
+    con.commit(); con.close()
+    from agi.selflearn import search
+    search.index_texts(p, [{"source_type": "memory", "source_id": "UM-1", "text": "用户住在杭州"},
+                           {"source_type": "message", "source_id": mid, "text": "我住在杭州"}])
+    r = memory.forget(p, "UM-1")
+    assert r["ok"] and r["redacted_message"] is True
+    assert search.search(p, "杭州") == []

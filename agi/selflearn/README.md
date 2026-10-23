@@ -432,3 +432,7 @@ python -m agi.selflearn.cli --db <db> correct-memory <id> "新内容" --evidence
 ### 混合检索（S8）
 
 `retrieval.hybrid`：bigram 召回 → 来源权重 + recency → MMR 去重；chat 的检索片段已改用 hybrid，CLI `retrieve "query"` 可查。
+
+### 遗忘全链路
+
+`forget` 现在除 invalid 记忆外：删除 memory/message/claim 检索行、把证据消息里的原话替换为 [已遗忘]、把派生 claims 标 invalid。

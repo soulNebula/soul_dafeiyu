@@ -135,6 +135,7 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
         "boundary_levels_ready": "BOUNDARY_LEVELS" in (Path(__file__).with_name("state.py")).read_text(encoding="utf-8"),
         "hybrid_retrieval_ready": (Path(__file__).with_name("retrieval.py")).exists()
                                   and "def hybrid" in (Path(__file__).with_name("retrieval.py")).read_text(encoding="utf-8"),
+        "forget_chain_ready": "redacted_message" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8"),
         "skill_gate_ready": (Path(__file__).with_name("skilltree.py")).exists()
                             and "gate_request" in (Path(__file__).with_name("skilltree.py")).read_text(encoding="utf-8"),
         "capability_gate_ready": ("capability_reply" in (Path(__file__).with_name("skilltree.py")).read_text(encoding="utf-8")

@@ -288,24 +288,48 @@ def retrieve(path: Path | str = DB_PATH, query: str = "", k: int = 6) -> list[di
     return [r for _, r in scored[:max(1, int(k))]]
 
 
-def forget(path: Path | str, memory_id: str, reason: str = "user_forget") -> dict:
-    """让一条记忆失效，不物理删除，保留审计。"""
+def forget(path: Path | str, memory_id: str, reason: str = "user_forget",
+           *, redact_evidence: bool = True) -> dict:
+    """让一条记忆失效，并尽量从证据消息/派生 claims/检索索引中移除原话。"""
     con = db.connect(path)
     try:
-        cur = con.execute(
-            "UPDATE user_memories SET status='invalid',conflict_group=NULL WHERE id=?",
-            (memory_id,))
-        con.commit()
-        if cur.rowcount == 0:
+        row = con.execute("SELECT * FROM user_memories WHERE id=?", (memory_id,)).fetchone()
+        if row is None:
             return {"ok": False, "error": "记忆不存在"}
+        evidence = str(row["evidence"] or "").strip()
+        message_id = str(row["evidence_message_id"] or "")
+        con.execute("UPDATE user_memories SET status='invalid',conflict_group=NULL WHERE id=?",
+                    (memory_id,))
+        claim_ids = []
         try:
-            from . import search
-            search.delete(path, "memory", memory_id)
+            for c in con.execute("SELECT id FROM claims WHERE evidence_message_id=?", (message_id,)):
+                claim_ids.append(str(c[0]))
+            con.execute("UPDATE claims SET status='invalid' WHERE evidence_message_id=?", (message_id,))
         except Exception:  # noqa: BLE001
             pass
-        return {"ok": True, "id": memory_id, "action": "invalid", "reason": reason}
+        redacted = False
+        if redact_evidence and message_id and evidence:
+            msg = con.execute("SELECT text FROM messages WHERE id=?", (message_id,)).fetchone()
+            if msg is not None and evidence in str(msg["text"] or ""):
+                text = str(msg["text"]).replace(evidence, "[已遗忘]")
+                con.execute("UPDATE messages SET text=? WHERE id=?", (text, message_id))
+                redacted = True
+        con.commit()
     finally:
         con.close()
+    try:
+        from . import search
+        search.delete(path, "memory", memory_id)
+        if message_id:
+            search.delete(path, "message", message_id)
+        for cid in ("claim",):
+            for claim_id in claim_ids:
+                search.delete(path, cid, claim_id)
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": True, "id": memory_id, "action": "invalid", "reason": reason,
+            "message_id": message_id, "redacted_message": redacted,
+            "claims_invalidated": len(claim_ids)}
 
 
 def export_brain(path: Path | str = DB_PATH) -> dict:

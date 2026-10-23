@@ -76,6 +76,14 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
                          and "def score_turn" in (Path(__file__).with_name("scoring.py")).read_text(encoding="utf-8"),
         "proposal_ready": (Path(__file__).with_name("proposals.py")).exists()
                           and "def transition" in (Path(__file__).with_name("proposals.py")).read_text(encoding="utf-8"),
+        "affect_ready": (Path(__file__).with_name("affect.py")).exists()
+                         and "def grudge_context" in (Path(__file__).with_name("affect.py")).read_text(encoding="utf-8"),
+        "initiative_ready": (Path(__file__).with_name("initiative.py")).exists()
+                             and "def decide" in (Path(__file__).with_name("initiative.py")).read_text(encoding="utf-8"),
+        "weak_validation_ready": (Path(__file__).with_name("weak_validation.py")).exists()
+                                  and "def run_recheck" in (Path(__file__).with_name("weak_validation.py")).read_text(encoding="utf-8"),
+        "wake_ready": (Path(__file__).with_name("wake.py")).exists()
+                       and "def run_due" in (Path(__file__).with_name("wake.py")).read_text(encoding="utf-8"),
         "growth_report_ready": (Path(__file__).with_name("report.py")).exists()
                                 and "def growth" in (Path(__file__).with_name("report.py")).read_text(encoding="utf-8"),
         "memory_control_ready": "def forget" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8")

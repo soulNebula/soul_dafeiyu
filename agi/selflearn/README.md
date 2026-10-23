@@ -222,3 +222,20 @@ python -m agi.selflearn.cli score-bucket --stage 熟 --mood positive --topic 生
 - 表情包只索引本地资产，不联网；
 - 反馈现在会写 `score_records`（三维桶 + 加权 sigmoid）；
 - proposal 只走 draft→gray→merged/rejected，不自动改人格/技能。
+
+## Batch 5：09–14 细化
+
+```bash
+python -m agi.selflearn.cli affect
+python -m agi.selflearn.cli initiative
+python -m agi.selflearn.cli weak-status
+python -m agi.selflearn.cli weak-schedule --skill SK-CODE-HTML
+python -m agi.selflearn.cli weak-recheck --skill SK-CODE-HTML --passed
+python -m agi.selflearn.cli wake-add --text "..." --after 3600
+python -m agi.selflearn.cli wake-run
+```
+
+- affect：情绪/能量/分享/电量/信任 + 时间衰减 + grudge 上下文；聊天已接 grudge；
+- initiative：主动欲望评分，只生成候选，不发送；
+- weak_validation：跨时间复测，失败只标记回退，不直接降级；
+- wake：优先级/预算/去重/审计，只标记 due，不自动发微信。

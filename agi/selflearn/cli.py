@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import acceptance, db, emoji, errors, image_understanding, ingest, learn_loop, media, memory, personality, proactive, profile, proposals, report, research, scheduler, scoring, skills, state, summary, trust
+from . import acceptance, affect, db, emoji, errors, image_understanding, initiative, ingest, learn_loop, media, memory, personality, proactive, profile, proposals, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 from .llm import Client
@@ -94,6 +94,16 @@ def main(argv=None) -> int:
     p_bucket = sub.add_parser("score-bucket")
     p_bucket.add_argument("--stage", default="陌生"); p_bucket.add_argument("--mood", default="neutral")
     p_bucket.add_argument("--topic", default="生活")
+    sub.add_parser("affect"); sub.add_parser("initiative")
+    sub.add_parser("weak-status")
+    p_wsch = sub.add_parser("weak-schedule"); p_wsch.add_argument("--skill", required=True); p_wsch.add_argument("--reason", default="")
+    p_wre = sub.add_parser("weak-recheck"); p_wre.add_argument("--skill", required=True)
+    p_wre.add_argument("--passed", action="store_true"); p_wre.add_argument("--failed", action="store_true"); p_wre.add_argument("--note", default="")
+    p_wadd = sub.add_parser("wake-add"); p_wadd.add_argument("--kind", default="check_in")
+    p_wadd.add_argument("--text", default=""); p_wadd.add_argument("--after", type=float, default=3600)
+    p_wadd.add_argument("--priority", type=float, default=0.5)
+    p_wdue = sub.add_parser("wake-due"); p_wdue.add_argument("--budget", type=int, default=5)
+    p_wrun = sub.add_parser("wake-run"); p_wrun.add_argument("--budget", type=int, default=5)
     args = parser.parse_args(argv)
     path = Path(args.db)
     if args.cmd == "serve":
@@ -181,6 +191,24 @@ def main(argv=None) -> int:
         _out(proposals.list_proposals(path, args.status or None)); return 0
     if args.cmd == "proposal-transition":
         _out(proposals.transition(path, args.proposal_id, args.action)); return 0
+    if args.cmd == "affect":
+        _out(affect.snapshot(path)); return 0
+    if args.cmd == "initiative":
+        _out(initiative.decide(path)); return 0
+    if args.cmd == "weak-status":
+        _out(weak_validation.status(path)); return 0
+    if args.cmd == "weak-schedule":
+        _out(weak_validation.schedule_recheck(path, args.skill, args.reason)); return 0
+    if args.cmd == "weak-recheck":
+        _out(weak_validation.run_recheck(path, args.skill, bool(args.passed) and not bool(args.failed), args.note)); return 0
+    if args.cmd == "wake-add":
+        _out({"ok": True, "id": wake.add(path, args.kind, args.text or "check in",
+                                         __import__("time").time() + args.after,
+                                         args.priority)}); return 0
+    if args.cmd == "wake-due":
+        _out(wake.due(path, budget=args.budget)); return 0
+    if args.cmd == "wake-run":
+        _out(wake.run_due(path, budget=args.budget)); return 0
     if args.cmd == "score-bucket":
         _out({"ok": True, "bucket": scoring.bucket_of(stage=args.stage, mood=args.mood, topic=args.topic),
               "buckets": scoring.buckets()}); return 0

@@ -440,3 +440,7 @@ python -m agi.selflearn.cli --db <db> correct-memory <id> "新内容" --evidence
 ### 人格三层
 
 `persona_layers.py`：core 需人工批准、evolving 需 2 条证据且每日最多 2 次晋级、relations 作为关系语境；context 已注入 chat prompt，changelog 可审计。
+
+### 工具层 G2
+
+`tools.run(name, **kwargs)` 白名单：calc / time / python_verify；不执行任意 shell/网络。`python -m agi.selflearn.cli tools` 查看。

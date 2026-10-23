@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import acceptance, affect, backfill, db, drift, emoji, emoji_profile, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_flow, learn_loop, media, memory, nightly, personality, pii, proactive, production, production_contacts, profile, proposals, quality, report, research, retrieval, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
+from . import acceptance, affect, backfill, db, drift, emoji, emoji_profile, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_flow, learn_loop, media, memory, nightly, personality, pii, proactive, production, production_contacts, profile, proposals, quality, report, research, retrieval, scheduler, scoring, skills, state, summary, tools, trust, wake, weak_validation
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 from .llm import Client
@@ -121,6 +121,7 @@ def main(argv=None) -> int:
     sub.add_parser("drift")
     sub.add_parser("grounding")
     p_ret = sub.add_parser("retrieve"); p_ret.add_argument("query"); p_ret.add_argument("--k", type=int, default=6)
+    sub.add_parser("tools")
     p_pc = sub.add_parser("production-contacts"); p_pc.add_argument("--days", type=int, default=7)
     p_scrub = sub.add_parser("scrub-pii"); p_scrub.add_argument("--text", required=True)
     args = parser.parse_args(argv)
@@ -219,6 +220,8 @@ def main(argv=None) -> int:
         _out({"ok": True, "clean": clean, "hits": hits}); return 0
     if args.cmd == "production-contacts":
         _out(production_contacts.aggregate(days=args.days)); return 0
+    if args.cmd == "tools":
+        _out({"ok": True, "tools": tools.available()}); return 0
     if args.cmd == "retrieve":
         _out({"ok": True, "hits": retrieval.hybrid(path, args.query, k=args.k)}); return 0
     if args.cmd == "grounding":

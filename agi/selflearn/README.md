@@ -428,3 +428,7 @@ python -m agi.selflearn.cli --db <db> correct-memory <id> "新内容" --evidence
 ### 边界五级
 
 `state.update` 输出 boundary.level 0–4（normal/uncomfortable/stop/serious/crisis）和 manipulation 标记；用户说“别说了/只有你懂我”会被识别，不鼓励排他依赖。
+
+### 混合检索（S8）
+
+`retrieval.hybrid`：bigram 召回 → 来源权重 + recency → MMR 去重；chat 的检索片段已改用 hybrid，CLI `retrieve "query"` 可查。

@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import affect, claim_ingest, context, db, errors, generation, guard, image_understanding, live_ingest, media, memory, personality, profile, proposal_bridge, scoring, search, skills, skilltree, state, style_profile, summary, trust
+from . import affect, claim_ingest, context, db, errors, generation, guard, image_understanding, live_ingest, media, memory, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -214,7 +214,7 @@ class SelfLearnAgent:
             pass
         mems = memory.retrieve(self.path, text, k=6)
         try:
-            hits = search.search(self.path, text, limit=5)
+            hits = retrieval.hybrid(self.path, text, k=5)
             retrieval_ctx = "\n".join(
                 f"- [{h.get('source_type')}] {str(h.get('text') or '')[:160]}"
                 for h in hits)

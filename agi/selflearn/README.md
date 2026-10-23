@@ -271,3 +271,7 @@ python -m agi.selflearn.cli --db <db> implicit-feedback
 - 从下一句真实用户消息推断 good/ok/bad，写 `note=implicit:...`；
 - 只是行为代理，不是用户主动评价；
 - production 门槛有独立 `explicit_feedback` 项，隐式反馈不计入。
+
+### 实时入库
+
+selflearn 每条消息会自动镜像到 `raw_events`（source=live）；session/segment 仍需 `ingest.build_sessions` 重建。

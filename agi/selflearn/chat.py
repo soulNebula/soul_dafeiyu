@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import affect, claim_ingest, db, errors, generation, guard, image_understanding, media, memory, personality, profile, scoring, search, skills, skilltree, state, style_profile, summary, trust
+from . import affect, claim_ingest, db, errors, generation, guard, image_understanding, live_ingest, media, memory, personality, profile, scoring, search, skills, skilltree, state, style_profile, summary, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -63,6 +63,10 @@ class SelfLearnAgent:
     def _simple_reply(self, user_id: str, reply: str, st: dict, attachment,
                       *, skill_gate=None, identity=False, had_image=False) -> dict[str, Any]:
         assistant_id = memory.store_message(self.path, "assistant", reply)
+        try:
+            live_ingest.record_message(self.path, "assistant", reply, message_id=assistant_id)
+        except Exception:  # noqa: BLE001
+            pass
         turn_id = _id("T-", user_id, time.time(), reply)
         con = db.connect(self.path)
         try:
@@ -95,6 +99,10 @@ class SelfLearnAgent:
         if image and not text:
             display = "[图片]"
         user_id = memory.store_message(self.path, "user", display)
+        try:
+            live_ingest.record_message(self.path, "user", display, message_id=user_id)
+        except Exception:  # noqa: BLE001
+            pass
         attachment = None
         if image:
             try:
@@ -253,8 +261,16 @@ class SelfLearnAgent:
             bubbles = [reply]
         turn_reply = " ".join(bubbles)
         assistant_id = memory.store_message(self.path, "assistant", bubbles[0])
+        try:
+            live_ingest.record_message(self.path, "assistant", bubbles[0], message_id=assistant_id)
+        except Exception:  # noqa: BLE001
+            pass
         for extra in bubbles[1:]:
-            memory.store_message(self.path, "assistant", extra)
+            eid = memory.store_message(self.path, "assistant", extra)
+            try:
+                live_ingest.record_message(self.path, "assistant", extra, message_id=eid)
+            except Exception:  # noqa: BLE001
+                pass
         image_memory = memory.store_image_memory(self.path, reply, user_id) if image else None
         media_info = None
         if image and attachment:

@@ -457,3 +457,7 @@ python -m agi.selflearn.cli --db <db> learn-answer --task LT-... --answer "..." 
 ### guard 时间/禁忌
 
 guard 现在还会检查相对时间词是否有上下文依据，并把“保证收益/包治/你必须/绝对安全”等禁忌话术标记/改写。
+
+### 盲测 + 二源
+
+`blind.create` 只把问题给学习者，expected_terms 隐藏；`blind.verify_with_blind` 要求至少 2 个来源 + 盲测通过，才调用 verify_and_unlock。

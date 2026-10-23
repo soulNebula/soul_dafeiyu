@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import acceptance, affect, backfill, db, drift, emoji, emoji_profile, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_flow, learn_loop, learn_practice, media, memory, nightly, personality, pii, proactive, production, production_contacts, profile, proposals, quality, report, research, retrieval, scheduler, scoring, skills, state, summary, tools, trust, wake, weak_validation
+from . import acceptance, affect, backfill, blind, db, drift, emoji, emoji_profile, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_flow, learn_loop, learn_practice, media, memory, nightly, personality, pii, proactive, production, production_contacts, profile, proposals, quality, report, research, retrieval, scheduler, scoring, skills, state, summary, tools, trust, wake, weak_validation
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 from .llm import Client
@@ -82,6 +82,12 @@ def main(argv=None) -> int:
     p_lex = sub.add_parser("learn-exercise"); p_lex.add_argument("--content", required=True)
     p_lans = sub.add_parser("learn-answer"); p_lans.add_argument("--task", required=True)
     p_lans.add_argument("--answer", required=True); p_lans.add_argument("--terms", required=True)
+    p_bc = sub.add_parser("blind-create"); p_bc.add_argument("--skill", required=True)
+    p_bc.add_argument("--question", required=True); p_bc.add_argument("--terms", required=True)
+    p_ba = sub.add_parser("blind-answer"); p_ba.add_argument("--token", required=True)
+    p_ba.add_argument("--answer", required=True)
+    p_bv = sub.add_parser("blind-verify"); p_bv.add_argument("--task", required=True)
+    p_bv.add_argument("--token", required=True); p_bv.add_argument("--answer", required=True)
     p_ingest = sub.add_parser("ingest-jsonl")
     p_ingest.add_argument("--file", required=True); p_ingest.add_argument("--source", default="jsonl")
     p_sessions = sub.add_parser("sessions"); p_sessions.add_argument("--friend", default="")
@@ -306,6 +312,13 @@ def main(argv=None) -> int:
                                         args.error)); return 0
     if args.cmd == "learn-verify":
         _out(learn_loop.verify_and_unlock(path, args.task, bool(args.passed), args.note)); return 0
+    if args.cmd == "blind-create":
+        _out(blind.create(path, args.skill, args.question,
+                          [x for x in args.terms.split(",") if x])); return 0
+    if args.cmd == "blind-answer":
+        _out(blind.grade(path, args.token, args.answer)); return 0
+    if args.cmd == "blind-verify":
+        _out(blind.verify_with_blind(path, args.task, args.token, args.answer)); return 0
     if args.cmd == "learn-exercise":
         _out(learn_practice.make_exercise({"content": args.content}, Client())); return 0
     if args.cmd == "learn-answer":

@@ -141,6 +141,8 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
         "guard_time_forbidden_ready": "time_not_in_context" in (Path(__file__).with_name("guard.py")).read_text(encoding="utf-8"),
         "learn_practice_ready": (Path(__file__).with_name("learn_practice.py")).exists()
                                 and "def make_exercise" in (Path(__file__).with_name("learn_practice.py")).read_text(encoding="utf-8"),
+        "blind_test_ready": (Path(__file__).with_name("blind.py")).exists()
+                            and "def verify_with_blind" in (Path(__file__).with_name("blind.py")).read_text(encoding="utf-8"),
         "persona_layers_ready": (Path(__file__).with_name("persona_layers.py")).exists()
                                and "def context" in (Path(__file__).with_name("persona_layers.py")).read_text(encoding="utf-8"),
         "skill_gate_ready": (Path(__file__).with_name("skilltree.py")).exists()

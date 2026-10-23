@@ -1,0 +1,27 @@
+# local runtime / secrets
+config.json
+agi/data/
+log/
+media/
+recon/
+_backups/
+_tmp*
+_refs/
+.dsh-ops/
+.dsh_write_probe
+
+# python / build caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+node_modules/
+
+# office/temp
+~$*
+*.tmp
+*.log

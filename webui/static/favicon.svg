@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="WXBOX">
+  <defs>
+    <linearGradient id="wxbox-favicon-g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4fd08a"/>
+      <stop offset="0.55" stop-color="#3eb575"/>
+      <stop offset="1" stop-color="#257a4d"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="#1e1f22"/>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="14.5" fill="none" stroke="#3a3d43"/>
+  <path d="M16 14h32a5 5 0 0 1 5 5v17a5 5 0 0 1-5 5H33.5L24 49v-8h-8a5 5 0 0 1-5-5V19a5 5 0 0 1 5-5Z" fill="url(#wxbox-favicon-g)"/>
+  <circle cx="22.5" cy="27.5" r="2.7" fill="#0d1a13"/>
+  <circle cx="32" cy="27.5" r="2.7" fill="#0d1a13"/>
+  <circle cx="41.5" cy="27.5" r="2.7" fill="#0d1a13"/>
+</svg>

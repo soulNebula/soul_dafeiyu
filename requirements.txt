@@ -1,0 +1,45 @@
+# wx_box 运行时依赖
+# 本机实测环境：Windows 10/11 x64 + Python 3.14（C:\Python314\python.exe）
+# 安装：C:\Python314\python.exe -m pip install -r requirements.txt
+# 国内网络慢可加：-i https://pypi.tuna.tsinghua.edu.cn/simple
+#
+# 下面是"本机已实测版本"（2026-10-22）。若在其他 Python 版本上 pip 解析失败，
+# 可把 == 放宽成 >=（例如 Pillow>=10.0），或单独升级对应包。
+#
+# Tkinter 是 Python 标准库，不需要在这里安装（官方安装包默认自带）。
+Pillow==12.3.0
+psutil==7.2.2
+numpy==2.5.2
+rapidocr-onnxruntime==1.2.3
+# 用于图片/GIF 原文件解密（wx_core/dat_decrypt.py：.dat 的 AES + 异或，V1/V2/V3）
+# 与表情包（贴纸）解密（wx_core/emoticon.py：AES-128-CBC）。
+# 默认流程会用"一次性只读提取"的密钥解密图片/贴纸缓存，因此属于运行时依赖。
+pycryptodome==4.1.0
+# 用于把表情包解密出的 wxgf（微信 HEVC 动画容器）转成动画 GIF；
+# 自带 ffmpeg 7.1 二进制（无需额外安装 ffmpeg）。不装时只保留原始 .wxgf、无 GIF 预览。
+imageio-ffmpeg==0.6.0
+
+# ---- 上面 rapidocr-onnxruntime 会自动带入的间接依赖（无需手写，列出本机实测版本备查）----
+# onnxruntime==1.31.0        OCR 推理引擎
+# opencv-python==5.0.0.93    RapidOCR 图像预处理
+# pyclipper==1.4.0 / Shapely==2.2.0 / six==1.17.0 / PyYAML==6.0.3
+#
+# ---- 不列为运行时依赖的包 ----
+# pywin32：不需要。产品代码（wx_core/win.py）统一用标准库 ctypes 调 Win32 API；
+#          pywin32 / uiautomation 只在早期 recon/ 探测脚本里用过，已不参与运行。
+#
+# ---- 开发/测试依赖（运行时不需要，按需手动安装）----
+# pytest==9.1.1      # 运行 tests/ 离线测试：C:\Python314\python.exe -m pip install pytest
+
+# Python < 3.14 时用于解压数据库里的 zstd 消息内容（3.14+ 用标准库 compression.zstd）
+zstandard==0.24.0; python_version < "3.14"
+
+# ---- 网页端（webui/）不需要额外依赖 ----
+# HTTP 服务、SSE、DeepSeek 流式调用全部使用 Python 标准库
+# （http.server / urllib / json / queue / threading），无需安装 Flask/FastAPI/uvicorn。
+#
+# ---- 朋友圈模块（webui/moments.py）----
+# 复用同目录 WechatMoments/ 的 wx4 数据层，由它自己的 venv 子进程运行：
+#   WechatMoments\.venv\Scripts\python.exe（Python 3.12 + xmltodict/dataclasses_json 等）
+# 主进程 Python 3.14 不导入 wx4；若该 venv 缺失，网页端「朋友圈」页签会提示不可用，
+# 聊天监听与 AI 分析不受影响。

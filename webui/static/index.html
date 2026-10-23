@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#1e1f22">
+  <!-- 会话令牌：由 webui/server.py 在返回 index.html 时替换（静态文件里保留占位符） -->
+  <meta name="wxbox-token" content="__WXBOX_TOKEN__">
+  <meta name="wxbox-mode" content="__WXBOX_MODE__">
+  <meta name="wxbox-version" content="__WXBOX_VERSION__">
+  <title>WXBOX · 消息分析台</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/style.css">
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ============================ 顶栏 ============================ -->
+  <header class="topbar">
+    <div class="tb-left">
+      <div class="brand" title="WXBOX · 微信好友消息监听器（只读）">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4.5 5.5h15a1.5 1.5 0 0 1 1.5 1.5v8.5a1.5 1.5 0 0 1-1.5 1.5h-7L8 20.5V17H4.5A1.5 1.5 0 0 1 3 15.5V7a1.5 1.5 0 0 1 1.5-1.5Z"/>
+            <circle cx="8.4" cy="11.2" r="1.05" fill="currentColor" stroke="none"/>
+            <circle cx="12" cy="11.2" r="1.05" fill="currentColor" stroke="none"/>
+            <circle cx="15.6" cy="11.2" r="1.05" fill="currentColor" stroke="none"/>
+          </svg>
+        </span>
+        <span class="brand-text"><span class="brand-name">WXBOX</span><span class="brand-sub">消息分析台</span></span>
+      </div>
+
+      <button class="status-chip" id="statusChip" type="button" title="微信监听状态">
+        <span class="dot" id="statusDot"></span>
+        <span class="status-text" id="statusText">连接中…</span>
+      </button>
+
+      <button class="live-chip" id="liveChip" type="button" title="实时事件连接（SSE）">
+        <span class="dot dot--live" id="liveDot"></span>
+        <span class="live-text" id="liveText">实时</span>
+      </button>
+
+      <div class="tb-chat" id="topChatBox" title="当前消息筛选会话">
+        <span class="tb-chat-label">会话</span>
+        <span class="tb-chat-value" id="topChat">全部消息</span>
+      </div>
+
+      <div class="tb-monitor" id="topMonitorBox" title="正在监听的好友">
+        <span class="tb-monitor-label">监听</span>
+        <span class="tb-monitor-value" id="topMonitoring">未选择</span>
+      </div>
+    </div>
+
+    <nav class="top-nav" id="topNav" aria-label="主导航">
+      <button class="nav-tab is-active" data-tab="messages" type="button">
+        <span class="nav-tab-icon" data-icon="chat"></span>
+        <span class="nav-tab-label">消息</span>
+        <span class="nav-badge" id="navMsgCount">0</span>
+      </button>
+      <button class="nav-tab" data-tab="moments" type="button">
+        <span class="nav-tab-icon" data-icon="camera"></span>
+        <span class="nav-tab-label">朋友圈</span>
+        <span class="nav-badge" id="navMomentsCount">0</span>
+      </button>
+    </nav>
+
+    <div class="tb-right">
+      <span class="mode-badge" id="modeBadge" title="后端模式"><span class="dot" id="modeDot"></span><span id="modeText">连接中</span></span>
+      <div class="listen-actions" id="listenActions">
+        <button class="btn btn-primary btn-sm" id="startListenBtn" type="button" title="开始监听已勾选的好友/群聊">开始监听</button>
+        <button class="btn btn-ghost btn-sm" id="stopListenBtn" type="button" title="结束监听（保留已加载消息）">结束监听</button>
+      </div>
+      <button class="icon-btn" id="friendsToggle" type="button" title="打开好友列表" aria-label="打开好友列表"><span data-icon="users"></span></button>
+      <button class="icon-btn" id="aiToggle" type="button" title="打开 AI 分析面板" aria-label="打开 AI 分析面板"><span data-icon="sparkles"></span></button>
+      <button class="icon-btn" id="backendToggle" type="button" title="启动 / 停止后端监听"><span data-icon="power"></span></button>
+      <button class="icon-btn" id="logToggle" type="button" title="日志" aria-label="日志"><span data-icon="terminal"></span></button>
+      <button class="btn btn-ghost btn-sm settings-btn" id="settingsBtn" type="button" title="模型设置">
+        <span data-icon="gear"></span><span class="btn-label">模型设置</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 实时连接断开提示 -->
+  <div class="conn-banner" id="connBanner" hidden>
+    <span data-icon="alert"></span>
+    <span id="connBannerText">实时连接已断开，正在自动重连…</span>
+  </div>
+
+  <!-- ============================ 主工作区 ============================ -->
+  <main class="workspace" id="workspace">
+
+    <!-- ------------------------- 左栏 ------------------------- -->
+    <div class="col-left" id="colLeft">
+
+      <!-- 好友面板（消息 tab） -->
+      <aside class="panel friends" id="friendsPanel">
+        <div class="panel-head contact-head">
+          <div class="contact-tabs" id="contactTabs" role="tablist" aria-label="好友 / 群聊">
+            <button class="contact-tab is-active" data-list="friends" type="button" role="tab" aria-selected="true">
+              好友<span class="tab-count" id="friendsTotal">0</span>
+            </button>
+            <button class="contact-tab" data-list="groups" type="button" role="tab" aria-selected="false">
+              群聊<span class="tab-count" id="groupsTotal">0</span>
+            </button>
+          </div>
+          <div class="panel-actions">
+            <button class="mini-btn" id="selectAllBtn" type="button" title="勾选当前列表全部">全选</button>
+            <button class="mini-btn" id="clearAllBtn" type="button" title="取消当前列表全部">清空</button>
+            <button class="icon-btn icon-btn--sm" id="syncFriendsBtn" type="button" title="重新同步列表" aria-label="重新同步列表"><span data-icon="refresh"></span></button>
+          </div>
+        </div>
+        <div class="contact-tools-row">
+          <button class="mini-btn contact-tool-btn" id="refreshContactsBtn" type="button" title="重新读取当前微信账号的好友与群聊列表">刷新列表</button>
+          <button class="mini-btn contact-tool-btn" id="clearContactsBtn" type="button" title="清空网页端好友/群聊列表（可点「刷新列表」重新读取）">清空全部列表</button>
+        </div>
+        <div class="search-box" id="friendSearchBox">
+          <span data-icon="search"></span>
+          <input id="friendSearch" type="search" placeholder="搜索好友…" autocomplete="off" spellcheck="false">
+          <button class="search-clear" id="friendSearchClear" type="button" title="清空搜索" hidden>×</button>
+        </div>
+        <div class="follow-note" id="followNote" hidden>
+          <span class="follow-note-icon" data-icon="info"></span>
+          <div class="follow-note-text"><b>只读跟随</b>：消息来自桌面版日志，本页不启动采集、不操作微信；勾选好友只影响本页筛选。</div>
+        </div>
+        <div class="monitor-summary" id="monitorSummary">监听中 0 位</div>
+        <div class="contacts-hint" id="contactsHint" hidden>
+          <span>仅显示有聊天记录的好友与群聊</span>
+          <button class="link-btn" id="contactsRefreshBtn" type="button">刷新</button>
+        </div>
+        <div class="contacts-account" id="contactsAccount" hidden>
+          当前账号：<b id="contactsAccountName">—</b>
+        </div>
+        <div class="friend-list" id="friendList" role="listbox" aria-label="好友列表"></div>
+        <div class="panel-foot" id="friendsFoot">共 0 位好友</div>
+      </aside>
+
+      <!-- 朋友圈信息面板（朋友圈 tab） -->
+      <aside class="panel moments-side" id="momentsSide" hidden>
+        <div class="panel-head">
+          <div class="panel-title">朋友圈</div>
+          <span class="count-badge" id="momentsSideCount">0</span>
+        </div>
+        <div class="account-card" id="momentsAccount">
+          <div class="avatar avatar--account" id="momentsAccountAvatar">微</div>
+          <div class="account-info">
+            <div class="account-name" id="momentsAccountName">朋友圈未就绪</div>
+            <div class="account-meta" id="momentsAccountMeta">可见 0 条 · 尚未同步</div>
+          </div>
+        </div>
+        <div class="moments-side-body">
+          <div class="moments-sync-row">
+            <label class="sync-limit" for="momentsLimitSelect">
+              <span>同步</span>
+              <select id="momentsLimitSelect" class="mini-select" title="每次同步最近多少条朋友圈">
+                <option value="5">5 条</option>
+                <option value="10" selected>10 条</option>
+                <option value="20">20 条</option>
+              </select>
+            </label>
+            <button class="btn btn-primary btn-sm" id="momentsSideSyncBtn" type="button">
+              <span class="spin-slot" data-icon="refresh"></span><span class="btn-text">同步朋友圈</span>
+            </button>
+          </div>
+          <button class="btn btn-ghost btn-block btn-sm" id="momentsClearBtn" type="button" title="清空内存中的朋友圈数据（不影响微信）">清空朋友圈</button>
+          <label class="switch auto-sync-row" id="momentsAutoRow" title="监听期间生效；每 30 分钟自动刷新微信朋友圈（会短暂切窗口）；实时监听结束后停止自动检查/刷新。只点发现/朋友圈/刷新，不点赞、不评论、不发消息">
+            <input type="checkbox" id="momentsAutoToggle" checked>
+            <span class="switch-track"></span>
+            <span class="auto-sync-main">
+              <span class="auto-sync-label">自动同步</span>
+              <span class="auto-sync-hint">监听期间生效；每 30 分钟自动刷新微信朋友圈（会短暂切窗口）</span>
+              <span class="auto-sync-status" id="momentsAutoStatus" hidden></span>
+            </span>
+          </label>
+          <p class="memory-hint">朋友圈数据仅在内存，关闭网页端后自动清空。</p>
+          <div class="toggle-list">
+            <label class="switch switch--row"><input type="checkbox" id="momentsOnlyImages"><span class="switch-track"></span><span class="switch-label">只看有图片</span></label>
+            <label class="switch switch--row"><input type="checkbox" id="momentsOnlyComments"><span class="switch-track"></span><span class="switch-label">只看有评论</span></label>
+          </div>
+          <div class="search-box">
+            <span data-icon="search"></span>
+            <input id="momentAuthorSearch" type="search" placeholder="搜索作者…" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="section-label">作者 <span class="count-badge" id="momentsAuthorCount">0</span></div>
+          <div class="author-list" id="momentAuthors"></div>
+        </div>
+        <div class="moments-side-foot" id="momentsSideFoot"></div>
+      </aside>
+    </div>
+
+    <!-- ------------------------- 中栏 ------------------------- -->
+    <div class="col-center" id="colCenter">
+
+      <!-- 消息流 -->
+      <section class="panel chat" id="chatMain">
+        <header class="chat-head">
+          <div class="chat-title-wrap">
+            <div class="chat-title-row">
+              <span class="chat-avatar" id="chatAvatar" aria-hidden="true">全</span>
+              <div>
+                <div class="chat-title-line">
+                  <h1 class="chat-title" id="chatTitle">全部消息</h1>
+                  <span class="chat-badge" id="chatGroupBadge" hidden>群聊</span>
+                </div>
+                <div class="chat-sub" id="chatSub">0 条消息</div>
+              </div>
+            </div>
+          </div>
+          <div class="chat-tools">
+            <button class="btn btn-ghost btn-sm" id="syncHistoryBtn" type="button" disabled>
+              <span data-icon="history"></span><span class="btn-label">同步历史</span>
+            </button>
+            <button class="btn btn-ghost btn-sm" id="clearChatBtn" type="button" disabled>
+              <span data-icon="trash"></span><span class="btn-label">清空聊天</span>
+            </button>
+            <button class="btn btn-ghost btn-sm video-auto-btn" id="videoAutoToggle" type="button" disabled aria-pressed="false" title="实验性功能：会切到对应聊天、点一次视频让微信缓存；会短暂抢窗口，可能点偏，失败只记录">
+              <span data-icon="video"></span><span class="btn-label">实验性：自动缓存聊天视频</span>
+            </button>
+            <label class="switch" title="新消息到达时自动滚动到底部">
+              <input type="checkbox" id="autoScrollToggle" checked>
+              <span class="switch-track"></span>
+              <span class="switch-label">自动滚动</span>
+            </label>
+          </div>
+
+          <div class="history-pop" id="historyPop" hidden>
+            <div class="history-pop-title">同步历史聊天</div>
+            <div class="history-pop-sub" id="historyPopFriend"></div>
+            <div class="history-pop-options" id="historyPopOptions">
+              <button type="button" data-limit="5">5 条</button>
+              <button type="button" data-limit="10">10 条</button>
+              <button type="button" data-limit="20">20 条</button>
+              <button type="button" data-limit="50">50 条</button>
+              <button type="button" data-limit="100">100 条</button>
+              <button type="button" data-limit="0">全部</button>
+            </div>
+            <div class="history-pop-hint">只读取本机已缓存的聊天记录：不发送消息、不写微信目录，数据仅在内存。</div>
+          </div>
+        </header>
+
+        <div class="filter-bar">
+          <div class="filter-chips" id="kindFilters" role="tablist" aria-label="消息类型筛选">
+            <button class="chip is-active" data-kind="all" type="button">全部</button>
+            <button class="chip" data-kind="text" type="button">文字</button>
+            <button class="chip" data-kind="image" type="button">图片</button>
+            <button class="chip" data-kind="emoji" type="button">表情包</button>
+            <button class="chip" data-kind="file" type="button">文件</button>
+            <button class="chip" data-kind="voice" type="button">语音</button>
+          </div>
+          <div class="filter-search search-box search-box--sm">
+            <span data-icon="search"></span>
+            <input id="messageSearch" type="search" placeholder="搜索消息…" autocomplete="off" spellcheck="false">
+            <button class="search-clear" id="messageSearchClear" type="button" title="清空搜索" hidden>×</button>
+          </div>
+        </div>
+
+        <div class="message-scroll" id="messageScroll">
+          <div class="message-list" id="messageList"></div>
+          <div class="empty-state" id="messageEmpty" hidden>
+            <div class="empty-icon" id="messageEmptyIcon"><span data-icon="chat"></span></div>
+            <div class="empty-title" id="messageEmptyTitle">还没有收到消息</div>
+            <div class="empty-desc" id="messageEmptyDesc">在左侧勾选要监听的好友，收到的新消息会自动出现在这里。</div>
+          </div>
+        </div>
+
+        <button class="jump-latest" id="jumpLatest" type="button" hidden>
+          <span data-icon="arrow-down"></span>
+          <span>回到最新</span>
+          <span class="jump-count" id="jumpLatestCount">0</span>
+        </button>
+      </section>
+
+      <!-- 朋友圈时间线 -->
+      <section class="panel moments-main" id="momentsMain" hidden>
+        <header class="chat-head">
+          <div class="chat-title-wrap">
+            <div class="chat-title-row">
+              <span class="chat-avatar chat-avatar--moments" aria-hidden="true"><span data-icon="camera"></span></span>
+              <div>
+                <h1 class="chat-title">朋友圈</h1>
+                <div class="chat-sub" id="momentsSub">尚未同步</div>
+              </div>
+            </div>
+          </div>
+          <div class="chat-tools">
+            <button class="btn btn-ghost btn-sm" id="momentsSyncBtn" type="button">
+              <span class="spin-slot" data-icon="refresh"></span><span class="btn-text">同步朋友圈</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="filter-bar moments-filter-bar">
+          <div class="moments-active-filters">
+            <button class="filter-chip" id="momentAuthorChip" type="button" hidden>
+              作者：<b id="momentAuthorName"></b><span class="filter-chip-x">×</span>
+            </button>
+          </div>
+          <div class="filter-search search-box search-box--sm">
+            <span data-icon="search"></span>
+            <input id="momentSearch" type="search" placeholder="搜索朋友圈内容、作者、地点…" autocomplete="off" spellcheck="false">
+            <button class="search-clear" id="momentSearchClear" type="button" title="清空搜索" hidden>×</button>
+          </div>
+        </div>
+
+        <div class="sync-strip" id="momentsSyncStrip" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span id="momentsSyncText">正在同步朋友圈，请稍候…</span>
+        </div>
+
+        <div class="message-scroll moments-scroll" id="momentsScroll">
+          <div class="moment-list" id="momentList"></div>
+          <div class="moment-skeleton" id="momentsSkeleton" hidden>
+            <div class="skeleton-card"><div class="sk-avatar"></div><div class="sk-lines"><i></i><i></i><i></i></div></div>
+            <div class="skeleton-card"><div class="sk-avatar"></div><div class="sk-lines"><i></i><i></i></div></div>
+            <div class="skeleton-card"><div class="sk-avatar"></div><div class="sk-lines"><i></i><i></i><i></i></div></div>
+          </div>
+          <div class="empty-state" id="momentsState" hidden>
+            <div class="empty-icon" id="momentsStateIcon"><span data-icon="camera"></span></div>
+            <div class="empty-title" id="momentsStateTitle">还没有朋友圈数据</div>
+            <div class="empty-desc" id="momentsStateDesc">点击「同步朋友圈」从本机微信缓存读取。</div>
+            <div class="empty-actions" id="momentsStateActions"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ------------------------- 右栏 AI ------------------------- -->
+    <aside class="panel ai" id="aiPanel">
+      <div class="panel-head ai-head">
+        <div class="panel-title"><span data-icon="sparkles"></span> AI 分析</div>
+        <button class="icon-btn icon-btn--sm drawer-close" id="closeAiBtn" type="button" title="收起 AI 面板" aria-label="收起 AI 面板">×</button>
+      </div>
+
+      <div class="ai-scroll" id="aiScroll">
+        <!-- 模型状态 -->
+        <div class="model-row" id="modelRow">
+          <span class="model-dot" id="modelDot"></span>
+          <div class="model-info">
+            <div class="model-name" id="modelName">DeepSeek V4.1 Flash 1017</div>
+            <div class="model-sub" id="modelSub">未配置 API Key</div>
+          </div>
+          <button class="mini-btn" id="configureModelBtn" type="button">配置</button>
+        </div>
+
+        <!-- 分析范围 -->
+        <div class="field">
+          <div class="field-label-row"><span class="field-label">分析范围</span></div>
+          <div class="segmented" id="scopeChips" role="tablist" aria-label="分析范围"></div>
+        </div>
+
+        <!-- 快捷指令 -->
+        <div class="field">
+          <div class="field-label-row"><span class="field-label">快捷指令</span></div>
+          <div class="quick-chips" id="quickChips"></div>
+        </div>
+
+        <!-- 问题输入 -->
+        <div class="field">
+          <div class="field-label-row">
+            <label class="field-label" for="aiQuestion">问题</label>
+            <span class="field-hint" id="aiQuestionCount">0 / 4000</span>
+          </div>
+          <textarea id="aiQuestion" rows="3" maxlength="4000" placeholder="想问什么？例如：总结最近的对话，列出需要我回复的事项。" spellcheck="false"></textarea>
+        </div>
+
+        <!-- 选项 + 开始 -->
+        <div class="ai-options">
+          <label class="switch switch--sm"><input type="checkbox" id="optThinking" checked><span class="switch-track"></span><span class="switch-label">深度思考</span></label>
+          <label class="switch switch--sm"><input type="checkbox" id="optImages" checked><span class="switch-track"></span><span class="switch-label">附带图片</span></label>
+          <span class="ai-limit" id="aiLimit">最近 80 条</span>
+        </div>
+
+        <div class="ai-actions">
+          <button class="btn btn-primary" id="analyzeBtn" type="button"><span data-icon="sparkles"></span><span>开始分析</span></button>
+          <button class="btn btn-danger" id="stopBtn" type="button" hidden><span class="stop-square"></span><span>停止</span></button>
+        </div>
+
+        <!-- 未配置提示 -->
+        <div class="ai-notice" id="aiNotConfigured" hidden>
+          <div class="ai-notice-title">还没有配置 DeepSeek</div>
+          <div class="ai-notice-desc">填入 API Key 后即可让大模型分析消息与朋友圈。Key 只保存在本机。</div>
+          <button class="btn btn-primary btn-block" id="aiConfigureBtn" type="button">打开模型设置</button>
+        </div>
+
+        <!-- 分析结果 -->
+        <div class="analysis" id="analysis" hidden>
+          <div class="analysis-head">
+            <div class="analysis-title-row">
+              <span class="analysis-status" id="analysisStatus">分析中…</span>
+              <span class="analysis-scope" id="analysisScope"></span>
+            </div>
+            <div class="analysis-meta" id="analysisMeta"></div>
+          </div>
+
+          <details class="reasoning" id="reasoningBox" hidden>
+            <summary><span class="reasoning-label">思考过程</span><span class="reasoning-len" id="reasoningLen"></span><span class="chev"></span></summary>
+            <div class="reasoning-body" id="reasoningBody"></div>
+          </details>
+
+          <div class="markdown" id="analysisContent"></div>
+
+          <div class="analysis-foot">
+            <span class="analysis-stat" id="analysisUsage"></span>
+            <span class="analysis-stat" id="analysisElapsed"></span>
+            <span class="analysis-spacer"></span>
+            <button class="mini-btn" id="copyAnalysis" type="button" title="复制结果">复制</button>
+            <button class="mini-btn" id="clearAnalysis" type="button" title="清空结果">清空</button>
+          </div>
+        </div>
+
+        <!-- 错误 / 繁忙提示 -->
+        <div class="ai-error" id="aiError" hidden>
+          <div class="ai-error-head"><span data-icon="alert"></span><span class="ai-error-title" id="aiErrorTitle">分析失败</span></div>
+          <div class="ai-error-text" id="aiErrorText"></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ============================ 日志抽屉 ============================ -->
+  <footer class="log-drawer" id="logDrawer">
+    <div class="log-head" id="logHead" role="button" tabindex="0" aria-label="展开或收起日志">
+      <span class="log-title"><span data-icon="terminal"></span>运行日志</span>
+      <span class="count-badge" id="logCount">0</span>
+      <span class="log-spacer"></span>
+      <button class="mini-btn" id="logClear" type="button" title="清空日志">清空</button>
+      <span class="log-chevron" id="logChevron"><span data-icon="chevron-up"></span></span>
+    </div>
+    <div class="log-body" id="logBody" aria-live="polite"></div>
+  </footer>
+</div>
+
+<!-- 抽屉遮罩（窄屏） -->
+<div class="scrim" id="scrim" hidden></div>
+
+<!-- ============================ 设置弹窗 ============================ -->
+<div class="modal-backdrop" id="settingsModal" hidden>
+  <div class="modal" id="settingsDialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal-head">
+      <div>
+        <h2 class="modal-title" id="settingsTitle">模型设置</h2>
+        <p class="modal-sub">配置 DeepSeek 模型，用于分析聊天消息与朋友圈</p>
+      </div>
+      <button class="icon-btn" id="settingsClose" type="button" title="关闭" aria-label="关闭">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-row">
+        <label class="form-label" for="apiKeyInput">API Key</label>
+        <div class="input-with-btn">
+          <input type="password" id="apiKeyInput" placeholder="sk-..." autocomplete="off" spellcheck="false">
+          <button class="icon-btn input-btn" id="toggleKeyVisible" type="button" title="显示 / 隐藏 Key" aria-label="显示或隐藏 API Key"><span data-icon="eye"></span></button>
+        </div>
+        <div class="form-hint" id="apiKeyHint">
+          只保存在本机 <code>web_config.json</code>，不会上传到除 DeepSeek 之外的任何地方。
+          可在 <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">DeepSeek 开放平台</a> 申请 Key。
+        </div>
+        <button class="link-btn" id="clearKeyBtn" type="button" hidden>清除已保存的 API Key</button>
+      </div>
+
+      <div class="form-row">
+        <label class="form-label" for="modelSelect">模型</label>
+        <select id="modelSelect" class="select"></select>
+        <div class="form-hint" id="modelHint">1M 上下文 · 支持深度思考与图像理解</div>
+      </div>
+
+      <div class="form-row form-row--switches">
+        <label class="switch"><input type="checkbox" id="cfgThinking" checked><span class="switch-track"></span><span class="switch-label">默认开启深度思考</span></label>
+        <label class="switch"><input type="checkbox" id="cfgImages" checked><span class="switch-track"></span><span class="switch-label">默认附带图片</span></label>
+      </div>
+
+      <details class="advanced" id="advancedBox">
+        <summary>高级设置</summary>
+        <div class="form-row">
+          <label class="form-label" for="baseUrlInput">Base URL</label>
+          <input type="text" id="baseUrlInput" placeholder="https://api.deepseek.com" autocomplete="off" spellcheck="false">
+          <div class="form-hint">默认 <code>https://api.deepseek.com</code>；使用中转 / 代理服务时再修改。</div>
+        </div>
+      </details>
+
+      <div class="test-result" id="testResult" hidden></div>
+      <div class="form-error" id="settingsFormError" hidden></div>
+    </div>
+
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="testConnBtn" type="button"><span class="spin-slot" data-icon="plug"></span><span class="btn-text">测试连接</span></button>
+      <span class="modal-foot-spacer"></span>
+      <button class="btn btn-ghost" id="settingsCancel" type="button">取消</button>
+      <button class="btn btn-primary" id="settingsSave" type="button">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ 图片灯箱 ============================ -->
+<div class="lightbox" id="lightbox" hidden>
+  <button class="lightbox-close" id="lightboxClose" type="button" title="关闭" aria-label="关闭">×</button>
+  <figure class="lightbox-figure">
+    <img id="lightboxImg" alt="查看大图">
+    <figcaption class="lightbox-caption" id="lightboxCaption"></figcaption>
+  </figure>
+</div>
+
+<!-- 轻提示 -->
+<div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+<noscript>
+  <div class="noscript">WXBOX 消息分析台需要启用 JavaScript，请更换浏览器或开启 JavaScript 后刷新。</div>
+</noscript>
+</body>
+</html>

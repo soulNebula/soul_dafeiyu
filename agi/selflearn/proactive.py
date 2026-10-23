@@ -13,6 +13,7 @@ from .config import DB_PATH
 
 COOLDOWN = 2 * 3600
 MIN_SCORE = 0.45
+DAILY_BUDGET = 6
 
 
 def _id(prefix: str, *parts) -> str:
@@ -103,6 +104,15 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         con.close()
     if last_p and now - last_p < cooldown:
         return {"ok": True, "available": False, "reason": "主动表达冷却中"}
+    con = db.connect(path)
+    try:
+        daily = int(con.execute(
+            "SELECT count(*) FROM proactive WHERE created_at>=? AND status IN ('spoken','proposed')",
+            (now - 86400,)).fetchone()[0])
+    finally:
+        con.close()
+    if daily >= DAILY_BUDGET:
+        return {"ok": True, "available": False, "reason": "今日主动预算已用完"}
     candidates = build_candidates(path, now)
     init_info = {}
     try:

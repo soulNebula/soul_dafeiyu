@@ -388,3 +388,8 @@ python -m agi.selflearn.cli learn-from-url --skill SK-CODE-HTML --url https://..
 ```
 
 或网页 API：`GET /api/learn`、`POST /api/learn/from-url`。链路：抓正文 → quote → provenance → 制卡。
+
+### 技能双账本 / 主动预算
+
+- 反馈/弱验证只影响对话技能账本，回归测试证明不能解锁 SK-CODE-* 节点；
+- proactive 增加 `DAILY_BUDGET=6`，30 秒轮询不会被当成无限主动。

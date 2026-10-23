@@ -114,6 +114,7 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
         "affect_integrated": "affect.update_from_message" in (Path(__file__).with_name("chat.py")).read_text(encoding="utf-8"),
         "learn_flow_ready": (Path(__file__).with_name("learn_flow.py")).exists()
                             and "def learn_from_url" in (Path(__file__).with_name("learn_flow.py")).read_text(encoding="utf-8"),
+        "proactive_budget_ready": "DAILY_BUDGET" in (Path(__file__).with_name("proactive.py")).read_text(encoding="utf-8"),
         "proposal_bridge_ready": (Path(__file__).with_name("proposal_bridge.py")).exists()
                                  and "def from_reflection" in (Path(__file__).with_name("proposal_bridge.py")).read_text(encoding="utf-8"),
         "growth_report_ready": (Path(__file__).with_name("report.py")).exists()

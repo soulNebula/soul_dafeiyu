@@ -332,3 +332,7 @@ python -m agi.selflearn.cli --db <db> grounding
 ```
 
 字符重叠弱审计，不是 NLI；当 `rate > 0.80` 判为 `unreliable`，不能拿它下生产结论。
+
+### 主动行为集成
+
+`proactive.tick` 现在会调用 `initiative.decide`，用其气泡配额限制主动条数；灰度探索率从 10% 调到 20%。

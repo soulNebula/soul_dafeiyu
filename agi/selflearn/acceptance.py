@@ -104,6 +104,7 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
                        and "def detect" in (Path(__file__).with_name("drift.py")).read_text(encoding="utf-8"),
         "grounding_ready": (Path(__file__).with_name("grounding.py")).exists()
                            and "def audit" in (Path(__file__).with_name("grounding.py")).read_text(encoding="utf-8"),
+        "initiative_integrated": "initiative.decide" in (Path(__file__).with_name("proactive.py")).read_text(encoding="utf-8"),
         "growth_report_ready": (Path(__file__).with_name("report.py")).exists()
                                 and "def growth" in (Path(__file__).with_name("report.py")).read_text(encoding="utf-8"),
         "memory_control_ready": "def forget" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8")

@@ -104,6 +104,11 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     if last_p and now - last_p < cooldown:
         return {"ok": True, "available": False, "reason": "主动表达冷却中"}
     candidates = build_candidates(path, now)
+    init_info = {}
+    try:
+        init_info = initiative.decide(path, now)
+    except Exception:  # noqa: BLE001
+        init_info = {}
     best = candidates[0]
     if best["score"] < MIN_SCORE:
         return {"ok": True, "available": False, "reason": "分享欲不足"}
@@ -125,6 +130,8 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         text = best["text"]
     text = style_profile.tune_reply("", text)[:200]
     max_bubbles = 3 if sharing >= 0.7 else (2 if sharing >= 0.55 or mood >= 0.7 else 1)
+    if int(init_info.get("max_bubbles") or 0) > 0:
+        max_bubbles = min(max_bubbles, int(init_info["max_bubbles"]))
     bubbles = style_profile.split_bubbles(text, max_bubbles)
     if not bubbles:
         return {"ok": True, "available": False, "reason": "没组织好语言"}
@@ -141,7 +148,9 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         con.close()
     return {"ok": True, "available": True, "message": bubbles[0], "messages": bubbles,
             "message_id": ids[0], "kind": best["kind"], "score": best["score"],
-            "reason": best["reason"], "mood": mood, "sharing": sharing}
+            "reason": best["reason"], "mood": mood, "sharing": sharing,
+            "initiative": {k: init_info.get(k) for k in
+                            ("available", "score", "reason", "max_bubbles", "bubble_count")}}
 
 
 def propose(path: Path | str = DB_PATH, now: float | None = None) -> dict[str, Any]:
@@ -149,6 +158,11 @@ def propose(path: Path | str = DB_PATH, now: float | None = None) -> dict[str, A
     if not _cooldown_ok(path, now):
         return {"ok": True, "available": False, "reason": "主动表达冷却中"}
     candidates = build_candidates(path, now)
+    init_info = {}
+    try:
+        init_info = initiative.decide(path, now)
+    except Exception:  # noqa: BLE001
+        init_info = {}
     best = candidates[0]
     if best["score"] < MIN_SCORE:
         return {"ok": True, "available": False, "reason": "分享欲分数不足",

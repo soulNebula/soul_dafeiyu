@@ -142,7 +142,7 @@ def pick_variant(path: Path | str = DB_PATH, rng: random.Random | None = None) -
     active = [r for r in rows if r["status"] == "active"]
     gray = [r for r in rows if r["status"] == "gray"]
     # 10% 灰度流量；其余走 active 的 Thompson 采样
-    pool = gray if (gray and rng.random() < 0.1) else (active or rows)
+    pool = gray if (gray and rng.random() < 0.2) else (active or rows)
     best = max(pool, key=lambda r: rng.betavariate(float(r["alpha"] or 1), float(r["beta"] or 1)))
     return {"skill_id": SKILL_ID, "variant_id": best["id"], "hint": best["hint"],
             "alpha": best["alpha"], "beta": best["beta"], "status": best["status"]}

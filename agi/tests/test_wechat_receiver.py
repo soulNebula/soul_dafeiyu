@@ -130,15 +130,14 @@ def test_only_inbound_text_messages_are_forwarded(receiver_factory):
         backend.events.put(event)
     backend.events.put(message(text="入站哨兵", msg_id="ok-1"))
 
-    assert wait_for(lambda: len(messages) == 1)
-    assert [m["id"] for m in messages] == ["ok-1"]
-    assert messages[0]["text"] == "入站哨兵"
+    assert wait_for(lambda: len(messages) == 3)
+    assert [m["id"] for m in messages] == ["img-1", "emoji-1", "ok-1"]
 
     status = receiver.status()
-    assert status["messages_forwarded"] == 1
-    assert status["messages_filtered"] == 4
+    assert status["messages_forwarded"] == 3
+    assert status["messages_filtered"] == 2
     assert status["non_message_ignored"] == 4
-    assert status["ignored"] == 4
+    assert status["ignored"] == 2
 
 
 def test_contact_outside_whitelist_is_ignored(receiver_factory):
@@ -281,3 +280,16 @@ def test_requires_injected_backend_and_callback():
         WeChatReceiver(object(), {"小明"}, lambda msg: None)
     with pytest.raises(TypeError):
         WeChatReceiver(FakeBackend(), {"小明"}, None)
+
+
+def test_recall_and_quote_system_messages_are_forwarded(receiver_factory):
+    backend, receiver, messages = receiver_factory()
+    receiver.start()
+    backend.events.put(message(kind="system", text="对方撤回了一条消息", msg_id="sys-recall"))
+    backend.events.put(message(kind="system", text="[引用消息]", msg_id="sys-quote"))
+    backend.events.put(message(kind="system", text="拍了拍你", msg_id="sys-pat"))
+    backend.events.put(message(kind="emoji", text="", msg_id="emoji-empty"))
+
+    assert wait_for(lambda: len(messages) == 3)
+    ids = [m["id"] for m in messages]
+    assert ids == ["sys-recall", "sys-quote", "emoji-empty"]

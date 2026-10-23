@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import mimetypes
 import os
 import queue
 import re
@@ -174,14 +176,41 @@ class Gateway:
                                   "reaction": reaction, "result": result})
         return True
 
+    def _image_data_url(self, media_path: str) -> str:
+        if not media_path:
+            return ""
+        try:
+            p = Path(str(media_path))
+            if not p.is_absolute():
+                p = ROOT / p
+            if not p.is_file() or p.stat().st_size > 12_000_000:
+                return ""
+            mime = mimetypes.guess_type(str(p))[0] or "image/png"
+            if not mime.startswith("image/"):
+                return ""
+            return "data:" + mime + ";base64," + base64.b64encode(p.read_bytes()).decode()
+        except Exception:  # noqa: BLE001
+            return ""
+
     def _reply(self, msg: dict) -> None:
         from agi.selflearn.chat import SelfLearnAgent
 
         contact = str(msg.get("friend") or "")
         text = str(msg.get("text") or "")
+        kind = str(msg.get("kind") or "text")
         db_path = cfg.contact_db(contact)
         agent = SelfLearnAgent(db_path)
-        result = agent.send(text)
+        if kind == "system":
+            if "撤回" in text:
+                text = "[对方撤回了一条消息]"
+            elif "引用消息" in text:
+                text = "[对方引用了一条消息]"
+        image_data = ""
+        if kind in ("image", "emoji"):
+            image_data = self._image_data_url(str(msg.get("media_path") or ""))
+            if not text.strip():
+                text = "发了个表情包" if kind == "emoji" else "发了张图片"
+        result = agent.send(text, image=image_data or None)
         if result.get("turn_id"):
             self.last_turns[contact] = str(result["turn_id"])
         if result.get("skipped"):

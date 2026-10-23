@@ -103,6 +103,14 @@ class SelfLearnAgent:
             live_ingest.record_message(self.path, "user", display, message_id=user_id)
         except Exception:  # noqa: BLE001
             pass
+        if "撤回" in text and ("消息" in text or "刚才" in text):
+            st = state.load(self.path)
+            return self._simple_reply(user_id, "看到了，你撤回了刚才那条。", st, None,
+                                      had_image=False)
+        if "引用" in text:
+            st = state.load(self.path)
+            return self._simple_reply(user_id, "看到了，你引用了一条消息。想接着说什么？", st,
+                                      None, had_image=False)
         correction_info = None
         try:
             correction_info = memory.apply_correction(self.path, text)

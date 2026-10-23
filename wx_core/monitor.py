@@ -639,6 +639,9 @@ class MonitorBackend:
                 t = (b.text or "").strip()
                 if t and (extract.TIME_RE.search(t) or extract.DATE_RE.search(t)) and len(t) <= 40:
                     cur_time = t
+                    continue
+                if t and ("撤回" in t or "引用消息" in t):
+                    entries.append((b, cur_time))
                 continue
             entries.append((b, cur_time))
 

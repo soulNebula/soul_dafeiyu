@@ -341,7 +341,8 @@ class WeChatReceiver:
         """返回不能转发的理由（空字符串表示可以转发）。"""
         if _clean(data.get("sender")) != SENDER_FRIEND:
             return "sender"
-        if _clean(data.get("kind")) != KIND_TEXT:
+        kind = _clean(data.get("kind"))
+        if kind not in ("text", "image", "emoji", "system"):
             return "kind"
 
         friend = _clean(data.get("friend"))
@@ -351,9 +352,13 @@ class WeChatReceiver:
             return "not_allowed"
 
         text = data.get("text")
-        if not isinstance(text, str) or not text.strip():
-            return "text"
-
+        if kind == "system":
+            if not isinstance(text, str) or not any(k in text for k in ("撤回", "引用消息")):
+                return "system"
+        elif kind == "text":
+            if not isinstance(text, str) or not text.strip():
+                return "text"
+        # image/emoji 允许空 text；media_path 由网关读取
         if self._is_stale(data):
             return "stale"
         return ""

@@ -539,3 +539,12 @@ def test_forget_redacts_evidence_and_search(tmp_path):
     r = memory.forget(p, "UM-1")
     assert r["ok"] and r["redacted_message"] is True
     assert search.search(p, "杭州") == []
+
+
+def test_recall_and_quote_get_natural_reply(tmp_path):
+    p = tmp_path / "recall.sqlite3"
+    a = SelfLearnAgent(p, client=FakeClient())
+    r = a.send("[对方撤回了一条消息]")
+    assert "撤回" in r["reply"] and r["reply"] != "？"
+    q = a.send("[对方引用了一条消息]")
+    assert "引用" in q["reply"]

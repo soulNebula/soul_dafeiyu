@@ -403,3 +403,7 @@ python -m agi.selflearn.cli learn-from-url --skill SK-CODE-HTML --url https://..
 `guard.check` 现在可接收 context：
 - 回复里数字必须能在上下文找到，否则标 `number_not_in_context`；
 - `[M-xxx]` 引用必须对应真实消息，否则删掉并标 `bad_citation`。
+
+### 自主 tick 总闸门（14）
+
+`web /api/proactive/tick` 先过 `autonomy.gate`：总开关、静默时段、每日预算、最小间隔任一不通过就不执行 proactive。

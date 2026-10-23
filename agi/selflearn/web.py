@@ -8,7 +8,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import acceptance, db, errors, learn_flow, learn_loop, memory, personality, proactive, report, scheduler, skills, skilltree, state, trust
+from . import acceptance, autonomy, db, errors, learn_flow, learn_loop, memory, personality, proactive, report, scheduler, skills, skilltree, state, trust
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 
@@ -187,6 +187,10 @@ class Handler(BaseHTTPRequestHandler):
                                                    client=_agent().client)
             self._json(200, result); return
         if path == "/api/proactive/tick":
+            gate = autonomy.gate(DB_PATH)
+            if not gate.get("allowed"):
+                self._json(200, {"ok": True, "available": False,
+                                 "reason": gate.get("reason"), "autonomy": gate}); return
             with _LOCK:
                 result = proactive.tick(DB_PATH, _agent().client)
             self._json(200, result); return

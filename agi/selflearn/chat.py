@@ -109,7 +109,12 @@ class SelfLearnAgent:
                 attachment = media.save_image(image, user_id, self.path)
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
-        st = state.update(self.path, text)
+        st = state.update(self.path, text, update_own=False)
+        try:
+            affect.update_from_message(self.path, text)
+        except Exception:  # noqa: BLE001
+            pass
+        st = state.load(self.path)
         try:
             affect.decay(self.path)
         except Exception:  # noqa: BLE001

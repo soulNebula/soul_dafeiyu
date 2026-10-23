@@ -111,6 +111,7 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
                                and "def build_profile" in (Path(__file__).with_name("emoji_profile.py")).read_text(encoding="utf-8"),
         "pii_ready": (Path(__file__).with_name("pii.py")).exists()
                      and "def scrub_pii" in (Path(__file__).with_name("pii.py")).read_text(encoding="utf-8"),
+        "affect_integrated": "affect.update_from_message" in (Path(__file__).with_name("chat.py")).read_text(encoding="utf-8"),
         "proposal_bridge_ready": (Path(__file__).with_name("proposal_bridge.py")).exists()
                                  and "def from_reflection" in (Path(__file__).with_name("proposal_bridge.py")).read_text(encoding="utf-8"),
         "growth_report_ready": (Path(__file__).with_name("report.py")).exists()

@@ -376,3 +376,7 @@ python -m agi.selflearn.cli scrub-pii --text "手机 13812345678"
 ### 记忆删除检索闭环
 
 `memory.forget` 现在同时删除 `search_documents/search_fts` 对应条目，删掉的记忆不会继续被检索到。
+
+### affect 接入主链
+
+chat 现在调用 `affect.update_from_message` 处理冒犯/道歉/危机/信任；`state.update(update_own=False)` 避免重复扣 mood。

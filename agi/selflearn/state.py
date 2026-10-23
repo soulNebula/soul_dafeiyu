@@ -64,7 +64,8 @@ def save(data: dict[str, Any], path: Path | str = DB_PATH) -> None:
         con.close()
 
 
-def update(path: Path | str = DB_PATH, text: str = "", reply: str = "") -> dict[str, Any]:
+def update(path: Path | str = DB_PATH, text: str = "", reply: str = "",
+           *, update_own: bool = True) -> dict[str, Any]:
     data = load(path)
     emo = data["emotion"]
     valence = float(emo.get("valence") or 0.0)
@@ -81,7 +82,9 @@ def update(path: Path | str = DB_PATH, text: str = "", reply: str = "") -> dict[
     emo["arousal"] = round(min(1.0, 0.3 + (0.2 if crisis or any(w in text for w in NEG) else 0)), 2)
     data["boundary"] = {"level": 4 if crisis else 0, "crisis": crisis}
     own = data["self"]
-    if crisis:
+    if not update_own:
+        pass
+    elif crisis:
         own["mood"] = max(0.0, float(own.get("mood", 0.55)) - 0.12)
     elif any(w in text for w in NEG):
         own["mood"] = max(0.0, float(own.get("mood", 0.55)) - 0.05)

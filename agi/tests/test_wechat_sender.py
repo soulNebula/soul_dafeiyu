@@ -366,3 +366,25 @@ def test_contradictory_send_result_is_failed(response):
 
     assert out["ok"] is False
     assert out["status"] == "failed"
+
+
+def test_sender_retries_transient_profile_window_error():
+    class Flaky:
+        calls = 0
+        def __init__(self, **kwargs):
+            pass
+        def ChatWith(self, contact, exact=True):
+            type(self).calls += 1
+            if type(self).calls == 1:
+                raise AttributeError("'ProfileWnd' object has no attribute 'topui'")
+            return contact
+        def ChatInfo(self):
+            return {"chat_name": CONTACT}
+        def SendMsg(self, text):
+            return dict(SUCCESS)
+
+    class M:
+        WeChat = Flaky
+    out = WxAutoSender(module=M).send(CONTACT, "测试")
+    assert out["ok"] is True and out["status"] == "sent"
+    assert out["attempts"] == 2

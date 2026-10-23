@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from typing import Any
 
 MAX_CHARS = 500
@@ -217,57 +218,47 @@ class WxAutoSender:
         真发前必须核对会话名；任何异常或不明确的 SendMsg 结果都返回
         ``{"ok": False, "status": "failed", "error": ...}``。
         """
-        try:
-            contact_name = str(contact or "").strip()
-            message = "" if text is None else str(text)
+        contact_name = str(contact or "").strip()
+        message = "" if text is None else str(text)
+        if not contact_name:
+            return self._failure("contact 不能为空")
+        if not message.strip():
+            return self._failure("消息不能为空")
+        if len(message) > MAX_CHARS:
+            return self._failure(f"消息超过 {MAX_CHARS} 字上限（实际 {len(message)} 字）")
+        if dry_run:
+            return {"ok": True, "status": "planned", "contact": contact_name, "text": message}
 
-            if not contact_name:
-                return self._failure("contact 不能为空")
-            if not message.strip():
-                return self._failure("消息不能为空")
-            if len(message) > MAX_CHARS:
-                return self._failure(
-                    f"消息超过 {MAX_CHARS} 字上限（实际 {len(message)} 字）"
-                )
-
-            if dry_run:
-                return {
-                    "ok": True,
-                    "status": "planned",
-                    "contact": contact_name,
-                    "text": message,
-                }
-
-            wx = self._instance()
-            switched = wx.ChatWith(contact_name, exact=True)
-            chat_info = getattr(wx, "ChatInfo", None)
-            info = chat_info() if callable(chat_info) else {}
-
-            got = self._chat_name(info)
-            if not got and not self._is_failure_response(switched):
-                got = self._chat_name(switched, fallback=True)
-
-            if not got:
-                return self._failure(
-                    "无法确认当前会话名（ChatInfo 为空，ChatWith 未返回可用名称）"
-                )
-            if got != contact_name:
-                return self._failure(
-                    f"会话不匹配：期望 {contact_name!r}，实际 {got!r}"
-                )
-
-            response = wx.SendMsg(message)
-            ok, detail = self._send_succeeded(response)
-            if not ok:
-                return self._failure(f"发送结果不明确或失败：{detail}")
-
-            return {
-                "ok": True,
-                "status": "sent",
-                "contact": contact_name,
-                "text": message,
-                "response": detail,
-                "module": self.module_name,
-            }
-        except Exception as exc:  # noqa: BLE001 - 适配器边界必须返回失败而不是抛出
-            return self._failure(f"{type(exc).__name__}: {str(exc)[:300]}")
+        last_error = ""
+        for attempt in range(2):
+            send_attempted = False
+            try:
+                wx = self._instance()
+                switched = wx.ChatWith(contact_name, exact=True)
+                chat_info = getattr(wx, "ChatInfo", None)
+                info = chat_info() if callable(chat_info) else {}
+                got = self._chat_name(info)
+                if not got and not self._is_failure_response(switched):
+                    got = self._chat_name(switched, fallback=True)
+                if not got:
+                    return self._failure("无法确认当前会话名（ChatInfo 为空，ChatWith 未返回可用名称）")
+                if got != contact_name:
+                    return self._failure(f"会话不匹配：期望 {contact_name!r}，实际 {got!r}")
+                send_attempted = True
+                response = wx.SendMsg(message)
+                ok, detail = self._send_succeeded(response)
+                if not ok:
+                    return self._failure(f"发送结果不明确或失败：{detail}")
+                return {"ok": True, "status": "sent", "contact": contact_name,
+                        "text": message, "response": detail, "module": self.module_name,
+                        "attempts": attempt + 1}
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+                transient = any(k in last_error for k in ("ProfileWnd", "topui", "Timeout", "timeout"))
+                # 只在尚未调用 SendMsg 时重试，避免重复发送
+                if attempt == 0 and transient and not send_attempted:
+                    self._wx = None
+                    time.sleep(0.8)
+                    continue
+                break
+        return self._failure(last_error or "发送失败")

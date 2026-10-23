@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import acceptance, affect, backfill, db, emoji, errors, goals, image_understanding, implicit_feedback, initiative, ingest, learn_loop, media, memory, personality, proactive, production, profile, proposals, quality, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
+from . import acceptance, affect, backfill, db, emoji, errors, goals, image_understanding, implicit_feedback, initiative, ingest, learn_loop, media, memory, nightly, personality, proactive, production, profile, proposals, quality, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 from .llm import Client
@@ -112,6 +112,7 @@ def main(argv=None) -> int:
     p_ga = sub.add_parser("goal-add"); p_ga.add_argument("title"); p_ga.add_argument("--parent", default=""); p_ga.add_argument("--priority", type=float, default=0.5)
     p_gu = sub.add_parser("goal-update"); p_gu.add_argument("goal_id")
     p_gu.add_argument("--status", default=""); p_gu.add_argument("--progress", type=float, default=-1)
+    p_night = sub.add_parser("nightly"); p_night.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
     path = Path(args.db)
     if args.cmd == "serve":
@@ -199,6 +200,8 @@ def main(argv=None) -> int:
         _out(proposals.list_proposals(path, args.status or None)); return 0
     if args.cmd == "proposal-transition":
         _out(proposals.transition(path, args.proposal_id, args.action)); return 0
+    if args.cmd == "nightly":
+        _out(nightly.run(path, Client(), force=args.force)); return 0
     if args.cmd == "goals":
         _out({"ok": True, "tree": goals.tree(path), "flat": goals.list_goals(path)}); return 0
     if args.cmd == "goal-add":

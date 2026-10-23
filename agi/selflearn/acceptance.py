@@ -98,6 +98,8 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
                                 and "MAX_PROMPT_TOKENS" in (Path(__file__).with_name("context.py")).read_text(encoding="utf-8"),
         "goals_ready": (Path(__file__).with_name("goals.py")).exists()
                        and "def tree" in (Path(__file__).with_name("goals.py")).read_text(encoding="utf-8"),
+        "nightly_ready": (Path(__file__).with_name("nightly.py")).exists()
+                         and "def run" in (Path(__file__).with_name("nightly.py")).read_text(encoding="utf-8"),
         "growth_report_ready": (Path(__file__).with_name("report.py")).exists()
                                 and "def growth" in (Path(__file__).with_name("report.py")).read_text(encoding="utf-8"),
         "memory_control_ready": "def forget" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8")

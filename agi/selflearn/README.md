@@ -308,3 +308,11 @@ python -m agi.selflearn.cli goal-update <id> --status done --progress 1
 ```
 
 只记录目标与进度，不自动执行/发送。
+
+### 夜间整理（M4）
+
+```bash
+python -m agi.selflearn.cli nightly --force
+```
+
+顺序：摘要 → 画像 → 自反思 → 弱验证状态；只写本地，不发送、不改技能等级。

@@ -9,9 +9,9 @@ from agi.selflearn import db, guard
 
 def test_number_must_be_in_context(tmp_path):
     p = tmp_path / "g.sqlite3"
-    bad = guard.check("我昨天买了 3 个苹果", p, context="我买了苹果")
+    bad = guard.check("我买了 3 个苹果", p, context="我买了苹果")
     assert bad["level"] == "L1" and any(i.startswith("number_not_in_context") for i in bad["issues"])
-    good = guard.check("我昨天买了 3 个苹果", p, context="买了 3 个苹果")
+    good = guard.check("我买了 3 个苹果", p, context="买了 3 个苹果")
     assert good["level"] == "L0"
 
 
@@ -31,3 +31,12 @@ def test_valid_citation_kept(tmp_path):
     con.commit(); con.close()
     out = guard.check("这是资料。[M-1]", p)
     assert out["level"] == "L0" and "[M-1]" in out["reply"]
+
+
+def test_time_and_forbidden_checks(tmp_path):
+    p = tmp_path / "g4.sqlite3"
+    r = guard.check("我昨天去了北京", p, context="今天在家")
+    assert any(i.startswith("time_not_in_context") for i in r["issues"])
+    f = guard.check("我保证收益", p)
+    assert any(i.startswith("forbidden") for i in f["issues"])
+    assert "保证收益" not in f["reply"]

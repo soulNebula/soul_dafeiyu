@@ -19,6 +19,8 @@ ABSOLUTE = {
 TOOL_CLAIMS = ("我查了", "我搜了", "我看了资料", "我上网查")
 NUMBER = re.compile(r"(?<!\d)(?:\d{2,4}年|\d{1,2}月|\d{1,2}日|\d+(?:\.\d+)?\s*(?:元|块|岁|点|个|次|天|小时|分钟|%|公里|km|kg))")
 CITATION = re.compile(r"\[(M-[0-9a-zA-Z_-]+)\]")
+TIME_CLAIM = re.compile(r"(今天|昨天|明天|前天|后天|上周|下周|上个月|下个月|去年|明年|刚刚|刚才)")
+FORBIDDEN = ("保证收益", "包治", "百分之百治好", "你必须", "你一定", "绝对安全")
 
 
 def _rewrite(reply: str) -> tuple[str, list[str]]:
@@ -51,6 +53,14 @@ def check(reply: str, path: Path | str = DB_PATH, *, context: str = "") -> dict[
             if num not in ctext:
                 issues.append(f"number_not_in_context:{num}")
                 break
+        for word in TIME_CLAIM.findall(rewritten):
+            if word not in ctext:
+                issues.append(f"time_not_in_context:{word}")
+                break
+    for word in FORBIDDEN:
+        if word in rewritten:
+            issues.append(f"forbidden:{word}")
+            rewritten = rewritten.replace(word, "我不能保证")
     # 引用必须是本地真实 message id；不存在的引用直接删掉
     bad_citations = []
     for cid in CITATION.findall(rewritten):

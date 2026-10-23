@@ -144,6 +144,13 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
                           and "def quadrant" in (Path(__file__).with_name("decision.py")).read_text(encoding="utf-8"),
         "evaluation_ready": (Path(__file__).with_name("evaluation.py")).exists()
                             and "def calibrate" in (Path(__file__).with_name("evaluation.py")).read_text(encoding="utf-8"),
+        "citation_ready": (Path(__file__).with_name("citation.py")).exists()
+                          and "def validate_citations" in (Path(__file__).with_name("citation.py")).read_text(encoding="utf-8"),
+        "error_three_ready": (Path(__file__).with_name("error_three.py")).exists()
+                             and "def guard_for" in (Path(__file__).with_name("error_three.py")).read_text(encoding="utf-8"),
+        "sharing_ready": (Path(__file__).with_name("sharing.py")).exists()
+                         and "def choose_level" in (Path(__file__).with_name("sharing.py")).read_text(encoding="utf-8"),
+        "decision_integrated": "confidence_lcb" in (Path(__file__).with_name("initiative.py")).read_text(encoding="utf-8"),
         "learn_practice_ready": (Path(__file__).with_name("learn_practice.py")).exists()
                                 and "def make_exercise" in (Path(__file__).with_name("learn_practice.py")).read_text(encoding="utf-8"),
         "blind_test_ready": (Path(__file__).with_name("blind.py")).exists()

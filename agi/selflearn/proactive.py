@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import db, memory, state, style_profile, trust
+from . import db, initiative, memory, sharing, state, style_profile, trust
 from .config import DB_PATH
 
 COOLDOWN = 2 * 3600
@@ -119,6 +119,11 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         init_info = initiative.decide(path, now)
     except Exception:  # noqa: BLE001
         init_info = {}
+    share_info = {}
+    try:
+        share_info = sharing.choose_level(path)
+    except Exception:  # noqa: BLE001
+        share_info = {}
     best = candidates[0]
     if best["score"] < MIN_SCORE:
         return {"ok": True, "available": False, "reason": "分享欲不足"}
@@ -161,7 +166,9 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
             "message_id": ids[0], "kind": best["kind"], "score": best["score"],
             "reason": best["reason"], "mood": mood, "sharing": sharing,
             "initiative": {k: init_info.get(k) for k in
-                            ("available", "score", "reason", "max_bubbles", "bubble_count")}}
+                            ("available", "score", "reason", "max_bubbles", "bubble_count",
+                             "confidence_lcb", "quadrant")},
+            "sharing_level": share_info}
 
 
 def propose(path: Path | str = DB_PATH, now: float | None = None) -> dict[str, Any]:
@@ -174,6 +181,11 @@ def propose(path: Path | str = DB_PATH, now: float | None = None) -> dict[str, A
         init_info = initiative.decide(path, now)
     except Exception:  # noqa: BLE001
         init_info = {}
+    share_info = {}
+    try:
+        share_info = sharing.choose_level(path)
+    except Exception:  # noqa: BLE001
+        share_info = {}
     best = candidates[0]
     if best["score"] < MIN_SCORE:
         return {"ok": True, "available": False, "reason": "分享欲分数不足",
@@ -189,7 +201,11 @@ def propose(path: Path | str = DB_PATH, now: float | None = None) -> dict[str, A
     finally:
         con.close()
     return {"ok": True, "available": True, "id": pid, **best,
-            "candidates": candidates, "note": "这是候选，不会自动发送"}
+            "candidates": candidates,
+            "initiative": {k: init_info.get(k) for k in
+                           ("available", "score", "confidence_lcb", "quadrant")},
+            "sharing_level": share_info,
+            "note": "这是候选，不会自动发送"}
 
 
 def decide(path: Path | str, proposal_id: str, action: str) -> dict[str, Any]:

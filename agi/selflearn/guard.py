@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import db
+from . import citation, db
 from .config import DB_PATH
 
 ABSOLUTE = {
@@ -61,20 +61,14 @@ def check(reply: str, path: Path | str = DB_PATH, *, context: str = "") -> dict[
         if word in rewritten:
             issues.append(f"forbidden:{word}")
             rewritten = rewritten.replace(word, "我不能保证")
-    # 引用必须是本地真实 message id；不存在的引用直接删掉
-    bad_citations = []
-    for cid in CITATION.findall(rewritten):
-        con = db.connect(path)
-        try:
-            row = con.execute("SELECT 1 FROM messages WHERE id=?", (cid,)).fetchone()
-        finally:
-            con.close()
-        if row is None:
-            bad_citations.append(cid)
-    if bad_citations:
-        issues.append("bad_citation")
-        for cid in bad_citations:
-            rewritten = rewritten.replace(f"[{cid}]", "")
+    # 引用必须对应真实 message/memory；未知/失效引用删掉
+    try:
+        checked = citation.validate_citations(rewritten, path)
+        if not checked.get("ok"):
+            issues.append("bad_citation")
+            rewritten = checked.get("reply") or rewritten
+    except Exception:  # noqa: BLE001
+        pass
     if any(i.startswith("tool_claim") for i in issues) or len(issues) >= 2:
         return {"level": "L2",
                 "reply": "这个我不太确定，先不瞎说。你可以再告诉我一点吗？",

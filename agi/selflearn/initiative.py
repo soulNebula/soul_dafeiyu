@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import db, memory, state, trust
+from . import db, decision, memory, state, trust
 from .config import DB_PATH
 
 # 说话的下限：心情/分享欲低于这个值就不主动，和 proactive.tick 的边界一致
@@ -349,6 +349,22 @@ def decide(path: Path | str = DB_PATH, now: float | None = None) -> dict[str, An
         available, reason = True, best["reason"]
 
     quota = int(d["bubble_quota"]) if available and best is not None else 0
+    confidence = 0.0
+    confidence_n = 0
+    try:
+        con = db.connect(path)
+        try:
+            row = con.execute(
+                "SELECT count(*) n, sum(CASE WHEN reaction='good' THEN 1 ELSE 0 END) ok "
+                "FROM feedback").fetchone()
+        finally:
+            con.close()
+        confidence_n = int(row["n"] or 0)
+        confidence = decision.wilson_lcb(int(row["ok"] or 0), confidence_n)
+    except Exception:  # noqa: BLE001
+        pass
+    score = float(best["score"]) if best else 0.0
+    quadrant = decision.quadrant(score, confidence)
     return {
         "ok": True,
         "available": bool(available),
@@ -362,6 +378,9 @@ def decide(path: Path | str = DB_PATH, now: float | None = None) -> dict[str, An
         "max_bubbles": quota,
         "bubble_count": quota,
         "desire": d,
+        "confidence_lcb": round(confidence, 4),
+        "confidence_n": confidence_n,
+        "quadrant": quadrant,
         "note": "只生成候选，不会自动发送",
         "now": now,
     }

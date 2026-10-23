@@ -475,3 +475,10 @@ guard 报 L1/L2 时才调用 `nli.verify`，若支持率 <0.5 直接降级安全
 - `decision.decide`：Wilson LCB + 四象限（do/explore/skip/hold）
 - `evaluation`：黄金集存取、成对胜率、分桶校准
 - autonomy 增加五级：off/manual/assist/auto/full
+
+### 本轮补缺
+
+- 引用：记忆上下文带 `[M-...]`，guard 校验真实 message/memory；
+- 07：bad 反馈写 error_three case，3 次同类自动升级 rule，prompt 注入【硬约束】；
+- 11：share 三级（observation/memory/opinion）接入 proactive 返回；
+- 12：initiative 返回 Wilson LCB + quadrant。

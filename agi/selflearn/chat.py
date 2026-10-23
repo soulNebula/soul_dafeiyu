@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import affect, claim_ingest, context, db, errors, generation, guard, image_understanding, live_ingest, media, memory, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, trust
+from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -234,6 +234,10 @@ class SelfLearnAgent:
         recent = memory.recent_messages(self.path, limit=10)
         crisis = bool(st["boundary"]["crisis"])
         lessons = errors.context(self.path)
+        for _cat in ("too_long", "too_many_questions", "pushy", "bad_feedback"):
+            _rule = error_three.guard_for(self.path, _cat)
+            if _rule:
+                lessons = (lessons + "\n【硬约束】" + _rule).strip()
         if grudge_ctx:
             lessons = (lessons + "\n" + grudge_ctx).strip()
         budget = errors.budget(self.path)
@@ -411,6 +415,16 @@ class SelfLearnAgent:
                     "SELECT reply FROM turns WHERE id=?", (turn_id,)).fetchone()
                 result["error_lesson"] = errors.record(
                     self.path, turn_id, turn["reply"] if turn else "", note)
+                try:
+                    cat = result["error_lesson"].get("category") or "bad_feedback"
+                    case = error_three.record_case(
+                        self.path, turn_id, cat, turn["reply"] if turn else "", note)
+                    result["error_case"] = case
+                    if case.get("promotable"):
+                        result["rule"] = error_three.promote_rule(
+                            self.path, cat, errors.LESSONS.get(cat, errors.LESSONS["bad_feedback"]))
+                except Exception as exc:  # noqa: BLE001
+                    result["error_case"] = {"ok": False, "error": str(exc)[:200]}
             # 每 3 条反馈尝试一次自反思（只从行动/结果，不从用户偏好）
             con = db.connect(self.path)
             try:

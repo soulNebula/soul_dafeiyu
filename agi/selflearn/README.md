@@ -344,3 +344,8 @@ python -m agi.selflearn.cli production-contacts
 ```
 
 扫描 `agi/data/selflearn/wechat_contacts/*.sqlite3`，聚合消息/轮次/explicit feedback/跨天指标；用于 801 真实联系人验收，不只看网页活动库。
+
+### 反思→提案桥（04）
+
+`feedback` 触发人格反思时，会把 activated/candidates 转成 `learning_proposals` 的 **draft** 提案；
+不会自动 grey/merged，需人工 transition。

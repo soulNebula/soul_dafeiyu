@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import affect, claim_ingest, context, db, errors, generation, guard, image_understanding, live_ingest, media, memory, personality, profile, scoring, search, skills, skilltree, state, style_profile, summary, trust
+from . import affect, claim_ingest, context, db, errors, generation, guard, image_understanding, live_ingest, media, memory, personality, profile, proposal_bridge, scoring, search, skills, skilltree, state, style_profile, summary, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -376,5 +376,10 @@ class SelfLearnAgent:
             finally:
                 con.close()
             if n >= 3 and n % 3 == 0 and self.client.available():
-                result["reflected"] = personality.reflect(self.path, self.client)
+                reflected = personality.reflect(self.path, self.client)
+                result["reflected"] = reflected
+                try:
+                    result["proposals"] = proposal_bridge.from_reflection(self.path, reflected)
+                except Exception as exc:  # noqa: BLE001
+                    result["proposals"] = {"ok": False, "error": str(exc)[:200]}
         return result

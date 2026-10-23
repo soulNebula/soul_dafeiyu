@@ -469,3 +469,9 @@ guard 报 L1/L2 时才调用 `nli.verify`，若支持率 <0.5 直接降级安全
 ### 自动拆解
 
 `learn_plan.apply` 把目标拆成 3 步并写入目标树（goals），CLI `learn-plan "目标"`。
+
+### 12/13 决策与弱验证
+
+- `decision.decide`：Wilson LCB + 四象限（do/explore/skip/hold）
+- `evaluation`：黄金集存取、成对胜率、分桶校准
+- autonomy 增加五级：off/manual/assist/auto/full

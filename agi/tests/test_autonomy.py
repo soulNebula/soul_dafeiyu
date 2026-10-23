@@ -27,3 +27,13 @@ def test_gate_disabled_and_budget(tmp_path):
                 ("autonomy", json.dumps({"enabled": False}), time.time()))
     con.commit(); con.close()
     assert autonomy.gate(p)["reason"] == "autonomy_disabled"
+
+
+def test_autonomy_five_levels(tmp_path):
+    p = tmp_path / "a3.sqlite3"
+    con = db.connect(p)
+    con.execute("INSERT OR REPLACE INTO state(key,value,updated_at) VALUES(?,?,?)",
+                ("autonomy", json.dumps({"level": "off"}), time.time()))
+    con.commit(); con.close()
+    r = autonomy.gate(p)
+    assert r["allowed"] is False and r["level"] == "off"

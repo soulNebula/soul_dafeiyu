@@ -11,8 +11,10 @@ from typing import Any
 
 from . import db
 
+LEVELS = ("off", "manual", "assist", "auto", "full")
 DEFAULT = {
     "enabled": True,
+    "level": "assist",
     "quiet_hours": [0, 7],
     "daily_budget": 6,
     "min_interval_seconds": 30,
@@ -40,8 +42,12 @@ def _config(path: Path | str) -> dict[str, Any]:
 def gate(path: Path | str, now: float | None = None) -> dict[str, Any]:
     now = time.time() if now is None else float(now)
     cfg = _config(path)
-    if not cfg.get("enabled", True):
-        return {"ok": True, "allowed": False, "reason": "autonomy_disabled", "config": cfg}
+    level = str(cfg.get("level") or "assist").lower()
+    if level not in LEVELS:
+        level = "assist"
+    if not cfg.get("enabled", True) or level in ("off", "manual"):
+        return {"ok": True, "allowed": False, "reason": "autonomy_disabled",
+                "level": level, "config": cfg}
     quiet = cfg.get("quiet_hours") or []
     if isinstance(quiet, (list, tuple)) and len(quiet) == 2:
         hour = time.localtime(now).tm_hour
@@ -66,4 +72,4 @@ def gate(path: Path | str, now: float | None = None) -> dict[str, Any]:
     gap = int(cfg.get("min_interval_seconds") or 30)
     if last and now - last < gap:
         return {"ok": True, "allowed": False, "reason": "min_interval", "config": cfg}
-    return {"ok": True, "allowed": True, "reason": "allowed", "config": cfg}
+    return {"ok": True, "allowed": True, "reason": "allowed", "level": level, "config": cfg}

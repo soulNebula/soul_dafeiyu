@@ -362,3 +362,11 @@ python -m agi.selflearn.cli --db <db> emoji-profile
 ### 夜间 S0/S1/S2 重建
 
 `nightly` 现在还会调用 `ingest.build_sessions` 并重建每段 segment；raw_events 不再只进不出。
+
+### S1 PII 清洗
+
+```bash
+python -m agi.selflearn.cli scrub-pii --text "手机 13812345678"
+```
+
+手机号/身份证/银行卡/密码/精确住址 → 占位符；`ingest.clean_event` 已接入。地址模糊化/短句合并也在 `pii.py`。

@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import db
+from . import db, pii
 
 # kind 为这些值时，message 才算“文本消息”。其他 kind 原样保留，但不进
 # session/segment，避免把系统提示、图片占位等当成聊天内容。
@@ -68,7 +68,7 @@ def clean_event(raw: dict) -> dict | None:
     if not friend or not sender or not kind:
         return None
 
-    text = _clean(raw.get("text"))
+    text, pii_hits = pii.scrub_pii(_clean(raw.get("text")))
     if kind in TEXT_KINDS and not text:
         return None
 

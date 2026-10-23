@@ -25,14 +25,16 @@ def test_production_ready_synthetic(tmp_path):
     path = tmp_path / "ready.sqlite3"
     con = db.connect(path)
     now = time.time()
+    base = now - 3 * 86400
+    ts = [base + (i % 3) * 86400 + i * 60 for i in range(30)]
     _insert(con, "INSERT INTO messages(id,role,text,ts,proactive) VALUES(?,?,?,?,?)",
-            [(f"M-{i}", "user" if i % 2 else "assistant", f"m{i}", now - i, 0)
+            [(f"M-{i}", "user" if i % 2 else "assistant", f"m{i}", ts[i], 0)
              for i in range(30)])
     _insert(con, "INSERT INTO turns(id,user_message_id,assistant_message_id,reply,created_at) "
                  "VALUES(?,?,?,?,?)",
-            [(f"T-{i}", f"M-{i}", f"M-{i}", "ok", now - i) for i in range(10)])
+            [(f"T-{i}", f"M-{i}", f"M-{i}", "ok", ts[i]) for i in range(10)])
     _insert(con, "INSERT INTO feedback(id,turn_id,reaction,score,created_at) VALUES(?,?,?,?,?)",
-            [(f"F-{i}", f"T-{i}", "good", 1.0, now - i) for i in range(3)])
+            [(f"F-{i}", f"T-{i}", "good", 1.0, base + (i % 2) * 86400 + i * 60) for i in range(3)])
     _insert(con, "INSERT INTO user_memories(id,scope,kind,content,evidence,confidence,status,created_at) "
                  "VALUES(?,?,?,?,?,?,?,?)",
             [(f"UM-{i}", "user", "fact", f"memory {i}", "原话", 0.9, "active", now - i)

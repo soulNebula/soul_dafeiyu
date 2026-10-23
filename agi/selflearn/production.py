@@ -23,6 +23,8 @@ MIN_PERSONA = 3
 MIN_CLAIMS = 5
 MAX_OPEN_CONFLICTS = 5
 MAX_ERROR_RATE = 0.25
+MIN_ACTIVE_DAYS = 3
+MIN_FEEDBACK_DAYS = 2
 
 
 def _table_rows(con, sql: str, args: tuple = ()) -> list[dict]:
@@ -77,6 +79,18 @@ def snapshot(path: Path | str = DB_PATH, *, days: int = 7) -> dict[str, Any]:
         days_active = _table_rows(
             con, "SELECT count(DISTINCT date(ts,'unixepoch','localtime')) n FROM messages")
         active_days = int(days_active[0]["n"]) if days_active else 0
+        try:
+            feedback_days = int(con.execute(
+                "SELECT count(DISTINCT date(created_at,'unixepoch','localtime')) "
+                "FROM feedback").fetchone()[0])
+        except Exception:  # noqa: BLE001
+            feedback_days = 0
+        try:
+            days_with_messages = [dict(r) for r in con.execute(
+                "SELECT date(ts,'unixepoch','localtime') day, count(*) n FROM messages "
+                "GROUP BY day ORDER BY day DESC LIMIT ?", (max(1, int(days)),))]
+        except Exception:  # noqa: BLE001
+            days_with_messages = []
     finally:
         con.close()
 
@@ -99,6 +113,10 @@ def snapshot(path: Path | str = DB_PATH, *, days: int = 7) -> dict[str, Any]:
                       "value": conflicts, "max": MAX_OPEN_CONFLICTS},
         "errors": {"ok": error_rate <= MAX_ERROR_RATE,
                    "value": round(error_rate, 3), "max": MAX_ERROR_RATE},
+        "active_days": {"ok": active_days >= MIN_ACTIVE_DAYS, "value": active_days,
+                        "min": MIN_ACTIVE_DAYS},
+        "feedback_days": {"ok": feedback_days >= MIN_FEEDBACK_DAYS, "value": feedback_days,
+                          "min": MIN_FEEDBACK_DAYS},
     }
     passed = sum(1 for item in checks.values() if item["ok"])
     total = len(checks)
@@ -109,6 +127,8 @@ def snapshot(path: Path | str = DB_PATH, *, days: int = 7) -> dict[str, Any]:
         "generated_at": time.time(),
         "window_days": int(days),
         "active_days": active_days,
+        "feedback_days": feedback_days,
+        "days_with_messages": days_with_messages,
         "recent_messages": recent_messages,
         "raw": {"messages": messages, "user_messages": user_messages, "turns": turns,
                 "feedback": feedback, "explicit_feedback": explicit_feedback, "memories": memories, "persona": persona,

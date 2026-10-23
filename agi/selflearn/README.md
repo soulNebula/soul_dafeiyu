@@ -275,3 +275,7 @@ python -m agi.selflearn.cli --db <db> implicit-feedback
 ### 实时入库
 
 selflearn 每条消息会自动镜像到 `raw_events`（source=live）；session/segment 仍需 `ingest.build_sessions` 重建。
+
+### 跨天门槛
+
+production 现在要求 `active_days >= 3`、`feedback_days >= 2`，防止一天猛聊就宣称生产通过。

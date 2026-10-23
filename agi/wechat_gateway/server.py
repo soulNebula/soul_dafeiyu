@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -20,6 +21,21 @@ from pathlib import Path
 from . import config as cfg
 from .receiver import WeChatReceiver
 from .sender import WxAutoSender
+
+_REACTION_WORDS = {
+    "good": "good", "好": "good", "好评": "good", "不错": "good", "赞": "good", "满意": "good",
+    "ok": "ok", "一般": "ok", "还行": "ok", "中": "ok",
+    "bad": "bad", "差": "bad", "差评": "bad", "不好": "bad", "不满意": "bad",
+}
+
+
+def parse_feedback(text: str) -> str | None:
+    """只认显式反馈：反馈 好 / 评价：一般 / feedback bad。"""
+    value = str(text or "").strip()
+    m = re.fullmatch(r"(?:反馈|评价|feedback)\s*[:：]?\s*(\S+)", value, re.I)
+    if not m:
+        return None
+    return _REACTION_WORDS.get(m.group(1).strip().lower())
 
 ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = ROOT / "agi" / "data" / "wechat" / "gateway.log"
@@ -51,6 +67,7 @@ class Gateway:
         self.start_error = ""
         self.sent = 0
         self.failed = 0
+        self.last_turns = {}
 
     def start(self) -> None:
         if not self.cfg.get("enabled"):
@@ -122,10 +139,31 @@ class Gateway:
             except queue.Empty:
                 continue
             try:
+                if self._handle_feedback(msg):
+                    continue
                 self._reply(msg)
             except Exception as exc:  # noqa: BLE001
                 self.failed += 1
                 self._record("worker_error", {"error": f"{type(exc).__name__}: {exc}"})
+
+    def _handle_feedback(self, msg: dict) -> bool:
+        contact = str(msg.get("friend") or "")
+        reaction = parse_feedback(str(msg.get("text") or ""))
+        if not reaction:
+            return False
+        turn_id = self.last_turns.get(contact)
+        if not turn_id:
+            self._record("feedback_ignored", {"friend": contact, "reason": "no_last_turn"})
+            return True
+        try:
+            from agi.selflearn.chat import SelfLearnAgent
+            result = SelfLearnAgent(cfg.contact_db(contact)).feedback(turn_id, reaction, "wechat_explicit")
+        except Exception as exc:  # noqa: BLE001
+            self._record("feedback_error", {"friend": contact, "error": f"{type(exc).__name__}: {exc}"})
+            return True
+        self._record("feedback", {"friend": contact, "turn_id": turn_id,
+                                  "reaction": reaction, "result": result})
+        return True
 
     def _reply(self, msg: dict) -> None:
         from agi.selflearn.chat import SelfLearnAgent
@@ -135,6 +173,8 @@ class Gateway:
         db_path = cfg.contact_db(contact)
         agent = SelfLearnAgent(db_path)
         result = agent.send(text)
+        if result.get("turn_id"):
+            self.last_turns[contact] = str(result["turn_id"])
         if result.get("skipped"):
             self._record("skipped", {"friend": contact, "reason": result.get("skip_reason")})
             return

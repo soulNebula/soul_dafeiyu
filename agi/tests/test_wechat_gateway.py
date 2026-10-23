@@ -82,3 +82,12 @@ def test_receiver_filters_and_dedupes():
     r.handle_event({"type": "message", "data": {
         "friend": "别人", "sender": "friend", "kind": "text", "text": "不在白名单", "id": "3"}})
     assert len(got) == 1 and got[0]["text"] == "你好"
+
+
+def test_parse_wechat_explicit_feedback():
+    from agi.wechat_gateway.server import parse_feedback
+    assert parse_feedback("反馈 好") == "good"
+    assert parse_feedback("评价：一般") == "ok"
+    assert parse_feedback("feedback bad") == "bad"
+    assert parse_feedback("好评") is None
+    assert parse_feedback("好") is None

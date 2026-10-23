@@ -407,3 +407,11 @@ python -m agi.selflearn.cli learn-from-url --skill SK-CODE-HTML --url https://..
 ### 自主 tick 总闸门（14）
 
 `web /api/proactive/tick` 先过 `autonomy.gate`：总开关、静默时段、每日预算、最小间隔任一不通过就不执行 proactive。
+
+### 记忆 correction
+
+```bash
+python -m agi.selflearn.cli --db <db> correct-memory <id> "新内容" --evidence "用户纠正"
+```
+
+旧记忆 invalid、新记忆带 evidence 写入，同时删旧 FTS/写新 FTS。

@@ -329,3 +329,38 @@ def list_user_memories(path: Path | str = DB_PATH, limit: int = 50) -> list[dict
             "SELECT * FROM user_memories ORDER BY created_at DESC LIMIT ?", (int(limit),))]
     finally:
         con.close()
+
+
+def correct(path: Path | str, memory_id: str, content: str,
+            evidence: str = "用户纠正") -> dict[str, Any]:
+    """纠错：旧条目失效，新条目带证据写入，并同步检索索引。"""
+    new_text = _clean(content)
+    if not new_text:
+        return {"ok": False, "error": "纠正内容不能为空"}
+    if _sensitive(new_text):
+        return {"ok": False, "error": "纠正内容包含敏感信息，拒绝写入"}
+    con = db.connect(path)
+    try:
+        old = con.execute("SELECT * FROM user_memories WHERE id=?", (memory_id,)).fetchone()
+        if old is None:
+            return {"ok": False, "error": "记忆不存在"}
+        new_id = _id("UM-", "correct", old["scope"], old["kind"], new_text, time.time())
+        now = time.time()
+        con.execute("INSERT OR IGNORE INTO user_memories(id,scope,kind,content,evidence,"
+                    "evidence_message_id,confidence,status,conflict_group,created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (new_id, old["scope"], old["kind"], new_text, str(evidence or "用户纠正"),
+                     old["evidence_message_id"], float(old["confidence"] or 0.8), "active", None, now))
+        con.execute("UPDATE user_memories SET status='invalid',conflict_group=NULL WHERE id=?",
+                    (memory_id,))
+        con.commit()
+    finally:
+        con.close()
+    try:
+        from . import search
+        search.delete(path, "memory", memory_id)
+        search.index_texts(path, [{"source_type": "memory", "source_id": new_id, "text": new_text}])
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": True, "old_id": memory_id, "id": new_id, "content": new_text,
+            "action": "corrected", "evidence": evidence}

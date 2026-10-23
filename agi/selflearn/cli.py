@@ -39,6 +39,8 @@ def main(argv=None) -> int:
     p_sum = sub.add_parser("summarize"); p_sum.add_argument("--force", action="store_true")
     sub.add_parser("summary")
     p_forget = sub.add_parser("forget"); p_forget.add_argument("memory_id")
+    p_correct = sub.add_parser("correct-memory"); p_correct.add_argument("memory_id")
+    p_correct.add_argument("content"); p_correct.add_argument("--evidence", default="用户纠正")
     p_report = sub.add_parser("report")
     p_report.add_argument("--markdown", action="store_true")
     p_resolve = sub.add_parser("resolve-conflict")
@@ -175,6 +177,8 @@ def main(argv=None) -> int:
         _out(media.list_attachments(path)); return 0
     if args.cmd == "forget":
         _out(memory.forget(path, args.memory_id)); return 0
+    if args.cmd == "correct-memory":
+        _out(memory.correct(path, args.memory_id, args.content, args.evidence)); return 0
     if args.cmd == "summary":
         _out(summary.latest(path)); return 0
     if args.cmd == "summarize":

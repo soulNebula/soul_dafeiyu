@@ -468,3 +468,19 @@ def test_error_ledger_root_cause_and_fix(tmp_path):
     assert errors.mark_fix_verified(p, row["id"])["ok"] is True
     assert errors.bump_hit(p, row["id"])["ok"] is True
     assert errors.list_errors(p)[0]["hit_count"] == 2
+
+
+def test_memory_correction_invalidates_old_and_indexes_new(tmp_path):
+    p = tmp_path / "corr.sqlite3"
+    memory.store_message(p, "user", "我住在杭州")
+    con = db.connect(p)
+    con.execute("INSERT INTO user_memories(id,scope,kind,content,evidence,confidence,status,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("UM-1", "user", "fact", "用户住在杭州", "我住在杭州", 0.9, "active", 1.0))
+    con.commit(); con.close()
+    from agi.selflearn import search
+    search.index_texts(p, [{"source_type": "memory", "source_id": "UM-1", "text": "用户住在杭州"}])
+    r = memory.correct(p, "UM-1", "用户住在上海", "我搬到上海了")
+    assert r["ok"] and r["id"] != "UM-1"
+    assert search.search(p, "杭州") == []
+    assert search.search(p, "上海")

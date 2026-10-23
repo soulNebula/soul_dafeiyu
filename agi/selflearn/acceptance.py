@@ -100,6 +100,8 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
                        and "def tree" in (Path(__file__).with_name("goals.py")).read_text(encoding="utf-8"),
         "nightly_ready": (Path(__file__).with_name("nightly.py")).exists()
                          and "def run" in (Path(__file__).with_name("nightly.py")).read_text(encoding="utf-8"),
+        "drift_ready": (Path(__file__).with_name("drift.py")).exists()
+                       and "def detect" in (Path(__file__).with_name("drift.py")).read_text(encoding="utf-8"),
         "growth_report_ready": (Path(__file__).with_name("report.py")).exists()
                                 and "def growth" in (Path(__file__).with_name("report.py")).read_text(encoding="utf-8"),
         "memory_control_ready": "def forget" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8")

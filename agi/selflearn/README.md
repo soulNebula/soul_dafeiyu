@@ -316,3 +316,11 @@ python -m agi.selflearn.cli nightly --force
 ```
 
 顺序：摘要 → 画像 → 自反思 → 弱验证状态；只写本地，不发送、不改技能等级。
+
+### 风格漂移审计（M3）
+
+```bash
+python -m agi.selflearn.cli --db <db> drift
+```
+
+比较最近/之前窗口的回复长度、提问比例、软化词比例；只审计，不自动改策略。

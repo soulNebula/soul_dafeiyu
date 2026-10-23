@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import acceptance, affect, backfill, db, drift, emoji, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_loop, media, memory, nightly, personality, proactive, production, production_contacts, profile, proposals, quality, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
+from . import acceptance, affect, backfill, db, drift, emoji, emoji_profile, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_loop, media, memory, nightly, personality, proactive, production, production_contacts, profile, proposals, quality, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 from .llm import Client
@@ -86,7 +86,7 @@ def main(argv=None) -> int:
     sub.add_parser("profile")
     sub.add_parser("profile-distill")
     p_emoji_index = sub.add_parser("emoji-index"); p_emoji_index.add_argument("--dir", required=True)
-    sub.add_parser("emoji-stats"); sub.add_parser("emoji-list")
+    sub.add_parser("emoji-stats"); sub.add_parser("emoji-list"); sub.add_parser("emoji-profile")
     p_emoji_use = sub.add_parser("emoji-use"); p_emoji_use.add_argument("--name", required=True)
     p_props = sub.add_parser("proposals"); p_props.add_argument("--status", default="")
     p_trans = sub.add_parser("proposal-transition")
@@ -193,6 +193,8 @@ def main(argv=None) -> int:
         _out(ingest.stats(path)); return 0
     if args.cmd == "emoji-index":
         _out(emoji.index_assets(path, args.dir)); return 0
+    if args.cmd == "emoji-profile":
+        _out(emoji_profile.build_profile(path)); return 0
     if args.cmd == "emoji-stats":
         _out(emoji.stats(path)); return 0
     if args.cmd == "emoji-list":

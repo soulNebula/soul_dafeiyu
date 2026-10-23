@@ -349,3 +349,12 @@ python -m agi.selflearn.cli production-contacts
 
 `feedback` 触发人格反思时，会把 activated/candidates 转成 `learning_proposals` 的 **draft** 提案；
 不会自动 grey/merged，需人工 transition。
+
+### 表情包人格档案（S5）
+
+```bash
+python -m agi.selflearn.cli emoji-index --dir <本地表情目录>
+python -m agi.selflearn.cli --db <db> emoji-profile
+```
+
+输出情绪分布、text/emoji 比、攻击性/自嘲度、Top 表情与 signature；基于本地标签弱推断。

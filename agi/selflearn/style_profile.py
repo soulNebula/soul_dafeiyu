@@ -57,6 +57,14 @@ def tune_reply(text: str, reply: str) -> str:
     return short or value
 
 
+def strip_periods(text: str) -> str:
+    """去掉对外回复里的中文句号和句末英文句点；保留问号/感叹号/逗号。"""
+    value = str(text or "")
+    value = value.replace("。", "")
+    value = re.sub(r"(?<![0-9A-Za-z])\.(?=\s|$)", "", value)
+    return value.strip()
+
+
 def split_bubbles(text: str, max_bubbles: int = 1) -> list[str]:
     text = str(text or "").strip()
     if not text or max_bubbles <= 1:

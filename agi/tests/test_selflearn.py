@@ -425,7 +425,7 @@ def test_high_mood_can_send_multiple_bubbles(tmp_path):
 def test_internal_questions_only_return_question_mark(tmp_path):
     path = tmp_path / "selflearn.sqlite3"
     agent = SelfLearnAgent(path, client=FakeClient(), rng=random.Random(8))
-    expected = ["？", "我听不明白你在说什么。", "换个问法。"]
+    expected = ["？", "我听不明白你在说什么", "换个问法"]
     for q, want in zip(("你的记忆库有什么", "你的技能树呢", "自画像是什么"), expected):
         r = agent.send(q)
         assert r["reply"] == want, (q, r["reply"])
@@ -509,7 +509,7 @@ def test_chat_correction_short_circuits_generation(tmp_path):
     agent = SelfLearnAgent(p, client=FakeClient())
     r = agent.send("记错了，不是住在杭州，是住在上海")
     assert r.get("correction", {}).get("ok") is True
-    assert r["reply"] == "好，我改过来了。"
+    assert r["reply"] == "好，我改过来了"
 
 
 def test_boundary_levels_and_manipulation(tmp_path):
@@ -548,3 +548,12 @@ def test_recall_and_quote_get_natural_reply(tmp_path):
     assert "撤回" in r["reply"] and r["reply"] != "？"
     q = a.send("[对方引用了一条消息]")
     assert "引用" in q["reply"]
+
+
+def test_replies_do_not_contain_periods(tmp_path):
+    p = tmp_path / "noperiod.sqlite3"
+    a = SelfLearnAgent(p, client=FakeClient())
+    for text in ("你好", "你是谁", "记错了，不是住在杭州，是住在上海"):
+        r = a.send(text)
+        for bubble in (r.get("bubbles") or [r.get("reply", "")]):
+            assert "。" not in bubble

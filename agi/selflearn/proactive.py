@@ -143,6 +143,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     if int(init_info.get("max_bubbles") or 0) > 0:
         max_bubbles = min(max_bubbles, int(init_info["max_bubbles"]))
     bubbles = style_profile.split_bubbles(text, max_bubbles)
+    bubbles = [style_profile.strip_periods(b) for b in bubbles if style_profile.strip_periods(b)]
     if not bubbles:
         return {"ok": True, "available": False, "reason": "没组织好语言"}
     ids = [memory.store_message(path, "assistant", b, now=now, proactive=True) for b in bubbles]

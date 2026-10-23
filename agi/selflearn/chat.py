@@ -62,6 +62,7 @@ class SelfLearnAgent:
 
     def _simple_reply(self, user_id: str, reply: str, st: dict, attachment,
                       *, skill_gate=None, identity=False, had_image=False) -> dict[str, Any]:
+        reply = style_profile.strip_periods(reply)
         assistant_id = memory.store_message(self.path, "assistant", reply)
         try:
             live_ingest.record_message(self.path, "assistant", reply, message_id=assistant_id)
@@ -295,6 +296,7 @@ class SelfLearnAgent:
         sharing = float(st["self"].get("sharing", 0.45))
         max_bubbles = 3 if (mood >= 0.75 or sharing >= 0.7) else (2 if (mood >= 0.6 or sharing >= 0.6) else 1)
         bubbles = style_profile.split_bubbles(reply, max_bubbles)
+        bubbles = [style_profile.strip_periods(b) for b in bubbles if style_profile.strip_periods(b)]
         if not bubbles:
             bubbles = [reply]
         turn_reply = " ".join(bubbles)

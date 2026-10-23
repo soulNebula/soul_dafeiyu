@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import acceptance, affect, backfill, db, drift, emoji, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_loop, media, memory, nightly, personality, proactive, production, profile, proposals, quality, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
+from . import acceptance, affect, backfill, db, drift, emoji, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_loop, media, memory, nightly, personality, proactive, production, production_contacts, profile, proposals, quality, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 from .llm import Client
@@ -115,6 +115,7 @@ def main(argv=None) -> int:
     p_night = sub.add_parser("nightly"); p_night.add_argument("--force", action="store_true")
     sub.add_parser("drift")
     sub.add_parser("grounding")
+    p_pc = sub.add_parser("production-contacts"); p_pc.add_argument("--days", type=int, default=7)
     args = parser.parse_args(argv)
     path = Path(args.db)
     if args.cmd == "serve":
@@ -202,6 +203,8 @@ def main(argv=None) -> int:
         _out(proposals.list_proposals(path, args.status or None)); return 0
     if args.cmd == "proposal-transition":
         _out(proposals.transition(path, args.proposal_id, args.action)); return 0
+    if args.cmd == "production-contacts":
+        _out(production_contacts.aggregate(days=args.days)); return 0
     if args.cmd == "grounding":
         _out(grounding.audit(path)); return 0
     if args.cmd == "drift":

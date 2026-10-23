@@ -336,3 +336,11 @@ python -m agi.selflearn.cli --db <db> grounding
 ### 主动行为集成
 
 `proactive.tick` 现在会调用 `initiative.decide`，用其气泡配额限制主动条数；灰度探索率从 10% 调到 20%。
+
+### 801 联系人库生产聚合
+
+```bash
+python -m agi.selflearn.cli production-contacts
+```
+
+扫描 `agi/data/selflearn/wechat_contacts/*.sqlite3`，聚合消息/轮次/explicit feedback/跨天指标；用于 801 真实联系人验收，不只看网页活动库。

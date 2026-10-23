@@ -136,6 +136,8 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
         "hybrid_retrieval_ready": (Path(__file__).with_name("retrieval.py")).exists()
                                   and "def hybrid" in (Path(__file__).with_name("retrieval.py")).read_text(encoding="utf-8"),
         "forget_chain_ready": "redacted_message" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8"),
+        "persona_layers_ready": (Path(__file__).with_name("persona_layers.py")).exists()
+                               and "def context" in (Path(__file__).with_name("persona_layers.py")).read_text(encoding="utf-8"),
         "skill_gate_ready": (Path(__file__).with_name("skilltree.py")).exists()
                             and "gate_request" in (Path(__file__).with_name("skilltree.py")).read_text(encoding="utf-8"),
         "capability_gate_ready": ("capability_reply" in (Path(__file__).with_name("skilltree.py")).read_text(encoding="utf-8")

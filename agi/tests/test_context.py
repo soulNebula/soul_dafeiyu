@@ -23,3 +23,8 @@ def test_prompt_includes_profile_retrieval_summary():
         retrieval_ctx="检索片段Z", profile_ctx="画像A")
     for token in ("用户画像", "画像A", "阶段摘要", "阶段摘要Y", "相关片段", "检索片段Z", "未解决冲突X"):
         assert token in p
+
+
+def test_prompt_includes_persona_layers():
+    p = SelfLearnAgent._prompt("hi", [], "", {}, [], st=None, layer_ctx="core: honest")
+    assert "人格层" in p and "core: honest" in p

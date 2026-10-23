@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import affect, claim_ingest, context, db, errors, generation, guard, image_understanding, live_ingest, media, memory, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, trust
+from . import affect, claim_ingest, context, db, errors, generation, guard, image_understanding, live_ingest, media, memory, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -233,6 +233,7 @@ class SelfLearnAgent:
         conflict_q = guard.open_conflict_question(self.path)
         sum_ctx = summary.context(self.path)
         profile_ctx = profile.render_profile(self.path)
+        layer_ctx = persona_layers.context(self.path)
         if crisis:
             reply = ("我在。先别一个人扛着。你现在安全吗？"
                      "如果可能，先联系你信任的人，或当地急救/心理援助。")
@@ -240,7 +241,8 @@ class SelfLearnAgent:
             prompt = self._prompt(text or "我发了一张图片，请看看并回应我。", mems, pctx,
                                    variant, recent, st=st, lessons=lessons,
                                    conflict_q=conflict_q, sum_ctx=sum_ctx,
-                                   retrieval_ctx=retrieval_ctx, profile_ctx=profile_ctx)
+                                   retrieval_ctx=retrieval_ctx, profile_ctx=profile_ctx,
+                                   layer_ctx=layer_ctx)
             if image:
                 content = [{"type": "text", "text": prompt},
                            {"type": "image_url", "image_url": {"url": image}}]
@@ -335,7 +337,8 @@ class SelfLearnAgent:
 
     @staticmethod
     def _prompt(text, mems, pctx, variant, recent, *, st=None, lessons="",
-                conflict_q="", sum_ctx="", retrieval_ctx="", profile_ctx="") -> str:
+                conflict_q="", sum_ctx="", retrieval_ctx="", profile_ctx="",
+                layer_ctx="") -> str:
         mem_lines = "\n".join(
             f"- [{m.get('scope','user')}/{m['kind']}] {m['content']}（依据：{m['evidence']}）"
             for m in mems
@@ -347,6 +350,7 @@ class SelfLearnAgent:
             "长期记忆（由你自己决定留存；其中关于用户的只用于理解对方，不要当成人格）：\n" +
             mem_lines +
             "\n\n用户画像（仅作理解，不要复述）：\n" + (profile_ctx or "（暂无）") +
+            "\n\n人格层（core/evolving/relations）：\n" + (layer_ctx or "（暂无）") +
             "\n\n阶段摘要：\n" + (sum_ctx or "（暂无）") +
             "\n\n相关片段（可参考，不当作事实）：\n" + (retrieval_ctx or "（无）") +
             "\n\n未解决冲突提醒：\n" + (conflict_q or "（无）") +

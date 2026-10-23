@@ -436,3 +436,7 @@ python -m agi.selflearn.cli --db <db> correct-memory <id> "新内容" --evidence
 ### 遗忘全链路
 
 `forget` 现在除 invalid 记忆外：删除 memory/message/claim 检索行、把证据消息里的原话替换为 [已遗忘]、把派生 claims 标 invalid。
+
+### 人格三层
+
+`persona_layers.py`：core 需人工批准、evolving 需 2 条证据且每日最多 2 次晋级、relations 作为关系语境；context 已注入 chat prompt，changelog 可审计。

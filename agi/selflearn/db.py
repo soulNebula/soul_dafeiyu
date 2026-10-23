@@ -132,6 +132,19 @@ CREATE TABLE IF NOT EXISTS feedback(
   id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, reaction TEXT NOT NULL, score REAL NOT NULL,
   note TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS persona_layers(
+  id TEXT PRIMARY KEY, layer TEXT NOT NULL, key TEXT NOT NULL,
+  value TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'candidate',
+  evidence_json TEXT NOT NULL DEFAULT '[]', version INTEGER NOT NULL DEFAULT 1,
+  approved_by TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS persona_changelog(
+  id TEXT PRIMARY KEY, key TEXT NOT NULL, action TEXT NOT NULL,
+  old_value TEXT NOT NULL DEFAULT '', new_value TEXT NOT NULL DEFAULT '',
+  layer TEXT NOT NULL, created_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS persona(
   id TEXT PRIMARY KEY, key TEXT NOT NULL, value TEXT NOT NULL, evidence_json TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active', updated_at REAL NOT NULL
@@ -211,7 +224,7 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
 def counts(path: Path | str = DB_PATH) -> dict[str, int]:
     con = connect(path)
     try:
-        names = ["messages", "user_memories", "turns", "feedback", "persona", "persona_candidates", "skills", "variants", "reflections", "trust_events", "errors", "lessons", "weak_checks", "proactive", "intents", "conflicts", "attachments", "summaries", "skill_nodes", "learn_tasks", "claims", "skill_cards", "practice_runs", "raw_events", "sessions", "session_segments", "media_understanding", "user_profile", "emoji_archive", "emoji_usage", "score_records", "learning_proposals", "weak_rechecks", "wake_runs", "goals"]
+        names = ["messages", "user_memories", "turns", "feedback", "persona", "persona_candidates", "skills", "variants", "reflections", "trust_events", "errors", "lessons", "weak_checks", "proactive", "intents", "conflicts", "attachments", "summaries", "skill_nodes", "learn_tasks", "claims", "skill_cards", "practice_runs", "raw_events", "sessions", "session_segments", "media_understanding", "user_profile", "emoji_archive", "emoji_usage", "score_records", "learning_proposals", "weak_rechecks", "wake_runs", "goals", "persona_layers", "persona_changelog"]
         return {name: int(con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]) for name in names}
     finally:
         con.close()

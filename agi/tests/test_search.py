@@ -165,3 +165,12 @@ def test_missing_source_id_is_stable(tmp_path):
     assert len(hits) == 1
     assert hits[0]["source_type"] == "text"
     assert hits[0]["source_id"].startswith("auto-")
+
+
+def test_delete_removes_document_from_search(tmp_path):
+    from agi.selflearn import search
+    p = tmp_path / "s.sqlite3"
+    search.index_texts(p, [{"source_type": "memory", "source_id": "UM-1", "text": "喜欢咖啡"}])
+    assert search.search(p, "咖啡")
+    assert search.delete(p, "memory", "UM-1") == 1
+    assert search.search(p, "咖啡") == []

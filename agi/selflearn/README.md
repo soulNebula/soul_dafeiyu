@@ -372,3 +372,7 @@ python -m agi.selflearn.cli scrub-pii --text "手机 13812345678"
 手机号/身份证/银行卡/密码/精确住址 → 占位符；`ingest.clean_event` 已接入。地址模糊化/短句合并也在 `pii.py`。
 
 `production-contacts` 的 active_days / feedback_days 现在按数据库日期并集计算，不再取单库最大值。
+
+### 记忆删除检索闭环
+
+`memory.forget` 现在同时删除 `search_documents/search_fts` 对应条目，删掉的记忆不会继续被检索到。

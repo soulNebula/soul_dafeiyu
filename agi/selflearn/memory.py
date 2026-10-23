@@ -298,6 +298,11 @@ def forget(path: Path | str, memory_id: str, reason: str = "user_forget") -> dic
         con.commit()
         if cur.rowcount == 0:
             return {"ok": False, "error": "记忆不存在"}
+        try:
+            from . import search
+            search.delete(path, "memory", memory_id)
+        except Exception:  # noqa: BLE001
+            pass
         return {"ok": True, "id": memory_id, "action": "invalid", "reason": reason}
     finally:
         con.close()

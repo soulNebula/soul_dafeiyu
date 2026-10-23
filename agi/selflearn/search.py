@@ -374,3 +374,29 @@ def search(path: Path | str, query: str, limit: int = 8) -> list[dict]:
         return []
     finally:
         con.close()
+
+
+def delete(path: Path | str, source_type: str, source_id: str | None = None) -> int:
+    """删除检索文档及其 FTS 行；找不到表时返回 0，不抛异常。"""
+    con = _connect(path)
+    try:
+        if not _table_exists(con, DOCS_TABLE):
+            return 0
+        if source_id is None:
+            rows = con.execute("SELECT id FROM search_documents WHERE source_type=?",
+                               (str(source_type),)).fetchall()
+        else:
+            rows = con.execute("SELECT id FROM search_documents WHERE source_type=? AND source_id=?",
+                               (str(source_type), str(source_id))).fetchall()
+        ids = [int(r[0]) for r in rows]
+        if not ids:
+            return 0
+        if _table_exists(con, FTS_TABLE):
+            con.executemany("DELETE FROM search_fts WHERE rowid=?", [(i,) for i in ids])
+        con.executemany("DELETE FROM search_documents WHERE id=?", [(i,) for i in ids])
+        con.commit()
+        return len(ids)
+    except sqlite3.Error:
+        return 0
+    finally:
+        con.close()

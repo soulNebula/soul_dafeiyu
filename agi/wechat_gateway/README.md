@@ -84,3 +84,16 @@ feedback bad
 
 801 会把这条记到该联系人上一条 AI 回复的 `feedback`，不再当普通聊天生成回复。
 仅认显式前缀，普通“好/一般”不会误判。
+
+## 发送硬闸门
+
+`config.json` 现在支持：
+
+```text
+stop: true                 一键急停
+quiet_hours: [0,7]         夜间静默
+rate_per_minute: 3         每分钟上限
+daily_limit: 200           每日上限
+```
+
+超限记录 `send_blocked`，不会调用 wxauto。默认 quiet_hours 覆盖凌晨；需要夜间测试时显式改配置。

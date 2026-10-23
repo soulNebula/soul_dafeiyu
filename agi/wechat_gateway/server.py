@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import config as cfg
+from . import policy
 from .receiver import WeChatReceiver
 from .sender import WxAutoSender
 
@@ -68,6 +69,9 @@ class Gateway:
         self.sent = 0
         self.failed = 0
         self.last_turns = {}
+        self.send_times = deque()
+        self.sent_today = 0
+        self.sent_day = time.strftime("%Y-%m-%d")
 
     def start(self) -> None:
         if not self.cfg.get("enabled"):
@@ -195,10 +199,25 @@ class Gateway:
                 time.sleep(float(self.cfg.get("reply_delay") or 0))
 
     def _send(self, contact: str, text: str) -> dict:
+        if self.cfg.get("stop"):
+            self._record("send_blocked", {"friend": contact, "reason": "stop_switch"})
+            return {"ok": False, "status": "blocked", "error": "stop_switch"}
         if self.cfg.get("dry_run", True):
             return self.sender.send(contact, text, dry_run=True)
         if not WXAUTO_PYTHON.exists():
             return {"ok": False, "status": "failed", "error": f"缺少 wxauto venv: {WXAUTO_PYTHON}"}
+        now = time.time()
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        if day != self.sent_day:
+            self.sent_day = day
+            self.sent_today = 0
+        recent = sum(1 for t in self.send_times if now - t < 60)
+        verdict = policy.check_send(now=now, hour=time.localtime(now).tm_hour,
+                                    recent_60s=recent, today_count=self.sent_today,
+                                    cfg=self.cfg)
+        if not verdict.get("ok"):
+            self._record("send_blocked", {"friend": contact, "reason": verdict.get("reason")})
+            return {"ok": False, "status": "blocked", "error": verdict.get("reason")}
         cmd = [str(WXAUTO_PYTHON), "-m", "agi.wechat_gateway.send_cli",
                "--contact", contact, "--text", text]
         try:
@@ -209,7 +228,11 @@ class Gateway:
             if not line:
                 return {"ok": False, "status": "failed",
                         "error": (proc.stderr or "send_cli 无输出")[-500:]}
-            return json.loads(line)
+            out = json.loads(line)
+            if out.get("ok"):
+                self.send_times.append(time.time())
+                self.sent_today += 1
+            return out
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
 
@@ -235,6 +258,11 @@ class Gateway:
             "queue": self.queue.qsize(),
             "sent": self.sent,
             "failed": self.failed,
+            "policy": {"stop": bool(self.cfg.get("stop")),
+                       "quiet_hours": self.cfg.get("quiet_hours"),
+                       "rate_per_minute": self.cfg.get("rate_per_minute"),
+                       "daily_limit": self.cfg.get("daily_limit"),
+                       "sent_today": self.sent_today},
             "backend": state,
             "receiver": self.receiver.status() if self.receiver else None,
             "recent": list(self.recent)[-20:],

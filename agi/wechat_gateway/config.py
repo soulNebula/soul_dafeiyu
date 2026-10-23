@@ -20,6 +20,10 @@ DEFAULTS = {
     "allowed_contacts": [],
     "max_chars": 500,
     "reply_delay": 0.3,
+    "stop": False,
+    "quiet_hours": [0, 7],
+    "rate_per_minute": 3,
+    "daily_limit": 200,
 }
 
 

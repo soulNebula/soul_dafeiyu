@@ -239,3 +239,14 @@ python -m agi.selflearn.cli wake-run
 - initiative：主动欲望评分，只生成候选，不发送；
 - weak_validation：跨时间复测，失败只标记回退，不直接降级；
 - wake：优先级/预算/去重/审计，只标记 due，不自动发微信。
+
+## 生产级验收
+
+```bash
+python -m agi.selflearn.cli --db <db> production
+python -m agi.selflearn.cli --db <db> production --markdown
+```
+
+门槛：消息≥30、轮次≥10、反馈≥3、记忆≥5、证据覆盖≥80%、人格≥3、claims≥5、未解决冲突≤5、错误率≤25%。
+
+注意：这是 pilot 门槛，不能替代 7 天真实运行；当前活动库只有 `needs_work`。

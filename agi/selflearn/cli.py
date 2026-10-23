@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import acceptance, affect, db, emoji, errors, image_understanding, initiative, ingest, learn_loop, media, memory, personality, proactive, profile, proposals, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
+from . import acceptance, affect, db, emoji, errors, image_understanding, initiative, ingest, learn_loop, media, memory, personality, proactive, production, profile, proposals, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 from .llm import Client
@@ -104,6 +104,8 @@ def main(argv=None) -> int:
     p_wadd.add_argument("--priority", type=float, default=0.5)
     p_wdue = sub.add_parser("wake-due"); p_wdue.add_argument("--budget", type=int, default=5)
     p_wrun = sub.add_parser("wake-run"); p_wrun.add_argument("--budget", type=int, default=5)
+    p_prod = sub.add_parser("production"); p_prod.add_argument("--days", type=int, default=7)
+    p_prod.add_argument("--markdown", action="store_true")
     args = parser.parse_args(argv)
     path = Path(args.db)
     if args.cmd == "serve":
@@ -191,6 +193,12 @@ def main(argv=None) -> int:
         _out(proposals.list_proposals(path, args.status or None)); return 0
     if args.cmd == "proposal-transition":
         _out(proposals.transition(path, args.proposal_id, args.action)); return 0
+    if args.cmd == "production":
+        if args.markdown:
+            print(production.markdown(path, days=args.days))
+        else:
+            _out(production.snapshot(path, days=args.days))
+        return 0
     if args.cmd == "affect":
         _out(affect.snapshot(path)); return 0
     if args.cmd == "initiative":

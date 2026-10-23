@@ -29,8 +29,22 @@ def aggregate(paths=None, *, days: int = 7) -> dict[str, Any]:
     for s in snapshots:
         for k in raw:
             raw[k] += int((s.get("raw") or {}).get(k) or 0)
-    active_days = max([int(s.get("active_days") or 0) for s in snapshots] or [0])
-    feedback_days = max([int(s.get("feedback_days") or 0) for s in snapshots] or [0])
+    days_set: set[str] = set()
+    feedback_set: set[str] = set()
+    for p in files:
+        try:
+            con = sqlite3.connect(p)
+            for r in con.execute("SELECT DISTINCT date(ts,'unixepoch','localtime') FROM messages"):
+                if r[0]:
+                    days_set.add(str(r[0]))
+            for r in con.execute("SELECT DISTINCT date(created_at,'unixepoch','localtime') FROM feedback"):
+                if r[0]:
+                    feedback_set.add(str(r[0]))
+            con.close()
+        except Exception:  # noqa: BLE001
+            pass
+    active_days = len(days_set)
+    feedback_days = len(feedback_set)
     checks = {
         "messages": raw["messages"] >= production.MIN_MESSAGES,
         "turns": raw["turns"] >= production.MIN_TURNS,

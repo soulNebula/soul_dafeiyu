@@ -420,3 +420,7 @@ python -m agi.selflearn.cli --db <db> correct-memory <id> "新内容" --evidence
 
 `nli.verify(reply, contexts, client)` 用 LLM judge 判断回复陈述是否有上下文依据；
 不塞进每轮热路径，避免延迟/成本，供审计或高风险回复使用。不是形式化 NLI。
+
+### chat correction 主链
+
+用户说“记错了，不是 A，是 B”时，chat 直接调用 `memory.apply_correction`，旧记忆失效、新记忆写入并同步检索，不再走普通生成。

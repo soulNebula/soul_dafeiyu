@@ -364,3 +364,39 @@ def correct(path: Path | str, memory_id: str, content: str,
         pass
     return {"ok": True, "old_id": memory_id, "id": new_id, "content": new_text,
             "action": "corrected", "evidence": evidence}
+
+
+_CORRECTION_CUE = re.compile(r"(记错|记错了|不对|更正|纠正|改成|不是)")
+_PAIR = re.compile(r"不是(.{1,60}?)[，,。；; ]*(?:而)?是(.{1,60})")
+
+
+def apply_correction(path: Path | str, text: str) -> dict[str, Any] | None:
+    """识别“记错了，不是A，是B”并更新最相关的一条 active 记忆。"""
+    value = _clean(text)
+    if not value or not _CORRECTION_CUE.search(value):
+        return None
+    m = _PAIR.search(value)
+    if not m:
+        return None
+    old_text = _clean(m.group(1))
+    new_text = _clean(m.group(2))
+    if not old_text or not new_text:
+        return None
+    con = db.connect(path)
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT * FROM user_memories WHERE status='active' ORDER BY created_at DESC LIMIT 100")]
+    finally:
+        con.close()
+    target = None
+    for row in rows:
+        content = str(row.get("content") or "")
+        if old_text and (old_text in content or content in old_text):
+            target = row
+            break
+    if target is None:
+        return {"ok": False, "reason": "no_matching_memory", "old": old_text, "new": new_text}
+    result = correct(path, target["id"], new_text, evidence=value)
+    result["matched"] = target["content"]
+    result["trigger"] = "chat_correction"
+    return result

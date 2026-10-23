@@ -484,3 +484,29 @@ def test_memory_correction_invalidates_old_and_indexes_new(tmp_path):
     assert r["ok"] and r["id"] != "UM-1"
     assert search.search(p, "杭州") == []
     assert search.search(p, "上海")
+
+
+def test_chat_correction_detects_and_updates_memory(tmp_path):
+    from agi.selflearn import memory
+    p = tmp_path / "corr2.sqlite3"
+    con = db.connect(p)
+    con.execute("INSERT INTO user_memories(id,scope,kind,content,evidence,confidence,status,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("UM-1", "user", "fact", "用户住在杭州", "我住在杭州", 0.9, "active", 1.0))
+    con.commit(); con.close()
+    r = memory.apply_correction(p, "记错了，不是住在杭州，是住在上海")
+    assert r and r["ok"] and r["matched"] == "用户住在杭州"
+    assert memory.apply_correction(p, "记错了，不是杭州，是上海")["reason"] == "no_matching_memory"
+
+
+def test_chat_correction_short_circuits_generation(tmp_path):
+    p = tmp_path / "corr_chat.sqlite3"
+    con = db.connect(p)
+    con.execute("INSERT INTO user_memories(id,scope,kind,content,evidence,confidence,status,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("UM-1", "user", "fact", "用户住在杭州", "我住在杭州", 0.9, "active", 1.0))
+    con.commit(); con.close()
+    agent = SelfLearnAgent(p, client=FakeClient())
+    r = agent.send("记错了，不是住在杭州，是住在上海")
+    assert r.get("correction", {}).get("ok") is True
+    assert r["reply"] == "好，我改过来了。"

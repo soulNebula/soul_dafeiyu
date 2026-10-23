@@ -103,6 +103,17 @@ class SelfLearnAgent:
             live_ingest.record_message(self.path, "user", display, message_id=user_id)
         except Exception:  # noqa: BLE001
             pass
+        correction_info = None
+        try:
+            correction_info = memory.apply_correction(self.path, text)
+        except Exception:  # noqa: BLE001
+            correction_info = None
+        if correction_info and correction_info.get("ok"):
+            st = state.load(self.path)
+            out = self._simple_reply(user_id, "好，我改过来了。", st, None,
+                                     had_image=bool(image))
+            out["correction"] = correction_info
+            return out
         attachment = None
         if image:
             try:

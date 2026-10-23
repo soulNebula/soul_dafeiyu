@@ -32,3 +32,15 @@ def test_nightly_with_fake_client_does_not_raise(tmp_path):
     r = nightly.run(path, FakeClient(), force=True)
     assert r["auto_send"] is False
     assert "steps" in r and "reflect" in r["steps"]
+
+
+def test_nightly_rebuilds_sessions(tmp_path):
+    path = tmp_path / "n3.sqlite3"
+    con = db.connect(path)
+    con.execute("INSERT INTO raw_events(id,source,source_id,friend,sender,kind,text,ts,meta_json) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                ("RE-1", "live", "M-1", "selflearn", "user", "text", "你好", time.time(), "{}"))
+    con.commit(); con.close()
+    r = nightly.run(path, None)
+    assert r["steps"]["sessions"]["sessions"] >= 1
+    assert r["steps"]["sessions"]["segments"] >= 1

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import personality, profile, summary, weak_validation
+from . import ingest, personality, profile, summary, weak_validation
 
 
 def run(path: Path | str, client=None, *, force: bool = False) -> dict[str, Any]:
@@ -34,6 +34,14 @@ def run(path: Path | str, client=None, *, force: bool = False) -> dict[str, Any]
         steps["summary"] = {"ok": False, "skipped": "no_client"}
         steps["profile"] = {"ok": False, "skipped": "no_client"}
         steps["reflect"] = {"ok": False, "skipped": "no_client"}
+    try:
+        sessions = ingest.build_sessions(path)
+        segments = 0
+        for session in sessions:
+            segments += len(ingest.segment_session(path, str(session["id"])))
+        steps["sessions"] = {"ok": True, "sessions": len(sessions), "segments": segments}
+    except Exception as exc:  # noqa: BLE001
+        steps["sessions"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     try:
         steps["weak"] = weak_validation.status(path)
     except Exception as exc:  # noqa: BLE001

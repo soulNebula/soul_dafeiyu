@@ -358,3 +358,7 @@ python -m agi.selflearn.cli --db <db> emoji-profile
 ```
 
 输出情绪分布、text/emoji 比、攻击性/自嘲度、Top 表情与 signature；基于本地标签弱推断。
+
+### 夜间 S0/S1/S2 重建
+
+`nightly` 现在还会调用 `ingest.build_sessions` 并重建每段 segment；raw_events 不再只进不出。

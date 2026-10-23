@@ -324,3 +324,11 @@ python -m agi.selflearn.cli --db <db> drift
 ```
 
 比较最近/之前窗口的回复长度、提问比例、软化词比例；只审计，不自动改策略。
+
+### 无据断言弱审计（M2）
+
+```bash
+python -m agi.selflearn.cli --db <db> grounding
+```
+
+字符重叠弱审计，不是 NLI；当 `rate > 0.80` 判为 `unreliable`，不能拿它下生产结论。

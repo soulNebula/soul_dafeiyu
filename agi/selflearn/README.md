@@ -415,3 +415,8 @@ python -m agi.selflearn.cli --db <db> correct-memory <id> "新内容" --evidence
 ```
 
 旧记忆 invalid、新记忆带 evidence 写入，同时删旧 FTS/写新 FTS。
+
+### 语义蕴含校验（可选）
+
+`nli.verify(reply, contexts, client)` 用 LLM judge 判断回复陈述是否有上下文依据；
+不塞进每轮热路径，避免延迟/成本，供审计或高风险回复使用。不是形式化 NLI。

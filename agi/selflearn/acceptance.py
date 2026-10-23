@@ -129,6 +129,8 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
         "memory_gate_ready": ("_sensitive" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8")
                               and "pending" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8")),
         "memory_correction_ready": "def correct" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8"),
+        "nli_ready": (Path(__file__).with_name("nli.py")).exists()
+                     and "def verify" in (Path(__file__).with_name("nli.py")).read_text(encoding="utf-8"),
         "skill_gate_ready": (Path(__file__).with_name("skilltree.py")).exists()
                             and "gate_request" in (Path(__file__).with_name("skilltree.py")).read_text(encoding="utf-8"),
         "capability_gate_ready": ("capability_reply" in (Path(__file__).with_name("skilltree.py")).read_text(encoding="utf-8")

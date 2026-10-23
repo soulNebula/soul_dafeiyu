@@ -49,6 +49,11 @@ def snapshot(path: Path | str = DB_PATH, *, days: int = 7) -> dict[str, Any]:
         user_messages = _count_by(con, "messages", "role", "user")
         turns = _count(con, "turns")
         feedback = _count(con, "feedback")
+        try:
+            explicit_feedback = int(con.execute(
+                "SELECT count(*) FROM feedback WHERE note NOT LIKE 'implicit:%'").fetchone()[0])
+        except Exception:  # noqa: BLE001
+            explicit_feedback = feedback
         memories = _count(con, "user_memories")
         evidence_rows = _table_rows(
             con, "SELECT count(*) n FROM user_memories WHERE evidence IS NOT NULL AND trim(evidence)<>''")
@@ -81,6 +86,8 @@ def snapshot(path: Path | str = DB_PATH, *, days: int = 7) -> dict[str, Any]:
         "messages": {"ok": messages >= MIN_MESSAGES, "value": messages, "min": MIN_MESSAGES},
         "turns": {"ok": turns >= MIN_TURNS, "value": turns, "min": MIN_TURNS},
         "feedback": {"ok": feedback >= MIN_FEEDBACK, "value": feedback, "min": MIN_FEEDBACK},
+        "explicit_feedback": {"ok": explicit_feedback >= MIN_FEEDBACK,
+                              "value": explicit_feedback, "min": MIN_FEEDBACK},
         "memories": {"ok": memories >= MIN_MEMORIES, "value": memories, "min": MIN_MEMORIES},
         "memory_evidence": {"ok": evidence_ratio >= MIN_EVIDENCE_RATIO,
                             "value": round(evidence_ratio, 3), "min": MIN_EVIDENCE_RATIO},
@@ -104,7 +111,7 @@ def snapshot(path: Path | str = DB_PATH, *, days: int = 7) -> dict[str, Any]:
         "active_days": active_days,
         "recent_messages": recent_messages,
         "raw": {"messages": messages, "user_messages": user_messages, "turns": turns,
-                "feedback": feedback, "memories": memories, "persona": persona,
+                "feedback": feedback, "explicit_feedback": explicit_feedback, "memories": memories, "persona": persona,
                 "claims": claims, "conflicts": conflicts, "errors": errors,
                 "proactive": proactive, "variants": variants},
         "checks": checks,
@@ -112,7 +119,7 @@ def snapshot(path: Path | str = DB_PATH, *, days: int = 7) -> dict[str, Any]:
         "total": total,
         "score": round(passed * 100 / total, 1),
         "verdict": verdict,
-        "note": "只证明本地数据达到 pilot 门槛；7 天真实留存/编造率仍需真实运行。",
+        "note": "只证明本地数据达到 pilot 门槛；explicit_feedback 必须是用户主动评价，隐式反馈不计入；7 天真实留存/编造率仍需真实运行。",
     }
 
 

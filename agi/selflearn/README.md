@@ -261,3 +261,13 @@ python -m agi.selflearn.cli --db <db> backfill-persona
 - claims 从真实历史 user 消息重新抽取，evidence 必须回原文；
 - persona 走现有反思，证据不足会自动不写；
 - feedback 不能回填，不能伪造。
+
+### 隐式反馈
+
+```bash
+python -m agi.selflearn.cli --db <db> implicit-feedback
+```
+
+- 从下一句真实用户消息推断 good/ok/bad，写 `note=implicit:...`；
+- 只是行为代理，不是用户主动评价；
+- production 门槛有独立 `explicit_feedback` 项，隐式反馈不计入。

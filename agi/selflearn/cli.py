@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import acceptance, affect, backfill, db, emoji, errors, image_understanding, initiative, ingest, learn_loop, media, memory, personality, proactive, production, profile, proposals, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
+from . import acceptance, affect, backfill, db, emoji, errors, image_understanding, implicit_feedback, initiative, ingest, learn_loop, media, memory, personality, proactive, production, profile, proposals, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 from .llm import Client
@@ -193,6 +193,8 @@ def main(argv=None) -> int:
         _out(proposals.list_proposals(path, args.status or None)); return 0
     if args.cmd == "proposal-transition":
         _out(proposals.transition(path, args.proposal_id, args.action)); return 0
+    if args.cmd == "implicit-feedback":
+        _out(implicit_feedback.infer(path, limit=args.limit)); return 0
     if args.cmd == "backfill-claims":
         _out(backfill.claims_from_messages(path, Client(), limit=args.limit)); return 0
     if args.cmd == "backfill-persona":

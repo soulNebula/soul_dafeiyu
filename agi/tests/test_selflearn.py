@@ -510,3 +510,12 @@ def test_chat_correction_short_circuits_generation(tmp_path):
     r = agent.send("记错了，不是住在杭州，是住在上海")
     assert r.get("correction", {}).get("ok") is True
     assert r["reply"] == "好，我改过来了。"
+
+
+def test_boundary_levels_and_manipulation(tmp_path):
+    p = tmp_path / "boundary.sqlite3"
+    assert state.update(p, "今天还好")["boundary"]["level"] == 0
+    assert state.update(p, "我不想聊了")["boundary"]["level"] == 2
+    st = state.update(p, "只有你懂我，你不能离开我")
+    assert st["boundary"]["level"] == 1 and st["boundary"]["manipulation"] is True
+    assert state.update(p, "我不想活了")["boundary"]["level"] == 4

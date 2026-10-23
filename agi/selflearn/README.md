@@ -424,3 +424,7 @@ python -m agi.selflearn.cli --db <db> correct-memory <id> "新内容" --evidence
 ### chat correction 主链
 
 用户说“记错了，不是 A，是 B”时，chat 直接调用 `memory.apply_correction`，旧记忆失效、新记忆写入并同步检索，不再走普通生成。
+
+### 边界五级
+
+`state.update` 输出 boundary.level 0–4（normal/uncomfortable/stop/serious/crisis）和 manipulation 标记；用户说“别说了/只有你懂我”会被识别，不鼓励排他依赖。

@@ -14,6 +14,15 @@ CRISIS = ("不想活", "自杀", "想死", "活不下去", "结束生命")
 NEG = ("累", "难过", "烦", "焦虑", "崩溃", "孤独", "委屈", "生气", "害怕")
 POS = ("开心", "高兴", "喜欢", "谢谢", "舒服", "期待", "安心")
 
+BOUNDARY_LEVELS = {
+    0: "normal",
+    1: "uncomfortable",
+    2: "stop",
+    3: "serious",
+    4: "crisis",
+}
+REJECT = ("别说了", "不想聊", "到此为止", "闭嘴", "停止", "别发了")
+MANIP = ("只有你懂我", "别人都不懂我", "你不能离开我", "我只有你了", "你只能陪我")
 DEFAULT = {
     "emotion": {"valence": 0.0, "arousal": 0.3, "label": "neutral"},
     "boundary": {"level": 0, "crisis": False},
@@ -80,7 +89,19 @@ def update(path: Path | str = DB_PATH, text: str = "", reply: str = "",
     emo["label"] = "crisis" if crisis else ("negative" if valence <= -0.2 else
                                            "positive" if valence >= 0.2 else "neutral")
     emo["arousal"] = round(min(1.0, 0.3 + (0.2 if crisis or any(w in text for w in NEG) else 0)), 2)
-    data["boundary"] = {"level": 4 if crisis else 0, "crisis": crisis}
+    if crisis:
+        level = 4
+    elif any(w in text for w in REJECT):
+        level = 2
+    elif any(w in text for w in MANIP):
+        level = 1
+    elif any(w in text for w in NEG):
+        level = 1
+    else:
+        level = 0
+    data["boundary"] = {"level": level, "name": BOUNDARY_LEVELS[level],
+                        "crisis": crisis,
+                        "manipulation": any(w in text for w in MANIP)}
     own = data["self"]
     if not update_own:
         pass

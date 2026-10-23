@@ -132,6 +132,7 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
         "nli_ready": (Path(__file__).with_name("nli.py")).exists()
                      and "def verify" in (Path(__file__).with_name("nli.py")).read_text(encoding="utf-8"),
         "correction_integrated": "apply_correction" in (Path(__file__).with_name("chat.py")).read_text(encoding="utf-8"),
+        "boundary_levels_ready": "BOUNDARY_LEVELS" in (Path(__file__).with_name("state.py")).read_text(encoding="utf-8"),
         "skill_gate_ready": (Path(__file__).with_name("skilltree.py")).exists()
                             and "gate_request" in (Path(__file__).with_name("skilltree.py")).read_text(encoding="utf-8"),
         "capability_gate_ready": ("capability_reply" in (Path(__file__).with_name("skilltree.py")).read_text(encoding="utf-8")

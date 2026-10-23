@@ -380,3 +380,11 @@ python -m agi.selflearn.cli scrub-pii --text "手机 13812345678"
 ### affect 接入主链
 
 chat 现在调用 `affect.update_from_message` 处理冒犯/道歉/危机/信任；`state.update(update_own=False)` 避免重复扣 mood。
+
+### Learn Loop 主链
+
+```bash
+python -m agi.selflearn.cli learn-from-url --skill SK-CODE-HTML --url https://...
+```
+
+或网页 API：`GET /api/learn`、`POST /api/learn/from-url`。链路：抓正文 → quote → provenance → 制卡。

@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import acceptance, affect, backfill, db, drift, emoji, emoji_profile, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_loop, media, memory, nightly, personality, pii, proactive, production, production_contacts, profile, proposals, quality, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
+from . import acceptance, affect, backfill, db, drift, emoji, emoji_profile, errors, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_flow, learn_loop, media, memory, nightly, personality, pii, proactive, production, production_contacts, profile, proposals, quality, report, research, scheduler, scoring, skills, state, summary, trust, wake, weak_validation
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 from .llm import Client
@@ -74,6 +74,9 @@ def main(argv=None) -> int:
     p_learn_verify.add_argument("--note", default="")
     p_learn_fetch = sub.add_parser("learn-fetch")
     p_learn_fetch.add_argument("--url", required=True); p_learn_fetch.add_argument("--keyword", default="")
+    p_lurl = sub.add_parser("learn-from-url")
+    p_lurl.add_argument("--skill", required=True); p_lurl.add_argument("--url", required=True)
+    p_lurl.add_argument("--keyword", default="")
     p_ingest = sub.add_parser("ingest-jsonl")
     p_ingest.add_argument("--file", required=True); p_ingest.add_argument("--source", default="jsonl")
     p_sessions = sub.add_parser("sessions"); p_sessions.add_argument("--friend", default="")
@@ -290,6 +293,9 @@ def main(argv=None) -> int:
                                         args.error)); return 0
     if args.cmd == "learn-verify":
         _out(learn_loop.verify_and_unlock(path, args.task, bool(args.passed), args.note)); return 0
+    if args.cmd == "learn-from-url":
+        _out(learn_flow.learn_from_url(path, args.skill, args.url,
+                                        keyword=args.keyword, client=Client())); return 0
     if args.cmd == "learn-fetch":
         fetched = research.fetch_text(args.url)
         if fetched.get("ok") and args.keyword:

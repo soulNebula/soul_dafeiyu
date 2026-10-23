@@ -8,7 +8,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import acceptance, db, errors, memory, personality, proactive, report, scheduler, skills, skilltree, state, trust
+from . import acceptance, db, errors, learn_flow, learn_loop, memory, personality, proactive, report, scheduler, skills, skilltree, state, trust
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 
@@ -111,6 +111,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers(); self.wfile.write(body); return
         if path == "/api/report":
             self._json(200, {"ok": True, "markdown": report.markdown(DB_PATH)}); return
+        if path == "/api/learn":
+            self._json(200, learn_loop.status(DB_PATH)); return
         if path == "/api/acceptance":
             self._json(200, acceptance.run(DB_PATH)); return
         if path == "/api/status":
@@ -174,6 +176,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Disposition", 'attachment; filename="selflearn-brain.json"')
             self.send_header("Content-Length", str(len(body)))
             self.end_headers(); self.wfile.write(body); return
+        if path == "/api/learn/from-url":
+            skill = str(body.get("skill") or "").strip()
+            url = str(body.get("url") or "").strip()
+            if not skill or not url.startswith(("http://", "https://")):
+                self._json(400, {"ok": False, "error": "需要 skill + http(s) url"}); return
+            with _LOCK:
+                result = learn_flow.learn_from_url(DB_PATH, skill, url,
+                                                   keyword=str(body.get("keyword") or ""),
+                                                   client=_agent().client)
+            self._json(200, result); return
         if path == "/api/proactive/tick":
             with _LOCK:
                 result = proactive.tick(DB_PATH, _agent().client)
@@ -190,6 +202,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, result); return
         if path == "/api/report":
             self._json(200, {"ok": True, "markdown": report.markdown(DB_PATH)}); return
+        if path == "/api/learn":
+            self._json(200, learn_loop.status(DB_PATH)); return
         if path == "/api/acceptance":
             self._json(200, acceptance.run(DB_PATH)); return
         if path == "/api/feedback":

@@ -444,3 +444,12 @@ python -m agi.selflearn.cli --db <db> correct-memory <id> "新内容" --evidence
 ### 工具层 G2
 
 `tools.run(name, **kwargs)` 白名单：calc / time / python_verify；不执行任意 shell/网络。`python -m agi.selflearn.cli tools` 查看。
+
+### Learn Loop 后半
+
+```bash
+python -m agi.selflearn.cli learn-exercise --content "用 + 做加法"
+python -m agi.selflearn.cli --db <db> learn-answer --task LT-... --answer "..." --terms "+ ,加法"
+```
+
+出题 → 弱 verifier 判分 → 记录 practice；另有 `has_two_sources` 二源检查。

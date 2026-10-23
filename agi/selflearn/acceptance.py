@@ -138,6 +138,8 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
         "forget_chain_ready": "redacted_message" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8"),
         "tools_ready": (Path(__file__).with_name("tools.py")).exists()
                        and "def run" in (Path(__file__).with_name("tools.py")).read_text(encoding="utf-8"),
+        "learn_practice_ready": (Path(__file__).with_name("learn_practice.py")).exists()
+                                and "def make_exercise" in (Path(__file__).with_name("learn_practice.py")).read_text(encoding="utf-8"),
         "persona_layers_ready": (Path(__file__).with_name("persona_layers.py")).exists()
                                and "def context" in (Path(__file__).with_name("persona_layers.py")).read_text(encoding="utf-8"),
         "skill_gate_ready": (Path(__file__).with_name("skilltree.py")).exists()

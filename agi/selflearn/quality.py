@@ -27,6 +27,7 @@ def claims_quality(path: Path | str = "agi/data/selflearn/selflearn.sqlite3") ->
     finally:
         con.close()
     total = len(rows)
+    facts = [r for r in rows if str(r.get("claim_type") or "") != "inference"]
     valid = fabricated = pending = accepted = 0
     bad_ids = []
     for row in rows:
@@ -39,11 +40,12 @@ def claims_quality(path: Path | str = "agi/data/selflearn/selflearn.sqlite3") ->
         else:
             fabricated += 1
             bad_ids.append(row["id"])
-        if str(row.get("status") or "") == "pending":
+        if str(row.get("status") or "") == "pending" and str(row.get("claim_type") or "") != "inference":
             pending += 1
         elif str(row.get("status") or "") == "active":
             accepted += 1
-    pending_ratio = pending / total if total else 0.0
+    fact_total = len(facts)
+    pending_ratio = pending / fact_total if fact_total else 0.0
     evidence_ratio = valid / total if total else 0.0
     return {
         "ok": True, "total": total, "valid_evidence": valid, "fabricated": fabricated,

@@ -289,3 +289,7 @@ python -m agi.selflearn.cli --db <db> quality
 - claim evidence 必须能回到原消息；
 - pending 比例目标 ≤25%；
 - 10 维画像每维至少 2 条证据。
+
+### LLM reasoning 预算
+
+`deepseek-flash` 的 reasoning tokens 可能吃满 max_tokens，导致正文为空；`llm.Client` 现在检测 `reasoning_tokens >= 80%` 或 `finish_reason=length` 时自动扩容重试一次（4096/8192 上限）。

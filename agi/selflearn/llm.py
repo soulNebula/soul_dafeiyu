@@ -57,17 +57,11 @@ class Client:
     def available(self) -> bool:
         return bool(self.api_key) or self.transport is not None
 
-    def chat(self, messages: list[dict], *, purpose: str = "chat",
-             max_tokens: int = 800, temperature: float = 0.7,
-             json_mode: bool = False) -> dict[str, Any]:
-        body = {"model": self.model, "messages": messages, "stream": False,
-                "max_tokens": int(max_tokens), "temperature": float(temperature)}
-        if json_mode:
-            body["response_format"] = {"type": "json_object"}
+    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         started = time.time()
         try:
             if self.transport is not None:
-                payload = self.transport(messages, body)
+                payload = self.transport(body["messages"], body)
             else:
                 if not self.api_key:
                     raise RuntimeError("缺少 DeepSeek API key")
@@ -80,15 +74,36 @@ class Client:
                 )
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     payload = json.loads(resp.read().decode("utf-8", "replace"))
-            text = ""
-            try:
-                text = (payload.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-            except Exception:  # noqa: BLE001
-                text = ""
+            choice = (payload.get("choices") or [{}])[0]
+            text = (choice.get("message") or {}).get("content") or ""
             return {"ok": bool(text), "text": text, "model": self.model,
                     "usage": payload.get("usage") or {},
+                    "finish_reason": choice.get("finish_reason") or "",
                     "elapsed": round(time.time() - started, 3)}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "text": "", "model": self.model, "usage": {},
                     "error": f"{type(exc).__name__}: {str(exc)[:200]}",
                     "elapsed": round(time.time() - started, 3)}
+
+    def chat(self, messages: list[dict], *, purpose: str = "chat",
+             max_tokens: int = 800, temperature: float = 0.7,
+             json_mode: bool = False) -> dict[str, Any]:
+        body = {"model": self.model, "messages": messages, "stream": False,
+                "max_tokens": int(max_tokens), "temperature": float(temperature)}
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
+        result = self._post(body)
+        # deepseek-flash 可能把预算耗在 reasoning tokens 上，正文为空；
+        # 真实网络请求遇到这种情况自动扩容重试一次（fake transport 不重试）。
+        usage = result.get("usage") or {}
+        reasoning = int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
+        if (not result.get("ok") and self.transport is None
+                and (reasoning >= int(max_tokens) * 0.8
+                     or result.get("finish_reason") == "length")):
+            retry = dict(body)
+            retry["max_tokens"] = min(8192, max(int(max_tokens) * 3, 2048))
+            second = self._post(retry)
+            second["retried"] = True
+            second["retry_max_tokens"] = retry["max_tokens"]
+            return second
+        return result

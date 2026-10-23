@@ -36,7 +36,7 @@ def ingest(path: Path | str, client, text: str, message_id: str) -> dict[str, An
     # 必须在抽取前拿 existing，否则刚写进去的 claim 会被自己 merge
     existing = _existing_active(path)
     extracted = claims_mod.extract_claims(path, client, text, message_id)
-    accepted, pending, rejected, merged, conflicts = [], [], [], [], []
+    accepted, pending, rejected, merged, conflicts, inferences = [], [], [], [], [], []
     for claim in extracted:
         result = gates.gate_claim(claim, existing, source_text=text)
         kind = result.get("result")
@@ -49,8 +49,15 @@ def ingest(path: Path | str, client, text: str, message_id: str) -> dict[str, An
                  "claim_type": claim.claim_type, "status": "active"}
             )
         elif kind == "pending":
-            _set_status(path, claim.id, "pending")
-            pending.append({"id": claim.id, "reason": result.get("reason")})
+            # C 级/推断不是“待确认事实”，单独存 inference；低置信度事实仍 pending
+            ctype = str(getattr(claim, "claim_type", ""))
+            level = str(getattr(claim, "source_level", ""))
+            if ctype == "inference" or level == "C":
+                _set_status(path, claim.id, "inference")
+                inferences.append({"id": claim.id, "reason": result.get("reason")})
+            else:
+                _set_status(path, claim.id, "pending")
+                pending.append({"id": claim.id, "reason": result.get("reason")})
         elif kind == "merge":
             target = result.get("match_id") or ""
             _set_status(path, claim.id, "merged", target or None)
@@ -77,7 +84,8 @@ def ingest(path: Path | str, client, text: str, message_id: str) -> dict[str, An
             _set_status(path, claim.id, "invalid")
             rejected.append({"id": claim.id, "reason": result.get("reason")})
     return {"extracted": len(extracted), "accepted": accepted, "pending": pending,
-            "rejected": rejected, "merged": merged, "conflicts": conflicts}
+            "rejected": rejected, "merged": merged, "conflicts": conflicts,
+            "inferences": inferences}
 
 
 def list_conflicts(path: Path | str) -> list[dict]:

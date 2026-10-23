@@ -249,7 +249,9 @@ class SelfLearnAgent:
         reply = reply[:800]
         guard_info = {"level": "L0", "issues": [], "reply": reply}
         if not crisis:
-            guard_info = guard.check(reply, self.path)
+            guard_ctx = "\n".join([text] + [str(m.get("content") or "") for m in mems]
+                                   + [str(m.get("text") or "") for m in recent[-6:]])
+            guard_info = guard.check(reply, self.path, context=guard_ctx)
             reply = guard_info["reply"][:800]
             if not image:
                 reply = style_profile.tune_reply(text, reply)

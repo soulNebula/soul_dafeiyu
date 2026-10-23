@@ -17,6 +17,8 @@ ABSOLUTE = {
     "绝对": "很可能",
 }
 TOOL_CLAIMS = ("我查了", "我搜了", "我看了资料", "我上网查")
+NUMBER = re.compile(r"(?<!\d)(?:\d{2,4}年|\d{1,2}月|\d{1,2}日|\d+(?:\.\d+)?\s*(?:元|块|岁|点|个|次|天|小时|分钟|%|公里|km|kg))")
+CITATION = re.compile(r"\[(M-[0-9a-zA-Z_-]+)\]")
 
 
 def _rewrite(reply: str) -> tuple[str, list[str]]:
@@ -36,13 +38,33 @@ def _rewrite(reply: str) -> tuple[str, list[str]]:
     return out, issues
 
 
-def check(reply: str, path: Path | str = DB_PATH) -> dict[str, Any]:
+def check(reply: str, path: Path | str = DB_PATH, *, context: str = "") -> dict[str, Any]:
     """返回 {level, reply, issues}；L2 用安全回复，不重试。"""
     text = str(reply or "").strip()
     if not text:
         return {"level": "L2", "reply": "我不太确定该怎么说。你愿意再多告诉我一点吗？",
                 "issues": ["empty"]}
     rewritten, issues = _rewrite(text)
+    ctext = str(context or "")
+    if ctext:
+        for num in NUMBER.findall(rewritten):
+            if num not in ctext:
+                issues.append(f"number_not_in_context:{num}")
+                break
+    # 引用必须是本地真实 message id；不存在的引用直接删掉
+    bad_citations = []
+    for cid in CITATION.findall(rewritten):
+        con = db.connect(path)
+        try:
+            row = con.execute("SELECT 1 FROM messages WHERE id=?", (cid,)).fetchone()
+        finally:
+            con.close()
+        if row is None:
+            bad_citations.append(cid)
+    if bad_citations:
+        issues.append("bad_citation")
+        for cid in bad_citations:
+            rewritten = rewritten.replace(f"[{cid}]", "")
     if any(i.startswith("tool_claim") for i in issues) or len(issues) >= 2:
         return {"level": "L2",
                 "reply": "这个我不太确定，先不瞎说。你可以再告诉我一点吗？",

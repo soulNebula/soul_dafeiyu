@@ -397,3 +397,9 @@ python -m agi.selflearn.cli learn-from-url --skill SK-CODE-HTML --url https://..
 ### 错误账本（07）
 
 `errors` 增加 `root_cause / fix_verified / hit_count`；`record(root_cause=...)`、`mark_fix_verified`、`bump_hit` 可在错误复现/修复后审计。
+
+### guard 上下文校验
+
+`guard.check` 现在可接收 context：
+- 回复里数字必须能在上下文找到，否则标 `number_not_in_context`；
+- `[M-xxx]` 引用必须对应真实消息，否则删掉并标 `bad_citation`。

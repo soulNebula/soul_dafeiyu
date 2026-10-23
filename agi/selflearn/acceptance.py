@@ -116,6 +116,7 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
                             and "def learn_from_url" in (Path(__file__).with_name("learn_flow.py")).read_text(encoding="utf-8"),
         "proactive_budget_ready": "DAILY_BUDGET" in (Path(__file__).with_name("proactive.py")).read_text(encoding="utf-8"),
         "error_ledger_ready": "fix_verified" in (Path(__file__).with_name("db.py")).read_text(encoding="utf-8"),
+        "guard_context_ready": "number_not_in_context" in (Path(__file__).with_name("guard.py")).read_text(encoding="utf-8"),
         "proposal_bridge_ready": (Path(__file__).with_name("proposal_bridge.py")).exists()
                                  and "def from_reflection" in (Path(__file__).with_name("proposal_bridge.py")).read_text(encoding="utf-8"),
         "growth_report_ready": (Path(__file__).with_name("report.py")).exists()

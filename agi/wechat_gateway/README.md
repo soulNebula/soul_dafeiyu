@@ -97,3 +97,15 @@ daily_limit: 200           每日上限
 ```
 
 超限记录 `send_blocked`，不会调用 wxauto。默认 quiet_hours 覆盖凌晨；需要夜间测试时显式改配置。
+
+## 发送控制面
+
+`config.json`：
+
+```text
+send_mode: auto | confirm | off
+admin_token: ""          # 设置后 /api/approve 需要 X-Admin-Token
+complaint_stop: true     # 收到投诉/举报/机器人识别 → 立即 stop
+```
+
+confirm 模式只记录 draft，不真实发送；`POST /api/approve` 可人工放行。

@@ -24,6 +24,9 @@ DEFAULTS = {
     "quiet_hours": [0, 7],
     "rate_per_minute": 3,
     "daily_limit": 200,
+    "send_mode": "auto",
+    "admin_token": "",
+    "complaint_stop": True,
 }
 
 

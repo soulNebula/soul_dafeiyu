@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import config as cfg
-from . import policy
+from . import control, policy
 from .receiver import WeChatReceiver
 from .sender import WxAutoSender
 
@@ -125,6 +125,11 @@ class Gateway:
     def on_inbound(self, msg: dict) -> None:
         self._record("inbound", {"friend": msg.get("friend"), "text": msg.get("text"),
                                   "id": msg.get("id")})
+        if self.cfg.get("complaint_stop", True) and control.is_complaint(str(msg.get("text") or "")):
+            self.cfg["stop"] = True
+            self._record("complaint_circuit", {"friend": msg.get("friend"),
+                                               "text": str(msg.get("text") or "")[:120], "stop": True})
+            return
         if not self.cfg.get("auto_reply"):
             return
         try:
@@ -198,7 +203,15 @@ class Gateway:
             if not self.cfg.get("dry_run", True):
                 time.sleep(float(self.cfg.get("reply_delay") or 0))
 
-    def _send(self, contact: str, text: str) -> dict:
+    def _send(self, contact: str, text: str, *, force: bool = False) -> dict:
+        mode = control.send_mode(self.cfg)
+        if mode == "off":
+            self._record("send_blocked", {"friend": contact, "reason": "send_mode_off"})
+            return {"ok": False, "status": "blocked", "error": "send_mode_off"}
+        if mode == "confirm" and not force:
+            self._record("draft", {"friend": contact, "text": text})
+            return {"ok": False, "status": "draft", "requires_confirm": True,
+                    "contact": contact, "text": text}
         if self.cfg.get("stop"):
             self._record("send_blocked", {"friend": contact, "reason": "stop_switch"})
             return {"ok": False, "status": "blocked", "error": "stop_switch"}
@@ -258,6 +271,8 @@ class Gateway:
             "queue": self.queue.qsize(),
             "sent": self.sent,
             "failed": self.failed,
+            "send_mode": control.send_mode(self.cfg),
+            "admin_token_set": bool(self.cfg.get("admin_token")),
             "policy": {"stop": bool(self.cfg.get("stop")),
                        "quiet_hours": self.cfg.get("quiet_hours"),
                        "rate_per_minute": self.cfg.get("rate_per_minute"),
@@ -284,6 +299,20 @@ def make_handler(gateway: Gateway):
 
         def do_POST(self):
             path = self.path.split("?", 1)[0]
+            if path == "/api/approve":
+                if not control.auth_ok({k: v for k, v in self.headers.items()}, gateway.cfg):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                except Exception:
+                    self._json(400, {"ok": False, "error": "bad json"}); return
+                contact = str(body.get("contact") or "")
+                text = str(body.get("text") or "")
+                if contact not in (gateway.cfg.get("allowed_contacts") or []) or not text:
+                    self._json(400, {"ok": False, "error": "contact 不在白名单或 text 为空"}); return
+                out = gateway._send(contact, text, force=True)
+                self._json(200, out); return
             if path == "/api/test/inbound":
                 if not gateway.cfg.get("dry_run", True):
                     self._json(403, {"ok": False, "error": "测试注入接口只允许 dry_run=true"})

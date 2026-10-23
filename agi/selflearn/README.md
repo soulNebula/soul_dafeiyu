@@ -250,3 +250,14 @@ python -m agi.selflearn.cli --db <db> production --markdown
 门槛：消息≥30、轮次≥10、反馈≥3、记忆≥5、证据覆盖≥80%、人格≥3、claims≥5、未解决冲突≤5、错误率≤25%。
 
 注意：这是 pilot 门槛，不能替代 7 天真实运行；当前活动库只有 `needs_work`。
+
+### 历史回填
+
+```bash
+python -m agi.selflearn.cli --db <db> backfill-claims --limit 12
+python -m agi.selflearn.cli --db <db> backfill-persona
+```
+
+- claims 从真实历史 user 消息重新抽取，evidence 必须回原文；
+- persona 走现有反思，证据不足会自动不写；
+- feedback 不能回填，不能伪造。

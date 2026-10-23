@@ -86,6 +86,8 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
                        and "def run_due" in (Path(__file__).with_name("wake.py")).read_text(encoding="utf-8"),
         "production_gate_ready": (Path(__file__).with_name("production.py")).exists()
                                  and "def snapshot" in (Path(__file__).with_name("production.py")).read_text(encoding="utf-8"),
+        "backfill_ready": (Path(__file__).with_name("backfill.py")).exists()
+                          and "def claims_from_messages" in (Path(__file__).with_name("backfill.py")).read_text(encoding="utf-8"),
         "growth_report_ready": (Path(__file__).with_name("report.py")).exists()
                                 and "def growth" in (Path(__file__).with_name("report.py")).read_text(encoding="utf-8"),
         "memory_control_ready": "def forget" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8")

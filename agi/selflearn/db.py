@@ -195,6 +195,12 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         con.execute("ALTER TABLE user_memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'user'")
     if "conflict_group" not in cols:
         con.execute("ALTER TABLE user_memories ADD COLUMN conflict_group TEXT")
+    ecols = {r[1] for r in con.execute("PRAGMA table_info(errors)").fetchall()}
+    for col, ddl in (("root_cause", "root_cause TEXT NOT NULL DEFAULT ''"),
+                     ("fix_verified", "fix_verified INTEGER NOT NULL DEFAULT 0"),
+                     ("hit_count", "hit_count INTEGER NOT NULL DEFAULT 1")):
+        if col not in ecols:
+            con.execute(f"ALTER TABLE errors ADD COLUMN {ddl}")
     mcols = {r[1] for r in con.execute("PRAGMA table_info(messages)").fetchall()}
     if "proactive" not in mcols:
         con.execute("ALTER TABLE messages ADD COLUMN proactive INTEGER NOT NULL DEFAULT 0")

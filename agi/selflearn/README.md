@@ -393,3 +393,7 @@ python -m agi.selflearn.cli learn-from-url --skill SK-CODE-HTML --url https://..
 
 - 反馈/弱验证只影响对话技能账本，回归测试证明不能解锁 SK-CODE-* 节点；
 - proactive 增加 `DAILY_BUDGET=6`，30 秒轮询不会被当成无限主动。
+
+### 错误账本（07）
+
+`errors` 增加 `root_cause / fix_verified / hit_count`；`record(root_cause=...)`、`mark_fix_verified`、`bump_hit` 可在错误复现/修复后审计。

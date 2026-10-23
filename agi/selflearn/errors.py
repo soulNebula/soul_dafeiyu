@@ -32,14 +32,16 @@ def classify(reply: str, note: str = "") -> str:
     return "bad_feedback"
 
 
-def record(path: Path | str, turn_id: str, reply: str, note: str = "") -> dict[str, Any]:
+def record(path: Path | str, turn_id: str, reply: str, note: str = "",
+           root_cause: str = "") -> dict[str, Any]:
     category = classify(reply, note)
     con = db.connect(path)
     try:
         now = time.time()
         eid = _id("ERR-", turn_id, category, now)
-        con.execute("INSERT INTO errors(id,turn_id,category,detail,created_at) VALUES(?,?,?,?,?)",
-                    (eid, turn_id, category, reply[:500], now))
+        con.execute("INSERT INTO errors(id,turn_id,category,detail,root_cause,fix_verified,hit_count,created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?)",
+                    (eid, turn_id, category, reply[:500], str(root_cause or "")[:300], 0, 1, now))
         lesson = LESSONS.get(category, LESSONS["bad_feedback"])
         exists = con.execute("SELECT id FROM lessons WHERE category=? AND status='active'",
                              (category,)).fetchone()
@@ -50,7 +52,8 @@ def record(path: Path | str, turn_id: str, reply: str, note: str = "") -> dict[s
         con.commit()
     finally:
         con.close()
-    return {"category": category, "lesson": LESSONS.get(category, LESSONS["bad_feedback"])}
+    return {"category": category, "lesson": LESSONS.get(category, LESSONS["bad_feedback"]),
+            "root_cause": root_cause, "fix_verified": 0}
 
 
 def active_lessons(path: Path | str = DB_PATH) -> list[dict]:
@@ -87,5 +90,30 @@ def list_errors(path: Path | str = DB_PATH, limit: int = 20) -> list[dict]:
     try:
         return [dict(r) for r in con.execute(
             "SELECT * FROM errors ORDER BY created_at DESC LIMIT ?", (int(limit),))]
+    finally:
+        con.close()
+
+
+def mark_fix_verified(path: Path | str, error_id: str, verified: bool = True) -> dict:
+    con = db.connect(path)
+    try:
+        cur = con.execute("UPDATE errors SET fix_verified=? WHERE id=?",
+                          (1 if verified else 0, error_id))
+        con.commit()
+        if not cur.rowcount:
+            return {"ok": False, "error": "错误不存在"}
+        return {"ok": True, "id": error_id, "fix_verified": bool(verified)}
+    finally:
+        con.close()
+
+
+def bump_hit(path: Path | str, error_id: str) -> dict:
+    con = db.connect(path)
+    try:
+        cur = con.execute("UPDATE errors SET hit_count=hit_count+1 WHERE id=?", (error_id,))
+        con.commit()
+        if not cur.rowcount:
+            return {"ok": False, "error": "错误不存在"}
+        return {"ok": True, "id": error_id}
     finally:
         con.close()

@@ -456,3 +456,15 @@ def test_preference_statement_is_not_code_request(tmp_path):
     r = agent.send("我叫阿明，平时喜欢晚上写代码")
     assert r.get("skill_gate") is None
     assert r.get("bubbles")
+
+
+def test_error_ledger_root_cause_and_fix(tmp_path):
+    from agi.selflearn import errors
+    p = tmp_path / "err.sqlite3"
+    r = errors.record(p, "T-1", "你必须马上照做", "bad", root_cause="pushy_advice")
+    assert r["root_cause"] == "pushy_advice"
+    row = errors.list_errors(p)[0]
+    assert row["root_cause"] == "pushy_advice" and row["fix_verified"] == 0
+    assert errors.mark_fix_verified(p, row["id"])["ok"] is True
+    assert errors.bump_hit(p, row["id"])["ok"] is True
+    assert errors.list_errors(p)[0]["hit_count"] == 2

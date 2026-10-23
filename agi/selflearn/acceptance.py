@@ -92,6 +92,8 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
                                   and "def infer" in (Path(__file__).with_name("implicit_feedback.py")).read_text(encoding="utf-8"),
         "live_ingest_ready": (Path(__file__).with_name("live_ingest.py")).exists()
                              and "def record_message" in (Path(__file__).with_name("live_ingest.py")).read_text(encoding="utf-8"),
+        "quality_ready": (Path(__file__).with_name("quality.py")).exists()
+                         and "def claims_quality" in (Path(__file__).with_name("quality.py")).read_text(encoding="utf-8"),
         "growth_report_ready": (Path(__file__).with_name("report.py")).exists()
                                 and "def growth" in (Path(__file__).with_name("report.py")).read_text(encoding="utf-8"),
         "memory_control_ready": "def forget" in (Path(__file__).with_name("memory.py")).read_text(encoding="utf-8")

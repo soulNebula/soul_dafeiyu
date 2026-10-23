@@ -279,3 +279,13 @@ selflearn 每条消息会自动镜像到 `raw_events`（source=live）；session
 ### 跨天门槛
 
 production 现在要求 `active_days >= 3`、`feedback_days >= 2`，防止一天猛聊就宣称生产通过。
+
+### M1 质量审计
+
+```bash
+python -m agi.selflearn.cli --db <db> quality
+```
+
+- claim evidence 必须能回到原消息；
+- pending 比例目标 ≤25%；
+- 10 维画像每维至少 2 条证据。

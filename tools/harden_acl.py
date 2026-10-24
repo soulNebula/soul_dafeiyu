@@ -200,6 +200,9 @@ def main(argv=None) -> int:
         print(f"\n有 {len(failures)} 个路径没能收紧（ACL 可能需要提权）。"
               "在管理员终端重跑 --apply，或手动执行上面的命令。")
         return 1 if args.strict else 0
+    if not args.apply:
+        print("\n只读盘点完成（未改动任何 ACL）；确认后执行：python tools/harden_acl.py --apply")
+        return 0
     print("\n全部完成：敏感路径已切断继承，仅当前用户/SYSTEM/Administrators 可访问。")
     return 0
 

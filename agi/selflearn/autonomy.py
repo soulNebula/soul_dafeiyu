@@ -73,7 +73,10 @@ def gate(path: Path | str, now: float | None = None) -> dict[str, Any]:
         budget = 6
     if budget > 0 and daily >= budget:  # <=0 视为不限
         return {"ok": True, "allowed": False, "reason": "daily_budget", "config": cfg}
-    gap = int(cfg.get("min_interval_seconds") or 30)
-    if last and now - last < gap:
+    try:
+        gap = int(cfg.get("min_interval_seconds", 30))
+    except (TypeError, ValueError):
+        gap = 30
+    if gap > 0 and last and now - last < gap:  # <=0 视为不限制
         return {"ok": True, "allowed": False, "reason": "min_interval", "config": cfg}
     return {"ok": True, "allowed": True, "reason": "allowed", "level": level, "config": cfg}

@@ -14,7 +14,14 @@ def run_once(path: Path | str, client=None, *, now: float | None = None) -> dict
     gate = autonomy.gate(path, now)
     if not gate.get("allowed"):
         return {"ok": True, "ran": False, "reason": gate.get("reason"), "gate": gate}
-    result = proactive.tick(path, client=client, now=now)
+    cfg = autonomy._config(path)
+    result = proactive.tick(
+        path, client=client, now=now,
+        idle_seconds=float(cfg.get("idle_seconds", 30)),
+        cooldown=float(cfg.get("cooldown_seconds", 900)),
+        min_score=cfg.get("min_score"),
+        respect_state=bool(cfg.get("respect_state", True)),
+    )
     return {"ok": True, "ran": True, "gate": gate, "proactive": result}
 
 

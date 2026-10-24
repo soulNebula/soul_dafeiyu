@@ -33,7 +33,9 @@ def _id(prefix: str, *parts) -> str:
 def _last_interaction(path: Path | str) -> float:
     con = db.connect(path)
     try:
-        row = con.execute("SELECT max(ts) FROM messages").fetchone()
+        # 只看"人"最后说话的时间：自己刚发过的主动消息不算"刚聊过"，
+        # 这样 LLM 想连发时不会被 8 秒静默挡住。
+        row = con.execute("SELECT max(ts) FROM messages WHERE role='user'").fetchone()
         return float(row[0] or 0) if row else 0.0
     finally:
         con.close()
@@ -125,20 +127,21 @@ def record_proactive_turn(path: Path | str, assistant_message_id: str, reply: st
 
 
 def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
-         idle_seconds: float = 30, cooldown: float = 900) -> dict[str, Any]:
+         idle_seconds: float = 30, cooldown: float = 900,
+         min_score: float | None = None, respect_state: bool = True) -> dict[str, Any]:
     """网页轮询：由它自己的心情/分享欲决定说不说，可一次说 1-2 条。"""
     now = time.time() if now is None else float(now)
     own = state.load(path)["self"]
     mood = float(own.get("mood", 0.55))
     sharing = float(own.get("sharing", 0.45))
-    if mood < 0.32 or sharing < 0.30:
+    if respect_state and (mood < 0.32 or sharing < 0.30):
         return {"ok": True, "available": False, "reason": "现在不太想说话"}
     last = _last_interaction(path)
     if not last:
         return {"ok": True, "available": False, "reason": "还没有对话"}
     if now - last < 8:
         return {"ok": True, "available": False, "reason": "刚聊过"}
-    if mood < 0.55 and sharing < 0.65 and now - last < idle_seconds:
+    if respect_state and idle_seconds > 0 and mood < 0.55 and sharing < 0.65 and now - last < idle_seconds:
         return {"ok": True, "available": False, "reason": "还在聊"}
     con = db.connect(path)
     try:
@@ -146,7 +149,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         last_p = float(row[0] or 0) if row else 0.0
     finally:
         con.close()
-    if last_p and now - last_p < cooldown:
+    if cooldown > 0 and last_p and now - last_p < cooldown:
         return {"ok": True, "available": False, "reason": "主动表达冷却中"}
     con = db.connect(path)
     try:
@@ -175,7 +178,8 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         return {"ok": True, "available": False,
                 "reason": f"决策象限 {quadrant}", "initiative": init_info,
                 "sharing_level": share_info}
-    if best["score"] < MIN_SCORE:
+    threshold = MIN_SCORE if min_score is None else float(min_score)
+    if best["score"] < threshold:
         return {"ok": True, "available": False, "reason": "分享欲不足"}
     recent = memory.recent_messages(path, limit=8)
     dialog = " | ".join(f"{m['role']}:{m['text']}" for m in recent[-6:])
@@ -185,13 +189,18 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         "如果实在没话说，输出 SKIP。最近对话：" + dialog
     )
     text = ""
+    llm_answered = False
     if client is not None and getattr(client, "available", lambda: False)():
         r = client.chat([{"role": "system", "content": "你说话像普通人，短句。"},
                          {"role": "user", "content": prompt}],
                         purpose="selflearn_proactive", max_tokens=150, temperature=0.8)
         if r.get("ok"):
+            llm_answered = True
             text = str(r.get("text") or "").strip()
-    if not text or text.upper() == "SKIP":
+    if llm_answered and (not text or text.upper().startswith("SKIP")):
+        # 明确让 LLM 自己决定"这次不说话"：它说 SKIP 就不发，不再用模板兜底
+        return {"ok": True, "available": False, "reason": "llm_skip"}
+    if not text:
         text = best["text"]
     text = style_profile.tune_reply("", text)[:200]
     max_bubbles = 3 if sharing >= 0.7 else (2 if sharing >= 0.55 or mood >= 0.7 else 1)

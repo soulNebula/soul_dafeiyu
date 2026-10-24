@@ -370,6 +370,16 @@ def run_train(model, encoded: list[dict], tokenizer, args) -> dict:
         every = int(getattr(args, "empty_cache_every", 0) or 0)
         if every and device.type == "cuda" and (step + 1) % every == 0:
             torch.cuda.empty_cache()
+        # 周期性存 adapter：断电/重启后至少能拿到中间产物，不用从头再来
+        save_every = int(getattr(args, "save_every", 0) or 0)
+        if save_every and (step + 1) % save_every == 0 and getattr(args, "save_adapter", ""):
+            from pathlib import Path as _Path
+            ckpt = _Path(str(args.save_adapter) + f"_step{step + 1}")
+            try:
+                model.save_pretrained(ckpt)
+                print(f"[smoke] checkpoint -> {ckpt}", flush=True)
+            except Exception as exc:  # noqa: BLE001 - 存盘失败不该中断训练
+                print(f"[smoke] checkpoint 失败 {type(exc).__name__}: {exc}", flush=True)
     total = time.perf_counter() - t_start
     peak_reserved_end = gb(torch.cuda.max_memory_reserved()) if device.type == "cuda" else 0.0
     if peak_reserved_end > 5.85:
@@ -433,6 +443,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="把 batch 长度对齐到该倍数（1=不对齐）；减少显存碎片")
     p.add_argument("--empty-cache-every", type=int, default=0,
                    help="每 N 步 torch.cuda.empty_cache()（0=不调用）；碎片严重时用")
+    p.add_argument("--save-every", type=int, default=0,
+                   help="每 N 步存一个 adapter 快照（0=只在结束时存）；断电后不白跑")
     p.add_argument("--save-adapter", nargs="?", const=str(DEFAULT_OUTPUT_DIR / "smoke_adapter"),
                    default="", help="可选：smoke 后保存 LoRA adapter（默认 E:\\agent\\output\\smoke_adapter）")
     p.add_argument("--dry-run", action="store_true",

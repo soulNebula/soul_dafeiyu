@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import hashlib
+import random
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -149,6 +151,14 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     from . import config as gw_cfg
 
     now = time.time() if now is None else float(now)
+    until = float(gateway.cfg.get("proactive_until_ts") or 0)
+    if until and now >= until:
+        gateway.cfg["proactive_enabled"] = False
+        try:
+            gateway._record("proactive_trial_ended", {"until": until})
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "ran": False, "reason": "trial_ended"}
     if not gateway.cfg.get("proactive_enabled"):
         return {"ok": True, "ran": False, "reason": "proactive_disabled"}
     contact_list = _contacts(gateway, contacts)
@@ -217,3 +227,48 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     except Exception:  # noqa: BLE001
         pass
     return out
+
+
+def _bounds(gateway) -> tuple[float, float]:
+    try:
+        lo = float(gateway.cfg.get("proactive_interval_min_s") or 30)
+    except (TypeError, ValueError):
+        lo = 30.0
+    try:
+        hi = float(gateway.cfg.get("proactive_interval_max_s") or 300)
+    except (TypeError, ValueError):
+        hi = 300.0
+    lo = max(10.0, lo)
+    hi = max(lo, hi)
+    return lo, hi
+
+
+def next_interval(gateway, *, client=None, last_outcome=None,
+                  now=None) -> float:
+    """下一次轮询间隔：**LLM 自己定**（30–300s），失败/不可用时随机；
+    最终再乘一个 0.85–1.15 的抖动，避免机械节奏。"""
+    lo, hi = _bounds(gateway)
+    client = client if client is not None else default_client()
+    idea = 0
+    try:
+        if client is not None and getattr(client, "available", lambda: False)():
+            prompt = (
+                "你是微信聊天里的普通人。刚结束一次主动查看，现在决定多久后再看一次消息。"
+                f"只输出一个 {int(lo)} 到 {int(hi)} 的整数（单位：秒）。"
+                "刚说过话就等久一点，心情活跃就看勤一点。"
+                f"上一次结果：{str(last_outcome or {})[:160]}"
+            )
+            r = client.chat(
+                [{"role": "system", "content": "只输出一个整数，不要解释。"},
+                 {"role": "user", "content": prompt}],
+                purpose="proactive_schedule", max_tokens=8, temperature=1.0)
+            match = re.search(r"\d+", str((r or {}).get("text") or ""))
+            if match:
+                idea = int(match.group(0))
+    except Exception:  # noqa: BLE001
+        idea = 0
+    if idea <= 0:
+        idea = random.randint(int(lo), int(hi))
+    idea = int(max(lo, min(hi, idea)))
+    delay = idea * random.uniform(0.85, 1.15)
+    return round(max(lo, min(hi, delay)), 1)

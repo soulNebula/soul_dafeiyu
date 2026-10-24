@@ -154,14 +154,27 @@ class Gateway:
             self._record("queue_full", {"friend": msg.get("friend")})
 
     def _proactive_loop(self) -> None:
-        """M5：常驻主动调度（进程在，调度就在；不依赖浏览器页面）。"""
-        interval = max(60.0, float(self.cfg.get("proactive_interval_s") or 900))
-        while not self.stop_event.is_set():
+        """M5：常驻主动调度（LLM 自己决定下次间隔，30–300s；带抖动）。"""
+        while not self.stop_event.is_set() and self.cfg.get("proactive_enabled"):
+            outcome = {}
             try:
-                self._proactive_cycle()
+                outcome = self._proactive_cycle()
             except Exception as exc:  # noqa: BLE001
-                self._record("proactive_error", {"error": f"{type(exc).__name__}: {exc}"[:200]})
-            self.stop_event.wait(interval)
+                self._record("proactive_error",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
+            try:
+                from . import proactive_worker
+                delay = proactive_worker.next_interval(self, last_outcome=outcome)
+            except Exception as exc:  # noqa: BLE001
+                self._record("proactive_schedule_error",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
+                delay = 300.0
+            try:
+                self.last_proactive["next_delay_s"] = delay
+            except Exception:  # noqa: BLE001
+                pass
+            self._record("proactive_schedule", {"next_delay_s": delay})
+            self.stop_event.wait(delay)
 
     def _proactive_cycle(self) -> dict:
         from . import proactive_worker

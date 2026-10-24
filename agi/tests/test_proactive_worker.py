@@ -137,3 +137,44 @@ def test_mark_response_sentiment(tmp_path):
     assert proactive_worker.mark_response(db_path, "嗯", now=4.0) == "positive"
     proactive_worker.record_event(db_path, "A", "第三句", "sent", now=5.0)
     assert proactive_worker.mark_response(db_path, "今天下雨了", now=6.0) == "neutral"
+
+
+# ---------------------------------------------------------------- 动态间隔
+class _SchedClient:
+    def __init__(self, text="120"):
+        self.text = text
+        self.calls = 0
+
+    def available(self):
+        return True
+
+    def chat(self, messages, **kw):
+        self.calls += 1
+        return {"ok": True, "text": self.text}
+
+
+def test_next_interval_follows_llm_and_jitters():
+    g = FakeGateway(proactive_interval_min_s=30, proactive_interval_max_s=300)
+    client = _SchedClient("120")
+    delay = proactive_worker.next_interval(g, client=client)
+    assert client.calls == 1
+    assert 102 <= delay <= 138  # 120 × 0.85~1.15
+
+
+def test_next_interval_clamps_to_max():
+    g = FakeGateway(proactive_interval_min_s=30, proactive_interval_max_s=300)
+    assert proactive_worker.next_interval(g, client=_SchedClient("9999")) <= 300
+    assert proactive_worker.next_interval(g, client=_SchedClient("1")) >= 30
+
+
+def test_next_interval_random_without_client():
+    g = FakeGateway(proactive_interval_min_s=30, proactive_interval_max_s=300)
+    for _ in range(5):
+        assert 30 <= proactive_worker.next_interval(g, client=None) <= 300
+
+
+def test_trial_end_disables_proactive(monkeypatch):
+    g = FakeGateway(proactive_until_ts=100.0)
+    out = proactive_worker.run_cycle(g, client=object(), now=200.0)
+    assert out["ran"] is False and out["reason"] == "trial_ended"
+    assert g.cfg["proactive_enabled"] is False

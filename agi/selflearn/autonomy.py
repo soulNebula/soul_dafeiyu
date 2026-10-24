@@ -67,7 +67,11 @@ def gate(path: Path | str, now: float | None = None) -> dict[str, Any]:
         last = float(row[0] or 0) if row else 0.0
     finally:
         con.close()
-    if daily >= int(cfg.get("daily_budget") or 6):
+    try:
+        budget = int(cfg.get("daily_budget", 6))
+    except (TypeError, ValueError):
+        budget = 6
+    if budget > 0 and daily >= budget:  # <=0 视为不限
         return {"ok": True, "allowed": False, "reason": "daily_budget", "config": cfg}
     gap = int(cfg.get("min_interval_seconds") or 30)
     if last and now - last < gap:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import time
 
+import time
+
 from agi.selflearn import autonomy, db
 
 
@@ -37,3 +39,24 @@ def test_autonomy_five_levels(tmp_path):
     con.commit(); con.close()
     r = autonomy.gate(p)
     assert r["allowed"] is False and r["level"] == "off"
+
+
+def test_daily_budget_zero_means_unlimited(tmp_path):
+    import json
+    import sqlite3
+    from agi.selflearn import autonomy, db
+
+    path = tmp_path / "c.sqlite3"
+    con = db.connect(path)
+    con.execute("INSERT OR REPLACE INTO state(key,value,updated_at) VALUES('autonomy',?,?)",
+                (json.dumps({"enabled": True, "level": "assist", "quiet_hours": [],
+                             "daily_budget": 0, "min_interval_seconds": 0}),
+                  time.time()))
+    for i in range(20):
+        con.execute("INSERT INTO proactive(id,kind,text,reason,score,status,created_at) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    ("P%d" % i, "check_in", "x", "r", 0.5, "spoken", time.time() - 3600 - i))
+    con.commit()
+    con.close()
+    gate = autonomy.gate(path)
+    assert gate["allowed"] is True

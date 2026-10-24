@@ -16,6 +16,16 @@ MIN_SCORE = 0.45
 DAILY_BUDGET = 6
 
 
+def _daily_budget(path: Path | str) -> int:
+    """日预算：优先读 autonomy 配置；<=0 表示不限。"""
+    try:
+        from . import autonomy
+        value = autonomy._config(path).get("daily_budget", DAILY_BUDGET)
+        return int(value)
+    except Exception:  # noqa: BLE001
+        return DAILY_BUDGET
+
+
 def _id(prefix: str, *parts) -> str:
     return prefix + hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:14]
 
@@ -145,7 +155,8 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
             (now - 86400,)).fetchone()[0])
     finally:
         con.close()
-    if daily >= DAILY_BUDGET:
+    budget = _daily_budget(path)
+    if budget > 0 and daily >= budget:
         return {"ok": True, "available": False, "reason": "今日主动预算已用完"}
     candidates = build_candidates(path, now)
     init_info = {}

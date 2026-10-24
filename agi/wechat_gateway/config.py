@@ -28,6 +28,13 @@ DEFAULTS = {
     "send_mode": "auto",
     "admin_token": "",
     "complaint_stop": True,
+    "min_interval_s": 1.5,
+    "hourly_limit": 40,
+    "fallback_enabled": False,
+    "fallback_mode": "manual",
+    "proactive_enabled": False,
+    "proactive_interval_s": 900,
+    "proactive_contacts": [],
 }
 
 

@@ -76,6 +76,8 @@ class Gateway:
         self.sent = 0
         self.failed = 0
         self.last_turns = {}
+        self.last_proactive = {}
+        self.proactive_thread = None
         self.send_times = deque()
         self.sent_today = 0
         self.sent_day = time.strftime("%Y-%m-%d")
@@ -107,6 +109,10 @@ class Gateway:
         self.receiver.start()
         self.worker = threading.Thread(target=self._work, name="gateway-worker", daemon=True)
         self.worker.start()
+        if self.cfg.get("proactive_enabled"):
+            self.proactive_thread = threading.Thread(
+                target=self._proactive_loop, name="gateway-proactive", daemon=True)
+            self.proactive_thread.start()
         self.ready = True
         self._record("gateway_started", {"allowed": allowed, "monitored": monitored,
                                           "dry_run": bool(self.cfg.get("dry_run", True))})
@@ -144,6 +150,20 @@ class Gateway:
         except queue.Full:
             self.failed += 1
             self._record("queue_full", {"friend": msg.get("friend")})
+
+    def _proactive_loop(self) -> None:
+        """M5：常驻主动调度（进程在，调度就在；不依赖浏览器页面）。"""
+        interval = max(60.0, float(self.cfg.get("proactive_interval_s") or 900))
+        while not self.stop_event.is_set():
+            try:
+                self._proactive_cycle()
+            except Exception as exc:  # noqa: BLE001
+                self._record("proactive_error", {"error": f"{type(exc).__name__}: {exc}"[:200]})
+            self.stop_event.wait(interval)
+
+    def _proactive_cycle(self) -> dict:
+        from . import proactive_worker
+        return proactive_worker.run_cycle(self)
 
     def _work(self) -> None:
         from agi.selflearn.chat import SelfLearnAgent
@@ -240,7 +260,7 @@ class Gateway:
                 time.sleep(float(self.cfg.get("reply_delay") or 0))
 
     def _send(self, contact: str, text: str, *, force: bool = False,
-              reactive: bool = False) -> dict:
+              reactive: bool = False, proactive: bool = False) -> dict:
         # 纵深防御：出站文本里的微信内部 ID 一律摘掉（2026-10-24 引用事故）
         original = str(text or "")
         text = textguard.strip_internal_ids(original)
@@ -282,8 +302,9 @@ class Gateway:
         last_sent_at = max(self.send_times) if self.send_times else 0.0
         verdict = policy.check_send(now=now, hour=time.localtime(now).tm_hour,
                                     recent_60s=recent, today_count=self.sent_today,
-                                    cfg=self.cfg, reactive=reactive, text=text,
-                                    last_sent_at=last_sent_at, hourly_count=hourly)
+                                    cfg=self.cfg, reactive=reactive and not proactive,
+                                    text=text, last_sent_at=last_sent_at,
+                                    hourly_count=hourly)
         if not verdict.get("ok"):
             self._record("send_blocked", {"friend": contact, "reason": verdict.get("reason")})
             return {"ok": False, "status": "blocked", "error": verdict.get("reason")}
@@ -399,6 +420,9 @@ class Gateway:
                                               if time.time() - t < 3600])},
             "fallback": {"enabled": bool(self.cfg.get("fallback_enabled")),
                          "mode": str(self.cfg.get("fallback_mode") or "manual")},
+            "proactive": {"enabled": bool(self.cfg.get("proactive_enabled")),
+                          "interval_s": self.cfg.get("proactive_interval_s"),
+                          "last": self.last_proactive},
             "backend": state,
             "receiver": self.receiver.status() if self.receiver else None,
             "recent": list(self.recent)[-20:],

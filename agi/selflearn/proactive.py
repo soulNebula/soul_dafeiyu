@@ -80,6 +80,40 @@ def build_candidates(path: Path | str = DB_PATH, now: float | None = None) -> li
     return sorted(candidates, key=lambda x: -x["score"])
 
 
+def record_proactive_turn(path: Path | str, assistant_message_id: str, reply: str,
+                          now: float | None = None) -> str | None:
+    """给主动消息补一条 turn（user_message_id 挂最近一条用户消息）。
+
+    这样"反馈 好/差"才能落到具体轮次上（否则主动消息永远收不到反馈）。
+    没有用户消息时返回 None（首次对话前不主动）。
+    """
+    now = time.time() if now is None else float(now)
+    try:
+        con = db.connect(path)
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        row = con.execute(
+            "SELECT id FROM messages WHERE role='user' ORDER BY ts DESC LIMIT 1").fetchone()
+        if not row or not row["id"]:
+            return None
+        turn_id = _id("T-PRO-", row["id"], now)
+        exists = con.execute("SELECT 1 FROM turns WHERE id=?", (turn_id,)).fetchone()
+        if exists:
+            return turn_id
+        con.execute(
+            "INSERT INTO turns(id,user_message_id,assistant_message_id,reply,skill_id,"
+            "variant_id,feedback,score,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (turn_id, row["id"], str(assistant_message_id or ""), str(reply or ""),
+             None, None, None, None, now))
+        con.commit()
+        return turn_id
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        con.close()
+
+
 def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
          idle_seconds: float = 30, cooldown: float = 900) -> dict[str, Any]:
     """网页轮询：由它自己的心情/分享欲决定说不说，可一次说 1-2 条。"""
@@ -160,6 +194,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         return {"ok": True, "available": False, "reason": "没组织好语言"}
     ids = [memory.store_message(path, "assistant", b, now=now, proactive=True) for b in bubbles]
     joined = " ".join(bubbles)
+    turn_id = record_proactive_turn(path, ids[0] if ids else "", joined, now)
     try:
         cand = share_store.record_candidate(
             path, level=str(share_info.get("level") or ""),
@@ -180,7 +215,8 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     finally:
         con.close()
     return {"ok": True, "available": True, "message": bubbles[0], "messages": bubbles,
-            "message_id": ids[0], "kind": best["kind"], "score": best["score"],
+            "message_id": ids[0], "turn_id": turn_id,
+            "kind": best["kind"], "score": best["score"],
             "reason": best["reason"], "mood": mood, "sharing": sharing,
             "initiative": {k: init_info.get(k) for k in
                             ("available", "score", "reason", "max_bubbles", "bubble_count",

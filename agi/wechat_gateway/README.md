@@ -149,8 +149,31 @@ admin_token: ""                    # 为空则启动自动生成；所有管理�
 complaint_stop: true               # 收到投诉/举报/机器人识别 → 立即 stop
 ```
 
+## 主动链（M5，默认关闭）
+
+之前主动消息只写进 selflearn 的 messages 表，从不发送；调度还挂在网页的
+`setInterval` 上（关页面就停）。现在由网关的守护线程驱动：
+
+```json
+{
+  "proactive_enabled": false,
+  "proactive_interval_s": 900,
+  "proactive_contacts": []
+}
+```
+
+- 默认 **false**：不主动开口；
+- 打开后每 15 分钟对 `proactive_contacts`（默认 = `allowed_contacts`）逐个跑一次
+  `ticker.run_once`（先过 `autonomy.gate`：静默时段/日预算/冷却）；
+- 生成的消息走 `_send(proactive=True)`：白名单、confirm/auto、静默时段、频率窗口、
+  内容闸门全部照常生效；
+- 主动消息会补一条 turn，发送成功后登记到 `last_turns`，之后发「反馈 好/差」能落到该轮；
+- ⚠️ 建议：开启主动时把该联系人设为 `"contact_modes": {"联系人": "confirm"}`，
+  先看草稿再批准，避免对真人"突然开口"。
+
 ## 尚未做
 
+- 主动消息若落在草稿（confirm）里，批准后不会补登记 last_turns（只对直接发送的登记）；
 - 在线急停（改 `stop` 需要重启；目标 <1s 的 HTTP 开关还没做）；
 - 草稿的列表界面（目前只有 JSON 接口）；
 - 发送频率的按小时窗口（现在只有每分钟/每日两个窗口）。

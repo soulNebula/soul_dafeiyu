@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS proactive_events(
   ts REAL NOT NULL,
   text TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'sent',
+  kind TEXT NOT NULL DEFAULT '',
   response TEXT,
   response_ts REAL
 );
@@ -52,21 +53,27 @@ def _ensure_events(db_path: Path | str) -> None:
     con = sqlite3.connect(_db(db_path))
     try:
         con.executescript(_EVENTS_SCHEMA)
+        # 兼容 P0-2 之前创建的旧表：补 kind 列（记录模板分布用）
+        columns = {row[1] for row in con.execute("PRAGMA table_info(proactive_events)")}
+        if "kind" not in columns:
+            con.execute("ALTER TABLE proactive_events ADD COLUMN kind TEXT NOT NULL DEFAULT ''")
         con.commit()
     finally:
         con.close()
 
 
 def record_event(db_path: Path | str, contact: str, text: str,
-                 status: str = "sent", now: float | None = None) -> str:
+                 status: str = "sent", now: float | None = None,
+                 kind: str = "") -> str:
     now = time.time() if now is None else float(now)
     _ensure_events(db_path)
     eid = "PE-" + hashlib.md5(f"{contact}|{now}|{text[:40]}".encode()).hexdigest()[:14]
     con = sqlite3.connect(_db(db_path))
     try:
         con.execute("INSERT OR REPLACE INTO proactive_events"
-                    "(id, contact, ts, text, status) VALUES(?,?,?,?,?)",
-                    (eid, str(contact), now, str(text)[:200], status))
+                    "(id, contact, ts, text, status, kind) VALUES(?,?,?,?,?,?)",
+                    (eid, str(contact), now, str(text)[:200], status,
+                     str(kind or "")[:40]))
         con.commit()
     finally:
         con.close()
@@ -309,6 +316,7 @@ def _contacts(gateway, contacts=None) -> list[str]:
 
 def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any]:
     """对所有（或指定）联系人跑一次主动循环；返回统计，不抛异常。"""
+    from agi.selflearn import proactive as selflearn_proactive
     from agi.selflearn import ticker
     from . import config as gw_cfg
 
@@ -400,12 +408,28 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 "reason": str(tick.get("reason") or pro.get("reason") or "gate")[:80]})
             continue
         bubbles = pro.get("messages") or ([pro.get("message")] if pro.get("message") else [])
+        kind = str(pro.get("kind") or "").strip()
         turn_id = str(pro.get("turn_id") or "")
-        sent_any = False
+        # P0-3 出站文本质检：补句末标点/合并空白/超长按标点切分（带 kind 的新主动消息才处理，
+        # 无 kind 的旧 payload 原样透传，保持向后兼容）。
+        outbound: list[str] = []
         for bubble in bubbles:
-            text = str(bubble or "").strip()
-            if not text:
+            raw = str(bubble or "").strip()
+            if not raw:
                 continue
+            if not kind:
+                outbound.append(raw)
+                continue
+            polished = selflearn_proactive.polish_outbound(raw)
+            if not polished:
+                continue
+            if "\n" in polished:  # 超长多句：逐段发送，避免一整段粘连
+                outbound.extend(part.strip() for part in polished.split("\n")
+                                if part.strip())
+            else:
+                outbound.append(polished)
+        sent_any = False
+        for text in outbound:
             # P0-2 同内容去重：窗口内发过相同/高度相似文本 → 跳过并记事件
             try:
                 duplicate = find_duplicate(db_path, contact, text, now=now,
@@ -417,7 +441,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 out["deduped"] += 1
                 try:
                     gateway._record("proactive_deduped", {
-                        "friend": contact, "text": text[:120],
+                        "friend": contact, "text": text[:120], "kind": kind,
                         "hit_ts": round(float(hit_ts), 1),
                         "hit_text": str(hit_text)[:120],
                         "window_s": round(float(dedupe_window), 1)})
@@ -430,11 +454,12 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 status = {"ok": False, "status": "failed",
                           "error": f"{type(exc).__name__}: {exc}"}
             gateway._record("proactive_send", {
-                "friend": contact, "text": text[:120],
+                "friend": contact, "text": text[:120], "kind": kind,
                 "status": status.get("status"), "draft_id": status.get("draft_id"),
                 "error": str(status.get("error") or "")[:120]})
             try:
-                record_event(db_path, contact, text, status.get("status") or "unknown", now)
+                record_event(db_path, contact, text, status.get("status") or "unknown",
+                             now, kind=kind)
             except Exception:  # noqa: BLE001
                 pass
             if status.get("ok") and status.get("status") != "draft":

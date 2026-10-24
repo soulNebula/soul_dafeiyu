@@ -155,6 +155,10 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
         "share_store_ready": (Path(__file__).with_name("share_store.py")).exists()
                              and "def record_candidate" in (Path(__file__).with_name("share_store.py")).read_text(encoding="utf-8"),
         "grudge_g4_ready": "UNFORGIVABLE_MARKS" in (Path(__file__).with_name("affect.py")).read_text(encoding="utf-8"),
+        "proposal_auto_ready": (Path(__file__).with_name("proposal_auto.py")).exists()
+                              and "def auto_gray" in (Path(__file__).with_name("proposal_auto.py")).read_text(encoding="utf-8"),
+        "ticker_ready": (Path(__file__).with_name("ticker.py")).exists()
+                        and "def run_once" in (Path(__file__).with_name("ticker.py")).read_text(encoding="utf-8"),
         "learn_practice_ready": (Path(__file__).with_name("learn_practice.py")).exists()
                                 and "def make_exercise" in (Path(__file__).with_name("learn_practice.py")).read_text(encoding="utf-8"),
         "blind_test_ready": (Path(__file__).with_name("blind.py")).exists()

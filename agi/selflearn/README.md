@@ -491,3 +491,9 @@ guard 报 L1/L2 时才调用 `nli.verify`，若支持率 <0.5 直接降级安全
 ### 记仇 G4
 
 `affect` 增加 G4 不可原谅层：隐私/利用脆弱/背叛类永久标记，不随时间消失；上下文只要求保持距离，不报复、不恢复从前。
+
+### 04/14 收口
+
+- `proposal-auto-gray`：draft→gray 只在 evidence≥2 时自动，merged/rejected 仍人工；
+- `proposal-weekly`：提案状态/合并率；
+- `ticker-once`：先过 autonomy gate，再跑一次 proactive。

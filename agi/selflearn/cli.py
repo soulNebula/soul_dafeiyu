@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from . import acceptance, affect, backfill, blind, db, decision, drift, emoji, emoji_profile, errors, evaluation, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_flow, learn_loop, learn_plan, learn_practice, media, memory, nightly, personality, pii, proactive, production, production_contacts, profile, proposals, quality, report, research, retrieval, scheduler, scoring, skills, state, summary, tools, trust, wake, weak_validation
+from . import acceptance, affect, backfill, blind, db, decision, drift, emoji, emoji_profile, errors, evaluation, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_flow, learn_loop, learn_plan, learn_practice, media, memory, nightly, personality, pii, proactive, production, production_contacts, profile, proposal_auto, proposals, quality, report, research, retrieval, scheduler, scoring, skills, state, summary, ticker, tools, trust, wake, weak_validation
 from .chat import SelfLearnAgent
 from .config import DB_PATH
 from .llm import Client
@@ -106,6 +106,9 @@ def main(argv=None) -> int:
     p_props = sub.add_parser("proposals"); p_props.add_argument("--status", default="")
     p_trans = sub.add_parser("proposal-transition")
     p_trans.add_argument("proposal_id"); p_trans.add_argument("action")
+    sub.add_parser("proposal-auto-gray")
+    sub.add_parser("proposal-weekly")
+    sub.add_parser("ticker-once")
     p_bucket = sub.add_parser("score-bucket")
     p_bucket.add_argument("--stage", default="陌生"); p_bucket.add_argument("--mood", default="neutral")
     p_bucket.add_argument("--topic", default="生活")
@@ -223,6 +226,12 @@ def main(argv=None) -> int:
         _out(emoji.list_emojis(path)); return 0
     if args.cmd == "emoji-use":
         _out(emoji.record_use(path, args.name)); return 0
+    if args.cmd == "proposal-auto-gray":
+        _out(proposal_auto.auto_gray(path)); return 0
+    if args.cmd == "proposal-weekly":
+        _out(proposal_auto.weekly_stats(path)); return 0
+    if args.cmd == "ticker-once":
+        _out(ticker.run_once(path, Client())); return 0
     if args.cmd == "proposals":
         _out(proposals.list_proposals(path, args.status or None)); return 0
     if args.cmd == "proposal-transition":

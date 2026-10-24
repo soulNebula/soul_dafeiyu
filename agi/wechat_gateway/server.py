@@ -83,6 +83,9 @@ class Gateway:
         self.send_times = deque()
         self.sent_today = 0
         self.sent_day = time.strftime("%Y-%m-%d")
+        # P0-2 死区哨兵：任何事件都会刷新 last_event_ts；长时间没有事件就写 gateway_stale
+        self.last_event_ts = self.started_at
+        self._last_stale_ts = 0.0
 
     def start(self) -> None:
         if not self.cfg.get("enabled"):
@@ -133,9 +136,36 @@ class Gateway:
 
     def _record(self, kind: str, data: dict) -> None:
         entry = {"ts": time.time(), "kind": kind, **data}
+        if kind != "gateway_stale":
+            # 死区心跳自己不算"有活动"，否则哨兵会自我续命
+            self.last_event_ts = entry["ts"]
         with self.lock:
             self.recent.append(entry)
         _log(entry, self.log_path)
+
+    def _check_stale(self, now: float | None = None) -> bool:
+        """P0-2 死区哨兵：超过 gateway_stale_alert_s 没事件就写 gateway_stale。
+
+        复用 `_work` 现有事件循环（0.2s 转一圈），不新起线程；同一告警 30 分钟内
+        最多写一次，避免自己刷屏。
+        """
+        now = time.time() if now is None else float(now)
+        try:
+            alert_s = float(self.cfg.get("gateway_stale_alert_s") or 1800.0)
+        except (TypeError, ValueError):
+            alert_s = 1800.0
+        last_event = float(getattr(self, "last_event_ts", 0.0) or 0.0)
+        if not last_event or now - last_event <= alert_s:
+            return False
+        if now - float(getattr(self, "_last_stale_ts", 0.0) or 0.0) < 1800.0:
+            return False
+        self._last_stale_ts = now
+        self._record("gateway_stale", {
+            "last_event_ts": round(last_event, 1),
+            "idle_s": round(now - last_event, 1),
+            "threshold_s": alert_s,
+        })
+        return True
 
     def on_inbound(self, msg: dict) -> None:
         self._record("inbound", {"friend": msg.get("friend"), "text": msg.get("text"),
@@ -154,7 +184,7 @@ class Gateway:
             self._record("queue_full", {"friend": msg.get("friend")})
 
     def _proactive_loop(self) -> None:
-        """M5：常驻主动调度（LLM 自己决定下次间隔，30–300s；带抖动）。"""
+        """M5：常驻主动调度（LLM 自己决定下次间隔，60–7200s = 1–120 分钟；带抖动）。"""
         while not self.stop_event.is_set() and self.cfg.get("proactive_enabled"):
             outcome = {}
             try:
@@ -168,7 +198,8 @@ class Gateway:
             except Exception as exc:  # noqa: BLE001
                 self._record("proactive_schedule_error",
                              {"error": f"{type(exc).__name__}: {exc}"[:200]})
-                delay = 300.0
+                # 兜底：1–120 分钟量级，不能再退回旧的 5 分钟密度
+                delay = 3600.0
             try:
                 self.last_proactive["next_delay_s"] = delay
             except Exception:  # noqa: BLE001
@@ -201,6 +232,10 @@ class Gateway:
             except Exception as exc:  # noqa: BLE001
                 self.failed += 1
                 self._record("flush_error", {"error": f"{type(exc).__name__}: {exc}"})
+            try:
+                self._check_stale()
+            except Exception:  # noqa: BLE001 - 哨兵失败不能影响主循环
+                pass
         self._flush_pending(force=True)
 
     def _buffer_inbound(self, msg: dict) -> None:

@@ -139,6 +139,168 @@ def default_client():
     return llm.Client()
 
 
+# --------------------------------------------------------------------------- #
+# P0-2：同内容去重 + 同类错误熔断
+# --------------------------------------------------------------------------- #
+#: 默认阈值（均可被 gateway.cfg 覆盖，见 config.DEFAULTS）
+DEDUPE_WINDOW_S = 1800.0
+BREAKER_THRESHOLD = 3
+BREAKER_COOLDOWN_S = 1800.0
+#: 熔断状态挂在 gateway 实例上，生命周期与进程一致
+BREAKER_STATE_ATTR = "_proactive_breaker"
+_ADDR_RE = re.compile(r"0x[0-9a-fA-F]+")
+_WS_RE = re.compile(r"\s+")
+#: 不算"发送失败"的状态（草稿/被闸门拦截不是故障，不该触发熔断）
+_NON_FAILURE_STATUS = ("draft", "blocked")
+
+
+def _cfg_float(gateway, key: str, default: float) -> float:
+    raw = gateway.cfg.get(key)
+    if raw is None:
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _cfg_int(gateway, key: str, default: int) -> int:
+    return int(_cfg_float(gateway, key, default))
+
+
+def _charset(text: Any) -> set[str]:
+    return {ch for ch in str(text or "").strip() if not ch.isspace()}
+
+
+def text_similar(a: Any, b: Any, threshold: float = 0.8) -> bool:
+    """完全相同，或字符集 Jaccard ≥ threshold（≥0.8）视为「高度相似」。"""
+    left, right = _charset(a), _charset(b)
+    if not left or not right:
+        return False
+    if str(a or "").strip() == str(b or "").strip():
+        return True
+    return len(left & right) / len(left | right) >= float(threshold)
+
+
+def recent_sent_texts(db_path: Path | str, contact: str,
+                      since: float) -> list[tuple[float, str]]:
+    """取该联系人窗口内**真正发出去过**的文本（status='sent'），新→旧。"""
+    try:
+        _ensure_events(db_path)
+        con = sqlite3.connect(_db(db_path))
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        rows = con.execute(
+            "SELECT ts,text FROM proactive_events WHERE contact=? AND ts>=? "
+            "AND status='sent' ORDER BY ts DESC",
+            (str(contact), float(since))).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    finally:
+        con.close()
+    return [(float(row[0]), str(row[1])) for row in rows]
+
+
+def find_duplicate(db_path: Path | str, contact: str, text: str, *,
+                   now: float, window_s: float) -> tuple[float, str] | None:
+    """窗口内是否发过相同/高度相似文本；命中返回 (历史 ts, 历史文本)。"""
+    for ts, old in recent_sent_texts(db_path, contact, float(now) - float(window_s)):
+        if text_similar(old, text):
+            return ts, old
+    return None
+
+
+def normalize_error(text: Any) -> str:
+    """错误文本归一化：去掉 0x… 对象地址、压空白，取前 60 字符当 error_key。
+
+    与 task-18（sender.py 的 error_key 字段）同口径；优先用对方已写好的 error_key。
+    """
+    value = _ADDR_RE.sub("0xADDR", str(text or ""))
+    value = _WS_RE.sub(" ", value).strip()
+    return value[:60]
+
+
+def error_key(status: Any) -> str:
+    """取一条发送结果里的熔断 key：优先 error_key 字段，否则归一化 error/reason 前 60 字。"""
+    if not isinstance(status, dict):
+        return normalize_error(status)
+    precomputed = str(status.get("error_key") or "").strip()
+    if precomputed:
+        return precomputed[:60]
+    raw = status.get("error") or status.get("reason") or status.get("status") or ""
+    return normalize_error(raw)
+
+
+def is_send_failure(status: Any) -> bool:
+    if not isinstance(status, dict):
+        return True
+    if status.get("ok") is True:
+        return False
+    return str(status.get("status") or "") not in _NON_FAILURE_STATUS
+
+
+def _breaker_state(gateway) -> dict:
+    state = getattr(gateway, BREAKER_STATE_ATTR, None)
+    if not isinstance(state, dict):
+        state = {}
+        try:
+            setattr(gateway, BREAKER_STATE_ATTR, state)
+        except Exception:  # noqa: BLE001
+            pass
+    state.setdefault("consecutive", 0)
+    state.setdefault("error_key", "")
+    state.setdefault("open_until", 0.0)
+    return state
+
+
+def breaker_snapshot(gateway, now: float | None = None) -> dict:
+    """只读快照，供 /status 与测试排查用。"""
+    state = _breaker_state(gateway)
+    now = time.time() if now is None else float(now)
+    open_until = float(state.get("open_until") or 0.0)
+    return {"open": bool(open_until > now), "consecutive": int(state.get("consecutive") or 0),
+            "error_key": str(state.get("error_key") or ""),
+            "open_until": open_until, "cooldown_left_s": max(0.0, round(open_until - now, 1))}
+
+
+def _note_send_failure(gateway, status: Any, *, now: float,
+                       threshold: int, cooldown_s: float) -> bool:
+    """累计同类连续失败；达到阈值就开熔断并记事件。返回是否刚打开。"""
+    state = _breaker_state(gateway)
+    key = error_key(status)
+    if key == str(state.get("error_key") or ""):
+        state["consecutive"] = int(state.get("consecutive") or 0) + 1
+    else:
+        state["error_key"] = key
+        state["consecutive"] = 1
+    open_until = float(state.get("open_until") or 0.0)
+    if int(state["consecutive"]) >= max(1, int(threshold)) and open_until <= float(now):
+        state["open_until"] = float(now) + max(1.0, float(cooldown_s))
+        error_text = str(status.get("error") or "") if isinstance(status, dict) else str(status or "")
+        try:
+            gateway._record("proactive_breaker_open", {
+                "error_key": key,
+                "consecutive": int(state["consecutive"]),
+                "threshold": int(threshold),
+                "cooldown_s": round(max(1.0, float(cooldown_s)), 1),
+                "until": round(float(state["open_until"]), 1),
+                "error": error_text[:200],
+            })
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    return False
+
+
+def _note_send_success(gateway) -> None:
+    state = _breaker_state(gateway)
+    state["consecutive"] = 0
+    state["error_key"] = ""
+    state["open_until"] = 0.0
+
+
+
 def _contacts(gateway, contacts=None) -> list[str]:
     raw = contacts or gateway.cfg.get("proactive_contacts") \
         or gateway.cfg.get("allowed_contacts") or []
@@ -162,13 +324,45 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     if not gateway.cfg.get("proactive_enabled"):
         return {"ok": True, "ran": False, "reason": "proactive_disabled"}
     contact_list = _contacts(gateway, contacts)
+    dedupe_window = _cfg_float(gateway, "proactive_dedupe_window_s", DEDUPE_WINDOW_S)
+    breaker_threshold = _cfg_int(gateway, "proactive_breaker_threshold", BREAKER_THRESHOLD)
+    breaker_cooldown = _cfg_float(gateway, "proactive_breaker_cooldown_s", BREAKER_COOLDOWN_S)
+    # P0-2 熔断：冷却期内直接不发送，只记一条 proactive_breaker_open（每轮一次，防刷屏）
+    breaker = _breaker_state(gateway)
+    open_until = float(breaker.get("open_until") or 0.0)
+    if open_until > now:
+        try:
+            gateway._record("proactive_breaker_open", {
+                "error_key": str(breaker.get("error_key") or ""),
+                "consecutive": int(breaker.get("consecutive") or 0),
+                "open_until": round(open_until, 1),
+                "cooldown_left_s": round(open_until - now, 1),
+                "contacts": len(contact_list)})
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "ran": False, "reason": "breaker_open",
+                "contacts": len(contact_list), "sent": 0, "drafts": 0, "deduped": 0,
+                "skipped": [], "breaker": breaker_snapshot(gateway, now)}
+    if open_until and open_until <= now:
+        # 冷却结束：记 close 并清零（下一轮恢复发送）
+        try:
+            gateway._record("proactive_breaker_close", {
+                "error_key": str(breaker.get("error_key") or ""),
+                "cooldown_s": round(max(1.0, breaker_cooldown), 1),
+                "cooldown_ended_at": round(open_until, 1)})
+        except Exception:  # noqa: BLE001
+            pass
+        breaker["open_until"] = 0.0
+        breaker["consecutive"] = 0
+        breaker["error_key"] = ""
     probability = _probability(gateway)
     roll = random.random()
     if roll >= probability:
         # 概率闸门：这一轮直接跳过，不查联系人、不调 LLM，只记一条日志
         try:
             gateway._record("proactive_skipped", {
-                "reason": "probability", "probability": probability,
+                "reason": "probability", "probability": round(probability, 4),
+                "probability_range": [round(x, 4) for x in probability_range(gateway)],
                 "roll": round(roll, 4), "contacts": len(contact_list)})
         except Exception:  # noqa: BLE001
             pass
@@ -177,7 +371,8 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 "skipped": [], "probability": probability, "roll": round(roll, 4)}
     client = client if client is not None else default_client()
     out: dict[str, Any] = {"ok": True, "ran": True, "contacts": len(contact_list),
-                           "sent": 0, "drafts": 0, "skipped": []}
+                           "sent": 0, "drafts": 0, "deduped": 0,
+                           "breaker_open": False, "skipped": []}
     idle_gap = float(gateway.cfg.get("proactive_idle_s") or 0)
     for contact in contact_list:
         db_path = gw_cfg.contact_db(contact)
@@ -211,6 +406,24 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             text = str(bubble or "").strip()
             if not text:
                 continue
+            # P0-2 同内容去重：窗口内发过相同/高度相似文本 → 跳过并记事件
+            try:
+                duplicate = find_duplicate(db_path, contact, text, now=now,
+                                           window_s=dedupe_window)
+            except Exception:  # noqa: BLE001 - 去重查询失败不阻塞发送
+                duplicate = None
+            if duplicate:
+                hit_ts, hit_text = duplicate
+                out["deduped"] += 1
+                try:
+                    gateway._record("proactive_deduped", {
+                        "friend": contact, "text": text[:120],
+                        "hit_ts": round(float(hit_ts), 1),
+                        "hit_text": str(hit_text)[:120],
+                        "window_s": round(float(dedupe_window), 1)})
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
             try:
                 status = gateway._send(contact, text, proactive=True)
             except Exception as exc:  # noqa: BLE001
@@ -227,13 +440,24 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             if status.get("ok") and status.get("status") != "draft":
                 out["sent"] += 1
                 sent_any = True
+                _note_send_success(gateway)  # 成功一次即清零
             elif status.get("status") == "draft":
                 out["drafts"] += 1
+            elif is_send_failure(status):
+                if _note_send_failure(gateway, status, now=now,
+                                      threshold=breaker_threshold,
+                                      cooldown_s=breaker_cooldown):
+                    out["breaker_open"] = True
+                    break  # 熔断后本轮不再发剩余气泡/联系人
         if sent_any and turn_id:
             # 只有真的发出去了才登记：草稿还没到对方手里，反馈会错位
             gateway.last_turns[contact] = turn_id
+        if out["breaker_open"]:
+            break
     outcome = {"ts": now, "contacts": out["contacts"],
                "sent": out["sent"], "drafts": out["drafts"],
+               "deduped": out["deduped"],
+               "breaker": breaker_snapshot(gateway, now),
                "skipped": len(out["skipped"])}
     try:
         gateway.last_proactive = outcome
@@ -243,39 +467,62 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
 
 
 def _bounds(gateway) -> tuple[float, float]:
-    """检查间隔上下界（秒）。默认 30–90 分钟；旧默认 30–300 秒是密度事故根因。"""
+    """检查间隔上下界（秒）。默认 60–7200 秒（1–120 分钟）。"""
     try:
-        lo = float(gateway.cfg.get("proactive_interval_min_s") or 1800)
+        lo = float(gateway.cfg.get("proactive_interval_min_s") or 60)
     except (TypeError, ValueError):
-        lo = 1800.0
+        lo = 60.0
     try:
-        hi = float(gateway.cfg.get("proactive_interval_max_s") or 5400)
+        hi = float(gateway.cfg.get("proactive_interval_max_s") or 7200)
     except (TypeError, ValueError):
-        hi = 5400.0
+        hi = 7200.0
     lo = max(10.0, lo)
     hi = max(lo, hi)
     return lo, hi
 
 
-def _probability(gateway) -> float:
-    """每轮检查真正发送的概率（0–1）。
-
-    缺失时返回 1.0：旧配置/旧测试没有这个键，不应被随机闸门挡掉。
-    显式配置 0.0 表示永不发（不同于「缺失」）。
-    """
-    raw = gateway.cfg.get("proactive_probability")
-    if raw is None:
-        return 1.0
+def probability_range(gateway) -> tuple[float, float]:
+    """当前配置的发送概率区间（旧键 `proactive_probability` 当固定值兼容）。"""
+    min_raw = gateway.cfg.get("proactive_probability_min")
+    max_raw = gateway.cfg.get("proactive_probability_max")
+    legacy = gateway.cfg.get("proactive_probability")
+    if min_raw is None and max_raw is None:
+        if legacy is None:
+            return 1.0, 1.0
+        try:
+            value = max(0.0, min(1.0, float(legacy)))
+        except (TypeError, ValueError):
+            value = 1.0
+        return value, value
     try:
-        value = float(raw)
+        lo = max(0.0, min(1.0, float(min_raw))) if min_raw is not None else 0.3
     except (TypeError, ValueError):
-        return 1.0
-    return max(0.0, min(1.0, value))
+        lo = 0.3
+    try:
+        hi = max(0.0, min(1.0, float(max_raw))) if max_raw is not None else 0.9
+    except (TypeError, ValueError):
+        hi = 0.9
+    if lo > hi:
+        lo, hi = hi, lo
+    return lo, hi
+
+
+def _probability(gateway) -> float:
+    """每轮检查真正发送的概率（0–1），**每轮在 [min, max] 内随机采**。
+
+    - 默认配置：``uniform(0.3, 0.9)``（2026-10-25 用户拍板，替代固定 0.3）；
+    - 旧配置只有 ``proactive_probability``：当固定值用；
+    - 三个键都没有（旧测试/旧库）：返回 1.0，保持向下兼容（不引入随机闸门）。
+    """
+    lo, hi = probability_range(gateway)
+    if lo == hi:
+        return lo
+    return random.uniform(lo, hi)
 
 
 def next_interval(gateway, *, client=None, last_outcome=None,
                   now=None) -> float:
-    """下一次轮询间隔：**LLM 自己定**（默认 1800–5400 秒 = 30–90 分钟），
+    """下一次轮询间隔：**LLM 自己定**（默认 60–7200 秒 = 1–120 分钟），
     失败/不可用时随机；最终再乘一个 0.85–1.15 的抖动，避免机械节奏。"""
     lo, hi = _bounds(gateway)
     client = client if client is not None else default_client()

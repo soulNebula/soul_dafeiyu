@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""P0-1 主动消息节奏：30s→30min、概率闸门、夜间静音跨零点。
+"""P0-1 主动消息节奏（2026-10-25 用户拍板的新语义）：
+
+- 间隔：60–7200 秒（1–120 分钟）随机；
+- 每轮发送概率：在 [0.3, 0.9] 内随机采（替代固定 0.3）；
+- 夜间静音：23:00–08:00（跨零点）。
 
 对应故障（gateway.log 审计）：177 次 proactive_send，8.1 小时 95 条成功，
-中位间隔 3.0 分钟、峰值 20 条/小时；根因是
-``proactive_interval_min_s: 30 / max_s: 300`` 与「每轮必发」。
+中位间隔 3.0 分钟、峰值 20 条/小时；根因是旧配置 30–300 秒 + 每轮必发。
 """
 from __future__ import annotations
 
@@ -15,9 +18,11 @@ from agi.wechat_gateway import policy, proactive_worker
 
 OLD_MIN_S = 30
 OLD_MAX_S = 300
-NEW_MIN_S = 1800   # 30 分钟
-NEW_MAX_S = 5400   # 90 分钟
-QUIET = [23, 8]    # 23:00–08:00（跨零点）
+NEW_MIN_S = 60      # 1 分钟
+NEW_MAX_S = 7200    # 120 分钟
+P_MIN = 0.3
+P_MAX = 0.9
+QUIET = [23, 8]     # 23:00–08:00（跨零点）
 
 
 class FakeGateway:
@@ -26,7 +31,8 @@ class FakeGateway:
     def __init__(self, **cfg):
         self.cfg = {
             "proactive_enabled": True,
-            "proactive_probability": 0.3,
+            "proactive_probability_min": P_MIN,
+            "proactive_probability_max": P_MAX,
             "allowed_contacts": ["好友A"],
             "proactive_contacts": [],
             **cfg,
@@ -69,7 +75,7 @@ class _SchedClient:
 
 
 # ------------------------------------------------------------------ 间隔默认值
-def test_interval_defaults_are_30_to_90_minutes():
+def test_interval_defaults_are_1_to_120_minutes():
     lo = gw_config.DEFAULTS["proactive_interval_min_s"]
     hi = gw_config.DEFAULTS["proactive_interval_max_s"]
     assert (lo, hi) == (NEW_MIN_S, NEW_MAX_S)
@@ -89,21 +95,48 @@ def test_next_interval_stays_in_new_bounds():
 def test_next_interval_clamps_llm_idea_into_new_bounds():
     g = FakeGateway(**{k: gw_config.DEFAULTS[k] for k in
                        ("proactive_interval_min_s", "proactive_interval_max_s")})
-    assert proactive_worker.next_interval(g, client=_SchedClient("9999")) <= NEW_MAX_S
+    assert proactive_worker.next_interval(g, client=_SchedClient("99999")) <= NEW_MAX_S
     assert proactive_worker.next_interval(g, client=_SchedClient("1")) >= NEW_MIN_S
 
 
-# ------------------------------------------------------------------ 概率闸门
-def test_probability_default_is_three_tenths():
-    assert gw_config.DEFAULTS["proactive_probability"] == pytest.approx(0.3)
+# ------------------------------------------------------------------ 概率区间
+def test_probability_defaults_are_range():
+    assert gw_config.DEFAULTS["proactive_probability_min"] == pytest.approx(P_MIN)
+    assert gw_config.DEFAULTS["proactive_probability_max"] == pytest.approx(P_MAX)
+    # 旧固定键不再出现在默认配置里（仅作为旧配置兼容读取）
+    assert "proactive_probability" not in gw_config.DEFAULTS
+
+
+def test_probability_uses_uniform_range(monkeypatch):
+    calls: list[tuple] = []
+
+    def fake_uniform(lo, hi):
+        calls.append((lo, hi))
+        return 0.5
+
+    monkeypatch.setattr(proactive_worker.random, "uniform", fake_uniform)
+    monkeypatch.setattr(proactive_worker.random, "random", lambda: 0.0)
+    monkeypatch.setattr(ticker, "run_once", lambda *a, **k: _tick_one())
+    g = FakeGateway()
+    proactive_worker.run_cycle(g, client=object(), now=100.0)
+    assert calls == [(P_MIN, P_MAX)]
+    assert len(g.sent) == 1
+
+
+def test_probability_varies_across_rounds():
+    g = FakeGateway()
+    samples = [proactive_worker._probability(g) for _ in range(80)]
+    assert all(P_MIN <= p <= P_MAX for p in samples)
+    assert len({round(p, 3) for p in samples}) > 10   # 不是固定值
 
 
 def test_probability_hit_sends(monkeypatch):
     monkeypatch.setattr(ticker, "run_once", lambda *a, **k: _tick_one())
-    monkeypatch.setattr(proactive_worker.random, "random", lambda: 0.0)  # 0.0 < 0.3 命中
+    monkeypatch.setattr(proactive_worker.random, "uniform", lambda lo, hi: 0.6)
+    monkeypatch.setattr(proactive_worker.random, "random", lambda: 0.0)  # 0.0 < 0.6
     g = FakeGateway()
     out = proactive_worker.run_cycle(g, client=object(), now=100.0)
-    assert len(g.sent) == 1              # 发送调用次数 1
+    assert len(g.sent) == 1
     assert out["sent"] == 1
     assert not any(k == "proactive_skipped" for k, _ in g.records)
 
@@ -112,7 +145,8 @@ def test_probability_miss_skips_and_logs(monkeypatch):
     calls: list[int] = []
     monkeypatch.setattr(ticker, "run_once",
                         lambda *a, **k: calls.append(1) or _tick_one())
-    monkeypatch.setattr(proactive_worker.random, "random", lambda: 0.99)  # 0.99 >= 0.3 跳过
+    monkeypatch.setattr(proactive_worker.random, "uniform", lambda lo, hi: 0.6)
+    monkeypatch.setattr(proactive_worker.random, "random", lambda: 0.99)  # 0.99 >= 0.6
     g = FakeGateway()
     out = proactive_worker.run_cycle(g, client=object(), now=100.0)
     assert calls == []                  # 跳过时不该再去跑 LLM
@@ -121,7 +155,8 @@ def test_probability_miss_skips_and_logs(monkeypatch):
     assert out["reason"] == "probability_skip"
     skipped = [data for kind, data in g.records if kind == "proactive_skipped"]
     assert len(skipped) == 1, g.records
-    assert skipped[0]["probability"] == pytest.approx(0.3)
+    assert skipped[0]["probability"] == pytest.approx(0.6)   # 带本次采样的 p
+    assert skipped[0]["probability_range"] == [P_MIN, P_MAX]
     assert skipped[0]["roll"] == pytest.approx(0.99)
 
 
@@ -132,17 +167,30 @@ def test_probability_miss_skips_and_logs(monkeypatch):
 def test_probability_extremes(monkeypatch, probability, roll, sends):
     monkeypatch.setattr(ticker, "run_once", lambda *a, **k: _tick_one())
     monkeypatch.setattr(proactive_worker.random, "random", lambda: roll)
-    g = FakeGateway(proactive_probability=probability)
+    g = FakeGateway(proactive_probability_min=probability,
+                    proactive_probability_max=probability)
     proactive_worker.run_cycle(g, client=object(), now=100.0)
     assert len(g.sent) == (1 if sends else 0)
 
 
+def test_legacy_fixed_probability_is_still_honored():
+    """旧配置只有 proactive_probability：当固定值用（不随机）。"""
+    g = FakeGateway()
+    g.cfg.pop("proactive_probability_min")
+    g.cfg.pop("proactive_probability_max")
+    g.cfg["proactive_probability"] = 0.5
+    assert proactive_worker.probability_range(g) == (0.5, 0.5)
+    assert proactive_worker._probability(g) == pytest.approx(0.5)
+
+
 def test_missing_probability_keeps_old_always_send(monkeypatch):
-    """旧配置/旧测试没有 proactive_probability 键：不引入随机闸门（向下兼容）。"""
+    """旧配置/旧测试三个概率键都没有：不引入随机闸门（向下兼容）。"""
     monkeypatch.setattr(ticker, "run_once", lambda *a, **k: _tick_one())
     monkeypatch.setattr(proactive_worker.random, "random", lambda: 0.999)
     g = FakeGateway()
-    g.cfg.pop("proactive_probability")
+    for key in ("proactive_probability", "proactive_probability_min",
+                "proactive_probability_max"):
+        g.cfg.pop(key, None)
     out = proactive_worker.run_cycle(g, client=object(), now=100.0)
     assert out["sent"] == 1 and len(g.sent) == 1
 

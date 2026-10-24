@@ -118,15 +118,28 @@ ALLOWED_DB_READERS = (
     "webui/contacts.py",            # 网页端联系人筛选（只读 contact/session 库，mode=ro）
     "webui/groups.py",              # 网页端群列表（只读 contact.db，mode=ro）
     "webui/history.py",             # 网页端历史记录（只读 message 库，mode=ro）
+    "webui/account.py",             # 只 stat key_info.db(-wal/-shm) 的 mtime 判断账号，不打开库
 )
 # 数据库路径字符串：若只出现在 `#` 注释里（例如"不读 db_storage"的说明），
 # 不视为违规；授权 DB 模块允许只读引用；真正在代码里引用/打开数据库仍会 FAIL。
+
 DB_PATH_PATTERNS = frozenset({
     r"\bdb_storage\b",
     r"(?i)\.db-wal\b",
     r"\bMicroMsg\.db\b",
     r"\bMsgMyMsg\b",
     r"\bkey\.dat\b",
+})
+# ---- `agi/`：独立 companion 系统（自己的 SQLite，不接触微信库）----
+# agi 用 `agi/data/*.sqlite3` 存记忆/草稿/用量/工具日志，属于本项目**有意写入**的数据，
+# 与"回写微信数据库"是两回事。这里只豁免 DB 相关 pattern；内存/Hook/注入仍照常 FAIL。
+COMPANION_DB_DIRS = ("agi/",)
+#: 网页端读 companion 库的页面（只读 mode=ro，与 agi/ 同属自建 SQLite）
+COMPANION_DB_FILES = ("webui/agi.py",)
+COMPANION_DB_EXEMPT_PATTERNS = frozenset({
+    r"\bsqlite3\.connect\b",
+    r"(?i)\b(?:insert\s+into|update\s+\w+\s+set|delete\s+from|drop\s+table|create\s+table|alter\s+table|attach\s+database|vacuum)\b",
+    r"(?i)\.db-wal\b",
 })
 
 
@@ -143,6 +156,12 @@ def is_allowed_memory_reader(rel_path: str) -> bool:
 def is_allowed_db_reader(rel_path: str) -> bool:
     """该文件是否属于"用户授权的数据库只读直读"白名单。"""
     return rel_path in ALLOWED_DB_READERS
+
+
+def is_companion_db(rel_path: str) -> bool:
+    """``agi/`` 及其网页端只读页面：用自己的 companion SQLite，不是微信库。"""
+    normalized = str(rel_path).replace("\\", "/")
+    return normalized.startswith(COMPANION_DB_DIRS) or normalized in COMPANION_DB_FILES
 
 
 
@@ -316,6 +335,7 @@ class Finding:
 #: 被"授权只读密钥提取 / 数据库只读直读"白名单豁免的调用记录（报告中如实列出）
 EXEMPT_MEMORY_HITS: list[tuple[str, int, str]] = []
 EXEMPT_DB_HITS: list[tuple[str, int, str]] = []
+EXEMPT_COMPANION_HITS: list[tuple[str, int, str]] = []
 
 
 def scan_forbidden_api(files: list[Path]) -> list[Finding]:
@@ -324,6 +344,7 @@ def scan_forbidden_api(files: list[Path]) -> list[Finding]:
         rel_path = rel(path)
         allowed_memory = is_allowed_memory_reader(rel_path)
         allowed_db = is_allowed_db_reader(rel_path)
+        allowed_companion = is_companion_db(rel_path)
         lines = read_lines(path)
         for i, line in enumerate(lines, 1):
             code = strip_code_only(line)
@@ -332,6 +353,11 @@ def scan_forbidden_api(files: list[Path]) -> list[Finding]:
                     continue
                 # 数据库路径只出现在 `#` 注释里（"不读 db_storage"之类的说明）不算违规
                 if pattern in DB_PATH_PATTERNS and _is_comment_only(line):
+                    continue
+                # agi 的 companion SQLite（自己的库，不是微信库）：只豁免 DB 相关 pattern
+                if allowed_companion and pattern in COMPANION_DB_EXEMPT_PATTERNS:
+                    EXEMPT_COMPANION_HITS.append(
+                        (rel_path, i, "agi 自己的 SQLite（记忆/草稿/用量），不接触微信库"))
                     continue
                 # 用户授权、一次性的只读密钥提取：仅豁免"读"，写/注入照常 FAIL
                 if allowed_memory and pattern in MEMORY_READ_EXEMPT_PATTERNS:
@@ -425,6 +451,7 @@ def main(argv: list[str] | None = None) -> int:
 
     EXEMPT_MEMORY_HITS.clear()
     EXEMPT_DB_HITS.clear()
+    EXEMPT_COMPANION_HITS.clear()
     api_findings = scan_forbidden_api(files)
     path_findings = scan_wechat_paths(files)
 
@@ -445,6 +472,12 @@ def main(argv: list[str] | None = None) -> int:
         print("  [授权] 数据库只读直读（db_storage 读取 / sqlite3 mode=ro；写回微信库仍 FAIL）：")
         for path, lineno, label in EXEMPT_DB_HITS:
             print(f"         {path}:{lineno}  {label}")
+    if EXEMPT_COMPANION_HITS:
+        print("  [授权] agi companion 数据库（自建 SQLite：记忆/草稿/用量；不接触微信库）：")
+        for path, lineno, label in EXEMPT_COMPANION_HITS[:10]:
+            print(f"         {path}:{lineno}  {label}")
+        if len(EXEMPT_COMPANION_HITS) > 10:
+            print(f"         …… 其余 {len(EXEMPT_COMPANION_HITS) - 10} 处同类（同一授权）")
     print()
 
     print("[2/2] 微信数据/安装目录字符串检查（写入=FAIL；授权只读模块豁免 WARN）")
@@ -473,7 +506,8 @@ def main(argv: list[str] | None = None) -> int:
     print("              wx_core/wechat_keys.py、wx_core/wcdb.py（一次性只读密钥提取）；")
     print("              wx_core/wcdb.py、wx_core/db_source.py（只读直读微信库、mode=ro、临时目录解密）；")
     print("              wx_core/clipboard.py、wx_core/textlog.py、wx_core/media_export.py、")
-    print("              wx_core/builtin_emoji.py（窗口消息/剪贴板/纯文本/内置 emoji 素材辅助）。")
+    print("              wx_core/builtin_emoji.py（窗口消息/剪贴板/纯文本/内置 emoji 素材辅助）；")
+    print("              agi/、webui/agi.py（自建 companion SQLite：记忆/草稿/用量，不接触微信库）。")
     print("=" * 66)
     return 0
 

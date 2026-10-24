@@ -320,6 +320,7 @@ wx_box/
 │  └─ replay / static/         # 只读跟随后端 / 原生 JS 页面
 ├─ tools/
 │  ├─ audit_compliance.py      # 合规静态审计（PASS/FAIL + 文件:行号）
+│  ├─ harden_acl.py            # 敏感文件/目录 Windows ACL 加固（--check 只读盘点 / --apply 收紧）
 │  ├─ export_emoticons.py      # 表情包导出（实现在 Demo/tools_impl）
 │  ├─ search_messages.py       # 全库消息检索（实现在 Demo/tools_impl）
 │  └─ reference_weflow/        # WeFlow 参考实现（Apache-2.0，仅参考、不运行）
@@ -402,6 +403,21 @@ wx_box/
 3. **主监听器不发送任何消息**（没有发送入口，也不会代替你回复）；真实发送仅在可选的 `agi/wechat_gateway/` 网关里（默认关闭真实发送）。不自动刷新/自动浏览微信朋友圈；
 4. 只写项目自己的 `media/`、`log/`、`config.json`、`web_config.json`；网页端临时数据只放内存。
 
+### 敏感文件落盘权限（Windows ACL 加固）
+
+`config.json`（含微信数据库密钥 `db_keys`）、`web_config.json`（LLM API key）、`log/`（聊天记录）、
+`media/`（解密原图）、`agi/data/`（自学习库、网关 token、草稿）默认会继承
+`Authenticated Users: Modify` —— Windows 上 `chmod 600` 是空操作，本机任何登录用户都能读走。
+
+```bat
+C:\Python314\python.exe tools\harden_acl.py --check   :: 只读盘点（默认）
+C:\Python314\python.exe tools\harden_acl.py --apply   :: 切断继承，只留当前用户/SYSTEM/Administrators
+```
+
+`--apply` 只改 ACL、不删除任何文件；失败会打印可复制命令且**不阻断**（`--strict` 时才非零退出）。
+收紧后 DSH 沙箱等以低权限身份运行的程序将无法写这些目录——这是有意取舍（凭据不外泄优先）。
+
+
 ### 用户授权的「只读」项（默认开启，可关闭）
 
 - **一次性只读密钥扫描**：定位微信 `Config.Cipher` 结构取图片密钥与每库 WCDB 密钥；取到即关闭句柄、成功后缓存，之后**不再读内存**。可用 `auto_extract_image_key=false` 关闭图片密钥提取（`db_direct=false` 则连数据库路线一起关闭）。
@@ -432,6 +448,9 @@ python tools\audit_compliance.py
 ```
 
 退出码 `0` = PASS（允许警告），`1` = FAIL。脚本扫描项目内全部 `*.py`（排除 `recon/`、`_refs/`、`WechatMoments/`、`Demo/`、缓存目录等参考/归档目录），并把授权项（只读内存、只读数据库、只读缓存、剪贴板/窗口辅助）**如实列出文件:行号**，不冒充「零内存访问」。
+
+> 2026-10-24 复跑：扫描 134 个 `.py`（含新增的 `agi/` 与网关），结论仍为 **PASS**（严重 0 / 警告 1）。
+> `agi/` 用的是**自建** companion SQLite（记忆/草稿/用量），与「回写微信数据库」无关，已在脚本里按「授权 companion DB」单列并豁免，内存/Hook/注入类规则对它照常生效。
 
 ---
 

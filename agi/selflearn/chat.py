@@ -265,6 +265,7 @@ class SelfLearnAgent:
                 research = tool_reply.research(self.client, text, db_path=self.path)
             except Exception:  # noqa: BLE001
                 research = {"used": False, "context": "", "sources": []}
+        gen_meta = {"two_stage": False, "claims": []}
         if crisis:
             reply = ("我在。先别一个人扛着。你现在安全吗？"
                      "如果可能，先联系你信任的人，或当地急救/心理援助。")

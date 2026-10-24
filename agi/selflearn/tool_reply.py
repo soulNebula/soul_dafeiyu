@@ -75,12 +75,21 @@ def should_lookup(text: str) -> bool:
 
 
 def _context_from(result: dict) -> str:
-    """把 agent 的结果整理成可注入的「资料」块（含来源）。"""
+    """把 agent 的结果整理成可注入的「资料」块（含来源）。
+
+    优先用工具结果里的**事实片段**（notes）：只依赖模型总结时，遇到模型偷懒
+    说"查不到"就会把资料浪费掉。
+    """
+    notes = [strip_internal_ids(str(n or "")).strip()
+             for n in (result.get("notes") or []) if str(n or "").strip()]
     reply = strip_internal_ids(str(result.get("reply") or "")).strip()
     sources = result.get("sources") or []
     lines = []
+    if notes:
+        lines.append("检索到的原文要点：")
+        lines.extend(f"- {n[:300]}" for n in notes[:5])
     if reply:
-        lines.append(reply[:MAX_CONTEXT_CHARS])
+        lines.append("检索结论：" + reply[:MAX_CONTEXT_CHARS // 2])
     if sources:
         lines.append("来源：")
         for src in sources[:5]:
@@ -93,8 +102,8 @@ def _context_from(result: dict) -> str:
 
 
 def research(client, text: str, *, db_path: Path | str | None = None,
-             max_steps: int = 2, max_tool_calls: int = 3,
-             deadline_s: float = 45.0) -> dict:
+             max_steps: int = 3, max_tool_calls: int = 4,
+             deadline_s: float = 60.0) -> dict:
     """跑一次工具循环，返回 ``{"used", "context", "sources", "error"}``。
 
     任何异常都不外抛（联网失败不能让聊天挂掉），只返回 used=False。
@@ -122,6 +131,7 @@ def research(client, text: str, *, db_path: Path | str | None = None,
         return out
     out.update({"used": True, "context": context,
                 "sources": result.get("sources") or [],
+                "notes": result.get("notes") or [],
                 "tool_calls": int(result.get("tool_calls") or 0),
                 "steps": result.get("steps") or []})
     return out

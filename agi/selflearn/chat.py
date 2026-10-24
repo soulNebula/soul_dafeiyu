@@ -315,6 +315,22 @@ class SelfLearnAgent:
             sk_gate = skilltree.gate_output(self.path, reply)
             if sk_gate:
                 reply = sk_gate["message"]
+        # L2：用了联网资料就在末尾补一个来源域名（模型常忘；L2 验收要求可核对）
+        if research.get("used") and "http" not in reply:
+            _src = ""
+            for _item in (research.get("sources") or []):
+                _url = str(_item.get("url") or "").strip()
+                if _url.startswith("http"):
+                    _src = _url
+                    break
+            if _src:
+                try:
+                    from urllib.parse import urlsplit
+                    _host = urlsplit(_src).hostname or ""
+                except Exception:  # noqa: BLE001
+                    _host = ""
+                if _host:
+                    reply = f"{reply}（来源：{_host}）"
         mood = float(st["self"].get("mood", 0.55))
         sharing = float(st["self"].get("sharing", 0.45))
         max_bubbles = 3 if (mood >= 0.75 or sharing >= 0.7) else (2 if (mood >= 0.6 or sharing >= 0.6) else 1)

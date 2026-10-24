@@ -127,6 +127,28 @@ def _collect_sources(name: str, payload: dict, sources: dict[str, dict]) -> None
         _add_source(value.get("url"), value.get("title"), sources)
 
 
+def _collect_notes(name: str, payload: dict, notes: list[str]) -> None:
+    """把工具结果里的**事实片段**留下来（比只看模型总结更可靠）。"""
+    if not payload.get("ok") or len(notes) >= 6:
+        return
+    value = payload.get("result")
+    if not isinstance(value, dict):
+        return
+    if name == "web_search":
+        for item in (value.get("results") or [])[:2]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            snippet = str(item.get("snippet") or "").strip()
+            if title or snippet:
+                notes.append(f"{title}：{snippet[:160]}".strip("："))
+    elif name == "web_fetch":
+        title = str(value.get("title") or "").strip()
+        text = " ".join(str(value.get("text") or "").split())
+        if text:
+            notes.append(f"{title}：{text[:400]}".strip("："))
+
+
 def _add_source(url: Any, title: Any, sources: dict[str, dict]) -> None:
     text = str(url or "").strip()
     if not text:
@@ -138,10 +160,11 @@ def _add_source(url: Any, title: Any, sources: dict[str, dict]) -> None:
 
 
 def _result(*, ok: bool, reply: str, sources: list[dict], steps: list[dict],
-            tool_calls: int, error: str, budget_exceeded: bool) -> dict:
+            tool_calls: int, error: str, budget_exceeded: bool,
+            notes: list[str] | None = None) -> dict:
     return {"ok": bool(ok), "reply": reply, "sources": sources, "steps": steps,
             "tool_calls": int(tool_calls), "error": error,
-            "budget_exceeded": bool(budget_exceeded)}
+            "budget_exceeded": bool(budget_exceeded), "notes": list(notes or [])}
 
 
 def run_agent(client, text: str, *, db_path=None, tools=None, max_steps: int = 5,
@@ -184,6 +207,7 @@ def run_agent(client, text: str, *, db_path=None, tools=None, max_steps: int = 5
     allowed = _allowed_names(registry, spec_list)
     steps: list[dict] = []
     sources: dict[str, dict] = {}
+    notes: list[str] = []
     seen_calls: set[tuple[str, str]] = set()
     reply = ""
     error = ""
@@ -261,6 +285,7 @@ def run_agent(client, text: str, *, db_path=None, tools=None, max_steps: int = 5
             steps.append({"tool": name, "ok": ok, "elapsed": elapsed})
             if ok:
                 _collect_sources(name, payload, sources)
+                _collect_notes(name, payload, notes)
             messages.append({"role": "tool", "tool_call_id": call_id,
                              "name": name, "content": _tool_content(payload)})
         if stop:
@@ -286,4 +311,4 @@ def run_agent(client, text: str, *, db_path=None, tools=None, max_steps: int = 5
     ok = (not error) and bool(reply)
     return _result(ok=ok, reply=reply, sources=list(sources.values())[:MAX_SOURCES],
                    steps=steps, tool_calls=calls_used, error=error,
-                   budget_exceeded=budget_exceeded)
+                   budget_exceeded=budget_exceeded, notes=notes)

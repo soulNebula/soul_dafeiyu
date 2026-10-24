@@ -33,7 +33,7 @@ h1{font-size:18px;margin:0}.sub{color:var(--dim);font-size:12px}.grid{display:gr
 #chat{height:60vh;overflow:auto;display:flex;flex-direction:column;gap:8px}
 .msg{max-width:80%;padding:8px 11px;border-radius:10px;white-space:pre-wrap;word-break:break-word}
 .msg.user{align-self:flex-end;background:var(--blue)}.msg.ai{align-self:flex-start;background:var(--ai);border:1px solid var(--line)}
-.meta{font-size:10px;color:var(--dim);margin-top:2px}.fb{display:flex;gap:4px;margin-top:4px}.fb button{background:#30363d;color:var(--text);border:0;border-radius:6px;padding:2px 7px;font-size:11px;cursor:pointer}
+.meta{font-size:10px;color:var(--dim);margin-top:2px}.fb{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}.fb button{background:#30363d;color:var(--text);border:0;border-radius:6px;padding:2px 7px;font-size:11px;cursor:pointer}.fb button.reason{background:#1f2937;border:1px solid var(--line);color:#9ecbff}
 .row{display:flex;gap:8px;margin-top:10px}textarea{flex:1;min-height:58px;background:var(--ai);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px;resize:vertical}
 button.primary{background:var(--blue);color:#fff;border:0;border-radius:8px;padding:0 16px;font-weight:600;cursor:pointer}
 .item{border-bottom:1px dashed var(--line);padding:5px 0;font-size:12px}.item b{color:#9ecbff}.tag{display:inline-block;background:var(--ai);border:1px solid var(--line);border-radius:12px;padding:0 7px;font-size:10px;color:var(--dim);margin:2px 2px 2px 0}
@@ -57,10 +57,11 @@ button.primary{background:var(--blue);color:#fff;border:0;border-radius:8px;padd
 const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function add(role,text,turnId){const d=document.createElement('div');d.className='msg '+role;const t=document.createElement('div');t.textContent=text;d.appendChild(t);
 const m=document.createElement('div');m.className='meta';m.textContent=role==='user'?'你':'AI';d.appendChild(m);
-if(role==='ai'&&turnId){const f=document.createElement('div');f.className='fb';['good','ok','bad'].forEach(r=>{const b=document.createElement('button');b.textContent=r;b.onclick=()=>fb(turnId,r);f.appendChild(b)});d.appendChild(f)}
+if(role==='ai'&&turnId){const f=document.createElement('div');f.className='fb';['good','ok','bad'].forEach(r=>{const b=document.createElement('button');b.textContent=r;b.onclick=()=>fb(turnId,r);f.appendChild(b)});
+[['太长','bad'],['太冷','bad'],['说错了','bad'],['很好','good']].forEach(([tag,r])=>{const b=document.createElement('button');b.className='reason';b.textContent=tag;b.title='随反馈提交原因标签：'+tag;b.onclick=()=>fb(turnId,r,tag);f.appendChild(b)});d.appendChild(f)}
 $('chat').appendChild(d);$('chat').scrollTop=$('chat').scrollHeight;return d}
 async function api(path,body){const r=await fetch(path,{headers:{'Content-Type':'application/json'},method:body?'POST':'GET',body:body?JSON.stringify(body):undefined});if(!r.ok)throw new Error(await r.text());return r.json()}
-async function fb(turnId,reaction){try{const r=await api('/api/feedback',{turn_id:turnId,reaction});$('hint').textContent=`反馈 ${reaction}：策略已更新；自人格反思 ${r.reflected?.written||0} 条`;await load()}catch(e){$('hint').textContent='反馈失败：'+e.message}}
+async function fb(turnId,reaction,note){try{const r=await api('/api/feedback',{turn_id:turnId,reaction,note:note||''});$('hint').textContent=`反馈 ${reaction}${note?'（'+note+'）':''}：策略已更新；自人格反思 ${r.reflected?.written||0} 条`;await load()}catch(e){$('hint').textContent='反馈失败：'+e.message}}
 async function load(){try{const s=await api('/api/status');$('memCount').textContent=`（${s.memories.length}）`;$('personaCount').textContent=`（${s.persona.length}）`;$('skillCount').textContent=`（${s.variants.length}）`;$('stateLine').textContent=`心情 ${s.state.self.mood} / 分享欲 ${s.state.self.sharing} / 关系 ${s.trust.stage}`;
 $('memories').innerHTML=s.memories.map(m=>`<div class="item"><b>${esc(m.kind)}</b> ${esc(m.content)} <button data-mid="${esc(m.id)}" style="background:transparent;color:#f85149;border:0;font-size:11px;cursor:pointer">删除</button><div class="meta">${esc(m.evidence)}</div></div>`).join('')||'<div class="sub">还没有记忆</div>';
 $('memories').querySelectorAll('button[data-mid]').forEach(b=>b.onclick=()=>forgetMemory(b.dataset.mid));
@@ -143,6 +144,8 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 con.close()
             self._json(200, rows[::-1]); return
+        if path == "/api/pairwise/stats":
+            self._json(200, skills.pair_stats(DB_PATH)); return
         self._json(404, {"ok": False, "error": "not found"})
 
     def do_POST(self):
@@ -217,6 +220,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(400, {"ok": False, "error": "需要 turn_id + good/ok/bad"}); return
             with _LOCK:
                 result = _agent().feedback(turn_id, reaction, str(body.get("note") or ""))
+            self._json(200 if result.get("ok") else 400, result); return
+        if path == "/api/pairwise":
+            with _LOCK:
+                result = skills.record_pair(DB_PATH, body)
             self._json(200 if result.get("ok") else 400, result); return
         self._json(404, {"ok": False, "error": "not found"})
 

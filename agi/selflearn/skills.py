@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 import time
 from pathlib import Path
@@ -164,21 +165,37 @@ def record_feedback(path: Path | str, turn_id: str, reaction: str,
         if turn is None:
             return {"ok": False, "error": "turn 不存在"}
         s = score(reaction)
+        # 幂等：同一 turn 只保留一条反馈。历史遗留的重复行也一并清掉
+        # （基线实测曾出现 6 行反馈覆盖 5 个 turn）；变体/弱验证计数按
+        # “该 turn 的最终评价”记一条，重复点同一按钮不会重复计数。
+        old = con.execute(
+            "SELECT reaction FROM feedback WHERE turn_id=? ORDER BY created_at DESC LIMIT 1",
+            (turn_id,)).fetchone()
+        con.execute("DELETE FROM feedback WHERE turn_id=?", (turn_id,))
         con.execute("UPDATE turns SET feedback=?, score=? WHERE id=?",
                     (reaction, s, turn_id))
         con.execute(
             "INSERT INTO feedback(id,turn_id,reaction,score,note,created_at) VALUES(?,?,?,?,?,?)",
-            (_new("FB-", turn_id, time.time()), turn_id, reaction, s, note[:500], time.time()),
+            (_new("FB-", turn_id), turn_id, reaction, s, note[:500], time.time()),
         )
         if turn["variant_id"]:
+            if old is not None:
+                # 评价被改写：先撤回上一条对变体的贡献，再按最终评价记一次
+                old_s = score(old["reaction"])
+                con.execute(
+                    "UPDATE variants SET alpha=max(0.0, alpha-?), beta=max(0.0, beta-?) "
+                    "WHERE id=?",
+                    (old_s, 1 - old_s, turn["variant_id"]),
+                )
             con.execute(
                 "UPDATE variants SET alpha=alpha+?, beta=beta+? WHERE id=?",
                 (s, 1 - s, turn["variant_id"]),
             )
+        # 弱验证 id 按 (skill, variant, turn) 确定，重复反馈用 REPLACE 覆盖而不是追加
         con.execute(
-            "INSERT INTO weak_checks(id,skill_id,variant_id,passed,note,created_at) "
+            "INSERT OR REPLACE INTO weak_checks(id,skill_id,variant_id,passed,note,created_at) "
             "VALUES(?,?,?,?,?,?)",
-            (_new("WC-", SKILL_ID, turn["variant_id"], reaction, time.time()),
+            (_new("WC-", SKILL_ID, turn["variant_id"], turn_id),
              SKILL_ID, turn["variant_id"], 1 if s >= 0.6 else 0, reaction[:300], time.time()),
         )
         con.commit()
@@ -231,3 +248,82 @@ def variant_stats(path: Path | str = DB_PATH) -> list[dict]:
         return [dict(r) for r in rows]
     finally:
         con.close()
+
+
+# ---------------------------------------------------------------- pairwise 采集
+PAIRWISE_CHOICES = ("a", "b", "tie")
+PAIRWISE_REQUIRED = ("turn_a", "turn_b", "reply_a", "reply_b")
+
+
+def record_pair(path: Path | str = DB_PATH, payload: dict | None = None) -> dict[str, Any]:
+    """写一条成对偏好（同一 context 下 a/b 两条回复谁更好）。
+
+    只做字段校验 + 落库，不做 Bradley-Terry 拟合（留到离线评测）。
+    校验失败返回 ``{"ok": False, "error": ...}``，由 web 层转 400。
+    """
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "body 必须是 JSON object"}
+    payload = payload or {}
+    values: dict[str, str] = {}
+    for key in PAIRWISE_REQUIRED:
+        value = str(payload.get(key) or "").strip()
+        if not value:
+            return {"ok": False, "error": f"缺少必填字段 {key}"}
+        values[key] = value
+    choice = str(payload.get("choice") or "").strip().lower()
+    if choice not in PAIRWISE_CHOICES:
+        return {"ok": False, "error": "choice 只允许 a/b/tie"}
+    context = payload.get("context")
+    if context is None:
+        context_json = "{}"
+    elif isinstance(context, str):
+        try:
+            context_json = json.dumps(json.loads(context), ensure_ascii=False)
+        except (TypeError, ValueError):
+            context_json = json.dumps({"text": context}, ensure_ascii=False)
+    else:
+        try:
+            context_json = json.dumps(context, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            context_json = json.dumps({"text": str(context)}, ensure_ascii=False)
+    rater = str(payload.get("rater") or "user").strip()[:40] or "user"
+    now = time.time()
+    pid = _new("PR-", values["turn_a"], values["turn_b"], choice, rater, now)
+    con = db.connect(path)
+    try:
+        con.execute(
+            "INSERT INTO pairs(id,turn_a,turn_b,reply_a,reply_b,model_a,model_b,"
+            "choice,note,rater,context_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (pid, values["turn_a"], values["turn_b"], values["reply_a"], values["reply_b"],
+             str(payload.get("model_a") or "") or None,
+             str(payload.get("model_b") or "") or None,
+             choice, str(payload.get("note") or "")[:500], rater, context_json, now),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"ok": True, "id": pid}
+
+
+def pair_stats(path: Path | str = DB_PATH, recent: int = 10) -> dict[str, Any]:
+    """pairwise 采集概览：总对数、choice 分布、最近 N 条。"""
+    con = db.connect(path)
+    try:
+        total = int(con.execute("SELECT count(*) FROM pairs").fetchone()[0])
+        choices = {name: 0 for name in PAIRWISE_CHOICES}
+        for row in con.execute("SELECT choice, count(*) AS n FROM pairs GROUP BY choice"):
+            key = str(row["choice"] or "").lower()
+            if key in choices:
+                choices[key] = int(row["n"])
+        rows = [dict(r) for r in con.execute(
+            "SELECT * FROM pairs ORDER BY created_at DESC, id DESC LIMIT ?",
+            (max(1, int(recent)),))]
+    finally:
+        con.close()
+    for row in rows:
+        try:
+            row["context"] = json.loads(row.get("context_json") or "{}")
+        except (TypeError, ValueError):
+            row["context"] = {}
+    return {"ok": True, "total": total, "choices": choices, "recent": rows}
+

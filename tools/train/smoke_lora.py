@@ -371,7 +371,10 @@ def run_train(model, encoded: list[dict], tokenizer, args) -> dict:
                 loss = out.loss * w / ga
             loss.backward()
             loss_sum += float(out.loss.detach().float().item())
-        torch.nn.utils.clip_grad_norm_(trainable, 1.0)
+            step_w = sum(float(s.get("weight", 1.0)) for s in micro) / len(micro)
+        # 关键：clip 的 max_norm 必须跟着样本权重放大，否则 bs=1 时
+        # 「loss×w」会被 clip 归一化抵消（第一版 D 臂就栽在这，加权完全无效）
+        torch.nn.utils.clip_grad_norm_(trainable, 1.0 * step_w)
         optimizer.step()
         if device.type == "cuda":
             torch.cuda.synchronize()

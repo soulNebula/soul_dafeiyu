@@ -116,6 +116,8 @@ class SelfLearnAgent:
                     quoted = text.split(sep, 1)[1].strip()
                     break
             if quoted:
+                if "wxid_" in quoted or re.search(r"\d{10,}:\d+:\d+:[0-9a-f]+", quoted):
+                    quoted = "[消息]"
                 msg = f"你引用的是「{quoted[:60]}」，想接着说什么？"
             else:
                 msg = "看到了，你引用了一条消息，想接着说什么？"

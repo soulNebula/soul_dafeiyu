@@ -416,12 +416,23 @@ class DbBridge:
                     media = ""
             return KIND_FILE, title, media
         if app_type in (57,):
-            quote = ""
             m = re.search(r"<refermsg>(.*?)</refermsg>", attrs_text, re.S)
             blob = m.group(1) if m else attrs_text
-            quote = _xml_tag("content", blob) or _xml_tag("title", blob) or _xml_tag("displayname", blob)
-            quote = _plain_from_xml(quote)[:200]
-            return KIND_SYSTEM, ("[引用消息] " + quote).strip(), ""
+            refer_type = _xml_tag("type", blob)
+            display = _plain_from_xml(_xml_tag("displayname", blob))[:40]
+            content = _plain_from_xml(_xml_tag("content", blob))[:200]
+            # 微信对图片/表情/内部引用常把 content 写成 wxid/长数字串；不能当人话回显
+            internal = bool(re.search(r"(wxid_|:\d{10,}:\d+:)", content))
+            if refer_type in ("3", "48"):
+                quote = "[图片]"
+            elif refer_type in ("47",):
+                quote = "[表情包]"
+            elif not content or internal:
+                quote = "[消息]"
+            else:
+                quote = content
+            label = (display + "：" if display else "") + quote
+            return KIND_SYSTEM, ("[引用消息] " + label).strip(), ""
         if app_type == 5:
             return KIND_SYSTEM, f"[链接] {title}" if title else "[链接]", ""
         if app_type in (33, 36):

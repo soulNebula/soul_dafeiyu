@@ -564,3 +564,10 @@ def test_quote_with_content_is_reflected(tmp_path):
     a = SelfLearnAgent(p, client=FakeClient())
     r = a.send("对方引用了这条消息：我喜欢咖啡")
     assert "咖啡" in r["reply"] and "引用" in r["reply"]
+
+
+def test_quote_never_echoes_internal_wxid(tmp_path):
+    p = tmp_path / "quoteid.sqlite3"
+    a = SelfLearnAgent(p, client=FakeClient())
+    r = a.send("对方引用了这条消息：wxid_0v0g2mpf37u322:1792801924481:1:27970b6973f85f8a8396b4ea")
+    assert "wxid_" not in r["reply"] and "1792801924481" not in r["reply"]

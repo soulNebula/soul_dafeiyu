@@ -49,6 +49,7 @@ def _record(parsed_ok: bool, match_all: bool, fail: str = "") -> dict:
     pred = _pred(match_target=match_all) if parsed_ok else None
     return {
         "id": "X", "parsed_ok": parsed_ok, "fail": fail,
+        "target": target, "pred": pred,
         "field_match": evaluate.compare_fields(pred, target),
     }
 
@@ -217,6 +218,11 @@ def test_summarize_rates_and_top_fail():
     assert g2["behavior_only"] == round(2 / n, 4)           # 只有 2 条 behavior 全对
     assert g2["all5"] == round(2 / n, 4)
     assert g2["all6"] == round(2 / n, 4)
+    # 新增主口径 balanced：结构齐全（这个 fixture 的 target 只有单一类别，均值有值即可）
+    assert "balanced" in g2 and g2["balanced"]["n"] == n
+    assert set(g2["balanced"]) >= {"ask_bal", "emoji_bal", "length_minority_recall",
+                                   "advice_minority_recall", "mean", "majority_baselines"}
+    assert g2["balanced"]["mean"] is not None
     # 分母包含格式失败项：所有 rate 都不会超过 valid_rate + 0
     assert summary["G2"]["all5"] <= summary["G1"]["valid_rate"]
 
@@ -226,6 +232,172 @@ def test_summarize_empty():
     assert summary["G1"]["valid_rate"] == 0.0
     assert summary["G1"]["top_fail"] == {}
     assert summary["G2"]["all5"] == 0.0
+    assert summary["G2"]["balanced"]["mean"] is None
+
+
+# --------------------------------------------------------------------------- #
+# balanced 主口径（balanced accuracy，类别不平衡）
+# --------------------------------------------------------------------------- #
+MAJORITY_BEHAVIOR = {"length": "short", "advice": False, "ask": True, "emoji": "偶尔"}
+MINORITY_BEHAVIOR = {"length": "normal", "advice": True, "ask": False, "emoji": "不用"}
+
+
+def _bal_record(target_behavior: dict, pred_behavior: dict | None) -> dict:
+    target = _target(behavior=target_behavior)
+    pred = _pred(behavior=pred_behavior) if pred_behavior is not None else None
+    return {"id": "B", "parsed_ok": pred_behavior is not None, "fail": "",
+            "target": target, "pred": pred,
+            "field_match": evaluate.compare_fields(pred, target)}
+
+
+def _imbalanced_records() -> list[dict]:
+    """10 条：8 条四字段全是多数类、2 条四字段全是少数类；模型永远预测多数类。
+
+    这样 behavior_only 很高（0.8），但每个字段的 balanced accuracy 都是 0.5。
+    """
+    records = [_bal_record(dict(MAJORITY_BEHAVIOR), dict(MAJORITY_BEHAVIOR))
+               for _ in range(8)]
+    records += [_bal_record(dict(MINORITY_BEHAVIOR), dict(MAJORITY_BEHAVIOR))
+                for _ in range(2)]
+    return records
+
+
+def test_behavior_balanced_penalises_majority_collapse():
+    records = _imbalanced_records()
+    balanced = evaluate.behavior_balanced(records)
+    # 每个字段：多数类 recall 1.0、少数类 recall 0 → balanced accuracy 0.5
+    for key in ("length_bal", "advice_bal", "ask_bal", "emoji_bal"):
+        assert balanced[key] == 0.5, key
+    assert balanced["mean"] == 0.5
+    # 少数类 recall 仍作为附加信息可见
+    assert balanced["length_minority_recall"] == 0.0
+    assert balanced["advice_minority_recall"] == 0.0
+    assert balanced["majority_baselines"] == {"length": 0.8, "advice": 0.8,
+                                              "ask": 0.8, "emoji": 0.8}
+    summary = evaluate.summarize(records)["G2"]
+    # 关键：全预测多数类时 behavior_only=0.8，但 balanced 只有 0.5
+    assert summary["behavior_only"] == 0.8
+    assert summary["balanced"]["mean"] < summary["behavior_only"]
+
+
+def test_behavior_balanced_always_minority_is_not_perfect():
+    """永远输出少数类：少数类 recall 会是 1.0，但 balanced accuracy 仍只有 0.5。"""
+    records = [_bal_record(dict(MAJORITY_BEHAVIOR), dict(MINORITY_BEHAVIOR))
+               for _ in range(8)]
+    records += [_bal_record(dict(MINORITY_BEHAVIOR), dict(MINORITY_BEHAVIOR))
+                for _ in range(2)]
+    balanced = evaluate.behavior_balanced(records)
+    # 旧口径（少数类 recall）会给 1.0；新口径必须公平地给 0.5
+    assert balanced["length_minority_recall"] == 1.0
+    assert balanced["advice_minority_recall"] == 1.0
+    assert balanced["length_bal"] == 0.5 and balanced["advice_bal"] == 0.5
+    assert balanced["ask_bal"] == 0.5 and balanced["emoji_bal"] == 0.5
+    assert balanced["mean"] == 0.5
+    assert evaluate.summarize(records)["G2"]["behavior_only"] == 0.2
+
+
+def test_behavior_balanced_perfect_and_invalid():
+    records = [_bal_record(dict(MAJORITY_BEHAVIOR), dict(MAJORITY_BEHAVIOR)),
+               _bal_record(dict(MINORITY_BEHAVIOR), dict(MINORITY_BEHAVIOR))]
+    perfect = evaluate.behavior_balanced(records)
+    assert perfect["mean"] == 1.0
+    assert perfect["length_bal"] == 1.0 and perfect["advice_bal"] == 1.0
+    assert perfect["length_minority_recall"] == 1.0
+    # 全解析失败：所有 recall 记为 0（不是 None）
+    broken = evaluate.behavior_balanced([_bal_record(dict(MINORITY_BEHAVIOR), None)])
+    assert broken["ask_bal"] == 0.0 and broken["emoji_bal"] == 0.0
+    assert broken["length_bal"] == 0.0 and broken["advice_bal"] == 0.0
+    assert broken["mean"] == 0.0
+
+
+def test_behavior_balanced_missing_class():
+    # target 里只有 length=short / advice=false：各字段只有一类，balanced=该类 recall
+    rec = _bal_record({"length": "short", "ask": True, "advice": False,
+                       "emoji": "偶尔"},
+                      {"length": "short", "ask": True, "advice": False,
+                       "emoji": "偶尔"})
+    rec2 = _bal_record({"length": "short", "ask": False, "advice": False,
+                        "emoji": "不用"},
+                       {"length": "short", "ask": True, "advice": False,
+                        "emoji": "不用"})
+    balanced = evaluate.behavior_balanced([rec, rec2])
+    assert balanced["length_bal"] == 1.0 and balanced["advice_bal"] == 1.0
+    assert balanced["length_minority_recall"] is None
+    assert balanced["advice_minority_recall"] is None
+    # ask: true 1/1、false 0/1 → 0.5；emoji: 1.0
+    assert balanced["ask_bal"] == 0.5 and balanced["emoji_bal"] == 1.0
+    # mean = (1.0 + 1.0 + 0.5 + 1.0)/4
+    assert balanced["mean"] == 0.875
+    assert balanced["class_recalls"]["ask"] == {"True": 1.0, "False": 0.0}
+
+
+# --------------------------------------------------------------------------- #
+# 规则基线（--rule-baseline，用 agi/inner/render.render_rule）
+# --------------------------------------------------------------------------- #
+def _rule_item(state_text: str, target: dict | None = None, uid: str = "R") -> dict:
+    ctx = [{"role": "system", "text": state_text},
+           {"role": "user", "text": "你最近怎么样"}]
+    return {"id": uid, "context": ctx, "user_msg": "还行",
+            "target": target or _target()}
+
+
+STATE_TEXT = ("你是微信里的一个 AI 朋友。\n"
+              "当前状态：mood=0.30 energy=0.40 sharing=0.20 battery=0.50 "
+              "trust=0.30 stage=初识 crisis=false")
+
+
+def test_rule_prediction_matches_render_rule():
+    from agi.inner import render, schema
+
+    item = _rule_item(STATE_TEXT)
+    expected_state = schema.from_state(
+        {"self": {"mood": 0.30, "energy": 0.40, "sharing": 0.20, "battery": 0.50,
+                  "trust": 0.30},
+         "relationship": {"trust": 0.30}},
+        0.30)
+    expected = dict(render.render_rule(expected_state).behavior)
+    got = evaluate.rule_prediction_behavior(item)
+    assert got == expected
+    # 没有状态文本 → None
+    assert evaluate.rule_prediction_behavior(
+        {"id": "x", "context": [{"role": "user", "text": "hi"}]}) is None
+
+
+def test_rule_baseline_structure_and_skip():
+    items = [_rule_item(STATE_TEXT, uid="R1"),
+             {"id": "R2", "context": [{"role": "user", "text": "没有状态"}],
+              "user_msg": "hi", "target": _target()}]
+    summary = evaluate.rule_baseline(items)
+    assert summary["n"] == 1 and summary["skipped"] == 1
+    assert set(summary) >= {"length_bal", "advice_bal", "ask_bal", "emoji_bal",
+                            "mean", "class_recalls", "majority_baselines"}
+    assert 0.0 <= summary["mean"] <= 1.0
+
+
+def test_rule_baseline_does_not_crash_on_render_error(monkeypatch):
+    from agi.inner import render
+
+    def boom(_state):
+        raise RuntimeError("render_rule boom")
+
+    monkeypatch.setattr(render, "render_rule", boom)
+    summary = evaluate.rule_baseline([_rule_item(STATE_TEXT, uid="R1")])
+    assert summary["n"] == 0 and summary["skipped"] == 1
+    assert summary["mean"] is None
+
+
+def test_rule_baseline_flag_adds_payload_field(monkeypatch, tmp_path):
+    data = _write_rows(tmp_path, [_rule_item(STATE_TEXT, uid="R1")])
+    fake = _FakeLlamaClient(replies=[json.dumps(_pred(), ensure_ascii=False)])
+    monkeypatch.setattr(evaluate, "_make_llama_client", _fake_factory(fake))
+    out = tmp_path / "eval.json"
+    code = evaluate.main(["--data", str(data), "--backend", "llama",
+                          "--rule-baseline", "--out", str(out)])
+    assert code == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["rule_baseline"] is not None
+    assert payload["rule_baseline"]["n"] == 1
+    assert payload["rule_baseline"]["mean"] is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -342,13 +514,25 @@ def test_missing_data_returns_2(tmp_path):
     assert code == 2
 
 
-def test_criteria_declares_behavior_as_hard_metric():
+def test_criteria_declares_balanced_as_primary_metric():
     criteria = evaluate.G2_CRITERIA
-    assert criteria["hard_metric"] == "behavior_only"
-    assert criteria["hard_fields"] == list(evaluate.BEHAVIOR_FIELDS)
+    # 主口径改为 balanced accuracy（每字段各类 recall 平均，再四字段平均）
+    assert criteria["primary_metric"] == "balanced"
+    assert "balanced accuracy" in criteria["primary_note"]
+    assert "多数类" in criteria["primary_note"]
+    assert "behavior_only" in criteria["legacy_metric"]
+    assert "参考" in criteria["legacy_note"]
+    assert "render_rule" in criteria["rule_baseline_note"]
     assert criteria["stance_intent_primary"] == "loose"
     assert criteria["stance_intent_reference"] == "strict"
     assert "emoji" not in criteria["all5_fields"]
+
+    # 字段级 balanced 也进 summary，且全预测多数类时 mean=0.5（不是 0.25/0.8）
+    summary = evaluate.summarize(_imbalanced_records())["G2"]
+    assert summary["balanced"]["mean"] == 0.5
+    assert summary["balanced"]["majority_baselines"]["length"] == 0.8
+    assert summary["balanced"]["class_recalls"]["length"] == {"short": 1.0,
+                                                              "normal": 0.0}
 
 
 def test_vision_defaults_to_keep_and_offload_is_opt_in():
@@ -424,9 +608,11 @@ def test_build_payload_keys_and_resume_flag():
     assert payload["peak_alloc_gb"] == 1.0 and payload["peak_reserved_gb"] == 2.0
     assert payload["per_item_s"] == 1.5
     assert set(payload) >= {"n", "adapter", "temperature", "G1", "G2",
-                            "elapsed_s", "criteria", "items"}
+                            "elapsed_s", "criteria", "items", "rule_baseline"}
+    assert payload["rule_baseline"] is None  # 默认不算规则基线
     assert payload["G2"]["field_rates"]["length"] == 0.5
-    assert payload["criteria"]["hard_metric"] == "behavior_only"
+    assert payload["criteria"]["primary_metric"] == "balanced"
+    assert "balanced" in payload["G2"]
 
 
 # --------------------------------------------------------------------------- #
@@ -524,7 +710,8 @@ def test_llama_backend_retries_then_succeeds(monkeypatch, tmp_path):
     monkeypatch.setattr(evaluate, "_make_llama_client", _fake_factory(fake))
     out = tmp_path / "eval.json"
     code = evaluate.main(["--data", str(data), "--backend", "llama",
-                          "--retries", "1", "--out", str(out)])
+                          "--retries", "1", "--retry-delay-s", "0",
+                          "--out", str(out)])
     assert code == 0
     assert fake.calls_made == 2  # 第一次失败 + 重试成功
     payload = json.loads(out.read_text(encoding="utf-8"))
@@ -655,3 +842,32 @@ def test_llama_backend_checkpoint_writes_partial(monkeypatch, tmp_path):
                           "--checkpoint-every", "2", "--out", str(out)]) == 0
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["n"] == 4 and payload["G1"]["valid_rate"] == 1.0
+
+
+def test_is_retryable_error():
+    assert evaluate.is_retryable_error({"fail": "client_error"}) is True
+    assert evaluate.is_retryable_error({"fail": "", "error": "boom"}) is True
+    assert evaluate.is_retryable_error({"fail": "not_json"}) is False
+    assert evaluate.is_retryable_error({"fail": "truncated"}) is False
+    assert evaluate.is_retryable_error({"fail": "", "parsed_ok": True}) is False
+
+
+def test_llama_resume_retry_errors_reruns_only_failures(monkeypatch, tmp_path):
+    data = _write_rows(tmp_path, _llama_rows(2))
+    out = tmp_path / "eval.json"
+    out.write_text(json.dumps({"items": [
+        {"id": "L0", "parsed_ok": True, "fail": "", "field_match": {},
+         "target": _target()},
+        {"id": "L1", "parsed_ok": False, "fail": "client_error", "error": "boom",
+         "field_match": {}, "target": _target()},
+    ]}, ensure_ascii=False), encoding="utf-8")
+    fake = _FakeLlamaClient(replies=[json.dumps(_pred(), ensure_ascii=False)])
+    monkeypatch.setattr(evaluate, "_make_llama_client", _fake_factory(fake))
+    code = evaluate.main(["--data", str(data), "--backend", "llama",
+                          "--resume", "--retry-errors", "--out", str(out)])
+    assert code == 0
+    assert fake.calls_made == 1  # 只重跑失败的那 1 条
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["n"] == 2
+    assert [i["id"] for i in payload["items"]] == ["L0", "L1"]
+    assert payload["G1"]["valid_rate"] == 1.0

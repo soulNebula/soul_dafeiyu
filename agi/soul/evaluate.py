@@ -35,6 +35,11 @@
 * ``--temperature 0.0``（默认贪心，可复现）；
 * ``--resume`` 断点续跑：读 ``--out`` 里已有 items、按 id 跳过，长跑中断/超时后接着跑；
   ``--checkpoint-every 20`` 每 20 条落盘一次，1.8h 级全量评估建议一起用；
+* ``--retry-errors`` 配合 ``--resume``：把 ``client_error`` 的旧记录丢掉重跑
+  （server 中途重启/超时时用；not_json/truncated 属于模型真实输出，不重跑）；
+* ``--rule-baseline``：同一批 val 上跑 ``agi/inner/render.render_rule`` 的规则基线，
+  输出 ``rule_baseline{length_bal, advice_bal, ask_bal, emoji_bal, mean, n, skipped}``，
+  每次评测自动带「模型 vs 手写规则」对照；
 * ``--data`` 参数化：v1 落盘后直接换成 ``soul_sft_v1_val.jsonl`` 即可；
 * 数据行若有现成 ``prompt`` 字段（v1 之后可能会有）优先用它，否则按
   ``tools/train/smoke_lora.py`` 的 chat 构造方式重建（测试锁住两者一致）。
@@ -79,8 +84,17 @@ embedding 在 cuda → 报 ``Expected all tensors to be on the same device``（2
 
 G2 判定口径（写进 summary，避免各人理解不同）
 ---------------------------------------------
-* **硬指标 = behavior 四字段**（length/ask/advice/emoji 归一后精确匹配）：
-  W4 的真正目标是「行为指令对不对」，所以主看 ``G2.behavior_only``（四字段全对率）；
+* **主口径 = ``G2.balanced``**：每个字段先算 **balanced accuracy**（该字段各类 recall
+  的算术平均，缺失类别跳过），length/advice/ask/emoji 四个字段再取平均。
+  - length/advice 也按两类平均：永远输出多数类或永远输出少数类都只有 0.5，
+    不会像"少数类 recall"那样把偏科模型算成满分；
+  - ``*_minority_recall`` 仅作附加信息，不参与 mean；
+  - ``majority_baselines`` 给各字段"全预测多数类"能拿到的分。
+  val 里 length=short 376/393、advice=false 376/393 —— behavior_only 会被多数类撑高。
+* **``--rule-baseline``**：用 ``agi/inner/render.render_rule`` 在同一批 val 上算同口径
+  balanced accuracy（状态从 context[0] 的 system 文本反解），汇总输出 ``rule_baseline``，
+  用于「蒸馏模型 vs 手写规则」对照；单条规则失败跳过并计数。
+* ``behavior_only``（四字段全对率）兼容保留，**仅作参考**（受类别不平衡影响）；
 * **stance / intent**：``strict``（精确）只作参考，``loose``（关键词重合 ≥50%）是主口径；
 * ``all5`` = stance_strict + intent_strict + length + ask + advice（不含 emoji，emoji 噪声最大）；
 * ``all6`` = 上述 5 项 + emoji，仅作附加参考。
@@ -126,16 +140,38 @@ FIELD_RATE_KEYS = ("length", "ask", "advice", "emoji",
 
 #: G2 判定口径（写进 summary JSON + stdout，避免"各人理解不同"）
 G2_CRITERIA = {
-    "hard_metric": "behavior_only",
+    "primary_metric": "balanced",
+    "primary_note": "主口径 = G2.balanced：每个字段先算 balanced accuracy（该字段各类 recall "
+                    "的算术平均，缺失类别跳过），length/advice/ask/emoji 四个字段再取平均。"
+                    "length/advice 也按两类平均，所以'永远输出多数类'或'永远输出少数类'都只有 0.5，"
+                    "不会像少数类 recall 那样把偏科模型算高分",
+    "legacy_metric": "behavior_only",
+    "legacy_note": "behavior_only = behavior 四字段全对率，保留兼容；受类别不平衡影响，"
+                   "仅作参考（全预测多数类也能拿到 ~0.86）",
+    "rule_baseline_note": "--rule-baseline 用 agi/inner/render.render_rule 在同一批 val 上算同口径 "
+                          "balanced accuracy，输出到 rule_baseline，用于'模型 vs 手写规则'对照",
     "hard_fields": list(BEHAVIOR_FIELDS),
-    "hard_note": "W4 真正目标是行为指令对不对：behavior 四字段归一后精确匹配，"
-                 "主看 behavior_only（四字段全对率）",
     "stance_intent_primary": "loose",
     "stance_intent_reference": "strict",
     "stance_intent_note": "strict 精确匹配只作参考；loose（关键词重合≥50%）为主口径",
     "all5_fields": list(ALL5_FIELDS),
     "all5_note": "all5 = stance_strict + intent_strict + length + ask + advice（不含 emoji）",
     "all6_note": "all6 = all5 + emoji，仅附加参考（emoji 枚举噪声最大）",
+}
+
+#: balanced 主口径用的四个行为字段；四项各算 balanced accuracy 再取平均
+BALANCED_FIELDS = ("length", "advice", "ask", "emoji")
+RARE_LABELS = {"length": "normal", "advice": True, "ask": None, "emoji": None}
+
+#: 规则基线：从 val 行 context[0] system 文本反解当前状态（与 tools/train/_compare_baselines.py 同口径）
+_STATE_PATTERNS = {
+    "mood": re.compile(r"mood=([0-9.]+)"),
+    "energy": re.compile(r"energy=([0-9.]+)"),
+    "sharing": re.compile(r"sharing=([0-9.]+)"),
+    "battery": re.compile(r"battery=([0-9.]+)"),
+    "trust": re.compile(r"trust=([0-9.]+)"),
+    "stage": re.compile(r"stage=(\S+)"),
+    "crisis": re.compile(r"crisis=(\w+)"),
 }
 
 
@@ -373,6 +409,169 @@ def compare_fields(pred: dict | None, target: dict) -> dict[str, bool]:
 # --------------------------------------------------------------------------- #
 # 汇总
 # --------------------------------------------------------------------------- #
+def _field_norm(field: str, value: Any):
+    if field == "length":
+        return _norm_length(value)
+    if field in ("ask", "advice"):
+        return _norm_bool(value)
+    return _norm_emoji(value)
+
+
+def _behavior_of(record: dict, which: str) -> dict:
+    data = record.get(which)
+    if not isinstance(data, dict):
+        return {}
+    behavior = data.get("behavior")
+    return behavior if isinstance(behavior, dict) else {}
+
+
+def _class_recalls(records: list[dict], field: str) -> dict[str, float]:
+    """按 target 类别算 recall；pred 缺失/非法一律算错（保证分母是全部样本）。"""
+    counts: dict[str, list[int]] = {}
+    for record in records:
+        target = _field_norm(field, _behavior_of(record, "target").get(field))
+        if target is None:
+            continue
+        pred = _field_norm(field, _behavior_of(record, "pred").get(field))
+        slot = counts.setdefault(str(target), [0, 0])
+        slot[0] += 1
+        if pred == target:
+            slot[1] += 1
+    return {label: hit / total for label, (total, hit) in counts.items() if total}
+
+
+def _majority_baseline(records: list[dict], field: str) -> float | None:
+    counts: dict[str, int] = {}
+    for record in records:
+        target = _field_norm(field, _behavior_of(record, "target").get(field))
+        if target is not None:
+            counts[str(target)] = counts.get(str(target), 0) + 1
+    total = sum(counts.values())
+    return round(max(counts.values()) / total, 4) if total else None
+
+
+def behavior_balanced(records: list[dict]) -> dict:
+    """类别不平衡下的主口径：每字段 balanced accuracy（各类 recall 平均），四字段再平均。
+
+    * ``length_bal`` / ``advice_bal`` / ``ask_bal`` / ``emoji_bal``：该字段两类 recall 的
+      算术平均（只有一类时就是该类的 recall，并在 ``class_recalls`` 里可见）；
+    * ``mean``：四个字段 balanced accuracy 的平均；
+    * ``*_minority_recall``：少数类 recall 仅作附加信息（不参与 mean，避免偏科模型刷分）；
+    * ``majority_baselines``：各字段多数类基线（all-majority 预测能拿到的分）。
+    """
+    empty = {"ask_bal": None, "emoji_bal": None, "length_bal": None,
+             "advice_bal": None, "mean": None,
+             "length_minority_recall": None, "advice_minority_recall": None,
+             "class_recalls": {}, "majority_baselines": {}, "n": len(records)}
+    if not records:
+        return empty
+    recalls = {field: _class_recalls(records, field) for field in BALANCED_FIELDS}
+
+    def balanced_acc(field: str) -> float | None:
+        values = list(recalls[field].values())
+        return round(sum(values) / len(values), 4) if values else None
+
+    ask_bal = balanced_acc("ask")
+    emoji_bal = balanced_acc("emoji")
+    length_bal = balanced_acc("length")
+    advice_bal = balanced_acc("advice")
+    parts = [v for v in (length_bal, advice_bal, ask_bal, emoji_bal) if v is not None]
+    length_min = recalls["length"].get(str(RARE_LABELS["length"]))
+    advice_min = recalls["advice"].get(str(RARE_LABELS["advice"]))
+    return {
+        "ask_bal": ask_bal,
+        "emoji_bal": emoji_bal,
+        "length_bal": length_bal,
+        "advice_bal": advice_bal,
+        "mean": round(sum(parts) / len(parts), 4) if parts else None,
+        # 附加信息：少数类 recall（不参与 mean）
+        "length_minority_recall": None if length_min is None else round(length_min, 4),
+        "advice_minority_recall": None if advice_min is None else round(advice_min, 4),
+        "class_recalls": {field: {label: round(value, 4)
+                                  for label, value in recalls[field].items()}
+                          for field in BALANCED_FIELDS},
+        "majority_baselines": {field: _majority_baseline(records, field)
+                               for field in BALANCED_FIELDS},
+        "n": len(records),
+    }
+
+
+def _state_from_system_text(text: str) -> dict:
+    """从「当前状态：mood=0.55 energy=0.60 …」反解状态字段；解不出返回 {}。"""
+    found: dict[str, Any] = {}
+    raw = str(text or "")
+    for key, pattern in _STATE_PATTERNS.items():
+        match = pattern.search(raw)
+        if not match:
+            continue
+        value = match.group(1)
+        if key == "stage":
+            found[key] = value
+        elif key == "crisis":
+            found[key] = value.lower() == "true"
+        else:
+            found[key] = float(value)
+    return found
+
+
+def rule_prediction_behavior(item: dict) -> dict | None:
+    """val 行 → render_rule 的 behavior 预测（与 _compare_baselines.py 同口径）。
+
+    只取 context 里 system 那条的状态；解不出状态返回 None。render_rule 的异常由调用方兜。
+    """
+    from agi.inner import render, schema  # 延迟 import：CI 无 torch 也能跑
+
+    context = item.get("context") or []
+    system_text = next((str(c.get("text") or "") for c in context
+                        if c.get("role") == "system"), "")
+    state_fields = _state_from_system_text(system_text)
+    if not state_fields:
+        return None
+    trust = float(state_fields.get("trust", 0.5))
+    state = schema.from_state(
+        {"self": state_fields, "relationship": {"trust": trust}}, trust)
+    rendered = render.render_rule(state)
+    behavior = rendered.behavior if isinstance(rendered.behavior, dict) else {}
+    return dict(behavior) or None
+
+
+def rule_baseline(items: list[dict]) -> dict:
+    """手写规则基线：同批 val 上算 behavior 四字段的 balanced accuracy。
+
+    输出结构对齐 ``G2.balanced``：``{length_bal, advice_bal, ask_bal, emoji_bal, mean,
+    n, skipped, class_recalls, majority_baselines}``。单条失败（状态解不出 /
+    render_rule 抛异常）跳过并计数，不整批崩。
+    """
+    records: list[dict] = []
+    skipped = 0
+    for item in items:
+        target = item.get("target") if isinstance(item.get("target"), dict) else {}
+        if not target:
+            skipped += 1
+            continue
+        try:
+            behavior = rule_prediction_behavior(item)
+        except Exception:  # noqa: BLE001 - 规则基线失败只跳过该条
+            skipped += 1
+            continue
+        if not behavior:
+            skipped += 1
+            continue
+        records.append({"target": target, "pred": {"behavior": behavior}})
+    balanced = behavior_balanced(records)
+    return {
+        "length_bal": balanced["length_bal"],
+        "advice_bal": balanced["advice_bal"],
+        "ask_bal": balanced["ask_bal"],
+        "emoji_bal": balanced["emoji_bal"],
+        "mean": balanced["mean"],
+        "n": balanced["n"],
+        "skipped": skipped,
+        "class_recalls": balanced["class_recalls"],
+        "majority_baselines": balanced["majority_baselines"],
+    }
+
+
 def summarize(records: list[dict]) -> dict:
     """records → {G1:{...}, G2:{...}} 汇总（分母 = 全部条数，含失败项）。"""
     n = len(records)
@@ -401,8 +600,9 @@ def summarize(records: list[dict]) -> dict:
         "G2": {
             "field_rates": {k: rate(k) for k in FIELD_RATE_KEYS},
             "all5": joint(ALL5_FIELDS),
-            "behavior_only": joint(BEHAVIOR_FIELDS),
+            "behavior_only": joint(BEHAVIOR_FIELDS),  # 兼容保留，仅参考
             "all6": joint(ALL5_FIELDS + ("emoji",)),
+            "balanced": behavior_balanced(records),    # 主口径
         },
     }
 
@@ -575,8 +775,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="--backend llama 单条请求超时秒数（默认 30）")
     p.add_argument("--retries", type=int, default=1,
                    help="--backend llama 请求失败重试次数（默认 1）")
+    p.add_argument("--retry-delay-s", type=float, default=0.5,
+                   help="--backend llama 重试前等待秒数（server 短暂重启时可调大，默认 0.5）")
+    p.add_argument("--rule-baseline", action="store_true",
+                   help="同时用 agi/inner/render.render_rule 在同一批 val 上算规则基线"
+                        "（behavior 四字段 balanced accuracy），输出 rule_baseline")
     p.add_argument("--resume", action="store_true",
                    help="断点续跑：读 --out 里已有 items，跳过同 id 已评样本再继续")
+    p.add_argument("--retry-errors", action="store_true",
+                   help="配合 --resume：把 client_error 的旧记录丢掉重跑（server 中途挂掉时用）")
     p.add_argument("--checkpoint-every", type=int, default=0,
                    help="每 N 条把部分结果写一次 --out（0=只在结束时写；全量长跑建议 20）")
     p.add_argument("--offload-vision", action="store_true",
@@ -694,6 +901,11 @@ def select_todo(items: list[dict], done_records: list[dict]) -> list[dict]:
             if it.get("id") is None or str(it.get("id")) not in done]
 
 
+def is_retryable_error(record: dict) -> bool:
+    """client_error（server 挂了/超时）可重跑；not_json/truncated 是模型真实输出，不重跑。"""
+    return bool(record.get("error")) or record.get("fail") == CLIENT_ERROR_LABEL
+
+
 def _avg(values) -> float | None:
     nums = [float(v) for v in values
             if isinstance(v, (int, float)) and not isinstance(v, bool)]
@@ -702,7 +914,7 @@ def _avg(values) -> float | None:
 
 def build_payload(records: list[dict], *, args, adapter: str, model_path: Path,
                   data_path: Path, elapsed: float, torch, split: str,
-                  resumed: int = 0) -> dict:
+                  resumed: int = 0, rule_baseline_summary: dict | None = None) -> dict:
     """records → 落盘/打印用汇总 JSON（含逐条明细与判定口径）。"""
     summary = summarize(records)
     backend = getattr(args, "backend", "hf")
@@ -728,6 +940,7 @@ def build_payload(records: list[dict], *, args, adapter: str, model_path: Path,
         "peak_alloc_gb": peak_alloc,
         "peak_reserved_gb": peak_reserved,
         "criteria": G2_CRITERIA,
+        "rule_baseline": rule_baseline_summary,
         "G1": summary["G1"],
         "G2": summary["G2"],
         "items": records,
@@ -765,7 +978,8 @@ CLIENT_ERROR_LABEL = "client_error"
 
 def generate_via_client(client, messages: list[dict], *,
                         max_tokens: int = MAX_NEW_TOKENS,
-                        temperature: float = 0.0, retries: int = 1) -> dict:
+                        temperature: float = 0.0, retries: int = 1,
+                        retry_delay_s: float = 0.5) -> dict:
     """llama-server 生成一条；client 接口与 ``agi/selflearn/llm`` 一致。
 
     失败重试 ``retries`` 次；仍失败返回带 ``error`` 的 dict，主循环记成
@@ -802,7 +1016,7 @@ def generate_via_client(client, messages: list[dict], *,
             else:
                 last_error = f"client 返回值非法：{type(result).__name__}"
         if attempt < int(retries):
-            time.sleep(0.5)
+            time.sleep(max(0.0, float(retry_delay_s)))
     return {"raw_output": "", "generated_tokens": None, "hit_max_tokens": False,
             "latency_s": round(time.perf_counter() - t0, 3),
             "prompt_tokens": prompt_tokens,
@@ -840,6 +1054,15 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[eval] data={data_path} n={len(items)} backend={backend} "
           f"adapter={adapter or '(base)'} temperature={args.temperature}", flush=True)
+    rule_summary = None
+    if args.rule_baseline:
+        try:
+            rule_summary = rule_baseline(items)
+            print("[eval] rule_baseline " + json.dumps(rule_summary, ensure_ascii=False),
+                  flush=True)
+        except Exception as exc:  # noqa: BLE001 - 规则基线失败不影响主评测
+            print(f"[eval] rule_baseline 计算失败（跳过）：{type(exc).__name__}: {exc}",
+                  file=sys.stderr)
     if args.dry_run:
         return run_dry_run(args, items, data_path, model_path, adapter, out_path)
 
@@ -883,6 +1106,13 @@ def main(argv: list[str] | None = None) -> int:
               f"（prompt 仍走 build_messages，不本地套 chat_template）", flush=True)
 
     resumed_records = load_resume_records(out_path) if args.resume else []
+    if args.retry_errors:
+        kept = [r for r in resumed_records if not is_retryable_error(r)]
+        dropped = len(resumed_records) - len(kept)
+        if dropped:
+            print(f"[eval] --retry-errors：丢弃 {dropped} 条 client_error 记录，准备重跑",
+                  flush=True)
+        resumed_records = kept
     todo = select_todo(items, resumed_records)
     records: list[dict] = list(resumed_records)
     resumed_n = len(records)
@@ -914,7 +1144,8 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 gen = generate_via_client(
                     client, messages, max_tokens=args.max_new_tokens,
-                    temperature=args.temperature, retries=args.retries)
+                    temperature=args.temperature, retries=args.retries,
+                    retry_delay_s=args.retry_delay_s)
                 prompt_tokens = gen.get("prompt_tokens")
             if gen.get("error"):
                 fmt = {"parsed_ok": False, "fail": CLIENT_ERROR_LABEL,
@@ -953,17 +1184,19 @@ def main(argv: list[str] | None = None) -> int:
                     records, args=args, adapter=adapter, model_path=model_path,
                     data_path=data_path,
                     elapsed=round(time.perf_counter() - t_start, 2),
-                    torch=torch, split=split, resumed=resumed_n))
+                    torch=torch, split=split, resumed=resumed_n,
+                    rule_baseline_summary=rule_summary))
     except KeyboardInterrupt:
         print("[eval] 收到中断，保存已跑出的部分结果", file=sys.stderr)
 
     elapsed = round(time.perf_counter() - t_start, 2)
-    print("[eval] G2 口径：硬指标=behavior 四字段全对率(behavior_only)；"
-          "stance/intent 主口径=loose（strict 仅参考）；all5 不含 emoji", flush=True)
+    print("[eval] G2 主口径=balanced（ask/emoji balanced acc + length/advice 少数类 recall "
+          "四项平均）；behavior_only 受类别不平衡影响仅作参考；"
+          "stance/intent 主口径=loose（strict 仅参考）", flush=True)
     payload = build_payload(records, args=args, adapter=adapter,
                             model_path=model_path, data_path=data_path,
                             elapsed=elapsed, torch=torch, split=split,
-                            resumed=resumed_n)
+                            resumed=resumed_n, rule_baseline_summary=rule_summary)
     print("[eval] SUMMARY " + json.dumps(
         {k: v for k, v in payload.items() if k != "items"}, ensure_ascii=False), flush=True)
     try:

@@ -159,6 +159,26 @@ def prepare_encoded(items: list[dict], tokenizer, max_len: int) -> list[dict]:
     return encoded
 
 
+def rare_weight_for(item: dict, weight: float, rules: list[str]) -> float:
+    """少数类样本加权：不复制数据、只放大 loss，避免过采样扭曲字段联合分布。
+
+    rules 形如 ["length=normal", "advice=true"]；命中任一条返回 weight。
+    """
+    b = (item.get("target") or {}).get("behavior") or {}
+    for rule in rules:
+        if "=" not in rule:
+            continue
+        key, val = rule.split("=", 1)
+        key, val = key.strip(), val.strip()
+        if key == "advice":
+            want = val.lower() in ("true", "1", "yes")
+            if bool(b.get("advice")) is want:
+                return weight
+        elif str(b.get(key)) == val:
+            return weight
+    return 1.0
+
+
 # --------------------------------------------------------------------------- #
 # 模型
 # --------------------------------------------------------------------------- #
@@ -347,7 +367,8 @@ def run_train(model, encoded: list[dict], tokenizer, args) -> dict:
             with torch.autocast("cuda", dtype=torch.bfloat16,
                                 enabled=(args.dtype == "bf16")):
                 out = model(**batch)
-                loss = out.loss / ga
+                w = sum(float(s.get("weight", 1.0)) for s in micro) / len(micro)
+                loss = out.loss * w / ga
             loss.backward()
             loss_sum += float(out.loss.detach().float().item())
         torch.nn.utils.clip_grad_norm_(trainable, 1.0)
@@ -445,6 +466,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="每 N 步 torch.cuda.empty_cache()（0=不调用）；碎片严重时用")
     p.add_argument("--save-every", type=int, default=0,
                    help="每 N 步存一个 adapter 快照（0=只在结束时存）；断电后不白跑")
+    p.add_argument("--rare-weight", type=float, default=1.0,
+                   help="少数类样本 loss 权重（1=关闭）；不复制数据，避免扭曲字段联合分布")
+    p.add_argument("--rare-rules", default="length=normal,advice=true",
+                   help="命中即加权的规则，逗号分隔，如 length=normal,advice=true")
     p.add_argument("--save-adapter", nargs="?", const=str(DEFAULT_OUTPUT_DIR / "smoke_adapter"),
                    default="", help="可选：smoke 后保存 LoRA adapter（默认 E:\\agent\\output\\smoke_adapter）")
     p.add_argument("--dry-run", action="store_true",
@@ -504,6 +529,16 @@ def main(argv: list[str] | None = None) -> int:
     from transformers import AutoTokenizer  # noqa: E402
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
     encoded = prepare_encoded(items, tokenizer, args.max_seq_len)
+    # 少数类加权：不复制数据，避免过采样扭曲 length/advice/emoji 的联合分布
+    rw = float(getattr(args, "rare_weight", 1.0) or 1.0)
+    rules = [r.strip() for r in str(getattr(args, "rare_rules", "") or "").split(",") if r.strip()]
+    n_rare = 0
+    if rw != 1.0 and rules:
+        for enc, item in zip(encoded, items):
+            w = rare_weight_for(item, rw, rules)
+            enc["weight"] = w
+            n_rare += int(w != 1.0)
+        print(f"[smoke] rare weight={rw} rules={rules} hit={n_rare}/{len(encoded)}", flush=True)
     n_tok = [len(e["input_ids"]) for e in encoded]
     n_prompt = [e["prompt_tokens"] for e in encoded]
     print(f"[smoke] tokens: n={len(encoded)} avg={sum(n_tok)/len(n_tok):.0f} "

@@ -180,7 +180,9 @@ def main() -> int:
         lo, hi = wilson(aw, n)
         lines.append(f"| {pair} | {len(rs)} | {aw} | {bw} | {tie} | {rate:.1%} | {lo:.1%}–{hi:.1%} |")
     # 分桶
-    lines += ["", "## 分桶（a 胜率，不含平）", "", "| bucket | rule:off | model:rule | model:static |", "|---|---|---|---|"]
+    lines += ["", "## 分桶（a 胜率，不含平）", "",
+              "| bucket | " + " | ".join(f"{a}:{b}" for a, b in pairs) + " |",
+              "|---" * (len(pairs) + 1) + "|"]
     buckets = sorted({r["bucket"] for r in rows})
     for b in buckets:
         cells = []

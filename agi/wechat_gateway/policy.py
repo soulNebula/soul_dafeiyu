@@ -23,6 +23,14 @@ SENSITIVE_CONTENT = (
 
 
 def in_quiet_hours(hour: int, start: int, end: int) -> bool:
+    """小时是否落在静音区间 [start, end)。
+
+    支持跨零点：``start > end`` 表示区间跨过 24 点，例如 23 → 8 即
+    23:00–08:00（23 点、0 点、7 点都在内，8 点解除）。``start == end``
+    视为不静音，保持旧语义（int 小时，左闭右开）。
+    """
+    hour = int(hour) % 24
+    start, end = int(start), int(end)
     if start == end:
         return False
     if start < end:

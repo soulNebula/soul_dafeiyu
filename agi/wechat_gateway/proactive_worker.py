@@ -162,6 +162,19 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     if not gateway.cfg.get("proactive_enabled"):
         return {"ok": True, "ran": False, "reason": "proactive_disabled"}
     contact_list = _contacts(gateway, contacts)
+    probability = _probability(gateway)
+    roll = random.random()
+    if roll >= probability:
+        # 概率闸门：这一轮直接跳过，不查联系人、不调 LLM，只记一条日志
+        try:
+            gateway._record("proactive_skipped", {
+                "reason": "probability", "probability": probability,
+                "roll": round(roll, 4), "contacts": len(contact_list)})
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "ran": False, "reason": "probability_skip",
+                "contacts": len(contact_list), "sent": 0, "drafts": 0,
+                "skipped": [], "probability": probability, "roll": round(roll, 4)}
     client = client if client is not None else default_client()
     out: dict[str, Any] = {"ok": True, "ran": True, "contacts": len(contact_list),
                            "sent": 0, "drafts": 0, "skipped": []}
@@ -230,23 +243,40 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
 
 
 def _bounds(gateway) -> tuple[float, float]:
+    """检查间隔上下界（秒）。默认 30–90 分钟；旧默认 30–300 秒是密度事故根因。"""
     try:
-        lo = float(gateway.cfg.get("proactive_interval_min_s") or 30)
+        lo = float(gateway.cfg.get("proactive_interval_min_s") or 1800)
     except (TypeError, ValueError):
-        lo = 30.0
+        lo = 1800.0
     try:
-        hi = float(gateway.cfg.get("proactive_interval_max_s") or 300)
+        hi = float(gateway.cfg.get("proactive_interval_max_s") or 5400)
     except (TypeError, ValueError):
-        hi = 300.0
+        hi = 5400.0
     lo = max(10.0, lo)
     hi = max(lo, hi)
     return lo, hi
 
 
+def _probability(gateway) -> float:
+    """每轮检查真正发送的概率（0–1）。
+
+    缺失时返回 1.0：旧配置/旧测试没有这个键，不应被随机闸门挡掉。
+    显式配置 0.0 表示永不发（不同于「缺失」）。
+    """
+    raw = gateway.cfg.get("proactive_probability")
+    if raw is None:
+        return 1.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.0, min(1.0, value))
+
+
 def next_interval(gateway, *, client=None, last_outcome=None,
                   now=None) -> float:
-    """下一次轮询间隔：**LLM 自己定**（30–300s），失败/不可用时随机；
-    最终再乘一个 0.85–1.15 的抖动，避免机械节奏。"""
+    """下一次轮询间隔：**LLM 自己定**（默认 1800–5400 秒 = 30–90 分钟），
+    失败/不可用时随机；最终再乘一个 0.85–1.15 的抖动，避免机械节奏。"""
     lo, hi = _bounds(gateway)
     client = client if client is not None else default_client()
     idea = 0

@@ -21,7 +21,8 @@ DEFAULTS = {
     "max_chars": 500,
     "reply_delay": 0.3,
     "stop": False,
-    "quiet_hours": [0, 7],
+    # 23:00–08:00 夜间静音；int 小时语义不变，start > end 即跨零点
+    "quiet_hours": [23, 8],
     "rate_per_minute": 3,
     "reactive_rate_per_minute": 8,
     "daily_limit": 200,
@@ -35,8 +36,11 @@ DEFAULTS = {
     "proactive_enabled": False,
     "proactive_interval_s": 900,
     "proactive_contacts": [],
-    "proactive_interval_min_s": 30,
-    "proactive_interval_max_s": 300,
+    # 主动检查间隔：30–90 分钟（旧值 30–300 秒，密度高 20–60 倍）
+    "proactive_interval_min_s": 1800,
+    "proactive_interval_max_s": 5400,
+    # 每轮检查只有 30% 概率真的发（对齐 qq-bridge）
+    "proactive_probability": 0.3,
     "proactive_until_ts": 0,
     "reply_debounce_ms": 2000,
     "proactive_idle_s": 600,

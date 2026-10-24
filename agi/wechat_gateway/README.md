@@ -103,18 +103,42 @@ feedback bad
 801 会把这条记到该联系人上一条 AI 回复的 `feedback`，不再当普通聊天生成回复。
 仅认显式前缀，普通“好/一般”不会误判。
 
-## 发送硬闸门
+## 发送硬闸门（M1）
 
-`config.json` 支持：
+`config.json`：
 
 ```text
 stop: true                 一键急停（改后重启生效）
 quiet_hours: [0,7]         夜间静默
+min_interval_s: 1.5        最小间隔（只约束主动发送；被动回复/多气泡不受限）
 rate_per_minute: 3         每分钟上限
+hourly_limit: 40           每小时上限
 daily_limit: 200           每日上限
+max_chars: 500             单条长度上限（超长直接拒发）
 ```
 
-超限记录 `send_blocked`，不会调用 wxauto。默认 quiet_hours 覆盖凌晨；需要夜间测试时显式改配置。
+内容闸门（`policy.check_content`）会在发送前拦掉：空文本、超长、本机绝对路径、
+疑似凭据赋值（`API key: …` / `password=…`）、`wxid_` 内部 ID、`sk-…`、私钥头。
+所有拦截都记 `send_blocked` + 原因，不会调用 wxauto。
+
+## 窗口级兜底（默认关闭）
+
+wxauto 失败时可以用窗口级兜底，但**默认只做"人工协助"**——因为窗口输入无法可靠校验
+"当前打开的是谁"，盲发可能发错人：
+
+```json
+{
+  "fallback_enabled": false,
+  "fallback_mode": "manual",
+  "fallback_input_box": null
+}
+```
+
+- `fallback_enabled=false`（默认）：失败只用草稿兜底；
+- `fallback_mode="manual"`：把文本放进剪贴板 + 记 `fallback` 审计 + 落草稿，
+  由你切到目标聊天手动粘贴；
+- `fallback_mode="auto"`：**必须**同时配置 `fallback_input_box: [x, y]`（截图坐标的点），
+  且要求微信窗口能切到前台；结果是 `verified: false`，请人工抽查。
 
 ## 发送控制面
 

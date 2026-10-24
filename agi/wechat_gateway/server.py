@@ -47,10 +47,11 @@ LOG_PATH = ROOT / "agi" / "data" / "wechat" / "gateway.log"
 WXAUTO_PYTHON = ROOT / "agi" / "data" / "wechat" / ".venv" / "Scripts" / "python.exe"
 
 
-def _log(entry: dict) -> None:
+def _log(entry: dict, path: Path | None = None) -> None:
+    target = Path(path) if path else LOG_PATH
     try:
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with LOG_PATH.open("a", encoding="utf-8") as fh:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
     except Exception:  # noqa: BLE001
         pass
@@ -60,6 +61,7 @@ class Gateway:
     def __init__(self, cfg_obj: dict):
         self.cfg = dict(cfg_obj)
         self.draft_path = self.cfg.get("drafts_path") or drafts.DEFAULT_PATH
+        self.log_path = Path(self.cfg.get("log_path") or LOG_PATH)
         self.receiver = None
         self.backend = None
         self.sender = WxAutoSender()
@@ -125,7 +127,7 @@ class Gateway:
         entry = {"ts": time.time(), "kind": kind, **data}
         with self.lock:
             self.recent.append(entry)
-        _log(entry)
+        _log(entry, self.log_path)
 
     def on_inbound(self, msg: dict) -> None:
         self._record("inbound", {"friend": msg.get("friend"), "text": msg.get("text"),
@@ -248,6 +250,14 @@ class Gateway:
         if text != original:
             self._record("send_sanitized", {"friend": contact,
                                             "removed_chars": len(original) - len(text)})
+        content = policy.check_content(text, self.cfg)
+        if not content.get("ok"):
+            self._record("send_blocked", {"friend": contact,
+                                          "reason": content.get("reason"),
+                                          "detail": content.get("detail", ""),
+                                          "chars": content.get("chars")})
+            return {"ok": False, "status": "blocked",
+                    "error": str(content.get("reason") or "content_rejected")}
         mode = control.send_mode(self.cfg, contact)
         if mode == "off":
             self._record("send_blocked", {"friend": contact, "reason": "send_mode_off"})
@@ -260,6 +270,23 @@ class Gateway:
         if self.cfg.get("stop"):
             self._record("send_blocked", {"friend": contact, "reason": "stop_switch"})
             return {"ok": False, "status": "blocked", "error": "stop_switch"}
+        now = time.time()
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        if day != self.sent_day:
+            self.sent_day = day
+            self.sent_today = 0
+        recent = sum(1 for t in self.send_times if now - t < 60)
+        # 每小时窗口：顺手清掉一小时前的记录，避免列表无限增长
+        self.send_times = [t for t in self.send_times if now - t < 3600]
+        hourly = len(self.send_times)
+        last_sent_at = max(self.send_times) if self.send_times else 0.0
+        verdict = policy.check_send(now=now, hour=time.localtime(now).tm_hour,
+                                    recent_60s=recent, today_count=self.sent_today,
+                                    cfg=self.cfg, reactive=reactive, text=text,
+                                    last_sent_at=last_sent_at, hourly_count=hourly)
+        if not verdict.get("ok"):
+            self._record("send_blocked", {"friend": contact, "reason": verdict.get("reason")})
+            return {"ok": False, "status": "blocked", "error": verdict.get("reason")}
         if self.cfg.get("dry_run", True):
             out = self.sender.send(contact, text, dry_run=True)
             if not out.get("ok") and out.get("status") == "failed":
@@ -267,19 +294,7 @@ class Gateway:
                                            str(out.get("error") or "failed"))
             return out
         if not WXAUTO_PYTHON.exists():
-            return {"ok": False, "status": "failed", "error": f"缺少 wxauto venv: {WXAUTO_PYTHON}"}
-        now = time.time()
-        day = time.strftime("%Y-%m-%d", time.localtime(now))
-        if day != self.sent_day:
-            self.sent_day = day
-            self.sent_today = 0
-        recent = sum(1 for t in self.send_times if now - t < 60)
-        verdict = policy.check_send(now=now, hour=time.localtime(now).tm_hour,
-                                    recent_60s=recent, today_count=self.sent_today,
-                                    cfg=self.cfg, reactive=reactive)
-        if not verdict.get("ok"):
-            self._record("send_blocked", {"friend": contact, "reason": verdict.get("reason")})
-            return {"ok": False, "status": "blocked", "error": verdict.get("reason")}
+            return self._on_send_failure(contact, text, f"缺少 wxauto venv: {WXAUTO_PYTHON}")
         cmd = [str(WXAUTO_PYTHON), "-m", "agi.wechat_gateway.send_cli",
                "--contact", contact, "--text", text]
         try:
@@ -288,24 +303,60 @@ class Gateway:
                                   env={**os.environ, "PYTHONIOENCODING": "utf-8"})
             line = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else ""
             if not line:
-                return {"ok": False, "status": "failed",
-                        "error": (proc.stderr or "send_cli 无输出")[-500:]}
+                return self._on_send_failure(
+                    contact, text, (proc.stderr or "send_cli 无输出")[-500:])
             out = json.loads(line)
             if out.get("ok"):
                 self.send_times.append(time.time())
                 self.sent_today += 1
             else:
-                self._archive_failed_draft(contact, text,
-                                           str(out.get("error") or out.get("status") or "failed"))
+                return self._on_send_failure(
+                    contact, text,
+                    str(out.get("error") or out.get("status") or "failed"))
             return out
         except Exception as exc:  # noqa: BLE001
-            self._archive_failed_draft(contact, text, f"{type(exc).__name__}: {exc}")
-            return {"ok": False, "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+            return self._on_send_failure(contact, text, f"{type(exc).__name__}: {exc}")
 
-    def _archive_failed_draft(self, contact: str, text: str, error: str) -> None:
+    def _on_send_failure(self, contact: str, text: str, error: str) -> dict:
+        """真实发送失败：先试窗口级兜底，再落草稿。"""
+        fallback = self._fallback_send(contact, text, error)
+        if fallback and fallback.get("ok") and fallback.get("status") == "sent":
+            now = time.time()
+            self.send_times.append(now)
+            self.sent_today += 1
+            fallback["trigger_error"] = str(error)[:200]
+            return fallback
+        if fallback and fallback.get("ok") and fallback.get("status") == "clipboard":
+            self._archive_failed_draft(
+                contact, text,
+                "fallback_clipboard: " + str(fallback.get("warning") or ""),
+                reason="fallback_clipboard")
+            return fallback
+        self._archive_failed_draft(contact, text, error)
+        return {"ok": False, "status": "failed", "error": str(error)[:200]}
+
+    def _fallback_send(self, contact: str, text: str, error: str) -> dict | None:
+        """窗口级兜底（默认关闭；默认只做剪贴板协助，不自动盲发）。"""
+        if not self.cfg.get("fallback_enabled"):
+            return None
+        try:
+            from . import win_send
+            out = win_send.send_via_window(text, self.cfg)
+        except Exception as exc:  # noqa: BLE001
+            out = {"ok": False, "status": "failed",
+                   "error": f"{type(exc).__name__}: {exc}"}
+        self._record("fallback", {"friend": contact, "status": out.get("status"),
+                                  "ok": bool(out.get("ok")),
+                                  "warning": str(out.get("warning") or "")[:200],
+                                  "error": str(out.get("error") or "")[:200],
+                                  "trigger": str(error)[:120]})
+        return out
+
+    def _archive_failed_draft(self, contact: str, text: str, error: str,
+                              reason: str = "send_failed") -> None:
         """发送失败不丢内容：落成草稿，等人工决定重发或丢弃。"""
         try:
-            item = drafts.add(contact, text, "send_failed", path=self.draft_path)
+            item = drafts.add(contact, text, reason, path=self.draft_path)
             self._record("draft", {"friend": contact, "text": text,
                                    "draft_id": item["id"], "reason": "send_failed",
                                    "error": str(error)[:200]})
@@ -340,8 +391,14 @@ class Gateway:
             "policy": {"stop": bool(self.cfg.get("stop")),
                        "quiet_hours": self.cfg.get("quiet_hours"),
                        "rate_per_minute": self.cfg.get("rate_per_minute"),
+                       "min_interval_s": self.cfg.get("min_interval_s"),
+                       "hourly_limit": self.cfg.get("hourly_limit"),
                        "daily_limit": self.cfg.get("daily_limit"),
-                       "sent_today": self.sent_today},
+                       "sent_today": self.sent_today,
+                       "sent_last_hour": len([t for t in self.send_times
+                                              if time.time() - t < 3600])},
+            "fallback": {"enabled": bool(self.cfg.get("fallback_enabled")),
+                         "mode": str(self.cfg.get("fallback_mode") or "manual")},
             "backend": state,
             "receiver": self.receiver.status() if self.receiver else None,
             "recent": list(self.recent)[-20:],

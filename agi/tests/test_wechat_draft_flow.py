@@ -14,6 +14,7 @@ def _gateway(tmp_path, **overrides) -> Gateway:
         "allowed_contacts": ["好友A"],
         "send_mode": "confirm",
         "drafts_path": str(tmp_path / "drafts.jsonl"),
+        "log_path": str(tmp_path / "gateway.log"),
     }
     cfg.update(overrides)
     return Gateway(cfg)

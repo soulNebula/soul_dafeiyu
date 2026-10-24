@@ -1,0 +1,87 @@
+{
+ "by_source": {
+  "golden": 350,
+  "messages": 832,
+  "synthetic": 708
+ },
+ "calls": 2112,
+ "prompt_tokens": 1664330,
+ "completion_tokens": 359346,
+ "profile_divergence": {
+  "sampled": 20,
+  "contexts_with_ge3": 20,
+  "ratio": 1.0,
+  "threshold": 0.8,
+  "pass": true,
+  "failures": 0
+ },
+ "updated": "2026-10-25T02:36:33+08:00",
+ "plan": {
+  "rows": 1891,
+  "by_source": {
+   "golden": 350,
+   "messages": 833,
+   "synthetic": 708
+  },
+  "unique_user_msg": 801,
+  "unique_context": 1891,
+  "max_dup": 22,
+  "max_dup_user_msg": "嗯",
+  "by_profile": {
+   "default": 397,
+   "work": 249,
+   "low_mood": 249,
+   "tired": 249,
+   "joke": 249,
+   "guarded": 249,
+   "close": 249
+  },
+  "by_split": {
+   "val": 393,
+   "train": 1498
+  },
+  "crisis_rows": 105
+ },
+ "budget_cny": 3.12,
+ "price_cny_per_million": {
+  "in": 1.0,
+  "out": 4.0
+ },
+ "items": 1890,
+ "elapsed_seconds": 3282.965,
+ "generate": {
+  "written": 36,
+  "failed": 0,
+  "skipped": 1855,
+  "total": 1891,
+  "elapsed": 58.563,
+  "aborted": false,
+  "abort_reason": ""
+ },
+ "actual": {
+  "rows": 1890,
+  "by_source": {
+   "golden": 350,
+   "messages": 832,
+   "synthetic": 708
+  },
+  "unique_user_msg": 801,
+  "unique_context": 1890,
+  "max_dup": 22,
+  "max_dup_user_msg": "嗯",
+  "by_profile": {
+   "default": 397,
+   "work": 249,
+   "low_mood": 248,
+   "tired": 249,
+   "joke": 249,
+   "guarded": 249,
+   "close": 249
+  },
+  "by_split": {
+   "val": 393,
+   "train": 1497
+  },
+  "crisis_rows": 105
+ }
+}

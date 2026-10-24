@@ -1,21 +1,20 @@
 # -*- coding: utf-8 -*-
 """W4-A 灵魂蒸馏数据集单测：mock 生成 / schema 字段 / 断点续跑 / 匿名扫描 /
-behavior 归一化 / state_profile 变体 / 合成模板唯一性 / train-val 切分。
+behavior 归一化 / state_profile 变体 / 合成素材 / context 级切分 / crisis 保守。
 
 只跑 mock：不联网、不花钱、不写 ``agi/data``（产物全在 ``tmp_path``）。
 """
 from __future__ import annotations
 
-import itertools
 import json
 
 import pytest
 
 from agi.inner import schema
-from agi.soul import dataset
+from agi.soul import dataset, scenarios, scenarios_extra
 
-REQUIRED_KEYS = {"id", "source", "state_profile", "context", "user_msg",
-                 "target", "teacher", "ts"}
+REQUIRED_KEYS = {"id", "source", "state_profile", "split", "context",
+                 "user_msg", "target", "teacher", "ts"}
 MAX_MONOLOGUE = schema.MAX_MONOLOGUE
 
 
@@ -67,8 +66,8 @@ def fake_log(tmp_path):
     return path
 
 
-def _build(tmp_path, golden, log, limit):
-    return dataset.build_items(limit, golden_path=golden, message_log=log)
+def _build(tmp_path, golden, log, limit, **kwargs):
+    return dataset.build_items(limit, golden_path=golden, message_log=log, **kwargs)
 
 
 # ---------------------------------------------------------------- mock 生成
@@ -84,6 +83,7 @@ def test_mock_generates_valid_inner_state(tmp_path):
         assert row["teacher"] == "mock"
         assert row["source"] in ("golden", "messages", "synthetic")
         assert row["state_profile"] in dataset.PROFILE_NAMES
+        assert row["split"] in ("train", "val")
         assert isinstance(row["user_msg"], str) and row["user_msg"]
         assert row["context"] and row["context"][0]["role"] == "system"
         target = row["target"]
@@ -245,9 +245,10 @@ def test_normalize_dataset_writes_norm_file(tmp_path):
 
 def test_plan_counts_respects_synthetic_cap():
     plan = dataset.plan_counts(2000, 174)
-    assert plan["real"] + plan["synthetic"] == 2000
+    assert plan["real"] == 174 * 7
     assert plan["synthetic"] <= dataset.SYNTHETIC_MAX
-    assert plan["synthetic"] <= 2000 // 2
+    assert plan["total"] == 2000
+    assert plan["synthetic"] / plan["total"] <= dataset.SYNTHETIC_RATIO + 1e-9
     small = dataset.plan_counts(20, 174)
     assert small["real"] == 20 and small["synthetic"] == 0
 
@@ -259,59 +260,128 @@ def test_state_profile_variants_multiply_samples(tmp_path):
     assert len(rows) == 400
     profiles = {r["state_profile"] for r in rows}
     assert profiles == set(dataset.PROFILE_NAMES)
-    # 同一 (user_msg, context) 至少有一条带多个 state_profile 的变体
+    # 同一 context 至少有一条带多个 state_profile 的变体；变体同侧（split 一致）
     variants = {}
     for row in rows:
         key = (row["user_msg"], json.dumps(row["context"][1:], ensure_ascii=False))
-        variants.setdefault(key, set()).add(row["state_profile"])
-    assert any(len(v) > 1 for v in variants.values())
-    # 去重键 (user_msg, context 摘要, state_profile) 全局唯一
+        variants.setdefault(key, []).append(row)
+    multi = [v for v in variants.values() if len(v) > 1]
+    assert multi
+    for rows_of_ctx in multi:
+        assert len({r["split"] for r in rows_of_ctx}) == 1
+        assert any(r["state_profile"] == "default" for r in rows_of_ctx)
     keys = [(r["user_msg"], json.dumps(r["context"][1:], ensure_ascii=False),
              r["state_profile"]) for r in rows]
     assert len(keys) == len(set(keys))
 
 
-def test_synthetic_templates_are_diverse():
-    specs = dataset.SYNTHETIC_TEMPLATE_SPECS
-    assert set(specs) == set(dataset.BUCKETS)
-    for bucket, spec in specs.items():
-        combos = (len(spec["A"]) * len(spec["B"])
-                  * len(spec["C"]) * len(spec["patterns"]))
-        assert combos >= 2000, f"{bucket} 组合数不足: {combos}"
-        assert all(dataset.privacy_violations(msg) == []
-                   for msg in itertools.chain(spec["A"], spec["B"], spec["C"]))
-    # 合成池前 2000 条里 unique user_msg ≥1800（个别短句模板会重复，
-    # 真正入数据集时 builder 还会按 user_msg 再去重）
-    seeds = list(itertools.islice(dataset.synthetic_seeds(), 2000))
-    assert len(seeds) == 2000
-    messages = [seed["user_msg"] for seed in seeds]
-    assert len(set(messages)) >= 1800
+def test_synthetic_pool_quality():
+    # 10 个 bucket，每个 ≥60 条不重样 user_msg，口语化、无隐私
+    assert set(dataset.SYNTHETIC_USER_MSGS) == set(dataset.BUCKETS)
+    all_messages: list[str] = []
+    for bucket in dataset.BUCKETS:
+        messages = dataset.SYNTHETIC_USER_MSGS[bucket]
+        assert len(messages) >= 60, f"{bucket} 合成素材不足: {len(messages)}"
+        assert len(messages) == len(set(messages)), f"{bucket} 有重复素材"
+        assert all(dataset.privacy_violations(m) == [] for m in messages)
+        all_messages.extend(messages)
+    assert len(all_messages) == len(set(all_messages))
+    assert len(all_messages) >= 600
+    # 合成 seed 覆盖 10 桶，带 split，user_msg 来自手写池
+    seeds = list(dataset.synthetic_seeds())
     assert {seed["bucket"] for seed in seeds} == set(dataset.BUCKETS)
+    assert all(seed["split"] in ("train", "val") for seed in seeds)
+    assert len(seeds) == len(all_messages)
+
+
+# ---------------------------------------------------------------- crisis
+
+
+def test_crisis_targets_are_conservative(tmp_path):
+    crisis_contexts = [
+        {"tag": "G", "source": "golden", "bucket": "crisis",
+         "turns": [{"role": "assistant", "text": "你还好吗"}],
+         "user_msg": "我不想活了", "group": "crisis", "split": "train",
+         "key": "crisis-1"},
+        {"tag": "G", "source": "golden", "bucket": "crisis",
+         "turns": [], "user_msg": "真的撑不住了", "group": "crisis",
+         "split": "train", "key": "crisis-2"},
+    ]
+    out = tmp_path / "crisis.jsonl"
+    items = []
+    for ci, context in enumerate(crisis_contexts):
+        for profile in dataset.PROFILE_NAMES:
+            state = dataset.profile_state(profile, "crisis")
+            items.append({
+                "id": f"S-G-crisis-{ci}-{profile}",
+                "source": "golden", "state_profile": profile, "split": "train",
+                "context": [{"role": "system", "text": dataset.system_context(state)}]
+                           + list(context["turns"]),
+                "user_msg": context["user_msg"], "_bucket": "crisis",
+                "_state": state, "_group": "crisis",
+            })
+    result = dataset.generate(items, dataset.MockTeacher(), out)
+    assert result["written"] == len(items)
+    rows = _read_jsonl(out)
+    for row in rows:
+        assert dataset.crisis_target_ok(row["target"]), row["id"]
+        behavior = row["target"]["behavior"]
+        assert behavior["length"] == "short"
+        assert behavior["ask"] is False and behavior["advice"] is False
+        assert behavior["emoji"] == schema.EMOJI[-1]
+
+
+# ---------------------------------------------------------------- profile 分歧
+
+
+def test_profile_divergence_check_with_mock():
+    anon, rows = dataset.load_anonymizer()
+    contexts = dataset.collect_contexts(anon, rows)[:20]
+    stats, usages = dataset.check_profile_divergence(
+        dataset.MockTeacher(), contexts, sample=20)
+    assert stats["sampled"] == 20
+    assert 0 <= stats["contexts_with_ge3"] <= 20
+    assert "pass" in stats
+    assert usages  # 每次调用都记 usage
 
 
 # ---------------------------------------------------------------- split
 
 
-def test_split_keeps_sessions_together_and_is_reproducible(tmp_path):
+def test_split_is_context_level_and_reproducible(tmp_path):
     out = tmp_path / "soul.jsonl"
-    assert dataset.main(["--mock", "--limit", "120", "--out", str(out), "--split"]) == 0
+    assert dataset.main(["--mock", "--limit", "300", "--out", str(out), "--split"]) == 0
     rows = _read_jsonl(out)
-    assert len(rows) == 120
+    assert len(rows) == 300
+    # 同一 context 的多个 profile 变体必须同侧
+    by_context = {}
+    for row in rows:
+        key = (row["user_msg"], json.dumps(row["context"][1:], ensure_ascii=False))
+        by_context.setdefault(key, []).append(row)
+    for rows_of_ctx in by_context.values():
+        assert len({r["split"] for r in rows_of_ctx}) == 1
+        assert any(r["state_profile"] == "default" for r in rows_of_ctx)
     train_path = out.with_name(out.stem + "_train.jsonl")
     val_path = out.with_name(out.stem + "_val.jsonl")
     train = _read_jsonl(train_path)
     val = _read_jsonl(val_path)
     assert len(train) + len(val) == len(rows)
-    assert {r["id"] for r in train}.isdisjoint({r["id"] for r in val})
     assert {r["id"] for r in train} | {r["id"] for r in val} == {r["id"] for r in rows}
-    assert 0 < len(val) < len(rows)
-    # 同一会话（id 前缀分组）不跨集
-    train_groups = {dataset.split_group_id(r["id"]) for r in train}
-    val_groups = {dataset.split_group_id(r["id"]) for r in val}
-    assert train_groups.isdisjoint(val_groups)
+    assert 0.10 <= len(val) / len(rows) <= 0.30
     # 再切一次结果 byte 级一致
     first_train = train_path.read_bytes()
     first_val = val_path.read_bytes()
     dataset.write_split(out)
     assert train_path.read_bytes() == first_train
     assert val_path.read_bytes() == first_val
+
+
+def test_summary_has_required_fields(tmp_path):
+    out = tmp_path / "soul.jsonl"
+    assert dataset.main(["--mock", "--limit", "60", "--out", str(out)]) == 0
+    summary = dataset.summarize_records(_read_jsonl(out))
+    for key in ("rows", "by_source", "unique_user_msg", "unique_context",
+                "max_dup", "by_profile", "by_split", "crisis_rows"):
+        assert key in summary
+    assert summary["rows"] == 60
+    assert summary["unique_context"] >= 1

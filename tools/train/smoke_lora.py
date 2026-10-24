@@ -77,7 +77,7 @@ def load_items(path: Path, limit: int) -> list[dict]:
                 items.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-            if len(items) >= limit:
+            if limit and len(items) >= limit:
                 break
     if not items:
         raise SystemExit(f"[smoke] 数据集为空：{path}")
@@ -266,10 +266,16 @@ def setup_peft(model, *, r: int, alpha: int, dropout: float, load_4bit: bool):
 # --------------------------------------------------------------------------- #
 # 训练
 # --------------------------------------------------------------------------- #
-def collate(batch: list[dict], pad_token_id: int):
+def collate(batch: list[dict], pad_token_id: int, bucket: int = 32):
     import torch
 
     max_len = max(len(x["input_ids"]) for x in batch)
+    # 长度量化到 64 的桶：Windows 上 expandable_segments 不可用，变长张量会让
+    # caching allocator 反复切新块、reserved 一路涨（实测 300 步涨到 11GB 并 spill
+    # 到系统内存）。把 batch 长度对齐到少量固定桶后，块可被复用，峰值掉回显存内。
+    bucket = max(1, int(bucket or 1))
+    if bucket > 1:
+        max_len = ((max_len + bucket - 1) // bucket) * bucket
     input_ids, labels, attn = [], [], []
     for x in batch:
         pad = max_len - len(x["input_ids"])
@@ -309,19 +315,33 @@ def run_train(model, encoded: list[dict], tokenizer, args) -> dict:
     torch.cuda.reset_peak_memory_stats()
     samples = list(encoded)
     random.Random(args.seed).shuffle(samples)
+    # 长度分桶：Windows 上 expandable_segments 不可用，变长样本反复申请/释放会碎片化，
+    # 把相近长度的样本排在一起可显著降低 reserved 峰值。
+    chunk = max(1, int(getattr(args, "sort_chunk", 64)))
+    if chunk > 1:
+        for i in range(0, len(samples), chunk):
+            samples[i:i + chunk] = sorted(
+                samples[i:i + chunk], key=lambda x: len(x["input_ids"]))
     bs = max(1, args.batch_size)
     ga = max(1, args.grad_accum)
     batches = [samples[i:i + bs] for i in range(0, len(samples), bs)]
-    steps = max(1, min(args.max_steps, len(batches) // ga))
+    epochs = max(1, int(getattr(args, "epochs", 1) or 1))
+    steps_per_epoch = max(1, len(batches) // ga)
+    wanted = steps_per_epoch * epochs
+    cap = int(getattr(args, "max_steps", 0) or 0)
+    steps = min(cap, wanted) if cap > 0 else wanted
+    steps = max(1, steps)
     records, losses = [], []
     t_start = time.perf_counter()
     for step in range(steps):
+        epoch = step // steps_per_epoch + 1
         micro_batches = [batches[(step * ga + g) % len(batches)] for g in range(ga)]
         t0 = time.perf_counter()
         optimizer.zero_grad(set_to_none=True)
         loss_sum, n_tokens = 0.0, 0
         for micro in micro_batches:
-            batch = collate(micro, tokenizer.pad_token_id)
+            batch = collate(micro, tokenizer.pad_token_id,
+                            bucket=int(getattr(args, "pad_bucket", 32)))
             batch = {k: v.to(device) for k, v in batch.items()}
             n_tokens += int(batch["input_ids"].numel())
             with torch.autocast("cuda", dtype=torch.bfloat16,
@@ -339,7 +359,7 @@ def run_train(model, encoded: list[dict], tokenizer, args) -> dict:
         losses.append(item_loss)
         peak_alloc = gb(torch.cuda.max_memory_allocated()) if device.type == "cuda" else 0.0
         peak_reserved = gb(torch.cuda.max_memory_reserved()) if device.type == "cuda" else 0.0
-        rec = {"step": step + 1, "loss": round(item_loss, 4),
+        rec = {"step": step + 1, "epoch": epoch, "loss": round(item_loss, 4),
                "step_seconds": round(dt, 3),
                "peak_alloc_gb": peak_alloc, "peak_reserved_gb": peak_reserved,
                "tokens": n_tokens,
@@ -347,10 +367,20 @@ def run_train(model, encoded: list[dict], tokenizer, args) -> dict:
                "answer_tokens": micro_batches[0][0]["answer_tokens"]}
         records.append(rec)
         print("[step] " + json.dumps(rec, ensure_ascii=False), flush=True)
+        every = int(getattr(args, "empty_cache_every", 0) or 0)
+        if every and device.type == "cuda" and (step + 1) % every == 0:
+            torch.cuda.empty_cache()
     total = time.perf_counter() - t_start
+    peak_reserved_end = gb(torch.cuda.max_memory_reserved()) if device.type == "cuda" else 0.0
+    if peak_reserved_end > 5.85:
+        print(f"[smoke] 警告：peak_reserved={peak_reserved_end}GB 已贴近 6GB 上限，"
+              f"可能 spill 到共享内存（step 会变慢）；建议 --grad-accum 1 或降 seq",
+              flush=True)
     summary = {
         "ok": True,
         "steps": steps,
+        "epochs": epochs,
+        "steps_per_epoch": steps_per_epoch,
         "total_seconds": round(total, 2),
         "seconds_per_step": round(total / max(1, steps), 3),
         "loss_first": round(losses[0], 4) if losses else None,
@@ -380,8 +410,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model-path", default=str(DEFAULT_MODEL_PATH),
                    help="本地模型目录（默认 E:\\agent\\models\\Qwen3.5-2B）")
     p.add_argument("--data", default=str(DEFAULT_DATA), help="soul_sft_v0.jsonl")
-    p.add_argument("--limit", type=int, default=50, help="最多读多少条样本")
-    p.add_argument("--max-steps", type=int, default=20)
+    p.add_argument("--limit", type=int, default=0, help="最多读多少条样本（0=全部）")
+    p.add_argument("--max-steps", type=int, default=0,
+                   help="优化步数上限（0=按 --epochs 跑满）")
+    p.add_argument("--epochs", type=int, default=1, help="遍历数据集的轮数")
     p.add_argument("--max-seq-len", type=int, default=512)
     p.add_argument("--batch-size", type=int, default=1)
     p.add_argument("--grad-accum", type=int, default=1)
@@ -395,6 +427,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--keep-vision", action="store_true",
                    help="多模态模型默认把视觉塔挪到 CPU 省显存；加此参数保持原样")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--sort-chunk", type=int, default=128,
+                   help="长度分桶的块大小（0/1=不分桶）；降低 Windows 显存碎片")
+    p.add_argument("--pad-bucket", type=int, default=32,
+                   help="把 batch 长度对齐到该倍数（1=不对齐）；减少显存碎片")
+    p.add_argument("--empty-cache-every", type=int, default=0,
+                   help="每 N 步 torch.cuda.empty_cache()（0=不调用）；碎片严重时用")
     p.add_argument("--save-adapter", nargs="?", const=str(DEFAULT_OUTPUT_DIR / "smoke_adapter"),
                    default="", help="可选：smoke 后保存 LoRA adapter（默认 E:\\agent\\output\\smoke_adapter）")
     p.add_argument("--dry-run", action="store_true",
@@ -433,6 +471,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     args.grad_checkpoint = not args.no_grad_checkpoint
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    # 注意：不要在 6GB 卡上全局设 PYTORCH_CUDA_ALLOC_CONF（max_split_size_mb 之类）。
+    # 实测设了之后权重加载阶段 reserved 反而从 4.1GB 涨到 8.3GB。
+    # 显存碎片改用「长度分桶排序 + padding 量化」在数据侧解决（见 collate/run_train）。
     os.environ.setdefault("MODELSCOPE_CACHE", str(HOME_DIR / "cache" / "modelscope"))
     os.environ.setdefault("HF_HOME", str(HOME_DIR / "cache" / "hf"))
     data_path = Path(args.data)

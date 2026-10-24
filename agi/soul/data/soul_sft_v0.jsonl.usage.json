@@ -1,0 +1,13 @@
+{
+ "by_source": {
+  "golden": 50,
+  "messages": 124,
+  "synthetic": 126
+ },
+ "calls": 328,
+ "prompt_tokens": 171347,
+ "completion_tokens": 60647,
+ "items": 300,
+ "updated": "2026-10-25T00:55:37+08:00",
+ "elapsed_seconds": 634.377
+}

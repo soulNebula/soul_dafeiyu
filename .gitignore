@@ -28,3 +28,8 @@ node_modules/
 
 # local secrets
 web_config.json
+
+# soul 数据：冻结集入库，派生/临时文件不入库
+agi/soul/data/*.failures.jsonl
+agi/soul/data/*_norm.jsonl
+agi/soul/data/*.tmp.jsonl

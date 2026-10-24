@@ -4,14 +4,37 @@
 真实发送只允许走 ``wxauto4``，默认不导入：只有非 dry-run 的 ``send``
 才会延迟加载。发送前先用 ``ChatWith(..., exact=True)`` 切换会话，再用
 ``ChatInfo()`` 核对会话名；无法确认或结果不明确时一律 fail-closed。
+
+P0-4 发送容错（2026-10-25）：
+- ``AttributeError('ProfileWnd' ... 'topui')`` 是 wxauto4 关资料卡时的内部
+  异常，**不代表切换失败**：只要 ``ChatInfo`` 能独立确认会话名 == 目标就继续发；
+  确认不了就 fail-closed（底线），错误信息写清卡在哪一步。
+- 发送前句柄双验：会话名 + 输入框存在性探测，并记 ``send_probe`` 审计事件。
+- SendMsg 失败先确认"上次确实没发出去"才允许重试一次；清空输入框失败记
+  ``input_clear_failed``。草稿落盘由网关层（server._on_send_failure）复用 drafts.py。
+- 错误归一化：``0x...`` 对象地址 → ``0xADDR``，得到 ``error_key``（与
+  proactive_worker.normalize_error 同口径，供熔断按同类错误计数）。
 """
 from __future__ import annotations
 
 import importlib
+import json
+import re
 import time
+from pathlib import Path
 from typing import Any
 
 MAX_CHARS = 500
+
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_LOG_PATH = ROOT / "agi" / "data" / "wechat" / "gateway.log"
+
+#: 错误归一化：与 agi/wechat_gateway/proactive_worker.py 的 normalize_error 同口径
+_ADDR_RE = re.compile(r"0x[0-9a-fA-F]+")
+_WS_RE = re.compile(r"\s+")
+
+#: P0-4 默认值（config.DEFAULTS 里有同名键时以配置为准）
+_RESILIENCE_DEFAULTS = {"send_probe_enabled": True, "send_retry_max": 1}
 
 
 class WxAutoSender:
@@ -27,10 +50,30 @@ class WxAutoSender:
     # ChatInfo()/ChatWith() 返回值里可能承载会话名的字段。
     _NAME_KEYS = ("chat_name", "name", "nickname", "who")
 
-    def __init__(self, module: Any = None, *, module_name: str = "wxauto4") -> None:
+    def __init__(self, module: Any = None, *, module_name: str = "wxauto4",
+                 cfg: dict | None = None, log_path: Path | str | None = None,
+                 retry_delay: float = 0.8) -> None:
         self._module = module
         self.module_name = str(module_name)
         self._wx = None
+        defaults = dict(_RESILIENCE_DEFAULTS)
+        try:
+            from . import config as gw_config
+            for key in defaults:
+                if key in gw_config.DEFAULTS:
+                    defaults[key] = gw_config.DEFAULTS[key]
+        except Exception:  # noqa: BLE001 - 配置读不到时用内置默认
+            pass
+        if isinstance(cfg, dict):
+            for key in defaults:
+                if key in cfg:
+                    defaults[key] = cfg[key]
+        self.cfg = defaults
+        self.log_path = Path(log_path) if log_path else None
+        try:
+            self.retry_delay = max(0.0, float(retry_delay))
+        except (TypeError, ValueError):
+            self.retry_delay = 0.8
 
     # ------------------------------------------------------------------
     # wxauto4 延迟加载
@@ -50,6 +93,271 @@ class WxAutoSender:
             # 按 wxauto4 的约定关闭广告初始化。
             self._wx = wx_cls(ads=False)
         return self._wx
+
+    # ------------------------------------------------------------------
+    # P0-4：审计 / 归一化 / 容错小工具
+    # ------------------------------------------------------------------
+    @staticmethod
+    def normalize_error(error: Any) -> str:
+        """错误文本归一化：去掉 0x… 对象地址、压空白，取前 60 字符当 error_key。"""
+        value = _ADDR_RE.sub("0xADDR", str(error or ""))
+        value = _WS_RE.sub(" ", value).strip()
+        return value[:60]
+
+    @staticmethod
+    def _is_profile_wnd_error(exc: BaseException) -> bool:
+        """topui/ProfileWnd 的 AttributeError：关资料卡失败，不代表会话切换失败。"""
+        if not isinstance(exc, AttributeError):
+            return False
+        text = str(exc or "")
+        return "topui" in text or "ProfileWnd" in text
+
+    @staticmethod
+    def _is_transient(error: str) -> bool:
+        return any(k in str(error or "") for k in ("ProfileWnd", "topui", "Timeout", "timeout"))
+
+    def _log_event(self, kind: str, data: dict) -> None:
+        """把审计事件追加到网关日志；日志失败绝不能影响发送。"""
+        if self.log_path is None:
+            return
+        entry = {"ts": time.time(), "kind": kind, **data}
+        try:
+            target = Path(self.log_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _sleep(self) -> None:
+        if self.retry_delay > 0:
+            time.sleep(self.retry_delay)
+
+    def _probe_handle(self, wx: Any) -> dict:
+        """发送前第二重校验：输入框存在性（探测不到就记录，不 abort）。"""
+        probe: dict[str, Any] = {"enabled": True, "chat_box": None,
+                                 "input_box_exists": None, "source": ""}
+        try:
+            box = getattr(wx, "ChatBox", None)
+            if box is None:
+                probe["source"] = "no_chatbox"
+                return probe
+            probe["chat_box"] = type(box).__name__
+            edit = getattr(box, "editbox", None)
+            if edit is None:
+                edit = getattr(box, "EditBox", None)
+            if edit is not None:
+                probe["source"] = "chatbox.editbox"
+                exists = getattr(edit, "Exists", None)
+                probe["input_box_exists"] = bool(exists()) if callable(exists) else True
+                return probe
+            who = getattr(box, "who", None)
+            probe["source"] = "chatbox.who"
+            probe["input_box_exists"] = (bool(str(who).strip())
+                                         if isinstance(who, str) else None)
+        except Exception as exc:  # noqa: BLE001 - 探测失败只记录
+            probe["source"] = "probe_error"
+            probe["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+        return probe
+
+    def _clear_input(self, wx: Any, contact: str) -> bool:
+        """失败兜底第一步：清空输入框；清不了必须留下 input_clear_failed。"""
+        error = "发送窗口未暴露 ChatBox.clear_edit，无法清空输入框"
+        try:
+            box = getattr(wx, "ChatBox", None)
+            clear = getattr(box, "clear_edit", None) if box is not None else None
+            if callable(clear):
+                clear()
+                return True
+        except Exception as exc:  # noqa: BLE001
+            error = f"{type(exc).__name__}: {str(exc)[:200]}"
+        self._log_event("input_clear_failed", {"friend": contact, "error": str(error)[:200]})
+        return False
+
+    def _confirm_not_sent(self, wx: Any, message: str) -> bool:
+        """SendMsg 异常/不明确后确认"上一次确实没发出去"。
+
+        只认一种明确证据：输入框里仍完整保留着原消息（说明按 Enter 没生效）。
+        读不到输入框内容一律返回 False —— 宁可落草稿，也不冒重复发送的险。
+        """
+        try:
+            box = getattr(wx, "ChatBox", None)
+            if box is None:
+                return False
+            edit = getattr(box, "editbox", None)
+            if edit is None:
+                edit = getattr(box, "EditBox", None)
+            if edit is None:
+                return False
+            get_value = getattr(edit, "GetValuePattern", None)
+            if not callable(get_value):
+                return False
+            pattern = get_value()
+            value = getattr(pattern, "Value", None)
+            if value is None and isinstance(pattern, dict):
+                value = pattern.get("Value") or pattern.get("value")
+            if not isinstance(value, str) or not value.strip():
+                return False
+            return value.strip() == str(message).strip()
+        except Exception:  # noqa: BLE001 - 探测失败 → 不重试
+            return False
+
+    def _verify_chat_name(self, wx: Any, switched: Any) -> tuple[str, str, str]:
+        """独立校验当前会话名；返回 (会话名, 阶段, 错误文本)。"""
+        try:
+            chat_info = getattr(wx, "ChatInfo", None)
+            info = chat_info() if callable(chat_info) else {}
+        except Exception as exc:  # noqa: BLE001
+            return "", "chat_info", (
+                "ChatInfo 读取失败（stage=chat_info，未发送）："
+                f"{type(exc).__name__}: {str(exc)[:200]}")
+        got = self._chat_name(info)
+        if not got and not self._is_failure_response(switched):
+            got = self._chat_name(switched, fallback=True)
+        if not got:
+            return "", "verify", (
+                "无法确认当前会话名（stage=verify，未发送）："
+                "ChatInfo 为空，ChatWith 未返回可用名称")
+        return got, "verify", ""
+
+    def _send_failure(self, contact: str, text: str, error: str, *, stage: str,
+                      attempts: int, probe: dict | None = None,
+                      send_attempted: bool = False, input_cleared: bool = False,
+                      topui_tolerated: bool = False) -> dict[str, Any]:
+        error = str(error or "发送失败")
+        key = self.normalize_error(error)
+        self._log_event("send_failed", {
+            "friend": contact,
+            "text": str(text or "")[:120],
+            "stage": stage,
+            "error": error[:300],
+            "error_key": key,
+            "attempts": int(attempts),
+            "send_attempted": bool(send_attempted),
+            "input_cleared": bool(input_cleared),
+            "topui_tolerated": bool(topui_tolerated),
+        })
+        result: dict[str, Any] = {
+            "ok": False, "status": "failed", "error": error, "error_key": key,
+            "stage": stage, "attempts": int(attempts),
+            "send_attempted": bool(send_attempted),
+            "input_cleared": bool(input_cleared),
+            "topui_tolerated": bool(topui_tolerated),
+        }
+        if probe is not None:
+            result["probe"] = probe
+        return result
+
+    # ------------------------------------------------------------------
+    # 一次发送尝试（send 的重试循环调用它）
+    # ------------------------------------------------------------------
+    def _attempt(self, contact: str, message: str, *, attempt: int,
+                 attempts_allowed: int, probe_enabled: bool) -> tuple[dict | None, bool]:
+        """返回 (结果, 是否重试)。结果 None 表示本次没走到结论、需要重试。"""
+        try:
+            wx = self._instance()
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+            if attempt < attempts_allowed and self._is_transient(last_error):
+                return None, True
+            return self._send_failure(contact, message, last_error,
+                                      stage="instance", attempts=attempt), False
+
+        # 步骤 1：切换会话。SwitchToChat 只做导航，失败不致命（ChatWith 才是关键）。
+        switch = getattr(wx, "SwitchToChat", None)
+        if callable(switch):
+            try:
+                switch()
+            except Exception:  # noqa: BLE001 - 关资料卡/切页失败留给 ChatWith 暴露
+                pass
+
+        tolerated = False
+        switched = None
+        try:
+            switched = wx.ChatWith(contact, exact=True)
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+            if self._is_profile_wnd_error(exc):
+                # 关键容错：关资料卡失败 ≠ 切换失败，交给 ChatInfo 独立确认。
+                tolerated = True
+                self._log_event("send_stage", {
+                    "friend": contact, "stage": "chat_with", "tolerated": True,
+                    "attempt": attempt, "error": last_error[:200]})
+            elif attempt < attempts_allowed and self._is_transient(last_error):
+                return None, True
+            else:
+                return self._send_failure(
+                    contact, message,
+                    f"{last_error}（stage=chat_with，切换会话失败，未发送）",
+                    stage="chat_with", attempts=attempt), False
+
+        # 步骤 2：ChatInfo 独立确认会话名（topui 容错后以它为准）。
+        got, stage, verify_error = self._verify_chat_name(wx, switched)
+        if verify_error:
+            if tolerated and attempt < attempts_allowed:
+                return None, True
+            if tolerated:
+                verify_error += ("；topui/ProfileWnd 已容错：切换可能已成功，"
+                                 "但无法确认当前会话 → fail-closed 不发送")
+            return self._send_failure(contact, message, verify_error, stage=stage,
+                                      attempts=attempt, topui_tolerated=tolerated), False
+        if got != contact:
+            return self._send_failure(
+                contact, message,
+                f"会话不匹配：期望 {contact!r}，实际 {got!r}"
+                f"（stage=verify, topui_tolerated={tolerated} → fail-closed 不发送）",
+                stage="verify", attempts=attempt, topui_tolerated=tolerated), False
+        if tolerated and attempt < attempts_allowed:
+            # 资料卡清理失败：按预算重试一次切换换干净句柄；重试后仍以 ChatInfo 为准。
+            return None, True
+
+        # 步骤 3：发送前句柄双验（会话名已在步骤 2 确认，这里探输入框）+ send_probe 审计。
+        probe = self._probe_handle(wx) if probe_enabled else None
+        if probe_enabled and probe is not None:
+            self._log_event("send_probe", {
+                "friend": contact,
+                "contact": contact,
+                "chat_name": got,
+                "chat_name_ok": True,
+                "probe": probe,
+                "input_box_exists": probe.get("input_box_exists"),
+                "source": probe.get("source"),
+                "topui_tolerated": tolerated,
+            })
+
+        # 步骤 4：发送。失败先清输入框，且只有确证"没发出去"才允许重试一次。
+        try:
+            response = wx.SendMsg(message)
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+            confirmed_not_sent = self._confirm_not_sent(wx, message)
+            cleared = self._clear_input(wx, contact)
+            if confirmed_not_sent and attempt < attempts_allowed:
+                return None, True
+            verified = "已确认未发出" if confirmed_not_sent else "无法确认是否已发出"
+            return self._send_failure(
+                contact, message,
+                f"{last_error}（stage=send，{verified}）",
+                stage="send", attempts=attempt, probe=probe,
+                send_attempted=True, input_cleared=cleared,
+                topui_tolerated=tolerated), False
+
+        ok, detail = self._send_succeeded(response)
+        if not ok:
+            confirmed_not_sent = self._confirm_not_sent(wx, message)
+            cleared = self._clear_input(wx, contact)
+            if confirmed_not_sent and attempt < attempts_allowed:
+                return None, True
+            return self._send_failure(
+                contact, message,
+                f"发送结果不明确或失败：{detail}（stage=send）",
+                stage="send", attempts=attempt, probe=probe,
+                send_attempted=True, input_cleared=cleared,
+                topui_tolerated=tolerated), False
+        return {"ok": True, "status": "sent", "contact": contact,
+                "text": message, "response": detail, "module": self.module_name,
+                "attempts": attempt, "chat_name": got, "probe": probe,
+                "topui_tolerated": tolerated}, False
 
     # ------------------------------------------------------------------
     # 返回值解析
@@ -215,8 +523,8 @@ class WxAutoSender:
         """发送一条文本。
 
         ``dry_run=True`` 只返回计划，不导入/实例化 wxauto4，也不发送。
-        真发前必须核对会话名；任何异常或不明确的 SendMsg 结果都返回
-        ``{"ok": False, "status": "failed", "error": ...}``。
+        真发前必须核对会话名；无法确认时 fail-closed，任何异常都返回
+        ``{"ok": False, "status": "failed", "error": ...}``（含 error_key/stage）。
         """
         contact_name = str(contact or "").strip()
         message = "" if text is None else str(text)
@@ -229,42 +537,33 @@ class WxAutoSender:
         if dry_run:
             return {"ok": True, "status": "planned", "contact": contact_name, "text": message}
 
+        try:
+            retry_max = max(0, int(self.cfg.get("send_retry_max") or 0))
+        except (TypeError, ValueError):
+            retry_max = 0
+        probe_enabled = bool(self.cfg.get("send_probe_enabled", True))
+        attempts_allowed = 1 + retry_max
+
+        attempt = 0
         last_error = ""
-        for attempt in range(2):
-            send_attempted = False
+        while attempt < attempts_allowed:
+            attempt += 1
             try:
-                wx = self._instance()
-                switch = getattr(wx, "SwitchToChat", None)
-                if callable(switch):
-                    try:
-                        switch()
-                    except Exception:  # noqa: BLE001 - 关资料卡失败时继续，ChatWith 会再报
-                        pass
-                switched = wx.ChatWith(contact_name, exact=True)
-                chat_info = getattr(wx, "ChatInfo", None)
-                info = chat_info() if callable(chat_info) else {}
-                got = self._chat_name(info)
-                if not got and not self._is_failure_response(switched):
-                    got = self._chat_name(switched, fallback=True)
-                if not got:
-                    return self._failure("无法确认当前会话名（ChatInfo 为空，ChatWith 未返回可用名称）")
-                if got != contact_name:
-                    return self._failure(f"会话不匹配：期望 {contact_name!r}，实际 {got!r}")
-                send_attempted = True
-                response = wx.SendMsg(message)
-                ok, detail = self._send_succeeded(response)
-                if not ok:
-                    return self._failure(f"发送结果不明确或失败：{detail}")
-                return {"ok": True, "status": "sent", "contact": contact_name,
-                        "text": message, "response": detail, "module": self.module_name,
-                        "attempts": attempt + 1}
-            except Exception as exc:  # noqa: BLE001
+                result, retry = self._attempt(contact_name, message, attempt=attempt,
+                                              attempts_allowed=attempts_allowed,
+                                              probe_enabled=probe_enabled)
+            except Exception as exc:  # noqa: BLE001 - 兜底：任何异常都 fail-closed
                 last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
-                transient = any(k in last_error for k in ("ProfileWnd", "topui", "Timeout", "timeout"))
-                # 只在尚未调用 SendMsg 时重试，避免重复发送
-                if attempt == 0 and transient and not send_attempted:
+                if attempt < attempts_allowed and self._is_transient(last_error):
                     self._wx = None
-                    time.sleep(0.8)
+                    self._sleep()
                     continue
-                break
-        return self._failure(last_error or "发送失败")
+                return self._send_failure(contact_name, message, last_error,
+                                          stage="unknown", attempts=attempt)
+            if retry:
+                self._wx = None
+                self._sleep()
+                continue
+            return result if result is not None else self._failure(last_error or "发送失败")
+        return self._send_failure(contact_name, message, last_error or "发送失败",
+                                  stage="unknown", attempts=attempt)

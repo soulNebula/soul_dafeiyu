@@ -432,7 +432,12 @@ class Gateway:
         try:
             proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True,
                                   encoding="utf-8", errors="replace", timeout=90,
-                                  env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+                                  env={**os.environ, "PYTHONIOENCODING": "utf-8",
+                                       "WECHAT_SEND_PROBE_ENABLED":
+                                           "1" if self.cfg.get("send_probe_enabled", True) else "0",
+                                       "WECHAT_SEND_RETRY_MAX":
+                                           str(self.cfg.get("send_retry_max", 1)),
+                                       "WECHAT_GATEWAY_LOG": str(self.log_path)})
             line = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else ""
             if not line:
                 return self._on_send_failure(
@@ -444,19 +449,27 @@ class Gateway:
             else:
                 return self._on_send_failure(
                     contact, text,
-                    str(out.get("error") or out.get("status") or "failed"))
+                    str(out.get("error") or out.get("status") or "failed"),
+                    error_key=str(out.get("error_key") or ""),
+                    stage=str(out.get("stage") or ""))
             return out
         except Exception as exc:  # noqa: BLE001
             return self._on_send_failure(contact, text, f"{type(exc).__name__}: {exc}")
 
-    def _on_send_failure(self, contact: str, text: str, error: str) -> dict:
-        """真实发送失败：先试窗口级兜底，再落草稿。"""
+    def _on_send_failure(self, contact: str, text: str, error: str, *,
+                         error_key: str = "", stage: str = "") -> dict:
+        """真实发送失败：先试窗口级兜底，再落草稿。
+
+        P0-4：落草稿时返回 ``status=draft`` + ``draft_id``，让调用方知道内容已保住、
+        等人工决定（不再只返回一个丢失上下文的 failed）。
+        """
         fallback = self._fallback_send(contact, text, error)
         if fallback and fallback.get("ok") and fallback.get("status") == "sent":
             now = time.time()
             self.send_times.append(now)
             self.sent_today += 1
             fallback["trigger_error"] = str(error)[:200]
+            fallback["error_key"] = error_key or self._normalize_error_key(error)
             return fallback
         if fallback and fallback.get("ok") and fallback.get("status") == "clipboard":
             self._archive_failed_draft(
@@ -464,8 +477,28 @@ class Gateway:
                 "fallback_clipboard: " + str(fallback.get("warning") or ""),
                 reason="fallback_clipboard")
             return fallback
-        self._archive_failed_draft(contact, text, error)
-        return {"ok": False, "status": "failed", "error": str(error)[:200]}
+        key = error_key or self._normalize_error_key(error)
+        item = self._archive_failed_draft(contact, text, error,
+                                          error_key=key, stage=stage)
+        result = {"ok": False, "status": "failed", "error": str(error)[:200]}
+        if item is not None:
+            # 发送确实失败了，只是内容落成了草稿：send_failed 供熔断/统计识别
+            # （status=draft 本身在 task-16 语义里属于"非故障状态"）
+            result.update({"status": "draft", "draft_id": item["id"],
+                           "requires_confirm": True, "send_failed": True})
+        if key:
+            result["error_key"] = key
+        if stage:
+            result["stage"] = stage
+        return result
+
+    @staticmethod
+    def _normalize_error_key(error: str) -> str:
+        """与 sender/proactive_worker 同口径：0x… → 0xADDR，压空白，取前 60 字。"""
+        import re as _re
+        value = _re.sub(r"0x[0-9a-fA-F]+", "0xADDR", str(error or ""))
+        value = _re.sub(r"\s+", " ", value).strip()
+        return value[:60]
 
     def _fallback_send(self, contact: str, text: str, error: str) -> dict | None:
         """窗口级兜底（默认关闭；默认只做剪贴板协助，不自动盲发）。"""
@@ -485,15 +518,23 @@ class Gateway:
         return out
 
     def _archive_failed_draft(self, contact: str, text: str, error: str,
-                              reason: str = "send_failed") -> None:
+                              reason: str = "send_failed", *,
+                              error_key: str = "", stage: str = "") -> dict | None:
         """发送失败不丢内容：落成草稿，等人工决定重发或丢弃。"""
         try:
             item = drafts.add(contact, text, reason, path=self.draft_path)
-            self._record("draft", {"friend": contact, "text": text,
-                                   "draft_id": item["id"], "reason": "send_failed",
-                                   "error": str(error)[:200]})
+            event = {"friend": contact, "text": text,
+                     "draft_id": item["id"], "reason": "send_failed",
+                     "error": str(error)[:200]}
+            key = error_key or self._normalize_error_key(error)
+            if key:
+                event["error_key"] = key
+            if stage:
+                event["stage"] = stage
+            self._record("draft", event)
+            return item
         except Exception:  # noqa: BLE001
-            pass
+            return None
 
     def status(self) -> dict:
         state = {}

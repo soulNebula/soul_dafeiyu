@@ -41,6 +41,9 @@ DEFAULTS = {
     "hourly_limit": 40,
     "fallback_enabled": False,
     "fallback_mode": "manual",
+    # P0-4 发送容错：发送前句柄双验（send_probe 审计）开关、非确定性失败的额外重试次数
+    "send_probe_enabled": True,
+    "send_retry_max": 1,
     "proactive_enabled": False,
     "proactive_contacts": [],
     # 主动检查间隔：60–7200 秒（1–120 分钟）随机（2026-10-25 用户拍板）

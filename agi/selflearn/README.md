@@ -482,3 +482,8 @@ guard 报 L1/L2 时才调用 `nli.verify`，若支持率 <0.5 直接降级安全
 - 07：bad 反馈写 error_three case，3 次同类自动升级 rule，prompt 注入【硬约束】；
 - 11：share 三级（observation/memory/opinion）接入 proactive 返回；
 - 12：initiative 返回 Wilson LCB + quadrant。
+
+### 12/11 主链接线
+
+- proactive 使用 quadrant：skip / 有足够反馈的 hold 会拦截；explore 最多 1 条气泡；
+- 选中的主动表达写 share_candidates + share_events（status=spoken）。

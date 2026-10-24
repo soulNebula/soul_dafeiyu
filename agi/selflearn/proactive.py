@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import db, initiative, memory, sharing, state, style_profile, trust
+from . import db, initiative, memory, share_store, sharing, state, style_profile, trust
 from .config import DB_PATH
 
 COOLDOWN = 2 * 3600
@@ -125,6 +125,11 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     except Exception:  # noqa: BLE001
         share_info = {}
     best = candidates[0]
+    quadrant = str(init_info.get("quadrant") or "")
+    if quadrant == "skip" or (quadrant == "hold" and int(init_info.get("confidence_n") or 0) >= 3):
+        return {"ok": True, "available": False,
+                "reason": f"决策象限 {quadrant}", "initiative": init_info,
+                "sharing_level": share_info}
     if best["score"] < MIN_SCORE:
         return {"ok": True, "available": False, "reason": "分享欲不足"}
     recent = memory.recent_messages(path, limit=8)
@@ -147,12 +152,24 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     max_bubbles = 3 if sharing >= 0.7 else (2 if sharing >= 0.55 or mood >= 0.7 else 1)
     if int(init_info.get("max_bubbles") or 0) > 0:
         max_bubbles = min(max_bubbles, int(init_info["max_bubbles"]))
+    if quadrant == "explore":
+        max_bubbles = min(max_bubbles, 1)
     bubbles = style_profile.split_bubbles(text, max_bubbles)
     bubbles = [style_profile.strip_periods(b) for b in bubbles if style_profile.strip_periods(b)]
     if not bubbles:
         return {"ok": True, "available": False, "reason": "没组织好语言"}
     ids = [memory.store_message(path, "assistant", b, now=now, proactive=True) for b in bubbles]
     joined = " ".join(bubbles)
+    try:
+        cand = share_store.record_candidate(
+            path, level=str(share_info.get("level") or ""),
+            kind=best["kind"], text=joined, reason=best["reason"],
+            source="proactive", score=best["score"], status="spoken")
+        if cand.get("id"):
+            share_store.record_event(path, cand["id"], "spoken",
+                                     {"quadrant": quadrant})
+    except Exception:  # noqa: BLE001
+        pass
     con = db.connect(path)
     try:
         con.execute("INSERT INTO proactive(id,kind,text,reason,score,status,created_at) "
@@ -187,6 +204,11 @@ def propose(path: Path | str = DB_PATH, now: float | None = None) -> dict[str, A
     except Exception:  # noqa: BLE001
         share_info = {}
     best = candidates[0]
+    quadrant = str(init_info.get("quadrant") or "")
+    if quadrant == "skip" or (quadrant == "hold" and int(init_info.get("confidence_n") or 0) >= 3):
+        return {"ok": True, "available": False,
+                "reason": f"决策象限 {quadrant}", "initiative": init_info,
+                "sharing_level": share_info}
     if best["score"] < MIN_SCORE:
         return {"ok": True, "available": False, "reason": "分享欲分数不足",
                 "candidates": candidates}

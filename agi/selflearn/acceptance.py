@@ -151,6 +151,9 @@ def run(path: Path | str = DB_PATH) -> dict[str, Any]:
         "sharing_ready": (Path(__file__).with_name("sharing.py")).exists()
                          and "def choose_level" in (Path(__file__).with_name("sharing.py")).read_text(encoding="utf-8"),
         "decision_integrated": "confidence_lcb" in (Path(__file__).with_name("initiative.py")).read_text(encoding="utf-8"),
+        "quadrant_integrated": "决策象限" in (Path(__file__).with_name("proactive.py")).read_text(encoding="utf-8"),
+        "share_store_ready": (Path(__file__).with_name("share_store.py")).exists()
+                             and "def record_candidate" in (Path(__file__).with_name("share_store.py")).read_text(encoding="utf-8"),
         "learn_practice_ready": (Path(__file__).with_name("learn_practice.py")).exists()
                                 and "def make_exercise" in (Path(__file__).with_name("learn_practice.py")).read_text(encoding="utf-8"),
         "blind_test_ready": (Path(__file__).with_name("blind.py")).exists()

@@ -110,8 +110,16 @@ class SelfLearnAgent:
                                       had_image=False)
         if "引用" in text:
             st = state.load(self.path)
-            return self._simple_reply(user_id, "看到了，你引用了一条消息。想接着说什么？", st,
-                                      None, had_image=False)
+            quoted = ""
+            for sep in ("：", ":"):
+                if sep in text:
+                    quoted = text.split(sep, 1)[1].strip()
+                    break
+            if quoted:
+                msg = f"你引用的是「{quoted[:60]}」，想接着说什么？"
+            else:
+                msg = "看到了，你引用了一条消息，想接着说什么？"
+            return self._simple_reply(user_id, msg, st, None, had_image=False)
         correction_info = None
         try:
             correction_info = memory.apply_correction(self.path, text)

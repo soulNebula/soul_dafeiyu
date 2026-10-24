@@ -19,3 +19,11 @@ def test_send_policy_blocks():
     assert check_send(now=0, hour=12, recent_60s=0, today_count=10, cfg=base)["reason"] == "daily_limit"
     assert check_send(now=0, hour=12, recent_60s=0, today_count=0, cfg=base)["ok"] is True
     assert check_send(now=0, hour=12, recent_60s=0, today_count=0, cfg={**base, "stop": True})["reason"] == "stop_switch"
+
+
+def test_reactive_rate_is_higher():
+    cfg = {"stop": False, "quiet_hours": [], "rate_per_minute": 3,
+           "reactive_rate_per_minute": 8, "daily_limit": 200}
+    assert check_send(now=0, hour=12, recent_60s=3, today_count=0, cfg=cfg)["reason"] == "rate_limit"
+    assert check_send(now=0, hour=12, recent_60s=3, today_count=0, cfg=cfg,
+                      reactive=True)["ok"] is True

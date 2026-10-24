@@ -23,6 +23,7 @@ DEFAULTS = {
     "stop": False,
     "quiet_hours": [0, 7],
     "rate_per_minute": 3,
+    "reactive_rate_per_minute": 8,
     "daily_limit": 200,
     "send_mode": "auto",
     "admin_token": "",

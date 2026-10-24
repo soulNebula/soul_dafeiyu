@@ -416,7 +416,12 @@ class DbBridge:
                     media = ""
             return KIND_FILE, title, media
         if app_type in (57,):
-            return KIND_SYSTEM, "[引用消息]", ""
+            quote = ""
+            m = re.search(r"<refermsg>(.*?)</refermsg>", attrs_text, re.S)
+            blob = m.group(1) if m else attrs_text
+            quote = _xml_tag("content", blob) or _xml_tag("title", blob) or _xml_tag("displayname", blob)
+            quote = _plain_from_xml(quote)[:200]
+            return KIND_SYSTEM, ("[引用消息] " + quote).strip(), ""
         if app_type == 5:
             return KIND_SYSTEM, f"[链接] {title}" if title else "[链接]", ""
         if app_type in (33, 36):

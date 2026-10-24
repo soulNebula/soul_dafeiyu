@@ -204,7 +204,7 @@ class Gateway:
             if "撤回" in text:
                 text = "[对方撤回了一条消息]"
             elif "引用消息" in text:
-                text = "[对方引用了一条消息]"
+                text = text.replace("[引用消息]", "对方引用了这条消息：", 1)
         image_data = ""
         if kind in ("image", "emoji"):
             image_data = self._image_data_url(str(msg.get("media_path") or ""))
@@ -221,7 +221,7 @@ class Gateway:
             bubble = str(bubble or "").strip()
             if not bubble:
                 continue
-            out = self._send(contact, bubble)
+            out = self._send(contact, bubble, reactive=True)
             entry = {"friend": contact, "text": bubble, "status": out.get("status"),
                      "dry_run": bool(self.cfg.get("dry_run", True)), "result": out}
             self._record("outbound", entry)
@@ -232,7 +232,8 @@ class Gateway:
             if not self.cfg.get("dry_run", True):
                 time.sleep(float(self.cfg.get("reply_delay") or 0))
 
-    def _send(self, contact: str, text: str, *, force: bool = False) -> dict:
+    def _send(self, contact: str, text: str, *, force: bool = False,
+              reactive: bool = False) -> dict:
         mode = control.send_mode(self.cfg)
         if mode == "off":
             self._record("send_blocked", {"friend": contact, "reason": "send_mode_off"})
@@ -256,7 +257,7 @@ class Gateway:
         recent = sum(1 for t in self.send_times if now - t < 60)
         verdict = policy.check_send(now=now, hour=time.localtime(now).tm_hour,
                                     recent_60s=recent, today_count=self.sent_today,
-                                    cfg=self.cfg)
+                                    cfg=self.cfg, reactive=reactive)
         if not verdict.get("ok"):
             self._record("send_blocked", {"friend": contact, "reason": verdict.get("reason")})
             return {"ok": False, "status": "blocked", "error": verdict.get("reason")}

@@ -557,3 +557,10 @@ def test_replies_do_not_contain_periods(tmp_path):
         r = a.send(text)
         for bubble in (r.get("bubbles") or [r.get("reply", "")]):
             assert "。" not in bubble
+
+
+def test_quote_with_content_is_reflected(tmp_path):
+    p = tmp_path / "quote.sqlite3"
+    a = SelfLearnAgent(p, client=FakeClient())
+    r = a.send("对方引用了这条消息：我喜欢咖啡")
+    assert "咖啡" in r["reply"] and "引用" in r["reply"]

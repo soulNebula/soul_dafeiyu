@@ -157,8 +157,18 @@ BREAKER_COOLDOWN_S = 1800.0
 BREAKER_STATE_ATTR = "_proactive_breaker"
 _ADDR_RE = re.compile(r"0x[0-9a-fA-F]+")
 _WS_RE = re.compile(r"\s+")
-#: 不算"发送失败"的状态（草稿/被闸门拦截不是故障，不该触发熔断）
+#: 不算"发送失败"的状态（被闸门拦截不是故障；draft 要另有 send_failed 才算，见下）
 _NON_FAILURE_STATUS = ("draft", "blocked")
+#
+# 失败率统计口径（P0-6，2026-10-25 与 P0-4 对齐）：
+#   - status == "failed"  → 失败；
+#   - status == "draft"   → **只有 send_failed=True 才算失败**（P0-4 把真实
+#     发送失败落成草稿并打这个标记；内容不丢、不重复发）；
+#   - status == "draft" 且无 send_failed → confirm 模式的人工草稿，非故障；
+#   - status == "blocked" → 内容/静音/限流闸门拦截，非故障；
+#   - 其余未知 status / 非 dict → 保守视为失败。
+# 所以"真正失败"的证据是 send_failed 字段（draft 只是落盘形态）；熔断一律按
+# error_key（P0-4 已写入，缺省回退 normalize_error 前 60 字）计数，不按完整 error 文本。
 
 
 def _cfg_float(gateway, key: str, default: float) -> float:
@@ -240,11 +250,23 @@ def error_key(status: Any) -> str:
 
 
 def is_send_failure(status: Any) -> bool:
+    """发送是否算失败（参与熔断计数）。
+
+    P0-6 口径（与 P0-4 的 draft 兜底对齐）：``status == "failed"`` → 失败；
+    ``status == "draft"`` 只有 ``send_failed`` 为真才算失败（真失败落草稿）；
+    无 ``send_failed`` 的旧 draft（confirm 人工草稿）与 ``blocked`` 属非故障。
+    """
     if not isinstance(status, dict):
         return True
     if status.get("ok") is True:
         return False
-    return str(status.get("status") or "") not in _NON_FAILURE_STATUS
+    state = str(status.get("status") or "")
+    if state == "failed":
+        return True
+    if state == "draft":
+        # P0-4：真失败被落成草稿并打 send_failed=True；旧 confirm 草稿没有该键
+        return bool(status.get("send_failed"))
+    return state not in _NON_FAILURE_STATUS
 
 
 def _breaker_state(gateway) -> dict:
@@ -285,6 +307,7 @@ def _note_send_failure(gateway, status: Any, *, now: float,
     if int(state["consecutive"]) >= max(1, int(threshold)) and open_until <= float(now):
         state["open_until"] = float(now) + max(1.0, float(cooldown_s))
         error_text = str(status.get("error") or "") if isinstance(status, dict) else str(status or "")
+        status_name = str(status.get("status") or "") if isinstance(status, dict) else ""
         try:
             gateway._record("proactive_breaker_open", {
                 "error_key": key,
@@ -293,6 +316,10 @@ def _note_send_failure(gateway, status: Any, *, now: float,
                 "cooldown_s": round(max(1.0, float(cooldown_s)), 1),
                 "until": round(float(state["open_until"]), 1),
                 "error": error_text[:200],
+                # P0-6：失败形态证据（真失败看 send_failed，draft 只是落盘形态）
+                "status": status_name,
+                "send_failed": bool(status.get("send_failed")) if isinstance(status, dict) else False,
+                "stage": str(status.get("stage") or "") if isinstance(status, dict) else "",
             })
         except Exception:  # noqa: BLE001
             pass
@@ -460,24 +487,32 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             gateway._record("proactive_send", {
                 "friend": contact, "text": text[:120], "kind": kind,
                 "status": status.get("status"), "draft_id": status.get("draft_id"),
+                # P0-6：失败率统计口径 status∈{failed,draft}，真正失败证据看 send_failed
+                "send_failed": bool(status.get("send_failed")),
+                "error_key": str(status.get("error_key") or "")[:120],
+                "stage": str(status.get("stage") or "")[:40],
                 "error": str(status.get("error") or "")[:120]})
             try:
                 record_event(db_path, contact, text, status.get("status") or "unknown",
                              now, kind=kind)
             except Exception:  # noqa: BLE001
                 pass
-            if status.get("ok") and status.get("status") != "draft":
-                out["sent"] += 1
-                sent_any = True
-                _note_send_success(gateway)  # 成功一次即清零
-            elif status.get("status") == "draft":
-                out["drafts"] += 1
-            elif is_send_failure(status):
+            # P0-6 顺序很重要：draft+send_failed 先按「失败」处理（参与熔断），
+            # 再顺便记一次 drafts（内容已落草稿）；否则永远进不了熔断分支。
+            if is_send_failure(status):
+                if status.get("status") == "draft":
+                    out["drafts"] += 1  # 真失败落草稿：内容保住但仍算失败
                 if _note_send_failure(gateway, status, now=now,
                                       threshold=breaker_threshold,
                                       cooldown_s=breaker_cooldown):
                     out["breaker_open"] = True
                     break  # 熔断后本轮不再发剩余气泡/联系人
+            elif status.get("ok") and status.get("status") != "draft":
+                out["sent"] += 1
+                sent_any = True
+                _note_send_success(gateway)  # 成功一次即清零
+            elif status.get("status") == "draft":
+                out["drafts"] += 1  # confirm 人工草稿（非故障，不影响熔断）
         if sent_any and turn_id:
             # 只有真的发出去了才登记：草稿还没到对方手里，反馈会错位
             gateway.last_turns[contact] = turn_id

@@ -38,7 +38,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from agi.selflearn import memory  # noqa: E402
+from agi.selflearn import affect, memory, state  # noqa: E402
 from agi.selflearn.chat import SelfLearnAgent  # noqa: E402
 
 ROOT = _ROOT
@@ -174,8 +174,42 @@ def existing_keys(out_path: Path | str) -> set[tuple[str, str]]:
     return done
 
 
+# 状态受控实验（v3）：按 bucket 显式种入不同状态。
+# 原因：状态引擎是关键词驱动，50 条黄金集里只有 4 条回放后状态非默认，
+# 不种状态就无法检验「状态本身有没有用」。
+STATE_PROFILES = {
+    "low_mood": {"mood": 0.28, "energy": 0.35, "sharing": 0.25, "battery": 0.40},
+    "conflict": {"mood": 0.35, "energy": 0.45, "sharing": 0.30, "battery": 0.50},
+    "crisis":   {"mood": 0.20, "energy": 0.30, "sharing": 0.20, "battery": 0.35},
+    "boundary": {"mood": 0.40, "energy": 0.50, "sharing": 0.30, "battery": 0.55},
+    "privacy":  {"mood": 0.45, "energy": 0.50, "sharing": 0.35, "battery": 0.60},
+    "work":     {"mood": 0.60, "energy": 0.55, "sharing": 0.45, "battery": 0.60},
+    "help":     {"mood": 0.55, "energy": 0.50, "sharing": 0.40, "battery": 0.55},
+    "joke":     {"mood": 0.75, "energy": 0.75, "sharing": 0.70, "battery": 0.70},
+    "smalltalk": {"mood": 0.70, "energy": 0.65, "sharing": 0.60, "battery": 0.70},
+    "silence":  {"mood": 0.45, "energy": 0.40, "sharing": 0.35, "battery": 0.50},
+}
+
+
+def apply_state_profile(path: Path | str, bucket: str) -> dict[str, float]:
+    """按 bucket 写入一组受控状态，返回写入值。"""
+    profile = STATE_PROFILES.get(bucket)
+    if not profile:
+        return {}
+    data = state.load(path)
+    data.setdefault("self", {}).update(profile)
+    state.save(data, path)
+    return dict(profile)
+
+
 def seed_context(path: Path | str, context: list[dict[str, Any]]) -> int:
-    """把黄金集 context 的 user/assistant 轮次按顺序写进临时库。"""
+    """把黄金集 context 的 user/assistant 轮次按顺序写进临时库。
+
+    v2 修正（2026-10-24）：只写消息不够——`rule` 臂会读 state.self，
+    若不回放 context 对情绪的影响，rule 臂每轮注入的都是默认状态，
+    实验实际测的是「一段通用指令」而不是「随对话变化的状态」。
+    因此对每条 user 轮次回放 affect.update_from_message。
+    """
     total = 0
     base = 1_700_000_000.0
     for i, turn in enumerate(context or []):
@@ -186,12 +220,18 @@ def seed_context(path: Path | str, context: list[dict[str, Any]]) -> int:
         if role not in ("user", "assistant") or not text:
             continue
         memory.store_message(path, role, text, now=base + i * 0.001)
+        if role == "user":
+            try:
+                affect.update_from_message(path, text)
+            except Exception:  # noqa: BLE001 - 状态回放失败不应中断消融
+                pass
         total += 1
     return total
 
 
 def run_one(item: dict[str, Any], mode: str, client, *, client_label: str,
-            tmp_root: Path | str | None = None) -> dict[str, Any]:
+            tmp_root: Path | str | None = None,
+            state_profile: bool = False) -> dict[str, Any]:
     """在独立 tmp SQLite 上跑一条 (golden_id, mode)，返回输出行。"""
     row: dict[str, Any] = {
         "golden_id": str(item.get("id") or ""),
@@ -202,6 +242,7 @@ def run_one(item: dict[str, Any], mode: str, client, *, client_label: str,
         "latency_ms": 0.0,
         "error": None,
         "client": client_label,
+        "state_after": None,
         "ts": round(time.time(), 3),
     }
     old = os.environ.get(MODE_ENV)
@@ -211,6 +252,13 @@ def run_one(item: dict[str, Any], mode: str, client, *, client_label: str,
         with tempfile.TemporaryDirectory(prefix="ablation_", dir=tmp_root) as td:
             path = Path(td) / "selflearn.sqlite3"
             seed_context(path, item.get("context") or [])
+            if state_profile:
+                apply_state_profile(path, str(item.get("bucket") or ""))
+            _st = state.load(path)
+            row["state_after"] = {
+                k: round(float(_st["self"].get(k, 0.0)), 3)
+                for k in ("mood", "energy", "sharing", "battery")
+            }
             agent = SelfLearnAgent(path, client=client, rng=random.Random(0))
             out = agent.send(str(item.get("user_msg") or ""))
         reply = str(out.get("reply") or "")
@@ -236,7 +284,8 @@ def run_one(item: dict[str, Any], mode: str, client, *, client_label: str,
 def run_ablation(*, golden: Path | str = GOLDEN_PATH, out: Path | str = OUT_PATH,
                  modes: list[str] | tuple[str, ...] | None = None,
                  limit: int = 0, client, client_label: str = "mock",
-                 tmp_root: Path | str | None = None) -> dict[str, Any]:
+                 tmp_root: Path | str | None = None,
+                 state_profile: bool = False) -> dict[str, Any]:
     """批量生成；返回统计。已存在的 (golden_id, mode) 跳过。"""
     modes = list(modes or MODES)
     items = load_golden(golden)
@@ -256,7 +305,7 @@ def run_ablation(*, golden: Path | str = GOLDEN_PATH, out: Path | str = OUT_PATH
                     skipped += 1
                     continue
                 row = run_one(item, mode, client, client_label=client_label,
-                              tmp_root=tmp_root)
+                              tmp_root=tmp_root, state_profile=state_profile)
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
                 fh.flush()  # 每行落盘，进程中断也能续跑
                 done.add(key)
@@ -300,6 +349,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help=f"逗号分隔的模式，默认 {','.join(MODES)}")
     parser.add_argument("--limit", type=int, default=0,
                         help="只跑前 N 条 golden（0=全部；按文件顺序取前 N 条）")
+    parser.add_argument("--state-profile", action="store_true",
+                        help="按 bucket 种入受控状态（v3 实验：检验状态本身是否影响回复）")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--mock", action="store_true",
                        help="用确定性 FakeClient（不联网，默认）")
@@ -326,7 +377,8 @@ def main(argv: list[str] | None = None) -> int:
                   "不联网、不需要 key）。", file=sys.stderr)
     try:
         run_ablation(golden=args.golden, out=args.out, modes=modes,
-                     limit=args.limit, client=client, client_label=label)
+                     limit=args.limit, client=client, client_label=label,
+                     state_profile=args.state_profile)
     except FileNotFoundError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 2

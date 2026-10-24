@@ -48,12 +48,13 @@ APOLOGY = ("对不起", "抱歉", "不好意思", "我错了", "是我不好", "
 SETTLE = ("算了", "过去吧", "翻篇", "不提了")
 
 SEVERE_MARKS = ("冒犯", "侮辱", "骂", "威胁", "隐私", "利用", "背叛", "破程序")
+UNFORGIVABLE_MARKS = ("背叛", "出卖", "利用脆弱", "利用我", "侵犯隐私", "骗我", "骗钱", "诈骗")
 FEEDBACK_REASON = {
     "good": "这次回应用户满意",
     "ok": "这次回应还行",
     "bad": "这次回应用户不满意",
 }
-LEVEL_ORDER = ("g1", "g2", "g3")
+LEVEL_ORDER = ("g1", "g2", "g3", "g4")
 
 
 def _num(value: Any, default: float) -> float:
@@ -158,7 +159,9 @@ def _grudge_items(events: list[dict], now: float) -> list[dict[str, Any]]:
     items = []
     for event in events:
         reason = event.get("reason")
-        if any(word in str(reason or "") for word in SEVERE_MARKS):
+        if any(word in str(reason or "") for word in UNFORGIVABLE_MARKS):
+            level, half_life = "g4", None
+        elif any(word in str(reason or "") for word in SEVERE_MARKS):
             level, half_life = "g3", None
         elif repeated:
             level, half_life = "g2", None
@@ -477,7 +480,9 @@ def grudge_context(path: Path | str = DB_PATH) -> str:
             labels.append(piece)
     count_text = "一件事" if len(active) == 1 else f"{len(active)} 件事"
     worst = max((item["level"] for item in active), key=LEVEL_ORDER.index)
-    if worst == "g3":
+    if worst == "g4":
+        behavior = "表现：保持距离；不主动翻旧账、不报复、不假装回到从前；只做必要的正常回应。"
+    elif worst == "g3":
         behavior = "表现：正常聊；不主动深聊、不先交底，同类话题直接说边界。"
     elif worst == "g2":
         behavior = "表现：正常聊，但别主动深聊、别先交底。"

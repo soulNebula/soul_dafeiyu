@@ -487,3 +487,7 @@ guard 报 L1/L2 时才调用 `nli.verify`，若支持率 <0.5 直接降级安全
 
 - proactive 使用 quadrant：skip / 有足够反馈的 hold 会拦截；explore 最多 1 条气泡；
 - 选中的主动表达写 share_candidates + share_events（status=spoken）。
+
+### 记仇 G4
+
+`affect` 增加 G4 不可原谅层：隐私/利用脆弱/背叛类永久标记，不随时间消失；上下文只要求保持距离，不报复、不恢复从前。

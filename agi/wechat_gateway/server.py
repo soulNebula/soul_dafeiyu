@@ -19,9 +19,10 @@ import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from . import config as cfg
-from . import control, policy
+from . import control, drafts, policy
 from .receiver import WeChatReceiver
 from .sender import WxAutoSender
 from .. import textguard
@@ -58,6 +59,7 @@ def _log(entry: dict) -> None:
 class Gateway:
     def __init__(self, cfg_obj: dict):
         self.cfg = dict(cfg_obj)
+        self.draft_path = self.cfg.get("drafts_path") or drafts.DEFAULT_PATH
         self.receiver = None
         self.backend = None
         self.sender = WxAutoSender()
@@ -246,19 +248,24 @@ class Gateway:
         if text != original:
             self._record("send_sanitized", {"friend": contact,
                                             "removed_chars": len(original) - len(text)})
-        mode = control.send_mode(self.cfg)
+        mode = control.send_mode(self.cfg, contact)
         if mode == "off":
             self._record("send_blocked", {"friend": contact, "reason": "send_mode_off"})
             return {"ok": False, "status": "blocked", "error": "send_mode_off"}
         if mode == "confirm" and not force:
-            self._record("draft", {"friend": contact, "text": text})
+            item = drafts.add(contact, text, "confirm", path=self.draft_path)
+            self._record("draft", {"friend": contact, "text": text, "draft_id": item["id"]})
             return {"ok": False, "status": "draft", "requires_confirm": True,
-                    "contact": contact, "text": text}
+                    "draft_id": item["id"], "contact": contact, "text": text}
         if self.cfg.get("stop"):
             self._record("send_blocked", {"friend": contact, "reason": "stop_switch"})
             return {"ok": False, "status": "blocked", "error": "stop_switch"}
         if self.cfg.get("dry_run", True):
-            return self.sender.send(contact, text, dry_run=True)
+            out = self.sender.send(contact, text, dry_run=True)
+            if not out.get("ok") and out.get("status") == "failed":
+                self._archive_failed_draft(contact, text,
+                                           str(out.get("error") or "failed"))
+            return out
         if not WXAUTO_PYTHON.exists():
             return {"ok": False, "status": "failed", "error": f"缺少 wxauto venv: {WXAUTO_PYTHON}"}
         now = time.time()
@@ -287,9 +294,23 @@ class Gateway:
             if out.get("ok"):
                 self.send_times.append(time.time())
                 self.sent_today += 1
+            else:
+                self._archive_failed_draft(contact, text,
+                                           str(out.get("error") or out.get("status") or "failed"))
             return out
         except Exception as exc:  # noqa: BLE001
+            self._archive_failed_draft(contact, text, f"{type(exc).__name__}: {exc}")
             return {"ok": False, "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+
+    def _archive_failed_draft(self, contact: str, text: str, error: str) -> None:
+        """发送失败不丢内容：落成草稿，等人工决定重发或丢弃。"""
+        try:
+            item = drafts.add(contact, text, "send_failed", path=self.draft_path)
+            self._record("draft", {"friend": contact, "text": text,
+                                   "draft_id": item["id"], "reason": "send_failed",
+                                   "error": str(error)[:200]})
+        except Exception:  # noqa: BLE001
+            pass
 
     def status(self) -> dict:
         state = {}
@@ -314,6 +335,7 @@ class Gateway:
             "sent": self.sent,
             "failed": self.failed,
             "send_mode": control.send_mode(self.cfg),
+            "drafts_pending": len(drafts.list_all(path=self.draft_path, limit=200)),
             "admin_token_set": bool(self.cfg.get("admin_token")),
             "policy": {"stop": bool(self.cfg.get("stop")),
                        "quiet_hours": self.cfg.get("quiet_hours"),
@@ -331,6 +353,7 @@ def make_handler(gateway: Gateway):
         def log_message(self, *args):
             return
 
+        # ------------------------------------------------------------ helpers
         def _json(self, code, data):
             body = json.dumps(data, ensure_ascii=False, default=str).encode()
             self.send_response(code)
@@ -339,50 +362,122 @@ def make_handler(gateway: Gateway):
             self.end_headers()
             self.wfile.write(body)
 
+        def _port(self) -> int:
+            try:
+                return int(self.server.server_address[1])
+            except Exception:  # noqa: BLE001
+                return int(gateway.cfg.get("port") or 801)
+
+        def _query_token(self) -> str:
+            try:
+                return (parse_qs(urlsplit(self.path).query).get("token") or [""])[0]
+            except Exception:  # noqa: BLE001
+                return ""
+
+        def _guard(self) -> bool:
+            """Host 回环校验 + token 鉴权；任一不过直接回错误。"""
+            if not control.host_ok(self.headers.get("Host") or "", self._port()):
+                self._json(403, {"ok": False, "error": "host not allowed"})
+                return False
+            headers = {k: v for k, v in self.headers.items()}
+            if not control.auth_ok(headers, gateway.cfg, self._query_token()):
+                self._json(401, {"ok": False, "error": "admin token required"})
+                return False
+            return True
+
+        def _read_json(self, limit: int = 1_048_576) -> dict:
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except (TypeError, ValueError):
+                n = 0
+            if n > limit:
+                raise ValueError("body too large")
+            raw = self.rfile.read(n) if n > 0 else b"{}"
+            try:
+                body = json.loads(raw or b"{}")
+            except ValueError as exc:
+                raise ValueError("bad json") from exc
+            if not isinstance(body, dict):
+                raise ValueError("bad json")
+            return body
+
+        # ------------------------------------------------------------ routes
         def do_POST(self):
+            if not self._guard():
+                return
             path = self.path.split("?", 1)[0]
+            try:
+                body = self._read_json()
+            except ValueError as exc:
+                self._json(413 if "large" in str(exc) else 400,
+                           {"ok": False, "error": str(exc)})
+                return
+
             if path == "/api/approve":
-                if not control.auth_ok({k: v for k, v in self.headers.items()}, gateway.cfg):
-                    self._json(401, {"ok": False, "error": "admin token required"}); return
-                try:
-                    n = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(n) or b"{}")
-                except Exception:
-                    self._json(400, {"ok": False, "error": "bad json"}); return
                 contact = str(body.get("contact") or "")
                 text = str(body.get("text") or "")
                 if contact not in (gateway.cfg.get("allowed_contacts") or []) or not text:
-                    self._json(400, {"ok": False, "error": "contact 不在白名单或 text 为空"}); return
-                out = gateway._send(contact, text, force=True)
-                self._json(200, out); return
+                    self._json(400, {"ok": False, "error": "contact 不在白名单或 text 为空"})
+                    return
+                self._json(200, gateway._send(contact, text, force=True))
+                return
+
+            if path == "/api/draft/approve":
+                draft_id = str(body.get("id") or "").strip()
+                item = drafts.discard(draft_id, path=gateway.draft_path)
+                if item is None:
+                    self._json(404, {"ok": False, "error": "草稿不存在"})
+                    return
+                out = gateway._send(str(item.get("contact") or ""),
+                                    str(item.get("text") or ""), force=True)
+                gateway._record("draft_approved", {"draft_id": draft_id,
+                                                   "friend": item.get("contact"),
+                                                   "status": out.get("status")})
+                self._json(200, {**out, "draft": item})
+                return
+
+            if path == "/api/draft/reject":
+                draft_id = str(body.get("id") or "").strip()
+                item = drafts.discard(draft_id, path=gateway.draft_path)
+                if item is None:
+                    self._json(404, {"ok": False, "error": "草稿不存在"})
+                    return
+                gateway._record("draft_rejected", {"draft_id": draft_id,
+                                                   "friend": item.get("contact")})
+                self._json(200, {"ok": True, "rejected": draft_id})
+                return
+
             if path == "/api/test/inbound":
                 if not gateway.cfg.get("dry_run", True):
                     self._json(403, {"ok": False, "error": "测试注入接口只允许 dry_run=true"})
-                    return
-                try:
-                    n = int(self.headers.get("Content-Length") or 0)
-                    body = json.loads(self.rfile.read(n) or b"{}")
-                except Exception:
-                    self._json(400, {"ok": False, "error": "bad json"})
                     return
                 friend = str(body.get("friend") or "")
                 text = str(body.get("text") or "")
                 if friend not in (gateway.cfg.get("allowed_contacts") or []) or not text:
                     self._json(400, {"ok": False, "error": "friend 不在白名单或 text 为空"})
                     return
-                gateway.on_inbound({"friend": friend, "text": text, "id": "TEST-" + str(time.time())})
+                gateway.on_inbound({"friend": friend, "text": text,
+                                    "id": "TEST-" + str(time.time())})
                 self._json(202, {"ok": True, "queued": True, "dry_run": True})
                 return
+
             self._json(404, {"ok": False, "error": "not found"})
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path in ("/health", "/healthz"):
                 self._json(200, {"ok": True, "service": "wechat_gateway"})
-            elif path == "/status":
+                return
+            if not self._guard():
+                return
+            if path == "/status":
                 self._json(200, gateway.status())
-            else:
-                self._json(404, {"ok": False, "error": "not found"})
+                return
+            if path == "/api/drafts":
+                self._json(200, {"ok": True,
+                                 "drafts": drafts.list_all(path=gateway.draft_path)})
+                return
+            self._json(404, {"ok": False, "error": "not found"})
 
     return Handler
 
@@ -395,6 +490,13 @@ def main(argv=None) -> int:
     cfg_obj = cfg.load()
     if args.port:
         cfg_obj["port"] = args.port
+    token, generated = control.ensure_admin_token(cfg_obj)
+    if generated:
+        try:
+            cfg.save(cfg_obj)
+        except Exception as exc:  # noqa: BLE001
+            print(f"admin_token 生成后写回配置失败：{exc}", flush=True)
+        print(f"[gateway] 已生成管理 token（X-Admin-Token）：{token}", flush=True)
     gateway = Gateway(cfg_obj)
     gateway.start()
     port = int(cfg_obj.get("port") or 801)

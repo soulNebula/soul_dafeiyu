@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import re
 import time
 from pathlib import Path
 from typing import Any
 
+from ..inner import inject as inner_inject
 from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, tool_reply, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
@@ -270,12 +272,22 @@ class SelfLearnAgent:
             reply = ("我在。先别一个人扛着。你现在安全吗？"
                      "如果可能，先联系你信任的人，或当地急救/心理援助。")
         else:
+            # W2-A：内状态注入（只影响语气与选择）。INNER_MODE 默认 off，
+            # off 时 inner_ctx 为空串，_prompt 拼出来的字符串与改动前逐字节一致。
+            inner_ctx = ""
+            try:
+                inner_ctx = inner_inject.build_inner_ctx(
+                    self.path, os.environ.get("INNER_MODE", "off"), self.client,
+                    text or "我发了一张图片，请看看并回应我。", recent, st)
+            except Exception:  # noqa: BLE001
+                inner_ctx = ""
             prompt = self._prompt(text or "我发了一张图片，请看看并回应我。", mems, pctx,
                                    variant, recent, st=st, lessons=lessons,
                                    conflict_q=conflict_q, sum_ctx=sum_ctx,
                                    retrieval_ctx=retrieval_ctx, profile_ctx=profile_ctx,
                                    layer_ctx=layer_ctx,
-                                   research_ctx=research.get("context", ""))
+                                   research_ctx=research.get("context", ""),
+                                   inner_ctx=inner_ctx)
             if image:
                 content = [{"type": "text", "text": prompt},
                            {"type": "image_url", "image_url": {"url": image}}]
@@ -411,7 +423,7 @@ class SelfLearnAgent:
     @staticmethod
     def _prompt(text, mems, pctx, variant, recent, *, st=None, lessons="",
                 conflict_q="", sum_ctx="", retrieval_ctx="", profile_ctx="",
-                layer_ctx="", research_ctx="") -> str:
+                layer_ctx="", research_ctx="", inner_ctx="") -> str:
         mem_lines = "\n".join(
             f"- [{m.get('scope','user')}/{m['kind']}] {m['content']}（依据：{m['evidence']}）"
             for m in mems
@@ -426,6 +438,12 @@ class SelfLearnAgent:
                 "回答末尾用「来源：网址」标 1–2 条；资料与问题无关就忽略并直说查不到）：\n"
                 + research_ctx
             )
+        # W2-A：inner_ctx 为空串时不产生任何字符（off 模式逐字节不变）；
+        # 注入位置：当前情绪/关系之后、教训之前。
+        inner_block = ""
+        if inner_ctx:
+            inner_block = ("\n\n你的内在状态（只影响语气与选择，不是事实，不要说出口）：\n"
+                           + inner_ctx)
         prompt = (
             "长期记忆（由你自己决定留存；其中关于用户的只用于理解对方，不要当成人格）：\n" +
             mem_lines +
@@ -439,6 +457,7 @@ class SelfLearnAgent:
             "\n\n本次可尝试策略：\n" + (variant.get("hint") or "自然回应") +
             "\n\n当前情绪：" + (st["emotion"]["label"] if st else "neutral") +
             "；关系：" + (st["relationship"]["stage"] if st else "陌生") +
+            inner_block +
             "；教训：\n" + (lessons or "（还没有）") +
             "\n\n最近对话：\n" + dialog +
             "\n\n用户刚刚说：\n" + text +

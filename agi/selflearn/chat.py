@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, trust
+from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, tool_reply, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -257,6 +257,14 @@ class SelfLearnAgent:
         sum_ctx = summary.context(self.path)
         profile_ctx = profile.render_profile(self.path)
         layer_ctx = persona_layers.context(self.path)
+        # L2 能查：问题需要事实/时效信息时，先跑一次工具循环（搜索→抓正文→汇总），
+        # 把资料注入提示词；最终仍由人格层写回复（风格不变，事实可核对）。
+        research = {"used": False, "context": "", "sources": []}
+        if not crisis:
+            try:
+                research = tool_reply.research(self.client, text, db_path=self.path)
+            except Exception:  # noqa: BLE001
+                research = {"used": False, "context": "", "sources": []}
         if crisis:
             reply = ("我在。先别一个人扛着。你现在安全吗？"
                      "如果可能，先联系你信任的人，或当地急救/心理援助。")
@@ -265,7 +273,8 @@ class SelfLearnAgent:
                                    variant, recent, st=st, lessons=lessons,
                                    conflict_q=conflict_q, sum_ctx=sum_ctx,
                                    retrieval_ctx=retrieval_ctx, profile_ctx=profile_ctx,
-                                   layer_ctx=layer_ctx)
+                                   layer_ctx=layer_ctx,
+                                   research_ctx=research.get("context", ""))
             if image:
                 content = [{"type": "text", "text": prompt},
                            {"type": "image_url", "image_url": {"url": image}}]
@@ -348,6 +357,11 @@ class SelfLearnAgent:
             con.commit()
         finally:
             con.close()
+        if research.get("used"):
+            try:
+                tool_reply.record_sources(self.path, text, research, turn_id=turn_id)
+            except Exception:  # noqa: BLE001
+                pass
         summary_info = None
         profile_info = None
         if self.client.available() and self._count_user_messages() % 6 == 0:
@@ -363,6 +377,8 @@ class SelfLearnAgent:
                 "media": media_info, "profile": profile_info,
                 "persona": pctx, "variant": variant, "crisis": crisis,
                 "guard": guard_info, "attachment": attachment, "generation": gen_meta,
+                "research": {"used": bool(research.get("used")),
+                             "sources": research.get("sources") or []},
                 "skill_gate": locals().get("sk_gate"),
                 "state": st, "trust": trust.snapshot(self.path),
                 "affect": affect.snapshot(self.path),
@@ -372,7 +388,7 @@ class SelfLearnAgent:
     @staticmethod
     def _prompt(text, mems, pctx, variant, recent, *, st=None, lessons="",
                 conflict_q="", sum_ctx="", retrieval_ctx="", profile_ctx="",
-                layer_ctx="") -> str:
+                layer_ctx="", research_ctx="") -> str:
         mem_lines = "\n".join(
             f"- [{m.get('scope','user')}/{m['kind']}] {m['content']}（依据：{m['evidence']}）"
             for m in mems
@@ -380,12 +396,20 @@ class SelfLearnAgent:
         dialog = "\n".join(
             f"{'用户' if m['role'] == 'user' else '你'}：{m['text']}" for m in recent[-8:]
         ) or "（第一次对话）"
+        research_block = ""
+        if research_ctx:
+            research_block = (
+                "\n\n本次联网查到的资料（只能用这些资料陈述事实，不要补充资料里没有的细节；"
+                "回答末尾用「来源：网址」标 1–2 条；资料与问题无关就忽略并直说查不到）：\n"
+                + research_ctx
+            )
         prompt = (
             "长期记忆（由你自己决定留存；其中关于用户的只用于理解对方，不要当成人格）：\n" +
             mem_lines +
             "\n\n用户画像（仅作理解，不要复述）：\n" + (profile_ctx or "（暂无）") +
             "\n\n人格层（core/evolving/relations）：\n" + (layer_ctx or "（暂无）") +
             "\n\n阶段摘要：\n" + (sum_ctx or "（暂无）") +
+            research_block +
             "\n\n相关片段（可参考，不当作事实）：\n" + (retrieval_ctx or "（无）") +
             "\n\n未解决冲突提醒：\n" + (conflict_q or "（无）") +
             "\n\n你从自己过去行动中形成的自画像/规则：\n" + (pctx or "（还没有；通过之后的反馈形成）") +

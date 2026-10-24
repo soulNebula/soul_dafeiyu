@@ -24,6 +24,7 @@ from . import config as cfg
 from . import control, policy
 from .receiver import WeChatReceiver
 from .sender import WxAutoSender
+from .. import textguard
 
 _REACTION_WORDS = {
     "good": "good", "好": "good", "好评": "good", "不错": "good", "赞": "good", "满意": "good",
@@ -197,6 +198,8 @@ class Gateway:
 
         contact = str(msg.get("friend") or "")
         text = str(msg.get("text") or "")
+        # 上行也消毒：引用内容里可能是内部 ID（上游已按类型解析，这里兜底）
+        text = textguard.strip_internal_ids(text)
         kind = str(msg.get("kind") or "text")
         db_path = cfg.contact_db(contact)
         agent = SelfLearnAgent(db_path)
@@ -234,6 +237,15 @@ class Gateway:
 
     def _send(self, contact: str, text: str, *, force: bool = False,
               reactive: bool = False) -> dict:
+        # 纵深防御：出站文本里的微信内部 ID 一律摘掉（2026-10-24 引用事故）
+        original = str(text or "")
+        text = textguard.strip_internal_ids(original)
+        if not text:
+            self._record("send_blocked", {"friend": contact, "reason": "internal_id_only"})
+            return {"ok": False, "status": "blocked", "error": "internal_id_only"}
+        if text != original:
+            self._record("send_sanitized", {"friend": contact,
+                                            "removed_chars": len(original) - len(text)})
         mode = control.send_mode(self.cfg)
         if mode == "off":
             self._record("send_blocked", {"friend": contact, "reason": "send_mode_off"})

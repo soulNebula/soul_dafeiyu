@@ -373,11 +373,16 @@ class SelfLearnAgent:
             con.commit()
         finally:
             con.close()
+        learned = 0
         if research.get("used"):
             try:
                 tool_reply.record_sources(self.path, text, research, turn_id=turn_id)
             except Exception:  # noqa: BLE001
                 pass
+            try:
+                learned = tool_reply.remember_research(self.path, research, turn_id=turn_id)
+            except Exception:  # noqa: BLE001
+                learned = 0
         summary_info = None
         profile_info = None
         if self.client.available() and self._count_user_messages() % 6 == 0:
@@ -394,7 +399,8 @@ class SelfLearnAgent:
                 "persona": pctx, "variant": variant, "crisis": crisis,
                 "guard": guard_info, "attachment": attachment, "generation": gen_meta,
                 "research": {"used": bool(research.get("used")),
-                             "sources": research.get("sources") or []},
+                             "sources": research.get("sources") or [],
+                             "learned": int(learned)},
                 "skill_gate": locals().get("sk_gate"),
                 "state": st, "trust": trust.snapshot(self.path),
                 "affect": affect.snapshot(self.path),

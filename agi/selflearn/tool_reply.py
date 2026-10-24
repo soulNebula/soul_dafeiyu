@@ -91,13 +91,15 @@ def _context_from(result: dict) -> str:
     if reply:
         lines.append("检索结论：" + reply[:MAX_CONTEXT_CHARS // 2])
     if sources:
-        lines.append("来源：")
+        lines.append("来源（回答里引用时用 [web-n] 标注）：")
+        idx = 0
         for src in sources[:5]:
             title = str(src.get("title") or "").strip()
             url = str(src.get("url") or "").strip()
             if not url:
                 continue
-            lines.append(f"- {title} {url}".strip())
+            idx += 1
+            lines.append(f"[web-{idx}] {title} {url}".strip())
     return "\n".join(lines)[:MAX_CONTEXT_CHARS]
 
 
@@ -187,3 +189,54 @@ def record_sources(db_path: Path | str, query: str, research: dict,
             con.close()
     except Exception:  # noqa: BLE001
         return 0
+
+
+def remember_research(db_path: Path | str, research: dict,
+                      *, turn_id: str = "", max_items: int = 2) -> int:
+    """把联网查到的事实写进长期记忆（scope=world，证据=来源 URL）。
+
+    这样"查过的东西"下次能被 `memory.retrieve` 检索到，才是 L3「能学」的起点。
+    只取前几条 notes（已截断），靠 `user_memories.content` 的唯一约束天然去重。
+    """
+    notes = (research or {}).get("notes") or []
+    sources = (research or {}).get("sources") or []
+    if not db_path or not notes:
+        return 0
+    url = ""
+    for src in sources:
+        if str(src.get("url") or "").startswith("http"):
+            url = str(src.get("url"))
+            break
+    evidence = f"来源：{url}" if url else "联网检索"
+    now = time.time()
+    written = 0
+    try:
+        con = sqlite3.connect(str(db_path))
+        try:
+            con.execute(
+                "CREATE TABLE IF NOT EXISTS user_memories("
+                "id TEXT PRIMARY KEY, scope TEXT NOT NULL DEFAULT 'user', "
+                "kind TEXT NOT NULL, content TEXT NOT NULL, evidence TEXT NOT NULL, "
+                "evidence_message_id TEXT, confidence REAL NOT NULL, "
+                "status TEXT NOT NULL DEFAULT 'active', conflict_group TEXT, "
+                "created_at REAL NOT NULL, UNIQUE(content))")
+            for note in notes[:max_items]:
+                content = strip_internal_ids(str(note or "")).strip()[:120]
+                if len(content) < 8:
+                    continue
+                mid = "WM-" + hashlib.md5(content.encode("utf-8", "replace")).hexdigest()[:14]
+                cur = con.execute(
+                    "INSERT OR IGNORE INTO user_memories"
+                    "(id, scope, kind, content, evidence, evidence_message_id, "
+                    "confidence, status, conflict_group, created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (mid, "world", "fact", content, evidence,
+                     str(turn_id or "") or None, 0.6, "active", None, now))
+                written += int(cur.rowcount or 0)
+            con.commit()
+            return written
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001
+        return 0
+

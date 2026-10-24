@@ -105,3 +105,35 @@ def test_proactive_turn_linkage(tmp_path):
     empty = tmp_path / "empty.sqlite3"
     db.connect(empty).close()
     assert proactive.record_proactive_turn(empty, "X", "hi") is None
+
+
+# ---------------------------------------------------------------- 空闲/负反馈
+def test_user_active_skips_proactive(monkeypatch):
+    monkeypatch.setattr(ticker, "run_once", lambda *a, **k: _tick_available())
+    g = FakeGateway(proactive_idle_s=600)
+    g.last_inbound = {"好友A": 100.0}
+    out = proactive_worker.run_cycle(g, client=object(), now=200.0)
+    assert out["sent"] == 0 and out["skipped"][0]["reason"] == "user_active"
+
+
+def test_negative_feedback_cools_down(monkeypatch, tmp_path):
+    monkeypatch.setattr(ticker, "run_once", lambda *a, **k: _tick_available())
+    g = FakeGateway()
+    # 用临时库替代 contact_db，避免污染真实联系人库
+    monkeypatch.setattr("agi.wechat_gateway.config.contact_db",
+                        lambda contact: tmp_path / "c.sqlite3")
+    db_path = tmp_path / "c.sqlite3"
+    proactive_worker.record_event(db_path, "好友A", "在吗", "sent", now=100.0)
+    assert proactive_worker.mark_response(db_path, "好烦，别发了", now=110.0) == "negative"
+    out = proactive_worker.run_cycle(g, client=object(), now=200.0)
+    assert out["sent"] == 0 and out["skipped"][0]["reason"] == "negative_cooldown"
+
+
+def test_mark_response_sentiment(tmp_path):
+    db_path = tmp_path / "c.sqlite3"
+    proactive_worker.record_event(db_path, "A", "在吗", "sent", now=1.0)
+    assert proactive_worker.mark_response(db_path, "哈哈有意思", now=2.0) == "positive"
+    proactive_worker.record_event(db_path, "A", "再说一句", "sent", now=3.0)
+    assert proactive_worker.mark_response(db_path, "嗯", now=4.0) == "positive"
+    proactive_worker.record_event(db_path, "A", "第三句", "sent", now=5.0)
+    assert proactive_worker.mark_response(db_path, "今天下雨了", now=6.0) == "neutral"

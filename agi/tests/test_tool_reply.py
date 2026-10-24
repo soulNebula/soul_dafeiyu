@@ -46,6 +46,7 @@ def test_research_builds_context_with_sources(monkeypatch):
     assert out["used"] is True
     assert "多云" in out["context"]
     assert "https://example.com/weather" in out["context"]
+    assert "[web-1]" in out["context"]
     assert out["tool_calls"] == 2
 
 
@@ -124,3 +125,28 @@ def test_chat_injects_research_and_records(monkeypatch, tmp_path):
     assert out["research"]["sources"][0]["url"] == "https://e.example/42"
     # 回复仍然走人格层，不被资料直接替换
     assert out["reply"]
+
+
+# ---------------------------------------------------------------- 学进记忆
+def test_remember_research_writes_world_memory(tmp_path):
+    db = tmp_path / "m.sqlite3"
+    n = tool_reply.remember_research(db, {
+        "notes": ["北京今天多云转晴，10~17 度", "空气质量良，适合出门"],
+        "sources": [{"url": "https://weather.example/bj", "title": "天气"}]},
+        turn_id="T-1")
+    assert n == 2
+    import sqlite3 as _s
+    con = _s.connect(db)
+    try:
+        rows = con.execute("select scope, kind, evidence from user_memories").fetchall()
+    finally:
+        con.close()
+    assert len(rows) == 2 and all(r[0] == "world" and r[1] == "fact" for r in rows)
+    assert all("weather.example" in r[2] for r in rows)
+
+
+def test_remember_research_dedupes_same_content(tmp_path):
+    db = tmp_path / "m.sqlite3"
+    payload = {"notes": ["同一条事实同一条事实"], "sources": [{"url": "https://a.example"}]}
+    assert tool_reply.remember_research(db, payload) == 1
+    assert tool_reply.remember_research(db, payload) == 0  # 内容唯一约束去重

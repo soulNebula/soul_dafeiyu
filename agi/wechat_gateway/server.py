@@ -78,6 +78,8 @@ class Gateway:
         self.last_turns = {}
         self.last_proactive = {}
         self.proactive_thread = None
+        self.pending: dict[str, dict] = {}
+        self.last_inbound: dict[str, float] = {}
         self.send_times = deque()
         self.sent_today = 0
         self.sent_day = time.strftime("%Y-%m-%d")
@@ -166,21 +168,82 @@ class Gateway:
         return proactive_worker.run_cycle(self)
 
     def _work(self) -> None:
-        from agi.selflearn.chat import SelfLearnAgent
-        from agi.selflearn.config import DB_PATH as DEFAULT_DB
-
         while not self.stop_event.is_set():
+            msg = None
             try:
                 msg = self.queue.get(timeout=0.2)
             except queue.Empty:
-                continue
+                msg = None
+            if msg is not None:
+                try:
+                    if self._handle_feedback(msg):
+                        continue
+                    self._buffer_inbound(msg)
+                except Exception as exc:  # noqa: BLE001
+                    self.failed += 1
+                    self._record("worker_error",
+                                 {"error": f"{type(exc).__name__}: {exc}"})
             try:
-                if self._handle_feedback(msg):
-                    continue
+                self._flush_pending()
+            except Exception as exc:  # noqa: BLE001
+                self.failed += 1
+                self._record("flush_error", {"error": f"{type(exc).__name__}: {exc}"})
+        self._flush_pending(force=True)
+
+    def _buffer_inbound(self, msg: dict) -> None:
+        """「等他把话说完」：连续几条文字先攒着，debounce 到点一次性回。
+
+        图片/表情/系统消息不攒（有时效），直接回。
+        """
+        contact = str(msg.get("friend") or "")
+        self.last_inbound[contact] = time.time()
+        # 收到消息 → 给上一条主动消息标反应（正/负/中性），用于"说错了就收敛"
+        try:
+            from . import proactive_worker
+            proactive_worker.mark_response(cfg.contact_db(contact),
+                                           str(msg.get("text") or ""))
+        except Exception:  # noqa: BLE001
+            pass
+        debounce_ms = int(self.cfg.get("reply_debounce_ms") or 0)
+        kind = str(msg.get("kind") or "text")
+        if debounce_ms <= 0 or kind != "text":
+            self._reply(msg)
+            return
+        now = time.time()
+        buf = self.pending.get(contact)
+        text = str(msg.get("text") or "").strip()
+        if not buf:
+            self.pending[contact] = {"msg": msg, "texts": [text],
+                                     "deadline": now + debounce_ms / 1000.0}
+            return
+        limit = int(self.cfg.get("max_chars") or 500)
+        merged = chr(10).join(x for x in (buf["texts"] + [text]) if x)
+        if len(merged) > limit:
+            # 已经攒太多了，立刻回，别再等
+            self._reply({"friend": contact, "text": merged[:limit], "kind": "text"})
+            self.pending.pop(contact, None)
+            return
+        buf["texts"].append(text)
+
+    def _flush_pending(self, *, force: bool = False) -> None:
+        now = time.time()
+        for contact in list(self.pending):
+            buf = self.pending[contact]
+            if not force and now < float(buf.get("deadline") or 0):
+                continue
+            self.pending.pop(contact, None)
+            texts = [x for x in (buf.get("texts") or []) if x]
+            if not texts:
+                continue
+            msg = dict(buf.get("msg") or {})
+            msg.update({"friend": contact, "text": chr(10).join(texts),
+                        "kind": "text"})
+            try:
                 self._reply(msg)
             except Exception as exc:  # noqa: BLE001
                 self.failed += 1
-                self._record("worker_error", {"error": f"{type(exc).__name__}: {exc}"})
+                self._record("worker_error",
+                             {"error": f"{type(exc).__name__}: {exc}"})
 
     def _handle_feedback(self, msg: dict) -> bool:
         contact = str(msg.get("friend") or "")

@@ -35,6 +35,8 @@ DEFAULTS = {
     "proactive_enabled": False,
     "proactive_interval_s": 900,
     "proactive_contacts": [],
+    "reply_debounce_ms": 2000,
+    "proactive_idle_s": 600,
 }
 
 

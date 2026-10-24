@@ -521,6 +521,11 @@ def summarize(rows: list[dict]) -> dict:
         sources[arm] = counter
     flips = [bool(r.get("judge_flip")) for r in judged if r.get("judge_flip") is not None]
     bias = [r["bias_check"] for r in rows if isinstance(r.get("bias_check"), dict)]
+    retried_rows = [r for r in rows if int(r.get("retried") or 0) > 0]
+    retries = {
+        "rows": len(retried_rows),
+        "attempts": sum(int(r.get("retried") or 0) for r in rows),
+    }
     bias_stats = {
         "n": len(bias),
         "consistent": sum(1 for b in bias if b.get("consistent")),
@@ -537,6 +542,7 @@ def summarize(rows: list[dict]) -> dict:
             "true": sum(flips), "false": len(flips) - sum(flips),
             "n": len(flips),
         },
+        "retries": retries,
         "position_bias": bias_stats,
         "errors": {
             "local_block": sum(1 for r in rows if r.get("arm_a_error")),
@@ -592,6 +598,11 @@ def render_report(summary: dict, meta: dict) -> str:
         f"- local soul：{meta.get('local_model') or '-'}"
         f" @ {meta.get('base_url') or '-'}",
         f"- server 实际加载：{_server_model_label(meta)}",
+        *([f"- 失败重试：{summary['retries']['rows']} 条曾 winner=null，"
+           f"共重跑 {summary['retries']['attempts']} 次，最终缺 "
+           f"{ov['rows'] - ov['decisive'] - ov['ties']} 条"
+           f"（只重跑失败/空回复，不按结果筛选）"]
+          if summary.get("retries", {}).get("rows") else []),
         f"- 耗时：{meta.get('elapsed_s')}s",
         "",
         "## 口径（两臂到底在比什么）",
@@ -670,6 +681,12 @@ def render_report(summary: dict, meta: dict) -> str:
               "3. 这里用 `chat._prompt` 的隔离 prompt（无记忆/画像/检索/教训），"
               "目的是只放大内状态块的影响；线上完整 prompt 的绝对效果需另测。",
               "4. mock 模式下 local 臂由假裁判固定获胜，只用于验证管线，不构成 G3 结论。",
+              "5. 回复几乎完全相同（如「行，那就先这样」vs「行，那先这样」）时裁判会摆动"
+              "（实测同一对重判出现 TIE/A/TIE）；平局/极短回复建议人工复核。"
+              "本次双向重评的 `order_dependent` 条数见「裁判位置偏差检查」。",
+              "6. 裁判 `max_tokens=120`：deepseek-flash 的 reasoning tokens 偶尔吃满预算 →"
+              "返回空/非法 JSON；本次用 `--retry-failed` 只重跑失败项补齐，重跑次数已记录在"
+              "「环境」段，不按胜负筛选。",
               ""]
     return "\n".join(lines)
 
@@ -800,6 +817,25 @@ def _load_resume_rows(out_path: Path, resume: bool) -> list[dict]:
         if isinstance(rows, list) else []
 
 
+def _load_previous_elapsed(out_path: Path, resume: bool) -> float:
+    """续跑/重试时把上一轮累计耗时带上（报告里的「耗时」是累计墙钟）。"""
+    if not resume or not out_path.exists():
+        return 0.0
+    try:
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+        return float((payload.get("meta") or {}).get("elapsed_s") or 0.0)
+    except (ValueError, OSError, TypeError):
+        return 0.0
+
+
+def _apply_cumulative_elapsed(meta: dict, previous_elapsed: float) -> None:
+    """把「上一轮累计 + 本轮」写回 meta；同时保留本轮/上轮拆分便于审计。"""
+    this_run = float(meta.get("elapsed_s") or 0.0)
+    meta["elapsed_s_this_run"] = round(this_run, 2)
+    meta["elapsed_s_previous"] = round(previous_elapsed, 2)
+    meta["elapsed_s"] = round(previous_elapsed + this_run, 2)
+
+
 def _item_row(ctx: dict) -> dict:
     item = ctx["item"]
     return {
@@ -824,9 +860,14 @@ def run_downstream(*, data: Path | str = DEFAULT_DATA,
                    arms: str = "both", limit: int = 0, seed: int = 42,
                    base_url: str = DEFAULT_BASE_URL, timeout_s: float = 30.0,
                    mock: bool = False, resume: bool = False, bias_check: int = 0,
+                   retry_failed: bool = False,
                    teacher_client=None, local_client=None, reply_client=None,
                    judge_client=None) -> dict:
-    """跑 G3；返回 ``{"meta", "summary", "items"}`` 并写 --out/--report。"""
+    """跑 G3；返回 ``{"meta", "summary", "items"}`` 并写 --out/--report。
+
+    ``retry_failed=True``（隐含 resume）：只重跑上轮 ``winner=null`` 的条目——
+    为空的那一臂重新生成回复、再重判；不按结果筛选，只修瞬态错误。
+    """
     if arms not in ARMS:
         raise SystemExit(f"未知 arms：{arms!r}，可选 {', '.join(ARMS)}")
     items = [normalize_item(raw) for raw in load_items(data, limit)]
@@ -851,12 +892,18 @@ def run_downstream(*, data: Path | str = DEFAULT_DATA,
         mode = "real"
 
     previous = _load_resume_rows(out_path, resume)
+    previous_elapsed = _load_previous_elapsed(out_path, resume)
     rows = list(previous)
-    done_ids = {str(r["golden_id"]) for r in previous}
+    row_by_id = {str(r["golden_id"]): r for r in previous}
+    done_ids = set(row_by_id)
     skipped = 0
+    retried = 0
+    retry_fixed = 0
+    retried_ids: list[str] = []
+    retry_info = {"requested": bool(retry_failed), "rows": 0, "fixed": 0, "ids": []}
     started = time.time()
     print(f"[g3] mode={mode} arms={arms} items={len(items)} 已续跑={len(done_ids)} "
-          f"bias_check={bias_check}", flush=True)
+          f"bias_check={bias_check} retry_failed={retry_failed}", flush=True)
     if mode == "real":
         # both：teacher InnerState n + 回复 2n + 裁判 n；teacher 单臂：InnerState n + 回复 n；
         # local 单臂：只有回复 n 次（本地 InnerState 不花 API 钱）
@@ -870,41 +917,47 @@ def run_downstream(*, data: Path | str = DEFAULT_DATA,
               f"{' + 双向复核 ' + str(min(bias_check, len(items))) if bias_check and arms == 'both' else ''}）",
               flush=True)
     for index, item in enumerate(items, 1):
-        if item["id"] in done_ids:
+        existing = row_by_id.get(item["id"])
+        retry_this = bool(existing is not None and retry_failed
+                          and existing.get("winner") is None)
+        if existing is not None and not retry_this:
             skipped += 1
             continue
         ctx = build_prompt_context(item)
-        row = _item_row(ctx)
+        row = existing if retry_this else _item_row(ctx)
         total_started = time.perf_counter()
-        if arms in ("both", "local"):
+        if arms in ("both", "local") and not row.get("arm_a_block"):
             arm_a = generate_arm_block("local", local_client, ctx)
             row.update({"arm_a_block": arm_a["block"],
                         "arm_a_source": arm_a["source"],
                         "arm_a_error": arm_a["error"],
                         "arm_a_latency_ms": arm_a["latency_ms"],
                         "arm_a_raw": arm_a["raw"]})
-        if arms in ("both", "teacher"):
+        if arms in ("both", "teacher") and not row.get("arm_b_block"):
             arm_b = generate_arm_block("teacher", teacher_client, ctx)
             row.update({"arm_b_block": arm_b["block"],
                         "arm_b_source": arm_b["source"],
                         "arm_b_error": arm_b["error"],
                         "arm_b_latency_ms": arm_b["latency_ms"],
                         "arm_b_raw": arm_b["raw"]})
-        # 生成回复：两条都生成（单臂模式只生成选中的那条）
-        if arms in ("both", "local"):
+        # 生成回复：两条都生成（单臂模式只生成选中的那条；重试时只补空的那条）
+        if arms in ("both", "local") and not row.get("reply_a"):
             rep_a = generate_reply(reply_client, ctx, row["arm_a_block"] or "")
             row["reply_a"] = rep_a["reply"]
             if rep_a["error"] and not row["reply_error"]:
                 row["reply_error"] = f"a: {rep_a['error']}"
             row["arm_a_latency_ms"] = round(
                 float(row["arm_a_latency_ms"] or 0) + rep_a["latency_ms"], 1)
-        if arms in ("both", "teacher"):
+        if arms in ("both", "teacher") and not row.get("reply_b"):
             rep_b = generate_reply(reply_client, ctx, row["arm_b_block"] or "")
             row["reply_b"] = rep_b["reply"]
             if rep_b["error"] and not row["reply_error"]:
                 row["reply_error"] = f"b: {rep_b['error']}"
             row["arm_b_latency_ms"] = round(
                 float(row["arm_b_latency_ms"] or 0) + rep_b["latency_ms"], 1)
+        # 重试时把已补齐的回复错误清掉
+        if row.get("reply_a") and row.get("reply_b"):
+            row["reply_error"] = None
         # 盲评（任何裁判异常都只记该条错误，不中断整批）
         if arms == "both":
             try:
@@ -917,7 +970,8 @@ def run_downstream(*, data: Path | str = DEFAULT_DATA,
                     if main:
                         row.update({"winner": main["winner"],
                                     "judge_reason": main["reason"],
-                                    "judge_flip": main["flip"]})
+                                    "judge_flip": main["flip"],
+                                    "judge_error": None})
                         row["bias_check"] = {
                             "opposite_winner": checked["opposite"].get("winner")
                             if checked["opposite"] else None,
@@ -934,18 +988,34 @@ def run_downstream(*, data: Path | str = DEFAULT_DATA,
                     if res:
                         row.update({"winner": res["winner"],
                                     "judge_reason": res["reason"],
-                                    "judge_flip": res["flip"]})
+                                    "judge_flip": res["flip"],
+                                    "judge_error": None})
                     else:
                         row["judge_error"] = "裁判输出不可解析"
             except Exception as exc:  # noqa: BLE001 - 裁判异常只影响该条
                 row["judge_error"] = f"{type(exc).__name__}: {exc}"[:300]
-        row["latency_ms"] = round((time.perf_counter() - total_started) * 1000, 1)
-        rows.append(row)
-        done_ids.add(item["id"])
-        payload = {"meta": _meta(data, out_path, report_path, items, mode, arms,
-                                 seed, base_url, bias_check, limit,
-                                 teacher_client, local_client, previous, started,
-                                 local_props=local_props),
+        elapsed_item = (time.perf_counter() - total_started) * 1000
+        if retry_this:
+            retried += 1
+            row["retried"] = int(row.get("retried") or 0) + 1
+            row["latency_ms"] = round(float(row.get("latency_ms") or 0) + elapsed_item, 1)
+            if row.get("winner") is not None:
+                retry_fixed += 1
+            retried_ids.append(item["id"])
+            retry_info.update({"rows": retried, "fixed": retry_fixed,
+                               "ids": list(retried_ids)})
+        else:
+            row["latency_ms"] = round(elapsed_item, 1)
+            rows.append(row)
+            done_ids.add(item["id"])
+            row_by_id[item["id"]] = row
+        checkpoint_meta = _meta(data, out_path, report_path, items, mode, arms,
+                                seed, base_url, bias_check, limit,
+                                teacher_client, local_client, previous, started,
+                                local_props=local_props)
+        checkpoint_meta["retry"] = dict(retry_info)
+        _apply_cumulative_elapsed(checkpoint_meta, previous_elapsed)
+        payload = {"meta": checkpoint_meta,
                    "summary": summarize(rows), "items": rows}
         write_json(out_path, payload)  # 每条约 1KB，逐条落盘便于续跑
         print(f"[{index}/{len(items)}] {item['id']} "
@@ -956,6 +1026,8 @@ def run_downstream(*, data: Path | str = DEFAULT_DATA,
     meta = _meta(data, out_path, report_path, items, mode, arms, seed, base_url,
                  bias_check, limit, teacher_client, local_client, previous, started,
                  local_props=local_props)
+    meta["retry"] = dict(retry_info)
+    _apply_cumulative_elapsed(meta, previous_elapsed)
     summary = summarize(rows)
     write_json(out_path, {"meta": meta, "summary": summary, "items": rows})
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -967,6 +1039,10 @@ def run_downstream(*, data: Path | str = DEFAULT_DATA,
           f"Wilson 95%=[{ov['wilson_95']['low']:.1%}, {ov['wilson_95']['high']:.1%}] "
           f"跳过={skipped}；-> {out_path}", flush=True)
     print(f"[g3] 报告 -> {report_path}", flush=True)
+    if retry_info["rows"]:
+        print(f"[g3] 失败重试：{retry_info['rows']} 条 winner=null → 补齐 "
+              f"{retry_info['fixed']} 条（仍缺 {retry_info['rows'] - retry_info['fixed']} 条）",
+              flush=True)
     return {"meta": meta, "summary": summary, "items": rows, "skipped": skipped}
 
 
@@ -1033,6 +1109,9 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="对前 N 条做双向重评，检查裁判位置偏差（0=不检查）")
     ap.add_argument("--resume", action="store_true",
                     help="断点续跑：读 --out 里已有 items，跳过同 golden_id")
+    ap.add_argument("--retry-failed", action="store_true",
+                    help="配合 --resume（隐含 resume）：只重跑上轮 winner=null 的条目"
+                         "（为空的那一臂重生成回复、再重判），用于修复瞬态 API 错误")
     ap.add_argument("--mock", action="store_true",
                     help="用确定性假 client（不联网、不需要 key/llama-server）")
     return ap
@@ -1048,8 +1127,9 @@ def main(argv: list[str] | None = None) -> int:
         run_downstream(
             data=args.data, out=args.out, report=args.report, arms=args.arms,
             limit=args.limit, seed=args.seed, base_url=args.base_url,
-            timeout_s=args.timeout_s, mock=args.mock, resume=args.resume,
-            bias_check=args.bias_check)
+            timeout_s=args.timeout_s, mock=args.mock,
+            resume=args.resume or args.retry_failed,
+            bias_check=args.bias_check, retry_failed=args.retry_failed)
     except FileNotFoundError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 2

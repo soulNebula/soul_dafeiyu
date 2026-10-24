@@ -110,6 +110,10 @@ python -m agi.eval_data.downstream --base-url http://127.0.0.1:8123 --limit 50 \
 # 4) 中断后断点续跑（按 golden_id 跳过已有条目，不重复写）
 python -m agi.eval_data.downstream --base-url http://127.0.0.1:8123 --limit 50 --resume \
     --out E:\agent\logs\g3_downstream.json --report E:\agent\logs\g3_report.md
+
+# 5) 只重跑上轮 winner=null 的条目（瞬态 API 错误/裁判不可解析；不按结果筛选）
+python -m agi.eval_data.downstream --base-url http://127.0.0.1:8123 --limit 50 --retry-failed \
+    --out E:\agent\logs\g3_downstream.json --report E:\agent\logs\g3_report.md
 ```
 
 | 参数 | 默认 | 说明 |
@@ -124,6 +128,7 @@ python -m agi.eval_data.downstream --base-url http://127.0.0.1:8123 --limit 50 -
 | `--timeout-s` | `30` | llama-server 单次请求超时 |
 | `--bias-check` | `0` | 对前 N 条用**相反左右顺序**再判一次，检查裁判位置偏差 |
 | `--resume` | 关 | 断点续跑；不加则覆盖 `--out` 重跑 |
+| `--retry-failed` | 关 | 隐含 resume：只重跑上轮 `winner=null` 的条目（为空的那一臂重生成回复、再重判），修复瞬态错误；不按胜负筛选 |
 | `--mock` | 关 | 确定性假 client（不联网、不需要 key/server） |
 
 真实模式的前置检查（缺了会**明确报错退出码 2**，不会静默回退）：
@@ -185,7 +190,7 @@ python -m agi.eval_data.downstream --base-url http://127.0.0.1:8123 --limit 50 -
 | 指标 | 数值 |
 | --- | --- |
 | mock 全量 50 条（arms=both，bias-check=10） | 50 行、judged=50、0 失败，**0.12 s**（含 260 次假 LLM 调用） |
-| 单测 `python -m pytest agi/tests/test_downstream.py -q` | **13 passed in 0.22 s** |
+| 单测 `python -m pytest agi/tests/test_downstream.py -q` | **14 passed in 0.37 s** |
 | mock 统计 | local 胜 50 / teacher 胜 0 / 平 0，Wilson=[92.9%, 100%]（**构造结果，不是 G3 结论**） |
 | 位置偏差检查 | 双向重评 10 条，顺序一致 10/10（mock 裁判是内容型，必然一致） |
 | 左右随机分布 | flip=True 17 / flip=False 33（共 50） |
@@ -212,6 +217,41 @@ mock 的 `MockJudgeClient` 固定偏好带 `local` 标记的回复，所以 loca
 最新代码又复跑一次 `--arms teacher --limit 2`：2/2 `model`、0 错误、回复非空，
 4.71 s / 4 次调用；产物留档在 `E:\agent\logs\g3_teacher_pilot_20261025.json|.md|.log`。
 
+### 正式跑：0.5B B（平衡采样）vs teacher（2026-10-25，C 臂训练同时进行）
+
+- server GGUF：`E:\agent\output\gguf\soul_qwen25_05b_v1b-q4_k_m.gguf`（`/props` 实测，
+  非 v0/v1）；50 条 golden，`--bias-check 10`，总墙钟 **479 s**（训练并发，local 单条被拖慢到 ~1s）。
+- **总体（预注册主指标）**：n=50、judged=50；**local 26 胜 / teacher 20 胜 / 平 4**；
+  local 胜率（不含平）**56.5%**，Wilson 95% **[42.2%, 69.8%]**，tie 率 8.0%。
+  → 区间跨 50%，按预注册标准：**未测出显著差异**（不是「一样好」）。
+- 分 bucket（n=5/桶，CI 都很宽，仅看方向）：边界/危机 4–0、隐私/工作 4–1；
+  闲聊 3–2；求助/玩笑 2–3；冲突/沉默 1–3；情绪低落 1–4。
+- `block_sources` rule 回退：**local 0/50，teacher 2/50**（G-003、G-010：
+  teacher 输出不是 JSON 对象，回退 rule；两条胜负各一）。
+- 数据完整性：首轮 9 条 `winner=null`（5 条裁判不可解析 + 4 条一臂回复瞬态失败），
+  `--retry-failed` 重跑 **11 次**全部补齐，最终缺 0 条（只重跑失败项，不按胜负筛选）。
+- 裁判位置偏差（10 条双向重评）：一致 7、顺序相关 3（30%）；平局/极近回复的裁决不稳
+  （G-049 重判出现 TIE/A/TIE），结论需人工复核。
+- 观察（供解读，不作为胜负）：两臂回复长度均值 local 40 字 vs teacher 84 字（内状态块
+  的 length 指令会系统性影响长度）；去掉 crisis（线上不注入块）后 local 22/42=52.4%
+  [37.7%, 66.6%]，更接近 50%。
+- 产物：`E:\agent\logs\g3_downstream.json`、`g3_report.md`；首轮原始数据备份在
+  `g3_downstream_firstpass.json` / `g3_report_firstpass.md`。
+
+### A 臂对照：0.5B v1 原版 vs teacher（2026-10-25，D 训练同时进行）
+
+- server GGUF：`E:\agent\output\gguf\soul_qwen25_05b_v1-q4_k_m.gguf`（`/props` 实测）；
+  与 B 完全同口径（同 50 条、同 teacher、同 seed=42、同 `--bias-check 10`），墙钟 425.5 s。
+- **总体**：n=50、judged=50；**local 19 胜 / teacher 28 胜 / 平 3**；local 胜率
+  **40.4%**，Wilson 95% **[27.6%, 54.7%]**，tie 6.0% → 与 teacher **无显著差异**（点估计偏低）。
+  数据完整性好：0 次重试、0 裁判错误、teacher rule 回退 1。
+- **A vs B**：B − A = **+16.1pt**（56.5% vs 40.4%，方向与 G2 排序 A 0.620 < B 0.686 一致），
+  但两比例检验 p=0.116、同 item McNemar p=0.265，**不显著**；按当前效应量约需
+  **148 条/臂**才能判定。⇒ 目前既不能证实「平衡采样传导到下游」，也不能证实「脱钩」。
+- 长度混杂：A 的 local 回复平均 **20 字** vs B **40 字**（内状态块 length 指令的系统性差异），
+  B 的优势可能部分来自更长的回复；长度配平臂待做。
+- 完整对照报告：`E:\agent\logs\g3_A_vs_B.md`。
+
 ## 真实跑一次的成本 / 耗时估算（50 条，两臂）
 
 基于真实 teacher pilot 的 usage 实测（上表）+ mock 全量 50 条的 prompt 规模：
@@ -227,6 +267,8 @@ mock 的 `MockJudgeClient` 固定偏好带 `local` 标记的回复，所以 loca
 - 成本：按 ¥1/M 输入、¥4/M 输出 ≈ **¥0.17**；按 ¥0.5/M、¥2/M ≈ **¥0.08**（未计重试/缓存优惠）。
 - 墙钟：按实测单次（teacher 1.58 s、回复 0.69 s、裁判 ~0.7 s、local 0.45 s），
   每条两臂 ≈ 4–5 s，50 条 **≈ 4–6 分钟**（串行；重试/排队会拉长）。
+  实测 2026-10-25 正式跑（C 臂训练并发、local 被拖慢）**479 s / 约 8 分钟**，
+  含 9 条失败重试共 11 次重跑；因此可按 **5–10 分钟**做时间预算。
 - 建议先 `--limit 10 --bias-check 5`（≈45 次调用、1–2 分钟、<¥0.05）确认方向，再跑全量 50。
 - 本工具不 import torch/transformers，仓库 python 3.14 与 `E:\agent\venv312` 都能跑；正式跑建议后台执行。
 

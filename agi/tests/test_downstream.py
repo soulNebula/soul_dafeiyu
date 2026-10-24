@@ -270,6 +270,35 @@ def test_mock_run_resume_does_not_duplicate(tmp_path):
     assert len(ids) == len(set(ids))
 
 
+def test_retry_failed_fixes_transient_errors(tmp_path):
+    """--retry-failed：只重跑 winner=null 的条目（补空回复 + 重判），不按结果筛选。"""
+    out, report, first = _run_mock(tmp_path)
+    assert len(first["items"]) == 3
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    # 人为两类典型失败：①裁判输出不可解析；②一臂回复为空（生成报错）
+    payload["items"][0].update({"winner": None, "judge_error": "裁判输出不可解析"})
+    payload["items"][1].update({"winner": None, "reply_a": "",
+                                "judge_error": "有一臂回复为空，跳过盲评",
+                                "reply_error": "a: 回复生成失败"})
+    out.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    result = g3.run_downstream(
+        data=GOLDEN_PATH, out=out, report=report, mock=True, limit=3,
+        resume=True, retry_failed=True)
+    assert result["skipped"] == 1
+    assert result["meta"]["retry"]["rows"] == 2
+    assert result["meta"]["retry"]["fixed"] == 2
+    rows = result["items"]
+    assert len(rows) == 3
+    assert len({r["golden_id"] for r in rows}) == 3
+    assert all(r["winner"] == "a" for r in rows)   # mock 裁判稳定偏好 local
+    assert all(r["judge_error"] is None for r in rows)
+    assert result["summary"]["overall"]["decisive"] == 3
+    assert result["summary"]["retries"]["rows"] == 2
+    assert result["summary"]["retries"]["attempts"] == 2
+    assert "失败重试" in report.read_text(encoding="utf-8")
+
+
 def test_judge_exception_is_contained(tmp_path):
     """裁判抛异常只让该条 winner=null，不中断整批。"""
     result = g3.run_downstream(

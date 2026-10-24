@@ -133,15 +133,15 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     now = time.time() if now is None else float(now)
     own = state.load(path)["self"]
     mood = float(own.get("mood", 0.55))
-    sharing = float(own.get("sharing", 0.45))
-    if respect_state and (mood < 0.32 or sharing < 0.30):
+    share_drive = float(own.get("sharing", 0.45))
+    if respect_state and (mood < 0.32 or share_drive < 0.30):
         return {"ok": True, "available": False, "reason": "现在不太想说话"}
     last = _last_interaction(path)
     if not last:
         return {"ok": True, "available": False, "reason": "还没有对话"}
     if now - last < 8:
         return {"ok": True, "available": False, "reason": "刚聊过"}
-    if respect_state and idle_seconds > 0 and mood < 0.55 and sharing < 0.65 and now - last < idle_seconds:
+    if respect_state and idle_seconds > 0 and mood < 0.55 and share_drive < 0.65 and now - last < idle_seconds:
         return {"ok": True, "available": False, "reason": "还在聊"}
     con = db.connect(path)
     try:
@@ -184,7 +184,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     recent = memory.recent_messages(path, limit=8)
     dialog = " | ".join(f"{m['role']}:{m['text']}" for m in recent[-6:])
     prompt = (
-        f"你现在心情 {mood:.2f}，分享欲 {sharing:.2f}。用户安静了，你想主动说点什么。"
+        f"你现在心情 {mood:.2f}，分享欲 {share_drive:.2f}。用户安静了，你想主动说点什么。"
         "只输出你要说的话，1-2 句，口语；可以分享自己的念头或问一句，不要客服腔、不报能力。"
         "如果实在没话说，输出 SKIP。最近对话：" + dialog
     )
@@ -203,7 +203,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     if not text:
         text = best["text"]
     text = style_profile.tune_reply("", text)[:200]
-    max_bubbles = 3 if sharing >= 0.7 else (2 if sharing >= 0.55 or mood >= 0.7 else 1)
+    max_bubbles = 3 if share_drive >= 0.7 else (2 if share_drive >= 0.55 or mood >= 0.7 else 1)
     if int(init_info.get("max_bubbles") or 0) > 0:
         max_bubbles = min(max_bubbles, int(init_info["max_bubbles"]))
     if quadrant == "explore":
@@ -237,7 +237,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     return {"ok": True, "available": True, "message": bubbles[0], "messages": bubbles,
             "message_id": ids[0], "turn_id": turn_id,
             "kind": best["kind"], "score": best["score"],
-            "reason": best["reason"], "mood": mood, "sharing": sharing,
+            "reason": best["reason"], "mood": mood, "sharing": share_drive,
             "initiative": {k: init_info.get(k) for k in
                             ("available", "score", "reason", "max_bubbles", "bubble_count",
                              "confidence_lcb", "quadrant")},

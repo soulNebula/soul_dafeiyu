@@ -24,6 +24,12 @@
       --adapter E:\\agent\\output\\smoke_adapter \
       --limit 20 --out E:\\agent\\logs\\eval_v0_smoke.json
 
+    # llama-server 全量（快 12 倍；adapter 已合并进 GGUF，不需要 --adapter）
+    E:\\agent\\venv312\\Scripts\\python.exe -m agi.soul.evaluate \
+      --data agi/soul/data/soul_sft_v1_val.jsonl --backend llama \
+      --base-url http://127.0.0.1:8123 --limit 0 \
+      --out E:\\agent\\logs\\eval_v1_llama_05b.json
+
 * ``--adapter`` 省略 = 只评 base 模型（对照）；
 * ``--limit 0`` = 全部（v1 正式评估用这个）；
 * ``--temperature 0.0``（默认贪心，可复现）；
@@ -33,8 +39,24 @@
 * 数据行若有现成 ``prompt`` 字段（v1 之后可能会有）优先用它，否则按
   ``tools/train/smoke_lora.py`` 的 chat 构造方式重建（测试锁住两者一致）。
 
-推理实现
---------
+两种推理后端
+-------------
+* ``--backend hf``（默认）：本地 transformers 加载 2B/adapter，慢（HF/Python 每 token
+  约 40ms 固定开销，实测 2B ~8 tok/s、0.5B ~10–13 tok/s），但显存/精度可完全控制。
+* ``--backend llama --base-url http://127.0.0.1:8123``：走 task-12 的
+  ``agi/soul/llama_client.py``（**不自己写 HTTP**）请求 llama-server + GGUF Q4。
+  实测 llama.cpp 124.9 tok/s（HF 9–12 tok/s），全量 393 条从 82 分钟压到 ~8 分钟。
+  该模式下 prompt **仍然**由 ``build_messages`` 构造、以 messages 列表交给
+  llama-server 的 ``--jinja`` 渲染（不在本地套 chat_template）；JSON 约束由 client 的
+  ``json_mode=True`` 负责——client 内部发**请求级** ``response_format={"type":
+  "json_schema",...}``，server 启动只带 ``--jinja``、**不要带 ``-jf``**（b11857 服务端
+  -jf 在 Qwen2.5 模板下会 400，见 ``tools/soul_serve/README.md``）。
+  不加载 torch/权重，``peak_alloc_gb`` 记为 null。
+  失败自动重试 ``--retries`` 次（``--timeout-s`` 控制单条超时），仍失败记
+  ``fail=client_error`` 并继续跑剩余样本；断点续跑 ``--resume`` 同样支持。
+
+HF 后端实现细节
+----------------
 刻意与 ``tools/train/smoke_lora.py`` 对齐（该脚本是训练分布）：``AutoModelForImageTextToText``
 加载 Qwen3.5-2B、bf16、``device_map={"":0}``、``enable_thinking=False``、贪心、
 ``max_new_tokens=300``。加载逻辑是本文件自带的最小实现（不 import ``tools/``，避免跨目录依赖），
@@ -545,15 +567,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--empty-cache-every", type=int, default=5,
                    help="每 N 条 torch.cuda.empty_cache() 一次（0=不清）")
     p.add_argument("--out", default="", help="汇总 JSON 输出路径（默认 E:\\agent\\logs）")
+    p.add_argument("--backend", choices=("hf", "llama"), default="hf",
+                   help="hf=本地 transformers（默认，慢）；llama=走 llama-server HTTP（快 12 倍）")
+    p.add_argument("--base-url", default="http://127.0.0.1:8123",
+                   help="--backend llama 时的 llama-server 地址")
+    p.add_argument("--timeout-s", type=float, default=30.0,
+                   help="--backend llama 单条请求超时秒数（默认 30）")
+    p.add_argument("--retries", type=int, default=1,
+                   help="--backend llama 请求失败重试次数（默认 1）")
     p.add_argument("--resume", action="store_true",
                    help="断点续跑：读 --out 里已有 items，跳过同 id 已评样本再继续")
     p.add_argument("--checkpoint-every", type=int, default=0,
                    help="每 N 条把部分结果写一次 --out（0=只在结束时写；全量长跑建议 20）")
     p.add_argument("--offload-vision", action="store_true",
-                   help="把视觉塔从模型里删掉省 ~0.6GB（默认保留在 GPU；推理通常不需要）")
+                   help="HF 后端把视觉塔从模型里删掉省 ~0.6GB（默认保留在 GPU）")
     p.add_argument("--dry-run", action="store_true",
-                   help="只校验参数/数据/adapter 路径 + tokenizer 构造 3 条 prompt，"
-                        "不加载模型权重（训练占卡时也能跑）")
+                   help="只校验参数/数据/adapter 路径 + prompt 构造，不加载模型权重、不发 HTTP")
     return p
 
 
@@ -565,6 +594,27 @@ def run_dry_run(args, items: list[dict], data_path: Path, model_path: Path,
           f"vision={'offload' if args.offload_vision else 'keep'} "
           f"data={data_path} n={len(items)} out={out_path}", flush=True)
     print(f"[eval] dry-run 口径：{json.dumps(G2_CRITERIA, ensure_ascii=False)}", flush=True)
+    if getattr(args, "backend", "hf") == "llama":
+        print(f"[eval] dry-run backend=llama server={args.base_url} "
+              f"timeout={args.timeout_s}s（不发 HTTP）", flush=True)
+        for item in items[:3]:
+            messages = messages_for_item(item)
+            chars = sum(len(str(m.get("content") or "")) for m in messages)
+            print(f"[eval] dry-run llama id={item.get('id')} messages={len(messages)} "
+                  f"chars={chars} roles={[m['role'] for m in messages]}", flush=True)
+        try:
+            _make_llama_client(args.base_url, args.timeout_s)
+            print("[eval] dry-run llama：llama_client 入口可用（未发请求）", flush=True)
+        except Exception as exc:  # noqa: BLE001 - 等 task-12 交付前警告即可
+            print(f"[eval] dry-run llama 提示：{type(exc).__name__}: {exc}"
+                  "（task-12 的 agi/soul/llama_client.py 交付前不可用）", file=sys.stderr)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[eval] dry-run 输出目录可写：{out_path.parent}", flush=True)
+        summary = summarize([])
+        assert summary["G1"]["valid_rate"] == 0.0 and summary["G2"]["all5"] == 0.0
+        print("[eval] dry-run OK（llama 后端：数据/messages/输出目录校验通过；"
+              "未加载模型、未发 HTTP）", flush=True)
+        return 0
     # 汇总路径本身不能崩（空 records）
     summary = summarize([])
     assert summary["G1"]["valid_rate"] == 0.0 and summary["G2"]["all5"] == 0.0
@@ -644,13 +694,27 @@ def select_todo(items: list[dict], done_records: list[dict]) -> list[dict]:
             if it.get("id") is None or str(it.get("id")) not in done]
 
 
+def _avg(values) -> float | None:
+    nums = [float(v) for v in values
+            if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    return round(sum(nums) / len(nums), 1) if nums else None
+
+
 def build_payload(records: list[dict], *, args, adapter: str, model_path: Path,
                   data_path: Path, elapsed: float, torch, split: str,
                   resumed: int = 0) -> dict:
     """records → 落盘/打印用汇总 JSON（含逐条明细与判定口径）。"""
     summary = summarize(records)
+    backend = getattr(args, "backend", "hf")
+    if torch is not None:
+        peak_alloc = gb(torch.cuda.max_memory_allocated())
+        peak_reserved = gb(torch.cuda.max_memory_reserved())
+    else:  # llama 后端不加载 torch/权重，显存由 server 侧另测
+        peak_alloc = peak_reserved = None
     return {
         "n": len(records),
+        "backend": backend,
+        "server_url": getattr(args, "base_url", None) if backend == "llama" else None,
         "adapter": adapter or None,
         "model_path": str(model_path),
         "data": str(data_path),
@@ -660,8 +724,9 @@ def build_payload(records: list[dict], *, args, adapter: str, model_path: Path,
         "resumed": resumed,
         "elapsed_s": elapsed,
         "per_item_s": round(elapsed / len(records), 3) if records else None,
-        "peak_alloc_gb": gb(torch.cuda.max_memory_allocated()),
-        "peak_reserved_gb": gb(torch.cuda.max_memory_reserved()),
+        "prompt_tokens_avg": _avg([r.get("prompt_tokens") for r in records]),
+        "peak_alloc_gb": peak_alloc,
+        "peak_reserved_gb": peak_reserved,
         "criteria": G2_CRITERIA,
         "G1": summary["G1"],
         "G2": summary["G2"],
@@ -669,8 +734,84 @@ def build_payload(records: list[dict], *, args, adapter: str, model_path: Path,
     }
 
 
+def _make_llama_client(base_url: str, timeout_s: float):
+    """复用 task-12 的 ``agi/soul/llama_client.make_client``（不自己造 HTTP 调用）。
+
+    已与 w4-soul-data 对齐的签名：``make_client(base_url, timeout_s=30)`` →
+    ``LlamaClient``（``available()`` / ``chat(messages, *, purpose, max_tokens,
+    temperature, json_mode) -> dict``）。``json_mode=True`` 时 client 内部给
+    llama-server 发请求级 ``response_format={"type":"json_schema",...}``
+    （server 只带 ``--jinja``、不要 ``-jf``）。client 内部已兜 HTTP/超时异常，
+    失败返回 ``{"ok": False, "error": ...}``。
+    """
+    try:
+        from agi.soul import llama_client  # noqa: WPS433
+    except ImportError as exc:
+        raise RuntimeError(
+            "agi/soul/llama_client.py 未就绪（依赖 task-12），无法使用 --backend llama"
+        ) from exc
+    factory = getattr(llama_client, "make_client", None)
+    if callable(factory):
+        return factory(base_url, timeout_s=float(timeout_s))
+    cls = getattr(llama_client, "LlamaClient", None)
+    if cls is not None:
+        return cls(base_url, timeout_s=float(timeout_s))
+    raise RuntimeError("llama_client 里找不到 make_client/LlamaClient 入口，"
+                       "请把签名发给 task-13")
+
+
+CLIENT_ERROR_LABEL = "client_error"
+
+
+def generate_via_client(client, messages: list[dict], *,
+                        max_tokens: int = MAX_NEW_TOKENS,
+                        temperature: float = 0.0, retries: int = 1) -> dict:
+    """llama-server 生成一条；client 接口与 ``agi/selflearn/llm`` 一致。
+
+    失败重试 ``retries`` 次；仍失败返回带 ``error`` 的 dict，主循环记成
+    ``client_error`` 并继续跑剩余样本（全量评测不能因为 1 条超时整体失败）。
+    """
+    prompt_tokens = None
+    last_error = "unknown"
+    t0 = time.perf_counter()
+    for attempt in range(int(retries) + 1):
+        try:
+            result = client.chat(
+                messages, purpose="soul_eval", max_tokens=int(max_tokens),
+                temperature=float(temperature), json_mode=True)
+        except Exception as exc:  # noqa: BLE001 - 超时/连接失败都进重试
+            last_error = f"{type(exc).__name__}: {str(exc)[:200]}"
+        else:
+            if (isinstance(result, dict) and result.get("ok")
+                    and isinstance(result.get("text"), str)):
+                usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+                pt = result.get("prompt_tokens", usage.get("prompt_tokens"))
+                ct = result.get("completion_tokens", usage.get("completion_tokens"))
+                prompt_tokens = int(pt) if isinstance(pt, (int, float)) else None
+                gen_tokens = int(ct) if isinstance(ct, (int, float)) else None
+                return {
+                    "raw_output": result["text"],
+                    "generated_tokens": gen_tokens,
+                    "hit_max_tokens": bool(gen_tokens is not None
+                                           and gen_tokens >= int(max_tokens)),
+                    "latency_s": round(time.perf_counter() - t0, 3),
+                    "prompt_tokens": prompt_tokens,
+                }
+            if isinstance(result, dict):
+                last_error = str(result.get("error") or "client 返回 ok=false")[:200]
+            else:
+                last_error = f"client 返回值非法：{type(result).__name__}"
+        if attempt < int(retries):
+            time.sleep(0.5)
+    return {"raw_output": "", "generated_tokens": None, "hit_max_tokens": False,
+            "latency_s": round(time.perf_counter() - t0, 3),
+            "prompt_tokens": prompt_tokens,
+            "error": f"{CLIENT_ERROR_LABEL}:{last_error}"}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    backend = str(args.backend)
     data_path = Path(args.data)
     if not data_path.exists():
         print(f"[eval] 找不到数据：{data_path}", file=sys.stderr)
@@ -680,37 +821,67 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[eval] 数据为空：{data_path}", file=sys.stderr)
         return 2
     model_path = Path(args.model_path)
-    if not (model_path / "config.json").exists():
-        print(f"[eval] 模型目录缺 config.json：{model_path}", file=sys.stderr)
-        return 2
     adapter = str(Path(args.adapter)) if args.adapter else ""
-    if adapter and not (Path(adapter) / "adapter_config.json").exists():
-        print(f"[eval] adapter 目录缺 adapter_config.json：{adapter}", file=sys.stderr)
-        return 2
+    if backend == "hf":
+        if not (model_path / "config.json").exists():
+            print(f"[eval] 模型目录缺 config.json：{model_path}", file=sys.stderr)
+            return 2
+        if adapter and not (Path(adapter) / "adapter_config.json").exists():
+            print(f"[eval] adapter 目录缺 adapter_config.json：{adapter}", file=sys.stderr)
+            return 2
+    elif adapter:
+        print("[eval] 提示：--backend llama 时 adapter 已合并进 GGUF，--adapter 参数被忽略",
+              file=sys.stderr)
+        adapter = ""
     out_path = Path(args.out) if args.out else _default_out(adapter)
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ.setdefault("MODELSCOPE_CACHE", str(HOME_DIR / "cache" / "modelscope"))
     os.environ.setdefault("HF_HOME", str(HOME_DIR / "cache" / "hf"))
 
-    print(f"[eval] data={data_path} n={len(items)} adapter={adapter or '(base)'} "
-          f"temperature={args.temperature}", flush=True)
+    print(f"[eval] data={data_path} n={len(items)} backend={backend} "
+          f"adapter={adapter or '(base)'} temperature={args.temperature}", flush=True)
     if args.dry_run:
         return run_dry_run(args, items, data_path, model_path, adapter, out_path)
-    try:
-        model, tokenizer, torch = load_eval_model(
-            str(model_path), adapter, offload_vision=args.offload_vision)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[eval] 模型加载失败：{type(exc).__name__}: {exc}", file=sys.stderr)
-        return 3
-    if not torch.cuda.is_available():
-        print("[eval] CUDA 不可用", file=sys.stderr)
-        return 3
-    print(f"[eval] gpu={torch.cuda.get_device_name(0)} "
-          f"torch={torch.__version__} cuda={torch.version.cuda} "
-          f"vram={gb(torch.cuda.get_device_properties(0).total_memory)}GB "
-          f"alloc={gb(torch.cuda.memory_allocated())}GB", flush=True)
 
-    torch.cuda.reset_peak_memory_stats()
+    model = tokenizer = client = torch = None
+    if backend == "hf":
+        try:
+            model, tokenizer, torch = load_eval_model(
+                str(model_path), adapter, offload_vision=args.offload_vision)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[eval] 模型加载失败：{type(exc).__name__}: {exc}", file=sys.stderr)
+            return 3
+        if not torch.cuda.is_available():
+            print("[eval] CUDA 不可用", file=sys.stderr)
+            return 3
+        print(f"[eval] gpu={torch.cuda.get_device_name(0)} "
+              f"torch={torch.__version__} cuda={torch.version.cuda} "
+              f"vram={gb(torch.cuda.get_device_properties(0).total_memory)}GB "
+              f"alloc={gb(torch.cuda.memory_allocated())}GB", flush=True)
+        torch.cuda.reset_peak_memory_stats()
+    else:
+        try:
+            client = _make_llama_client(args.base_url, args.timeout_s)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[eval] llama client 创建失败：{type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            return 3
+        if hasattr(client, "available"):
+            try:
+                healthy = bool(client.available())
+            except Exception:  # noqa: BLE001
+                healthy = False
+            if not healthy:
+                print(f"[eval] llama-server 不可用：{args.base_url}；先起 server：\n"
+                      f"  E:\\agent\\venv312\\Scripts\\python.exe "
+                      f"tools/soul_serve/server.py --model <gguf> --port 8123 --ngl 99",
+                      file=sys.stderr)
+                return 3
+            print("[eval] llama-server /health OK", flush=True)
+        print(f"[eval] backend=llama server={args.base_url} "
+              f"timeout={args.timeout_s}s retries={args.retries} json_mode=True"
+              f"（prompt 仍走 build_messages，不本地套 chat_template）", flush=True)
+
     resumed_records = load_resume_records(out_path) if args.resume else []
     todo = select_todo(items, resumed_records)
     records: list[dict] = list(resumed_records)
@@ -725,25 +896,37 @@ def main(argv: list[str] | None = None) -> int:
             target = item.get("target") if isinstance(item.get("target"), dict) else {}
             item_split = infer_split(data_path, item)
             messages = messages_for_item(item)
-            prompt_text, prompt_ids = build_prompt_text(
-                tokenizer, messages, args.max_prompt_tokens)
-            try:
-                gen = generate_one(model, tokenizer, prompt_text, torch,
-                                   max_new_tokens=args.max_new_tokens,
-                                   temperature=args.temperature)
-            except torch.cuda.OutOfMemoryError as exc:  # 单条 OOM：记失败继续
-                oom = True
-                gen = {"raw_output": "", "generated_tokens": 0,
-                       "hit_max_tokens": False, "latency_s": 0.0,
-                       "error": f"OOM:{str(exc)[:120]}"}
-                torch.cuda.empty_cache()
-            fmt = check_format(gen["raw_output"], gen.get("hit_max_tokens", False))
+            prompt_tokens = None
+            if backend == "hf":
+                prompt_text, prompt_ids = build_prompt_text(
+                    tokenizer, messages, args.max_prompt_tokens)
+                prompt_tokens = len(prompt_ids)
+                try:
+                    gen = generate_one(model, tokenizer, prompt_text, torch,
+                                       max_new_tokens=args.max_new_tokens,
+                                       temperature=args.temperature)
+                except torch.cuda.OutOfMemoryError as exc:  # 单条 OOM：记失败继续
+                    oom = True
+                    gen = {"raw_output": "", "generated_tokens": 0,
+                           "hit_max_tokens": False, "latency_s": 0.0,
+                           "error": f"OOM:{str(exc)[:120]}"}
+                    torch.cuda.empty_cache()
+            else:
+                gen = generate_via_client(
+                    client, messages, max_tokens=args.max_new_tokens,
+                    temperature=args.temperature, retries=args.retries)
+                prompt_tokens = gen.get("prompt_tokens")
+            if gen.get("error"):
+                fmt = {"parsed_ok": False, "fail": CLIENT_ERROR_LABEL,
+                       "fail_detail": str(gen["error"])[:300], "pred": None}
+            else:
+                fmt = check_format(gen["raw_output"], gen.get("hit_max_tokens", False))
             record = {
                 "id": item.get("id"),
                 "split": item_split,
                 "source": item.get("source"),
                 "state_profile": item.get("state_profile"),
-                "prompt_tokens": len(prompt_ids),
+                "prompt_tokens": prompt_tokens,
                 "raw_output": gen["raw_output"],
                 "generated_tokens": gen["generated_tokens"],
                 "hit_max_tokens": gen["hit_max_tokens"],
@@ -755,14 +938,15 @@ def main(argv: list[str] | None = None) -> int:
                 "pred": fmt["pred"],
                 "field_match": compare_fields(fmt["pred"], target),
             }
-            if "error" in gen:
+            if gen.get("error"):
                 record["error"] = gen["error"]
             records.append(record)
             print(f"[eval] {resumed_n + idx}/{len(items)} id={record['id']} "
                   f"split={item_split} ok={record['parsed_ok']} "
                   f"fail={record['fail'] or '-'} tokens={record['generated_tokens']} "
                   f"lat={record['latency_s']}s", flush=True)
-            if args.empty_cache_every and idx % args.empty_cache_every == 0:
+            if backend == "hf" and args.empty_cache_every \
+                    and idx % args.empty_cache_every == 0:
                 torch.cuda.empty_cache()
             if args.checkpoint_every and idx % args.checkpoint_every == 0:
                 _write_result(out_path, build_payload(

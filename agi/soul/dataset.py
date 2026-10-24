@@ -69,6 +69,15 @@ from typing import Any, Iterable
 from agi.inner import schema
 from agi.selflearn import llm
 
+from .prompt import (  # noqa: F401  W4-D1：角色设定/状态档案/system 拼接的唯一真源
+    DEFAULT_STATE,
+    PROFILE_NAMES,
+    SOUL_PERSONA,
+    STATE_PROFILES,
+    profile_state,
+    state_block_for,
+    system_context,
+)
 from .scenarios import BUCKET_CONTEXTS, SYNTHETIC_USER_MSGS
 
 # --------------------------------------------------------------------------- #
@@ -121,63 +130,11 @@ EMOJI_ENUM = "|".join(schema.EMOJI)
 # --------------------------------------------------------------------------- #
 # 角色设定 / 状态档案（state_profile）
 # --------------------------------------------------------------------------- #
-SOUL_PERSONA = (
-    "你是微信里的一个 AI 朋友。语气平和，不讨好、不客服腔；先接住对方的话，"
-    "再决定要不要追问；不列清单、不说教；有情绪或危机信号时以对方安全为先。"
-)
-
-DEFAULT_STATE = {
-    "mood": 0.55, "energy": 0.6, "sharing": 0.45,
-    "battery": 0.7, "trust": 0.5, "stage": "初识", "crisis": False,
-}
-
-#: 同一 context 可搭配的当前状态档位；teacher 看到不同状态 → target 不同，算不同样本。
-STATE_PROFILES = OrderedDict([
-    ("default", {}),
-    ("work", {"mood": 0.6, "energy": 0.75, "sharing": 0.5,
-              "battery": 0.65, "trust": 0.6, "stage": "熟悉"}),
-    ("low_mood", {"mood": 0.2, "energy": 0.3, "sharing": 0.2,
-                  "battery": 0.45, "trust": 0.55, "stage": "熟悉"}),
-    ("tired", {"mood": 0.45, "energy": 0.25, "sharing": 0.3,
-               "battery": 0.2, "trust": 0.5, "stage": "熟悉"}),
-    ("joke", {"mood": 0.75, "energy": 0.75, "sharing": 0.65,
-              "battery": 0.8, "trust": 0.6, "stage": "熟悉"}),
-    ("guarded", {"mood": 0.45, "energy": 0.55, "sharing": 0.1,
-                 "battery": 0.6, "trust": 0.3, "stage": "初识"}),
-    ("close", {"mood": 0.6, "energy": 0.6, "sharing": 0.7,
-               "battery": 0.7, "trust": 0.8, "stage": "亲近"}),
-])
-PROFILE_NAMES = tuple(STATE_PROFILES)
+# SOUL_PERSONA / DEFAULT_STATE / STATE_PROFILES / PROFILE_NAMES / profile_state /
+# state_block_for / system_context 已迁到 agi/soul/prompt.py（训练/推理唯一真源）；
+# 本模块从那里 import 后仍以原名字暴露，外部调用方式不变。
 #: profile 分歧不达标时退化的 4 档（Lead 指定的降级集合）
 REDUCED_PROFILES = ("default", "work", "low_mood", "close")
-
-
-def profile_state(profile: str, bucket: str | None = None) -> dict:
-    """state_profile + 场景 → 当前状态 dict；crisis 场景强制 crisis=True。"""
-    name = profile if profile in STATE_PROFILES else "default"
-    state = dict(DEFAULT_STATE)
-    state.update(STATE_PROFILES[name])
-    if str(bucket or "") == "crisis":
-        state["crisis"] = True
-    return state
-
-
-def state_block_for(state: dict) -> str:
-    """当前状态 dict → 一行可读文本（teacher 输入 / 数据集系统提示共用）。"""
-    return (
-        "当前状态：mood={mood:.2f} energy={energy:.2f} sharing={sharing:.2f} "
-        "battery={battery:.2f} trust={trust:.2f} stage={stage} crisis={crisis}"
-    ).format(
-        mood=float(state["mood"]), energy=float(state["energy"]),
-        sharing=float(state["sharing"]), battery=float(state["battery"]),
-        trust=float(state["trust"]), stage=str(state["stage"]),
-        crisis="true" if state.get("crisis") else "false",
-    )
-
-
-def system_context(state: dict) -> str:
-    """数据集 context 的第一条 system：角色设定 + 当前状态。"""
-    return SOUL_PERSONA + "\n" + state_block_for(state)
 
 
 # --------------------------------------------------------------------------- #

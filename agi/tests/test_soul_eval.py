@@ -419,6 +419,7 @@ def test_build_payload_keys_and_resume_flag():
         records, args=args, adapter="", model_path=Path("m"),
         data_path=Path("d.jsonl"), elapsed=3.0, torch=_Torch, split="val", resumed=1)
     assert payload["n"] == 2 and payload["resumed"] == 1
+    assert payload["backend"] == "hf" and payload["server_url"] is None
     assert payload["adapter"] is None
     assert payload["peak_alloc_gb"] == 1.0 and payload["peak_reserved_gb"] == 2.0
     assert payload["per_item_s"] == 1.5
@@ -426,3 +427,231 @@ def test_build_payload_keys_and_resume_flag():
                             "elapsed_s", "criteria", "items"}
     assert payload["G2"]["field_rates"]["length"] == 0.5
     assert payload["criteria"]["hard_metric"] == "behavior_only"
+
+
+# --------------------------------------------------------------------------- #
+# llama 后端（不连真实 server；任务描述要求 mock HTTP/客户端）
+# --------------------------------------------------------------------------- #
+class _FakeLlamaClient:
+    """记录调用参数的假 client，接口与 task-12 的 llama_client 对齐。"""
+
+    def __init__(self, replies=None, usage=None, fail_times=0, raise_error=False):
+        self.replies = list(replies or [])
+        self.usage = usage
+        self.fail_times = int(fail_times)
+        self.raise_error = bool(raise_error)
+        self.calls: list[dict] = []
+        self.calls_made = 0
+
+    def chat(self, messages, *, purpose="", max_tokens=300, temperature=0.0,
+             json_mode=False):
+        self.calls.append({"messages": messages, "purpose": purpose,
+                           "max_tokens": max_tokens, "temperature": temperature,
+                           "json_mode": json_mode})
+        self.calls_made += 1
+        if self.raise_error:
+            raise TimeoutError("fake timeout")
+        if self.calls_made <= self.fail_times:
+            return {"ok": False, "error": "server busy"}
+        text = self.replies[(self.calls_made - 1) % len(self.replies)] \
+            if self.replies else "{}"
+        result = {"ok": True, "text": text}
+        if self.usage is not None:
+            result["usage"] = dict(self.usage)
+        return result
+
+
+def _llama_rows(n: int = 2) -> list[dict]:
+    return [{"id": f"L{i}", "source": "synthetic",
+             "context": [{"role": "system", "text": "SYS"},
+                         {"role": "user", "text": "之前的话"}],
+             "user_msg": f"用户第 {i} 句", "target": _target()} for i in range(n)]
+
+
+def _write_rows(tmp_path: Path, rows: list[dict]) -> Path:
+    path = tmp_path / "rows.jsonl"
+    path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows),
+                    encoding="utf-8")
+    return path
+
+
+def _fake_factory(client, seen=None):
+    def factory(base_url, timeout_s):
+        if seen is not None:
+            seen["base_url"] = base_url
+            seen["timeout_s"] = timeout_s
+        return client
+    return factory
+
+
+def test_llama_backend_end_to_end_with_fake_client(monkeypatch, tmp_path):
+    data = _write_rows(tmp_path, _llama_rows(2))
+    fake = _FakeLlamaClient(replies=[json.dumps(_pred(), ensure_ascii=False)],
+                            usage={"prompt_tokens": 123, "completion_tokens": 45})
+    seen: dict = {}
+    monkeypatch.setattr(evaluate, "_make_llama_client", _fake_factory(fake, seen))
+    out = tmp_path / "eval.json"
+    code = evaluate.main([
+        "--data", str(data), "--backend", "llama",
+        "--base-url", "http://127.0.0.1:8123", "--limit", "0", "--out", str(out),
+    ])
+    assert code == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["backend"] == "llama"
+    assert payload["server_url"] == "http://127.0.0.1:8123"
+    assert payload["G1"]["valid_rate"] == 1.0
+    assert payload["G2"]["behavior_only"] == 1.0
+    assert payload["prompt_tokens_avg"] == 123.0
+    assert payload["peak_alloc_gb"] is None and payload["peak_reserved_gb"] is None
+    assert payload["n"] == 2
+    assert seen == {"base_url": "http://127.0.0.1:8123", "timeout_s": 30.0}
+    # 核心不变量：交给 client 的 messages 必须就是 build_messages 的结果（不本地套模板）
+    rows = _llama_rows(2)
+    for i, call in enumerate(fake.calls):
+        assert call["messages"] == evaluate.build_messages(rows[i])[0]
+        assert call["json_mode"] is True
+        assert call["max_tokens"] == 300
+        assert call["temperature"] == 0.0
+        assert call["purpose"] == "soul_eval"
+    # 无 error 字段
+    assert all("error" not in item for item in payload["items"])
+
+
+def test_llama_backend_retries_then_succeeds(monkeypatch, tmp_path):
+    data = _write_rows(tmp_path, _llama_rows(1))
+    fake = _FakeLlamaClient(replies=[json.dumps(_pred(), ensure_ascii=False)],
+                            fail_times=1)
+    monkeypatch.setattr(evaluate, "_make_llama_client", _fake_factory(fake))
+    out = tmp_path / "eval.json"
+    code = evaluate.main(["--data", str(data), "--backend", "llama",
+                          "--retries", "1", "--out", str(out)])
+    assert code == 0
+    assert fake.calls_made == 2  # 第一次失败 + 重试成功
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["G1"]["valid_rate"] == 1.0
+
+
+def test_llama_backend_client_error_is_recorded_not_fatal(monkeypatch, tmp_path):
+    data = _write_rows(tmp_path, _llama_rows(2))
+    fake = _FakeLlamaClient(fail_times=99)
+    monkeypatch.setattr(evaluate, "_make_llama_client", _fake_factory(fake))
+    out = tmp_path / "eval.json"
+    code = evaluate.main(["--data", str(data), "--backend", "llama",
+                          "--retries", "0", "--out", str(out)])
+    assert code == 0  # 单条失败不中断全量
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["n"] == 2
+    assert payload["G1"]["valid_rate"] == 0.0
+    assert payload["G1"]["top_fail"] == {"client_error": 2}
+    assert all(item["fail"] == "client_error" for item in payload["items"])
+    assert all(item["parsed_ok"] is False for item in payload["items"])
+
+
+def test_llama_backend_raises_timeout_maps_to_client_error(monkeypatch, tmp_path):
+    data = _write_rows(tmp_path, _llama_rows(1))
+    fake = _FakeLlamaClient(raise_error=True)
+    monkeypatch.setattr(evaluate, "_make_llama_client", _fake_factory(fake))
+    out = tmp_path / "eval.json"
+    code = evaluate.main(["--data", str(data), "--backend", "llama",
+                          "--retries", "0", "--out", str(out)])
+    assert code == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    item = payload["items"][0]
+    assert item["fail"] == "client_error"
+    assert "TimeoutError" in item["error"]
+
+
+def test_generate_via_client_usage_and_errors():
+    messages = [{"role": "user", "content": "hi"}]
+    ok_client = _FakeLlamaClient(replies=['{"mood": 0.5}'],
+                                 usage={"prompt_tokens": 11, "completion_tokens": 7})
+    out = evaluate.generate_via_client(ok_client, messages, max_tokens=300,
+                                       temperature=0.0, retries=0)
+    assert out["raw_output"] == '{"mood": 0.5}'
+    assert out["prompt_tokens"] == 11 and out["generated_tokens"] == 7
+    assert out["hit_max_tokens"] is False
+    assert ok_client.calls[0]["json_mode"] is True
+
+    bad = evaluate.generate_via_client(_FakeLlamaClient(fail_times=99), messages,
+                                       retries=0)
+    assert bad["raw_output"] == ""
+    assert bad["error"].startswith("client_error:")
+
+    # client 返回非 dict →
+    class _Weird:
+        def chat(self, *a, **k):
+            return "not a dict"
+    weird = evaluate.generate_via_client(_Weird(), messages, retries=0)
+    assert weird["error"].startswith("client_error:")
+
+
+def test_make_llama_client_missing_module_has_clear_error(monkeypatch):
+    import sys as _sys
+    monkeypatch.setitem(_sys.modules, "agi.soul.llama_client", None)
+    with pytest.raises(RuntimeError) as exc:
+        evaluate._make_llama_client("http://127.0.0.1:8123", 30.0)
+    assert "llama_client" in str(exc.value)
+
+
+def test_make_llama_client_matches_delivered_signature():
+    """task-12 已交付 llama_client.make_client(base_url, timeout_s=30)。"""
+    pytest.importorskip("agi.soul.llama_client")
+    client = evaluate._make_llama_client("http://127.0.0.1:8123", 7.5)
+    assert client.base_url == "http://127.0.0.1:8123"
+    assert client.timeout_s == 7.5
+    assert hasattr(client, "available") and hasattr(client, "chat")
+
+
+def test_llama_backend_unhealthy_server_exits_3(monkeypatch, tmp_path):
+    data = _write_rows(tmp_path, _llama_rows(1))
+
+    class _DownClient(_FakeLlamaClient):
+        def available(self):
+            return False
+
+    fake = _DownClient(replies=["{}"])
+    monkeypatch.setattr(evaluate, "_make_llama_client", _fake_factory(fake))
+    code = evaluate.main(["--data", str(data), "--backend", "llama",
+                          "--out", str(tmp_path / "eval.json")])
+    assert code == 3
+    assert fake.calls_made == 0  # 不可用就不发请求
+
+
+def test_llama_dry_run_does_not_need_server(monkeypatch, tmp_path):
+    data = _write_rows(tmp_path, _llama_rows(3))
+    out = tmp_path / "dry.json"
+    code = evaluate.main(["--data", str(data), "--backend", "llama",
+                          "--limit", "0", "--dry-run", "--out", str(out)])
+    assert code == 0
+    assert not out.exists()  # dry-run 不写结果
+
+
+def test_llama_backend_resume_skips_done(monkeypatch, tmp_path):
+    """llama 模式也要能断点续跑（全量 393 条属长跑）。"""
+    data = _write_rows(tmp_path, _llama_rows(2))
+    out = tmp_path / "eval.json"
+    first = _FakeLlamaClient(replies=[json.dumps(_pred(), ensure_ascii=False)])
+    monkeypatch.setattr(evaluate, "_make_llama_client", _fake_factory(first))
+    assert evaluate.main(["--data", str(data), "--backend", "llama",
+                          "--out", str(out)]) == 0
+    assert first.calls_made == 2
+
+    second = _FakeLlamaClient(replies=[json.dumps(_pred(), ensure_ascii=False)])
+    monkeypatch.setattr(evaluate, "_make_llama_client", _fake_factory(second))
+    assert evaluate.main(["--data", str(data), "--backend", "llama",
+                          "--resume", "--out", str(out)]) == 0
+    assert second.calls_made == 0  # 全部已评，不再发请求
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["n"] == 2 and payload["resumed"] == 2
+    assert payload["G1"]["valid_rate"] == 1.0
+
+
+def test_llama_backend_checkpoint_writes_partial(monkeypatch, tmp_path):
+    data = _write_rows(tmp_path, _llama_rows(4))
+    out = tmp_path / "eval.json"
+    fake = _FakeLlamaClient(replies=[json.dumps(_pred(), ensure_ascii=False)])
+    monkeypatch.setattr(evaluate, "_make_llama_client", _fake_factory(fake))
+    assert evaluate.main(["--data", str(data), "--backend", "llama",
+                          "--checkpoint-every", "2", "--out", str(out)]) == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["n"] == 4 and payload["G1"]["valid_rate"] == 1.0

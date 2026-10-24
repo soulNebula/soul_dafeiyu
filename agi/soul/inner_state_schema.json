@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InnerState",
+  "description": "灵魂蒸馏模型单轮输出：只负责 stance/intent/monologue/behavior；mood/energy/sharing/battery/trust 由推理侧用真实状态覆盖，这里只要 0-1 范围。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mood", "energy", "sharing", "battery", "trust",
+    "stage", "stance", "intent", "monologue", "behavior"
+  ],
+  "properties": {
+    "mood": {"type": "number", "minimum": 0, "maximum": 1},
+    "energy": {"type": "number", "minimum": 0, "maximum": 1},
+    "sharing": {"type": "number", "minimum": 0, "maximum": 1},
+    "battery": {"type": "number", "minimum": 0, "maximum": 1},
+    "trust": {"type": "number", "minimum": 0, "maximum": 1},
+    "stage": {"type": "string", "enum": ["陌生", "初识", "熟悉", "亲近", "信任"]},
+    "stance": {"type": "string", "maxLength": 30},
+    "intent": {"type": "string", "maxLength": 60},
+    "monologue": {"type": "string", "maxLength": 40},
+    "behavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["length", "ask", "advice", "emoji"],
+      "properties": {
+        "length": {"type": "string", "enum": ["short", "normal", "long"]},
+        "ask": {"type": "boolean"},
+        "advice": {"type": "boolean"},
+        "emoji": {"type": "string", "enum": ["偶尔", "不用"]}
+      }
+    }
+  }
+}

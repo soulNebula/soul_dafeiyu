@@ -234,6 +234,12 @@ class WxAutoSender:
             send_attempted = False
             try:
                 wx = self._instance()
+                switch = getattr(wx, "SwitchToChat", None)
+                if callable(switch):
+                    try:
+                        switch()
+                    except Exception:  # noqa: BLE001 - 关资料卡失败时继续，ChatWith 会再报
+                        pass
                 switched = wx.ChatWith(contact_name, exact=True)
                 chat_info = getattr(wx, "ChatInfo", None)
                 info = chat_info() if callable(chat_info) else {}

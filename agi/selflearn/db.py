@@ -138,6 +138,26 @@ CREATE TABLE IF NOT EXISTS conflicts(
 CREATE TABLE IF NOT EXISTS turns(
   id TEXT PRIMARY KEY, user_message_id TEXT NOT NULL, assistant_message_id TEXT NOT NULL,
   reply TEXT NOT NULL, skill_id TEXT, variant_id TEXT, feedback TEXT, score REAL,
+  latency_ms REAL, created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pairs(
+  id TEXT PRIMARY KEY,
+  turn_a TEXT NOT NULL, turn_b TEXT NOT NULL,
+  reply_a TEXT NOT NULL, reply_b TEXT NOT NULL,
+  model_a TEXT, model_b TEXT,
+  choice TEXT,                 -- a | b | tie
+  note TEXT NOT NULL DEFAULT '',
+  rater TEXT NOT NULL DEFAULT 'user',
+  context_json TEXT NOT NULL DEFAULT '{}',
+  created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inner_states(
+  id TEXT PRIMARY KEY,
+  turn_id TEXT,
+  mode TEXT NOT NULL,          -- rule | model | shadow
+  state_json TEXT NOT NULL,
+  block TEXT NOT NULL DEFAULT '',
+  injected INTEGER NOT NULL DEFAULT 0,
   created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS feedback(
@@ -229,6 +249,9 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
     mcols = {r[1] for r in con.execute("PRAGMA table_info(messages)").fetchall()}
     if "proactive" not in mcols:
         con.execute("ALTER TABLE messages ADD COLUMN proactive INTEGER NOT NULL DEFAULT 0")
+    tcols = {r[1] for r in con.execute("PRAGMA table_info(turns)").fetchall()}
+    if "latency_ms" not in tcols:
+        con.execute("ALTER TABLE turns ADD COLUMN latency_ms REAL")
     con.commit()
     return con
 
@@ -236,7 +259,7 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
 def counts(path: Path | str = DB_PATH) -> dict[str, int]:
     con = connect(path)
     try:
-        names = ["messages", "user_memories", "turns", "feedback", "persona", "persona_candidates", "skills", "variants", "reflections", "trust_events", "errors", "lessons", "weak_checks", "proactive", "intents", "conflicts", "attachments", "summaries", "skill_nodes", "learn_tasks", "claims", "skill_cards", "practice_runs", "raw_events", "sessions", "session_segments", "media_understanding", "user_profile", "emoji_archive", "emoji_usage", "score_records", "learning_proposals", "weak_rechecks", "wake_runs", "goals", "persona_layers", "persona_changelog", "share_candidates", "share_events"]
+        names = ["messages", "user_memories", "turns", "feedback", "persona", "persona_candidates", "skills", "variants", "reflections", "trust_events", "errors", "lessons", "weak_checks", "proactive", "intents", "conflicts", "attachments", "summaries", "skill_nodes", "learn_tasks", "claims", "skill_cards", "practice_runs", "raw_events", "sessions", "session_segments", "media_understanding", "user_profile", "emoji_archive", "emoji_usage", "score_records", "learning_proposals", "weak_rechecks", "wake_runs", "goals", "persona_layers", "persona_changelog", "share_candidates", "share_events", "pairs", "inner_states"]
         return {name: int(con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]) for name in names}
     finally:
         con.close()

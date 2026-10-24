@@ -48,6 +48,42 @@ def _id(prefix: str, *parts) -> str:
     return prefix + h
 
 
+SHADOW_MODE = "shadow"
+
+
+def _inner_state_snapshot(path: Path, st: dict, text: str) -> str:
+    """W3-A：shadow 落库用的内状态快照（与 rule 渲染同源，便于离线复盘）。
+
+    延迟 import：避开 `agi.inner` ↔ `agi.selflearn` 的加载顺序问题（与 inject.py 同策略）。
+    """
+    from ..inner import render as inner_render
+    from ..inner import schema as inner_schema
+
+    try:
+        base = inner_schema.from_state(st, trust.get(path))
+        data = inner_render.render_rule(base)
+        data.monologue = inner_inject.sanitize_monologue(data.monologue, text)
+        return json.dumps(data.to_dict(), ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        return "{}"
+
+
+def _record_inner_state(path: Path, turn_id: str, mode: str, state_json: str,
+                        block: str, injected: int = 0) -> None:
+    """W3-A：写 inner_states。shadow 只记录、不注入。"""
+    con = db.connect(path)
+    try:
+        con.execute(
+            "INSERT INTO inner_states(id,turn_id,mode,state_json,block,injected,created_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (_id("IS-", turn_id, time.time()), turn_id, mode, state_json, block,
+             int(injected), time.time()),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
 class SelfLearnAgent:
     def __init__(self, path: Path | str = DB_PATH, client=None, rng=None) -> None:
         self.path = Path(path)
@@ -63,7 +99,8 @@ class SelfLearnAgent:
             con.close()
 
     def _simple_reply(self, user_id: str, reply: str, st: dict, attachment,
-                      *, skill_gate=None, identity=False, had_image=False) -> dict[str, Any]:
+                      *, skill_gate=None, identity=False, had_image=False,
+                      t0: float | None = None) -> dict[str, Any]:
         reply = style_profile.strip_periods(reply)
         assistant_id = memory.store_message(self.path, "assistant", reply)
         try:
@@ -71,13 +108,17 @@ class SelfLearnAgent:
         except Exception:  # noqa: BLE001
             pass
         turn_id = _id("T-", user_id, time.time(), reply)
+        # W3-A：延迟 = send 入口 → 写 turn（含模型调用），不含发送本身；毫秒、1 位小数
+        latency_ms = (round((time.perf_counter() - t0) * 1000, 1)
+                      if t0 is not None else None)
         con = db.connect(self.path)
         try:
             con.execute(
                 "INSERT INTO turns(id,user_message_id,assistant_message_id,reply,skill_id,"
-                "variant_id,feedback,score,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                "variant_id,feedback,score,latency_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (turn_id, user_id, assistant_id, reply,
-                 (skill_gate or {}).get("skill_id"), None, None, None, time.time()),
+                 (skill_gate or {}).get("skill_id"), None, None, None, latency_ms,
+                 time.time()),
             )
             con.commit()
         finally:
@@ -95,6 +136,8 @@ class SelfLearnAgent:
                 "had_image": had_image}
 
     def send(self, text: str, *, image: str | None = None) -> dict[str, Any]:
+        # W3-A：延迟埋点起点；到写 turn 为止（不含把回复发出去）
+        t0 = time.perf_counter()
         text = str(text or "").strip()
         if not text and not image:
             return {"ok": False, "error": "消息为空"}
@@ -109,7 +152,7 @@ class SelfLearnAgent:
         if "撤回" in text and ("消息" in text or "刚才" in text):
             st = state.load(self.path)
             return self._simple_reply(user_id, "看到了，你撤回了刚才那条。", st, None,
-                                      had_image=False)
+                                      had_image=False, t0=t0)
         if "引用" in text:
             st = state.load(self.path)
             quoted = ""
@@ -123,7 +166,7 @@ class SelfLearnAgent:
                 msg = f"你引用的是「{quoted[:60]}」，想接着说什么？"
             else:
                 msg = "看到了，你引用了一条消息，想接着说什么？"
-            return self._simple_reply(user_id, msg, st, None, had_image=False)
+            return self._simple_reply(user_id, msg, st, None, had_image=False, t0=t0)
         correction_info = None
         try:
             correction_info = memory.apply_correction(self.path, text)
@@ -132,7 +175,7 @@ class SelfLearnAgent:
         if correction_info and correction_info.get("ok"):
             st = state.load(self.path)
             out = self._simple_reply(user_id, "好，我改过来了。", st, None,
-                                     had_image=bool(image))
+                                     had_image=bool(image), t0=t0)
             out["correction"] = correction_info
             return out
         attachment = None
@@ -161,10 +204,10 @@ class SelfLearnAgent:
             n = sum(1 for m in recent_lines if m["role"] == "assistant" and
                     any(v[:4] in m["text"] for v in lines))
             return self._simple_reply(user_id, lines[n % len(lines)], st, attachment,
-                                      had_image=bool(image))
+                                      had_image=bool(image), t0=t0)
         if META_QUERY.search(text):
             return self._simple_reply(user_id, "那个我没法细说。你问点别的。", st, attachment,
-                                      had_image=bool(image))
+                                      had_image=bool(image), t0=t0)
         if INTERNAL_QUERY.search(text):
             recent_users = [m for m in memory.recent_messages(self.path, limit=20)
                             if m["role"] == "user"]
@@ -175,7 +218,8 @@ class SelfLearnAgent:
                 else:
                     break
             reply = INTERNAL_ANSWERS[min(max(count - 1, 0), len(INTERNAL_ANSWERS) - 1)]
-            return self._simple_reply(user_id, reply, st, attachment, had_image=bool(image))
+            return self._simple_reply(user_id, reply, st, attachment, had_image=bool(image),
+                                      t0=t0)
         # 固定的模型身份，不靠模型自己猜
         if re.search(r"(你是什么模型|哪个模型|模型版本|用什么模型|你用的什么模型|你是.*模型)",
                      text, re.I):
@@ -186,16 +230,17 @@ class SelfLearnAgent:
                     if m["role"] == "assistant" and "DeepSeek V4.1 Flash" in m["text"])
             reply = replies[n % len(replies)]
             return self._simple_reply(user_id, reply, st, attachment, identity=True,
-                                      had_image=bool(image))
+                                      had_image=bool(image), t0=t0)
         # 能力问题只按技能树回答，不列模型通用能力
         cap = skilltree.capability_reply(self.path, text)
         if cap:
-            return self._simple_reply(user_id, cap, st, attachment, had_image=bool(image))
+            return self._simple_reply(user_id, cap, st, attachment, had_image=bool(image),
+                                      t0=t0)
         # 06 闸门：没到 L3 的技能，不生成/不交付代码；追问也继承上一条代码需求
         sk_gate = skilltree.gate_request(self.path, text)
         if sk_gate:
             return self._simple_reply(user_id, sk_gate["message"], st, attachment,
-                                      skill_gate=sk_gate, had_image=bool(image))
+                                      skill_gate=sk_gate, had_image=bool(image), t0=t0)
         # 情绪差时，对无明确要求的短消息可以选择不回
         direct = bool(re.search(r"[?？]|吗|什么|怎么|为什么|帮|写|要不要|能不能|该不该", text))
         if (not direct and len(text) <= 8 and
@@ -268,6 +313,11 @@ class SelfLearnAgent:
             except Exception:  # noqa: BLE001
                 research = {"used": False, "context": "", "sources": []}
         gen_meta = {"two_stage": False, "claims": []}
+        # W3-A：INNER_MODE=shadow 只记录不注入。模式值先归一化出是否 shadow；
+        # shadow 时 inner_ctx 恒为空串 → prompt 与 off 逐字节一致（test_shadow 逐字节锁）。
+        inner_mode = os.environ.get("INNER_MODE", "off")
+        shadow_mode = str(inner_mode).strip().lower() == SHADOW_MODE
+        shadow_block = ""
         if crisis:
             reply = ("我在。先别一个人扛着。你现在安全吗？"
                      "如果可能，先联系你信任的人，或当地急救/心理援助。")
@@ -275,12 +325,21 @@ class SelfLearnAgent:
             # W2-A：内状态注入（只影响语气与选择）。INNER_MODE 默认 off，
             # off 时 inner_ctx 为空串，_prompt 拼出来的字符串与改动前逐字节一致。
             inner_ctx = ""
-            try:
-                inner_ctx = inner_inject.build_inner_ctx(
-                    self.path, os.environ.get("INNER_MODE", "off"), self.client,
-                    text or "我发了一张图片，请看看并回应我。", recent, st)
-            except Exception:  # noqa: BLE001
-                inner_ctx = ""
+            if shadow_mode:
+                # shadow 用 rule 渲染块，但绝不放进 prompt
+                try:
+                    shadow_block = inner_inject.build_inner_ctx(
+                        self.path, "rule", self.client,
+                        text or "我发了一张图片，请看看并回应我。", recent, st)
+                except Exception:  # noqa: BLE001
+                    shadow_block = ""
+            else:
+                try:
+                    inner_ctx = inner_inject.build_inner_ctx(
+                        self.path, inner_mode, self.client,
+                        text or "我发了一张图片，请看看并回应我。", recent, st)
+                except Exception:  # noqa: BLE001
+                    inner_ctx = ""
             prompt = self._prompt(text or "我发了一张图片，请看看并回应我。", mems, pctx,
                                    variant, recent, st=st, lessons=lessons,
                                    conflict_q=conflict_q, sum_ctx=sum_ctx,
@@ -375,17 +434,27 @@ class SelfLearnAgent:
         if image_memory:
             new_memories = list(new_memories) + [image_memory]
         turn_id = _id("T-", user_id, time.time(), turn_reply)
+        # W3-A：延迟 = send 入口 → 写 turn（含模型调用），不含发送本身；毫秒、1 位小数
+        latency_ms = round((time.perf_counter() - t0) * 1000, 1)
         con = db.connect(self.path)
         try:
             con.execute(
                 "INSERT INTO turns(id,user_message_id,assistant_message_id,reply,skill_id,"
-                "variant_id,feedback,score,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                "variant_id,feedback,score,latency_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (turn_id, user_id, assistant_id, turn_reply, variant.get("skill_id"),
-                 variant.get("variant_id"), None, None, time.time()),
+                 variant.get("variant_id"), None, None, latency_ms, time.time()),
             )
             con.commit()
         finally:
             con.close()
+        # W3-A：shadow 落库（只记不注入、injected=0）；失败静默降级，不影响主链
+        if shadow_mode and not crisis:
+            try:
+                _record_inner_state(
+                    self.path, turn_id, SHADOW_MODE,
+                    _inner_state_snapshot(self.path, st, text or ""), shadow_block, 0)
+            except Exception:  # noqa: BLE001
+                pass
         learned = 0
         if research.get("used"):
             try:

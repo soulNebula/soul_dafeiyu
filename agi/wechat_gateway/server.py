@@ -532,7 +532,12 @@ class Gateway:
             "fallback": {"enabled": bool(self.cfg.get("fallback_enabled")),
                          "mode": str(self.cfg.get("fallback_mode") or "manual")},
             "proactive": {"enabled": bool(self.cfg.get("proactive_enabled")),
-                          "interval_s": self.cfg.get("proactive_interval_s"),
+                          "interval_s": {
+                              "min": self.cfg.get("proactive_interval_min_s"),
+                              "max": self.cfg.get("proactive_interval_max_s")},
+                          "probability": {
+                              "min": self.cfg.get("proactive_probability_min"),
+                              "max": self.cfg.get("proactive_probability_max")},
                           "last": self.last_proactive},
             "backend": state,
             "receiver": self.receiver.status() if self.receiver else None,

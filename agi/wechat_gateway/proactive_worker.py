@@ -363,26 +363,30 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
         breaker["open_until"] = 0.0
         breaker["consecutive"] = 0
         breaker["error_key"] = ""
-    probability = _probability(gateway)
-    roll = random.random()
-    if roll >= probability:
-        # 概率闸门：这一轮直接跳过，不查联系人、不调 LLM，只记一条日志
-        try:
-            gateway._record("proactive_skipped", {
-                "reason": "probability", "probability": round(probability, 4),
-                "probability_range": [round(x, 4) for x in probability_range(gateway)],
-                "roll": round(roll, 4), "contacts": len(contact_list)})
-        except Exception:  # noqa: BLE001
-            pass
-        return {"ok": True, "ran": False, "reason": "probability_skip",
-                "contacts": len(contact_list), "sent": 0, "drafts": 0,
-                "skipped": [], "probability": probability, "roll": round(roll, 4)}
+    # P0-5：概率闸门从「每轮一次」改成「每个联系人独立掷骰」，p 每次在 [min,max] 随机
     client = client if client is not None else default_client()
     out: dict[str, Any] = {"ok": True, "ran": True, "contacts": len(contact_list),
                            "sent": 0, "drafts": 0, "deduped": 0,
                            "breaker_open": False, "skipped": []}
     idle_gap = float(gateway.cfg.get("proactive_idle_s") or 0)
     for contact in contact_list:
+        probability = _probability(gateway)
+        roll = random.random()
+        if roll >= probability:
+            # 跳过时不查库、不调 LLM，只记一条带 contact 和本次 p 的日志
+            out["skipped"].append({"contact": contact, "reason": "probability",
+                                   "probability": round(probability, 4),
+                                   "roll": round(roll, 4)})
+            try:
+                gateway._record("proactive_skipped", {
+                    "reason": "probability", "contact": contact,
+                    "probability": round(probability, 4),
+                    "probability_range": [round(x, 4)
+                                          for x in probability_range(gateway)],
+                    "roll": round(roll, 4), "contacts": len(contact_list)})
+            except Exception:  # noqa: BLE001
+                pass
+            continue
         db_path = gw_cfg.contact_db(contact)
         last_in = float(getattr(gateway, "last_inbound", {}).get(contact, 0) or 0)
         if idle_gap > 0 and last_in and now - last_in < idle_gap:
@@ -488,6 +492,15 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
         gateway.last_proactive = outcome
     except Exception:  # noqa: BLE001
         pass
+    # 兼容旧返回语义：整轮所有联系人都被概率闸门跳过 → ran=False/reason=probability_skip
+    probability_skips = [s for s in out["skipped"] if s.get("reason") == "probability"]
+    if (probability_skips and out["skipped"] and not out["sent"] and not out["drafts"]
+            and not out["deduped"]
+            and all(s.get("reason") == "probability" for s in out["skipped"])):
+        last_skip = probability_skips[-1]
+        out.update({"ran": False, "reason": "probability_skip",
+                    "probability": last_skip.get("probability"),
+                    "roll": last_skip.get("roll")})
     return out
 
 

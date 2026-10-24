@@ -15,7 +15,8 @@ LEVELS = ("off", "manual", "assist", "auto", "full")
 DEFAULT = {
     "enabled": True,
     "level": "assist",
-    "quiet_hours": [0, 7],
+    # 与 gateway 对齐：23:00–08:00 夜间静音（start > end 表示跨零点）
+    "quiet_hours": [23, 8],
     "daily_budget": 6,
     "min_interval_seconds": 30,
 }

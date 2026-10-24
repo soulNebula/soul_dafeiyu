@@ -1,10 +1,18 @@
 # -*- coding: utf-8 -*-
-"""801 微信网关配置。"""
+"""801 微信网关配置。
+
+P0-5：运行时 ``agi/data/wechat/config.json`` 会覆盖 DEFAULTS，历史事故值
+（间隔 30/300 秒、``quiet_hours: []``）必须自动迁移，否则新默认值在本机不生效。
+迁移规则见 :func:`migrate_config`：幂等、原子写回、只升旧事故值、用户显式新值不动。
+"""
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "agi" / "data" / "wechat"
@@ -34,7 +42,6 @@ DEFAULTS = {
     "fallback_enabled": False,
     "fallback_mode": "manual",
     "proactive_enabled": False,
-    "proactive_interval_s": 900,
     "proactive_contacts": [],
     # 主动检查间隔：60–7200 秒（1–120 分钟）随机（2026-10-25 用户拍板）
     "proactive_interval_min_s": 60,
@@ -44,7 +51,8 @@ DEFAULTS = {
     "proactive_probability_max": 0.9,
     "proactive_until_ts": 0,
     "reply_debounce_ms": 2000,
-    "proactive_idle_s": 600,
+    # 对方多久之前还在说话就不主动（秒）：15 分钟，对齐 qq-bridge 的静默要求
+    "proactive_idle_s": 900,
     # P0-2：同内容去重窗口（秒）——窗口内发过相同/高相似文本就跳过
     "proactive_dedupe_window_s": 1800,
     # P0-2：同类错误连续 N 次熔断，冷却 cooldown 秒
@@ -54,21 +62,117 @@ DEFAULTS = {
     "gateway_stale_alert_s": 1800,
 }
 
+#: P0-5 迁移阈值：低于这些值视为历史事故配置
+MIGRATION_INTERVAL_MIN_S = 60
+MIGRATION_INTERVAL_MAX_S = 7200
+MIGRATION_LEGACY_INTERVAL_MIN = 120      # 旧默认 30/1800 都 < 120
+MIGRATION_LEGACY_INTERVAL_MAX = 600      # 旧默认 300/5400 都 < 600
+MIGRATION_QUIET_HOURS = [23, 8]
+#: 旧默认/事故静音值（[] 表示未配置）
+MIGRATION_LEGACY_QUIET = ([], [0, 7])
+#: 旧默认 proactive_idle_s=600（10 分钟）→ 900（15 分钟，对齐 qq-bridge）
+MIGRATION_IDLE_S = 900
+MIGRATION_LEGACY_IDLE = 600
+MIGRATION_LOG_NAME = "gateway.log"
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def migrate_config(raw: dict) -> tuple[dict, dict]:
+    """把旧事故配置迁移成新默认；返回 ``(迁移后的 dict, changes)``。
+
+    - ``proactive_interval_min_s`` < 120 → 60
+    - ``proactive_interval_max_s`` < 600 → 7200
+    - ``quiet_hours`` 为 ``[]`` 或 ``[0, 7]`` → ``[23, 8]``
+    - 缺 ``proactive_probability_min/max`` **不写文件**，由 DEFAULTS 提供 0.3/0.9
+    - 用户显式新值（min ≥ 120 / max ≥ 600 / 其他 quiet_hours）一律不动
+
+    ``changes`` 为空表示无需迁移（幂等）。
+    """
+    cfg = dict(raw)
+    changes: dict[str, dict] = {}
+
+    def _upgrade(key: str, new: Any, too_old) -> None:
+        old = cfg.get(key)
+        if too_old(old):
+            changes[key] = {"old": old, "new": new}
+            cfg[key] = new
+
+    _upgrade("proactive_interval_min_s", MIGRATION_INTERVAL_MIN_S,
+             lambda v: (f := _as_float(v)) is not None
+             and f < MIGRATION_LEGACY_INTERVAL_MIN
+             and f != MIGRATION_INTERVAL_MIN_S)  # 新默认 60 本身 <120，不能二次迁移
+    _upgrade("proactive_interval_max_s", MIGRATION_INTERVAL_MAX_S,
+             lambda v: (f := _as_float(v)) is not None
+             and f < MIGRATION_LEGACY_INTERVAL_MAX
+             and f != MIGRATION_INTERVAL_MAX_S)
+    quiet = cfg.get("quiet_hours")
+    for legacy in MIGRATION_LEGACY_QUIET:
+        if isinstance(quiet, list) and quiet == legacy:
+            changes["quiet_hours"] = {"old": quiet, "new": list(MIGRATION_QUIET_HOURS)}
+            cfg["quiet_hours"] = list(MIGRATION_QUIET_HOURS)
+            break
+    _upgrade("proactive_idle_s", MIGRATION_IDLE_S,
+             lambda v: _as_float(v) == MIGRATION_LEGACY_IDLE
+             and _as_float(v) != MIGRATION_IDLE_S)
+    return cfg, changes
+
+
+def _write_atomic(cfg: dict) -> None:
+    """原子写回：同目录临时文件 + os.replace（保留其他键与缩进）。"""
+    target = Path(CONFIG_PATH)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".migrating.tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, target)
+
+
+def _log_migration(changes: dict) -> None:
+    entry = {
+        "ts": time.time(),
+        "kind": "config_migrated",
+        "path": str(CONFIG_PATH),
+        "changes": changes,
+    }
+    try:
+        target = Path(CONFIG_PATH)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with (target.parent / MIGRATION_LOG_NAME).open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except Exception:  # noqa: BLE001 - 日志失败不影响加载
+        pass
+
 
 def load() -> dict:
+    """读配置；发现历史事故值时做一次幂等迁移（写回文件 + config_migrated 日志）。"""
     cfg = dict(DEFAULTS)
+    raw: Any = {}
     try:
-        raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        if isinstance(raw, dict):
-            cfg.update(raw)
-    except Exception:  # noqa: BLE001
-        pass
+        raw = json.loads(Path(CONFIG_PATH).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - 文件不存在/损坏：沿用 DEFAULTS（保持原行为）
+        raw = {}
+    if not isinstance(raw, dict) or not raw:
+        return cfg
+    migrated, changes = migrate_config(raw)
+    if changes:
+        try:
+            _write_atomic(migrated)
+        except Exception:  # noqa: BLE001 - 写盘失败时内存里仍是迁移后的值
+            pass
+        _log_migration(changes)
+    cfg.update(migrated)
     return cfg
 
 
 def save(cfg: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    target = Path(CONFIG_PATH)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def contact_db(contact: str) -> Path:

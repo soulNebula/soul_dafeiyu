@@ -44,6 +44,12 @@ DEFAULTS = {
     # P0-4 发送容错：发送前句柄双验（send_probe 审计）开关、非确定性失败的额外重试次数
     "send_probe_enabled": True,
     "send_retry_max": 1,
+    # P5-a 发送层多媒体（默认关闭：用户/决策层显式开启前，send_bubbles 一律 blocked）
+    "media_enabled": False,
+    "media_dirs": [],              # 追加白名单目录（默认三个目录见 agi/wechat_gateway/media.py）
+    "media_max_mb": 10,            # 单文件大小上限（MB）
+    "media_send_interval_ms": 120,  # mixed 多气泡间隔；实现钳制在 80–150ms
+    "sticker_fallback_emoji": "😄",  # 贴纸当图片失败后的 emoji 降级
     "proactive_enabled": False,
     "proactive_contacts": [],
     # 主动检查间隔：60–7200 秒（1–120 分钟）随机（2026-10-25 用户拍板）

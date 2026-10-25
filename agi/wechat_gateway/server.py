@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import config as cfg
-from . import control, drafts, policy
+from . import control, drafts, media as media_mod, policy
 from .receiver import WeChatReceiver
 from .sender import WxAutoSender
 from .. import textguard
@@ -697,6 +697,258 @@ class Gateway:
             return out
         except Exception as exc:  # noqa: BLE001
             return self._on_send_failure(contact, text, f"{type(exc).__name__}: {exc}")
+
+
+    # ------------------------------------------------------------------ #
+    # P5-a：多媒体多气泡发送（STOP/静默/白名单/干跑与文本发送同一套闸门）
+    # ------------------------------------------------------------------ #
+    def _media_env(self) -> dict:
+        """子进程媒体配置：与文本发送同一套 env 下发方式（send_cli 读取）。"""
+        media_dirs = [str(x) for x in (self.cfg.get("media_dirs") or [])]
+        return {
+            "WECHAT_MEDIA_ENABLED": "1" if media_mod.media_enabled(self.cfg) else "0",
+            "WECHAT_MEDIA_DIRS": json.dumps(media_dirs, ensure_ascii=False),
+            "WECHAT_MEDIA_MAX_MB": str(self.cfg.get("media_max_mb", 10)),
+            "WECHAT_MEDIA_INTERVAL_MS": str(self.cfg.get("media_send_interval_ms", 120)),
+            "WECHAT_STICKER_FALLBACK_EMOJI": str(
+                self.cfg.get("sticker_fallback_emoji") or "😄"),
+            # 审计统一由 Gateway._record 写，子进程那层关掉避免重复
+            "WECHAT_MEDIA_AUDIT": "0",
+        }
+
+    def _media_blocked(self, contact: str, reason: str,
+                       items: list[dict] | None = None) -> dict:
+        self._record("send_blocked", {"friend": contact, "reason": reason})
+        # 逐条返回 blocked 结果（和成功路径同 shape，决策层按 item["ok"] 统计即可）
+        results = [WxAutoSender._bubble_result(item, False, "blocked", reason)
+                   for item in (items or []) if isinstance(item, dict)]
+        return {"ok": False, "status": "blocked", "error": reason,
+                "items": results, "sent": 0, "failed": 0, "draft_ids": []}
+
+    def send_media_batch(self, contact: str, items: list[dict] | tuple[dict, ...], *,
+                         proactive: bool = False, reactive: bool = False,
+                         force: bool = False) -> dict:
+        """发送一组多媒体气泡（批量版，返回含统计/草稿的 dict）。
+
+        items 规范见 :mod:`agi.wechat_gateway.media`：
+        ``{type: text|emoji_text|image|gif|sticker, text?, path?, name?}``。
+        与 :meth:`_send` 共用闸门：STOP > media_enabled > 白名单 > 内容 > send_mode >
+        stop 开关 > 夜间静默 > 频率/预算；真实发送在 wxauto4 venv 子进程里执行。
+        返回 ``{ok, status, items, sent, failed, draft_ids}``；失败的**文本**气泡
+        会落草稿（不丢内容），media 失败只记审计、不影响同批其它气泡。
+        """
+        contact_name = str(contact or "").strip()
+        raw_items = [dict(item) for item in (items or []) if isinstance(item, dict)]
+        if not contact_name or not raw_items:
+            return {"ok": False, "status": "failed", "error": "empty_contact_or_items",
+                    "items": [], "sent": 0, "failed": 0, "draft_ids": []}
+
+        # ① STOP 最高优先级（含 reactive/force）
+        if self.stop_present():
+            self._log_stopped()
+            return self._media_blocked(contact_name, "stop_file", raw_items)
+        # ② 媒体开关（默认 false：上线前显式开启）
+        if not media_mod.media_enabled(self.cfg):
+            return self._media_blocked(contact_name, "media_disabled", raw_items)
+        # ③ 白名单
+        allowed = [str(x) for x in (self.cfg.get("allowed_contacts") or [])
+                   if str(x).strip()]
+        if allowed and contact_name not in allowed:
+            return self._media_blocked(contact_name, "not_allowed", raw_items)
+        # ④ 文本消毒/内容闸门 + 逐条校验（坏条目只失败自己，不拖累整批）
+        results: list[dict | None] = [None] * len(raw_items)
+        cleaned: list[tuple[int, dict]] = []
+        for index, item in enumerate(raw_items):
+            kind = str(item.get("type") or "").strip().lower()
+            if kind in media_mod.TEXT_TYPES:
+                original = str(item.get("text") or "")
+                text = textguard.strip_internal_ids(original)
+                if not text:
+                    results[index] = {"ok": False, "status": "failed", "type": kind,
+                                      "error": "internal_id_only", "fallback_used": [],
+                                      "used": None}
+                    continue
+                if text != original:
+                    self._record("send_sanitized", {"friend": contact_name,
+                                                    "removed_chars": len(original) - len(text)})
+                    item = dict(item)
+                    item["text"] = text
+                content = policy.check_content(text, self.cfg)
+                if not content.get("ok"):
+                    results[index] = {
+                        "ok": False, "status": "failed", "type": kind,
+                        "error": str(content.get("reason") or "content_rejected"),
+                        "fallback_used": [], "used": None}
+                    continue
+            cleaned.append((index, item))
+        if not cleaned:
+            return {"ok": False, "status": "failed", "error": "all_items_invalid",
+                    "items": [r for r in results if r is not None],
+                    "sent": 0, "failed": len(raw_items), "draft_ids": []}
+        # ⑤ send_mode：off 拦住；confirm 只给文本落确认草稿（media 无法草稿化）
+        mode = control.send_mode(self.cfg, contact_name)
+        if mode == "off":
+            return self._media_blocked(contact_name, "send_mode_off", raw_items)
+        if mode == "confirm" and not force:
+            draft_ids: list[str] = []
+            for index, item in cleaned:
+                kind = str(item.get("type") or "")
+                if kind in media_mod.TEXT_TYPES:
+                    draft = drafts.add(contact_name, str(item.get("text") or ""),
+                                       "confirm", path=self.draft_path)
+                    draft_ids.append(draft["id"])
+                    self._record("draft", {"friend": contact_name,
+                                           "text": str(item.get("text") or ""),
+                                           "draft_id": draft["id"]})
+                    results[index] = {"ok": False, "status": "draft", "type": kind,
+                                      "draft_id": draft["id"], "fallback_used": [],
+                                      "used": None}
+                else:
+                    results[index] = {"ok": False, "status": "skipped", "type": kind,
+                                      "error": "media_requires_auto_mode",
+                                      "fallback_used": [], "used": None}
+            return {"ok": False, "status": "draft", "requires_confirm": True,
+                    "items": [r for r in results if r is not None],
+                    "sent": 0, "failed": 0, "draft_ids": draft_ids}
+        if self.cfg.get("stop"):
+            return self._media_blocked(contact_name, "stop_switch", raw_items)
+        now = time.time()
+        # ⑥ 夜间静默：与 _send 一致（只拦主动；reactive/force 必须回）
+        override_active, _just = self._quiet_override_active(now)
+        quiet_blocks = (not reactive) and (not force)
+        if quiet_blocks and self._quiet_blocked(now):
+            return self._media_blocked(contact_name, "quiet_hours", raw_items)
+        policy_cfg = self.cfg
+        if override_active or reactive or force:
+            policy_cfg = dict(self.cfg)
+            policy_cfg["quiet_hours"] = [0, 0]
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        if day != self.sent_day:
+            self.sent_day = day
+            self.sent_today = 0
+        recent = sum(1 for t in self.send_times if now - t < 60)
+        self.send_times = [t for t in self.send_times if now - t < 3600]
+        hourly = len(self.send_times)
+        last_sent_at = max(self.send_times) if self.send_times else 0.0
+        batch_text = " ".join(str(item.get("text") or "") for _, item in cleaned)[:200]
+        verdict = policy.check_send(now=now, hour=time.localtime(now).tm_hour,
+                                    recent_60s=recent, today_count=self.sent_today,
+                                    cfg=policy_cfg, reactive=reactive and not proactive,
+                                    text=batch_text, last_sent_at=last_sent_at,
+                                    hourly_count=hourly)
+        if not verdict.get("ok"):
+            return self._media_blocked(contact_name,
+                                       str(verdict.get("reason") or "policy_blocked"),
+                                       raw_items)
+        # ⑦ dry_run：不导入 wxauto，只返回计划
+        if self.cfg.get("dry_run", True):
+            for index, item in cleaned:
+                results[index] = {"ok": True, "status": "planned",
+                                  "type": str(item.get("type") or ""),
+                                  "fallback_used": [], "used": None}
+                self._record("send_media", {
+                    "friend": contact_name, "type": str(item.get("type") or ""),
+                    "name": media_mod.item_label(item), "status": "planned",
+                    "fallback": [], "used": None, "error": "", "error_key": ""})
+            return {"ok": True, "status": "planned",
+                    "items": [r for r in results if r is not None],
+                    "sent": 0, "failed": 0, "draft_ids": []}
+
+        # ⑧ 真发：wxauto4 venv 子进程（与文本发送同一条链路）
+        if not WXAUTO_PYTHON.exists():
+            payload_items = []
+            error = f"缺少 wxauto venv: {WXAUTO_PYTHON}"
+        else:
+            payload = [item for _, item in cleaned]
+            cmd = [str(WXAUTO_PYTHON), "-m", "agi.wechat_gateway.send_cli",
+                   "--contact", contact_name,
+                   "--items", json.dumps(payload, ensure_ascii=False)]
+            error = ""
+            payload_items = []
+            try:
+                proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True,
+                                      encoding="utf-8", errors="replace", timeout=120,
+                                      env={**os.environ, "PYTHONIOENCODING": "utf-8",
+                                           "WECHAT_SEND_PROBE_ENABLED":
+                                               "1" if self.cfg.get("send_probe_enabled", True) else "0",
+                                           "WECHAT_SEND_RETRY_MAX":
+                                               str(self.cfg.get("send_retry_max", 1)),
+                                           "WECHAT_GATEWAY_LOG": str(self.log_path),
+                                           **self._media_env()})
+                stdout = (proc.stdout or "").strip()
+                line = stdout.splitlines()[-1] if stdout else ""
+                if not line:
+                    error = (proc.stderr or "send_cli 无输出")[-500:]
+                else:
+                    parsed = json.loads(line)
+                    payload_items = parsed.get("items") or []
+            except Exception as exc:  # noqa: BLE001
+                error = f"{type(exc).__name__}: {exc}"
+
+        # ⑨ 汇总：结果回填、计数、文本失败落草稿、逐条 send_media 审计
+        sent = 0
+        failed = 0
+        draft_ids: list[str] = []
+        for order, (index, item) in enumerate(cleaned):
+            result = payload_items[order] if order < len(payload_items) else None
+            if not isinstance(result, dict):
+                result = {"ok": False, "status": "failed", "type": str(item.get("type") or ""),
+                          "error": error or "missing_result", "fallback_used": [], "used": None}
+            result = dict(result)
+            result.setdefault("type", str(item.get("type") or ""))
+            results[index] = result
+            self._record("send_media", {
+                "friend": contact_name, "type": str(result.get("type") or ""),
+                "name": media_mod.item_label(item),
+                "status": str(result.get("status") or ""),
+                "fallback": result.get("fallback_used") or [],
+                "used": result.get("used"),
+                "error": str(result.get("error") or "")[:200],
+                "error_key": (str(result.get("error_key") or "")
+                              or self._normalize_error_key(str(result.get("error") or "")))})
+            if result.get("ok"):
+                sent += 1
+                self.send_times.append(now)
+                self.sent_today += 1
+                continue
+            failed += 1
+            # 文本气泡失败：落草稿，内容不丢（media 无草稿形态，只记审计）
+            kind = str(item.get("type") or "").strip().lower()
+            if kind in media_mod.TEXT_TYPES:
+                draft = self._archive_failed_draft(
+                    contact_name, str(item.get("text") or ""),
+                    str(result.get("error") or error or "failed"),
+                    reason="send_failed",
+                    error_key=str(result.get("error_key") or ""),
+                    stage="media")
+                if draft is not None:
+                    draft_ids.append(draft["id"])
+        self.sent += sent
+        self.failed += failed
+        all_ok = bool(sent) and failed == 0
+        if all_ok:
+            status = "sent"
+        elif sent:
+            status = "partial"
+        elif draft_ids:
+            status = "draft"
+        else:
+            status = "failed"
+        return {"ok": all_ok, "status": status,
+                "items": [r for r in results if r is not None],
+                "sent": sent, "failed": failed, "draft_ids": draft_ids}
+
+    def send_bubbles(self, contact: str, items: list[dict] | tuple[dict, ...], *,
+                     proactive: bool = False, reactive: bool = False,
+                     force: bool = False) -> list[dict]:
+        """发送一组多媒体气泡，返回**逐条结果 list**（与 WxAutoSender.send_bubbles 同契约）。
+
+        决策层（task-60）直接调用本方法：``results[i]`` = {ok, status, type, error,
+        fallback_used, used}；批量统计/草稿详情见 :meth:`send_media_batch`。
+        """
+        batch = self.send_media_batch(contact, items, proactive=proactive,
+                                      reactive=reactive, force=force)
+        return batch.get("items") or []
 
     def _on_send_failure(self, contact: str, text: str, error: str, *,
                          error_key: str = "", stage: str = "") -> dict:

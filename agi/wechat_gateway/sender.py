@@ -14,6 +14,13 @@ P0-4 发送容错（2026-10-25）：
   ``input_clear_failed``。草稿落盘由网关层（server._on_send_failure）复用 drafts.py。
 - 错误归一化：``0x...`` 对象地址 → ``0xADDR``，得到 ``error_key``（与
   proactive_worker.normalize_error 同口径，供熔断按同类错误计数）。
+
+P5-a 发送层多媒体（2026-10-26）：
+- ``send_bubbles(contact, items)`` 支持 text/emoji_text/image/gif/sticker 与 mixed
+  多气泡；items 字段规范见 ``agi/wechat_gateway/media.py``（对外契约，不要改名）。
+- image/gif 走 ``SendFiles``；sticker 无原生 API → 贴纸当图片 → emoji → 纯文本三级降级。
+- mixed：按 items 顺序逐条发，气泡间隔钳制在 80–150ms；单条 media 失败不影响后续文本。
+- 现有单条文本 ``send()`` 行为逐字节不变。
 """
 from __future__ import annotations
 
@@ -24,6 +31,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import media as media_mod
+
 MAX_CHARS = 500
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,8 +42,17 @@ DEFAULT_LOG_PATH = ROOT / "agi" / "data" / "wechat" / "gateway.log"
 _ADDR_RE = re.compile(r"0x[0-9a-fA-F]+")
 _WS_RE = re.compile(r"\s+")
 
-#: P0-4 默认值（config.DEFAULTS 里有同名键时以配置为准）
-_RESILIENCE_DEFAULTS = {"send_probe_enabled": True, "send_retry_max": 1}
+#: P0-4/P5-a 默认值（config.DEFAULTS 里有同名键时以配置为准）
+_RESILIENCE_DEFAULTS = {
+    "send_probe_enabled": True,
+    "send_retry_max": 1,
+    "media_enabled": False,
+    "media_dirs": [],
+    "media_max_mb": 10,
+    "media_send_interval_ms": 120,
+    "sticker_fallback_emoji": "😄",
+    "media_audit": True,
+}
 
 
 class WxAutoSender:
@@ -569,3 +587,286 @@ class WxAutoSender:
             return result if result is not None else self._failure(last_error or "发送失败")
         return self._send_failure(contact_name, message, last_error or "发送失败",
                                   stage="unknown", attempts=attempt)
+
+    # ------------------------------------------------------------------
+    # P5-a：多媒体多气泡（text / emoji_text / image / gif / sticker）
+    # ------------------------------------------------------------------
+    def _media_cfg(self, cfg: dict | None = None) -> dict:
+        """合并媒体发送用配置：sender 自身 cfg ← 调用方显式 cfg（只认已知键）。"""
+        merged = dict(self.cfg)
+        if isinstance(cfg, dict):
+            for key in _RESILIENCE_DEFAULTS:
+                if key in cfg:
+                    merged[key] = cfg[key]
+        return merged
+
+    def _open_chat(self, contact: str) -> tuple[Any, str, str]:
+        """切到目标会话并核对；返回 ``(wx, chat_name, error)``，失败时 wx=None。
+
+        P0-4 容错沿用：topui/ProfileWnd 异常不致命，但必须由 ChatInfo 独立确认；
+        确认不了就 fail-closed（一个气泡都不发）。
+        """
+        try:
+            retry_max = max(0, int(self.cfg.get("send_retry_max") or 0))
+        except (TypeError, ValueError):
+            retry_max = 0
+        attempts_allowed = 1 + retry_max
+        attempt = 0
+        last_error = ""
+        while attempt < attempts_allowed:
+            attempt += 1
+            try:
+                wx = self._instance()
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+                if attempt < attempts_allowed and self._is_transient(last_error):
+                    self._wx = None
+                    self._sleep()
+                    continue
+                return None, "", f"{last_error}（stage=instance，切换会话失败，未发送）"
+            switch = getattr(wx, "SwitchToChat", None)
+            if callable(switch):
+                try:
+                    switch()
+                except Exception:  # noqa: BLE001 - 导航失败留给 ChatWith 暴露
+                    pass
+            tolerated = False
+            switched = None
+            try:
+                switched = wx.ChatWith(contact, exact=True)
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+                if self._is_profile_wnd_error(exc):
+                    tolerated = True
+                elif attempt < attempts_allowed and self._is_transient(last_error):
+                    self._wx = None
+                    self._sleep()
+                    continue
+                else:
+                    return None, "", (f"{last_error}"
+                                      "（stage=chat_with，切换会话失败，未发送）")
+            got, stage, verify_error = self._verify_chat_name(wx, switched)
+            if verify_error:
+                if tolerated and attempt < attempts_allowed:
+                    self._wx = None
+                    self._sleep()
+                    continue
+                suffix = ("；topui/ProfileWnd 已容错：切换可能已成功，但无法确认当前会话"
+                          " → fail-closed 不发送") if tolerated else ""
+                return None, "", verify_error + suffix
+            if got != contact:
+                return None, "", (f"会话不匹配：期望 {contact!r}，实际 {got!r}"
+                                  f"（stage=verify, topui_tolerated={tolerated}"
+                                  " → fail-closed 不发送）")
+            if tolerated and attempt < attempts_allowed:
+                self._wx = None
+                self._sleep()
+                continue
+            return wx, got, ""
+        return None, "", last_error or "切换会话失败"
+
+    def _send_text_raw(self, wx: Any, text: str) -> tuple[bool, str]:
+        """发一条文本（SendMsg）；返回 (ok, 错误)。"""
+        try:
+            response = wx.SendMsg(text)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {str(exc)[:300]}"
+        ok, detail = self._send_succeeded(response)
+        return ok, "" if ok else f"发送结果不明确或失败：{detail}"
+
+    def _send_file_raw(self, wx: Any, path: str) -> tuple[bool, str]:
+        """发一个文件（SendFiles，图片/GIF）；返回 (ok, 错误)。"""
+        send_files = getattr(wx, "SendFiles", None)
+        if not callable(send_files):
+            return False, "当前 wxauto4 模块不支持 SendFiles"
+        try:
+            response = send_files(path)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {str(exc)[:300]}"
+        ok, detail = self._send_succeeded(response)
+        return ok, "" if ok else f"发送结果不明确或失败：{detail}"
+
+    def _log_media(self, cfg: dict, data: dict) -> None:
+        """每条 item 的 send_media 审计；Gateway 走 _record 时可用 env 关掉本层。"""
+        if not bool(cfg.get("media_audit", True)):
+            return
+        self._log_event("send_media", data)
+
+    @staticmethod
+    def _bubble_result(item: dict, ok: bool, status: str, error: str = "",
+                       fallback_used: list[str] | None = None,
+                       used: str | None = None) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "ok": bool(ok), "status": status,
+            "type": str(item.get("type") or ""),
+            "fallback_used": list(fallback_used or []),
+            "used": used,
+            "error": str(error or "")[:300],
+            "error_key": WxAutoSender.normalize_error(error) if error else "",
+        }
+        if item.get("text"):
+            result["text"] = str(item.get("text"))[:MAX_CHARS]
+        if item.get("path"):
+            result["path"] = str(item.get("path"))
+        if item.get("name"):
+            result["name"] = str(item.get("name"))
+        return result
+
+    def _sticker_bubbles(self, wx: Any, item: dict,
+                         cfg: dict) -> tuple[bool, str, str | None, list[str]]:
+        """贴纸三级降级：贴纸当图片 → emoji_text → 纯文本。
+
+        返回 ``(ok, error, used, fallback_used)``；``fallback_used`` 是按顺序尝试过的
+        策略列表（image/emoji_text/text），``used`` 是最终成功的那一级（全失败 None）。
+        """
+        tries: list[str] = []
+        raw = item.get("path") or item.get("name")
+        sticker_path = media_mod.resolve_sticker(raw, cfg)
+        errors: list[str] = []
+        if sticker_path:
+            tries.append("image")
+            ok, error = self._send_file_raw(wx, sticker_path)
+            if ok:
+                return True, "", "image", tries
+            errors.append(error)
+        elif raw:
+            # 说得清为什么没走图片这一步（.wxgf 不可发 / 不在白名单 / 找不到）
+            _found = media_mod.find_file(raw, cfg)
+            if _found is not None and _found.suffix.lower() in media_mod.UNSENDABLE_EXTS:
+                errors.append("wxgf_unsupported")
+            else:
+                errors.append("sticker_not_found")
+        # emoji 降级（Unicode emoji 是普通文本，客户端一定渲染）
+        emoji = media_mod.fallback_emoji(cfg)
+        if emoji:
+            tries.append("emoji_text")
+            ok, error = self._send_text_raw(wx, emoji)
+            if ok:
+                return True, "", "emoji_text", tries
+            errors.append(error)
+        # 纯文本兜底：绝不因为贴纸失败把整条消息吞掉
+        plain = str(item.get("text") or "").strip()
+        if not plain:
+            stem = Path(str(raw or "")).stem
+            plain = f"[{stem}]" if stem and stem not in (".", "") else "[表情包]"
+        tries.append("text")
+        ok, error = self._send_text_raw(wx, plain)
+        if ok:
+            return True, "", "text", tries
+        errors.append(error)
+        return False, " / ".join(x for x in errors if x) or "sticker_failed", None, tries
+
+    def send_bubbles(self, contact: str, items: list[dict] | tuple[dict, ...], *,
+                     dry_run: bool = False, cfg: dict | None = None) -> list[dict[str, Any]]:
+        """按顺序发送多个气泡（文字夹杂表情/图片），返回每条结果。
+
+        items 规范见 :mod:`agi.wechat_gateway.media`（对外契约）：
+        ``{type: text|emoji_text|image|gif|sticker, text?, path?, name?}``。
+
+        - ``media_enabled=false`` → 整体 blocked，**不发送任何东西**；
+        - 会话名无法确认 → 所有气泡 fail-closed（不发送）；
+        - 单条 media 失败不影响后续文本（mixed 按顺序继续）；
+        - 气泡之间 sleep 80–150ms（配置 ``media_send_interval_ms`` 钳制）。
+        """
+        contact_name = str(contact or "").strip()
+        raw_items = [item for item in (items or []) if isinstance(item, dict)]
+        effective = self._media_cfg(cfg)
+        if not contact_name or not raw_items:
+            return [self._bubble_result(item, False, "failed", "空的 contact/items")
+                    for item in raw_items]
+        if not media_mod.media_enabled(effective):
+            self._log_media(effective, {
+                "friend": contact_name, "status": "blocked", "type": "batch",
+                "error": "media_disabled", "items": len(raw_items)})
+            return [self._bubble_result(item, False, "blocked", "media_disabled")
+                    for item in raw_items]
+
+        interval = media_mod.send_interval_s(effective)
+        results: list[dict | None] = [None] * len(raw_items)
+        pending: list[int] = []
+        for index, item in enumerate(raw_items):
+            kind = str(item.get("type") or "").strip().lower()
+            # sticker 的定位失败也可能降级成 emoji/文本，交给 _sticker_bubbles 处理，
+            # 不在这里直接判死（.wxgf 就是典型：不能发文件，但可以降级）。
+            if kind == "sticker":
+                pending.append(index)
+                continue
+            valid, code = media_mod.validate_item(item, cfg=effective)
+            if valid:
+                pending.append(index)
+                continue
+            results[index] = self._bubble_result(item, False, "failed", code)
+            self._log_media(effective, {
+                "friend": contact_name, "type": str(item.get("type") or ""),
+                "name": media_mod.item_label(item), "status": "failed",
+                "fallback": [], "error": code, "error_key": code})
+        if not pending:
+            return [result if result is not None else
+                    self._bubble_result(raw_items[i], False, "failed", "invalid_item")
+                    for i, result in enumerate(results)]
+
+        if dry_run:
+            for index in pending:
+                results[index] = self._bubble_result(raw_items[index], True, "planned")
+            return [result if result is not None else
+                    self._bubble_result(raw_items[i], False, "failed", "invalid_item")
+                    for i, result in enumerate(results)]
+
+        wx, chat_name, switch_error = self._open_chat(contact_name)
+        if wx is None:
+            for index in pending:
+                results[index] = self._bubble_result(
+                    raw_items[index], False, "failed", f"未发送：{switch_error}")
+                self._log_media(effective, {
+                    "friend": contact_name,
+                    "type": str(raw_items[index].get("type") or ""),
+                    "name": media_mod.item_label(raw_items[index]),
+                    "status": "failed", "fallback": [],
+                    "error": switch_error[:200],
+                    "error_key": self.normalize_error(switch_error)})
+            return [result if result is not None else
+                    self._bubble_result(raw_items[i], False, "failed", "invalid_item")
+                    for i, result in enumerate(results)]
+
+        probe_enabled = bool(effective.get("send_probe_enabled", True))
+        if probe_enabled:
+            probe = self._probe_handle(wx)
+            self._log_event("send_probe", {
+                "friend": contact_name, "contact": contact_name,
+                "chat_name": chat_name, "chat_name_ok": True, "mode": "media",
+                "probe": probe, "input_box_exists": probe.get("input_box_exists"),
+                "source": probe.get("source")})
+
+        attempted_any = False
+        for index in pending:
+            if attempted_any:
+                time.sleep(interval)          # 80–150ms：避免后续气泡抢焦点
+            attempted_any = True
+            item = raw_items[index]
+            kind = str(item.get("type") or "").strip().lower()
+            fallback_used: list[str] = []
+            used: str | None = None
+            if kind in media_mod.TEXT_TYPES:
+                ok, error = self._send_text_raw(wx, str(item.get("text")))
+            elif kind == "sticker":
+                ok, error, used, fallback_used = self._sticker_bubbles(
+                    wx, item, effective)
+            else:                             # image / gif
+                found = media_mod.find_file(item.get("path") or item.get("name"),
+                                            effective)
+                if found is None:
+                    ok, error = False, "not_found"
+                else:
+                    ok, error = self._send_file_raw(wx, str(found))
+            status = "sent" if ok else "failed"
+            results[index] = self._bubble_result(
+                item, ok, status, error, fallback_used=fallback_used, used=used)
+            self._log_media(effective, {
+                "friend": contact_name, "type": kind,
+                "name": media_mod.item_label(item), "status": status,
+                "fallback": fallback_used, "used": used,
+                "error": str(error or "")[:200],
+                "error_key": self.normalize_error(error) if error else ""})
+        return [result if result is not None else
+                self._bubble_result(raw_items[i], False, "failed", "invalid_item")
+                for i, result in enumerate(results)]

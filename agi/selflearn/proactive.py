@@ -69,6 +69,27 @@ TOPIC_SIMILARITY_MAX = 0.35
 #: 问句配额：最近 N 条里 ≥M 条以问号结尾 → 本次强制陈述/分享句
 QUESTION_WINDOW = 3
 QUESTION_FORCE_AT = 2
+
+# --------------------------------------------------------------------------- #
+# P0-9：反编造共同经历（真机首条消息「便当盒」杜撰）
+# --------------------------------------------------------------------------- #
+#: 「共同经历断言」句式：正文命中后必须有真实锚点支撑（≥2 字重叠），否则视为编造。
+#: 真实锚点 = 该次 tick 提供给模型的最近用户消息 / memory 话题 / followup 锚点。
+SHARED_CLAIM_PATTERNS = (
+    "你上回", "你上次", "你之前", "你以前", "你昨天", "你前天", "你那次",
+    "你说过", "你提过", "你放在我这", "你放在我这儿", "你留在我这",
+    "上次你", "还记得你", "我们上次", "我们之前", "我们以前",
+    "你送我的", "你给我的",
+)
+#: 全局不编造约束（拼进每个 kind 的 prompt；followup 有真实锚点时例外）
+GROUNDING_CONSTRAINTS = (
+    "不编造约束（比具体更重要）：\n"
+    "- 只能引用「记忆/最近聊天里真实出现过」的内容；没有依据时只讲你自己的事，"
+    "不得声称对方做过什么；\n"
+    "- 禁止编造和对方共同的经历，禁止这些句式：你上回…、上次你…、还记得你…、"
+    "你说过要…、你放在我这的…；\n"
+    "- 禁止杜撰具体的私人物品、共同住所、共同行程。"
+)
 #: 全局负向约束（拼进每个 kind 的 prompt；光靠轮换挡不住「安静」主题）
 TOPIC_CONSTRAINTS = (
     "硬约束（违反会被重写，必须遵守）：\n"
@@ -101,16 +122,17 @@ _KIND_FALLBACK = {
     "share": "刚想到你之前说的{topic}，我今天也碰上一件类似的小事。",
     "followup": "上次你说「{anchor}」，我这两天还一直想着这事。",
     "light": "刚看到楼下猫在追自己的尾巴，笑死。",
-    "silence_ack": "今天路过一家老店，闻到刚出炉的面包味，想起你喜欢这个。",
+    "silence_ack": "今天路过一家老店，闻到刚出炉的面包味，买了两个。",
 }
 
-#: 后处理兜底用的**无锚点/无话题**安全句（不含禁词、不评论沉默；彼此不同）
+#: 后处理兜底用的**只讲自己的事/中性事实**安全句（P0-9：绝不编造共同经历；
+#: 不含禁词、彼此不同）
 _SAFE_FALLBACK = {
-    "care": _KIND_FALLBACK["care"],
+    "care": "这两天降温，我出门差点被风吹回去。",
     "share": "刚泡了杯手冲，酸得我皱了下眉，下次想换个豆子。",
-    "followup": "上次聊到的那件事，我这两天还一直惦记着。",
-    "light": _KIND_FALLBACK["light"],
-    "silence_ack": _KIND_FALLBACK["silence_ack"],
+    "followup": "刚把书架上那本旧书翻出来，纸页有点发黄了。",
+    "light": "刚看到楼下猫在追自己的尾巴，笑死。",
+    "silence_ack": "今天路过一家老店，闻到刚出炉的面包味，买了两个。",
 }
 
 #: followup 的主题去重变体：都保留锚点，避免「换话题」把具体内容换没了
@@ -168,6 +190,69 @@ def topic_overlap(first: Any, second: Any) -> float:
 
 def max_topic_overlap(text: Any, history: list[str]) -> float:
     return max((topic_overlap(text, old) for old in list(history or [])), default=0.0)
+
+
+def _has_shared_experience_claim(text: Any) -> bool:
+    """正文是否出现「你上回/上次你/还记得你…」这类共同经历断言。"""
+    value = str(text or "")
+    return any(pattern in value for pattern in SHARED_CLAIM_PATTERNS)
+
+
+def grounding_ok(text: Any, anchors) -> bool:
+    """反编造校验：命中共同经历断言的句子，必须与某个真实锚点有 ≥2 字重叠。
+
+    - 没有共同经历断言 → 直接通过（只讲自己的事/中性事实）；
+    - 有断言但 ``anchors`` 里找不到对应实词（字符 2-gram 交集为空）→ 视为编造；
+    - ``anchors`` 为空时，任何共同经历断言都视为编造。
+    """
+    value = str(text or "").strip()
+    if not value:
+        return True
+    if not _has_shared_experience_claim(value):
+        return True
+    anchor_list = [str(item).strip() for item in list(anchors or [])
+                   if str(item or "").strip()]
+    if not anchor_list:
+        return False
+    anchor_grams = [_bigrams(item) for item in anchor_list]
+    for sentence in re.split(r"[。！？!?；;\n]+", value):
+        sentence = sentence.strip()
+        if not sentence or not _has_shared_experience_claim(sentence):
+            continue
+        grams = _bigrams(sentence)
+        if not any(grams & other for other in anchor_grams if other):
+            return False
+    return True
+
+
+def _grounding_anchors(path: Path | str, candidate: dict | None = None) -> list[str]:
+    """该次 tick 提供给模型的真实上下文：最近用户消息 + memory 话题/证据 + followup 锚点。"""
+    anchors: list[Any] = []
+    if isinstance(candidate, dict):
+        anchors.append(candidate.get("anchor"))
+        anchors.append(candidate.get("topic"))
+    try:
+        memories = memory.list_user_memories(path, 20)
+    except Exception:  # noqa: BLE001
+        memories = []
+    for item in memories:
+        anchors.append(item.get("content"))
+        anchors.append(item.get("evidence"))
+    try:
+        recent = memory.recent_messages(path, limit=40)
+    except Exception:  # noqa: BLE001
+        recent = []
+    for msg in recent:
+        if msg.get("role") != "user":
+            continue
+        anchors.append(msg.get("text"))
+    cleaned: list[str] = []
+    for item in anchors:
+        text = str(item or "").strip()
+        if not text or text.startswith("["):  # 媒体占位不算真实内容
+            continue
+        cleaned.append(text)
+    return cleaned
 
 
 def _recent_proactive_texts(path: Path | str, limit: int = TOPIC_WINDOW) -> list[str]:
@@ -469,19 +554,21 @@ def _mentions_anchor(text: str, anchor: str) -> bool:
 
 def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
                  dialog: str, *, force_statement: bool = False,
-                 regenerate: bool = False) -> str:
-    """按 kind 选不同的生成指令 + 全局负向约束（禁元话题/禁泛问/问句配额）。"""
+                 regenerate: bool = False, own_only: bool = False) -> str:
+    """按 kind 选不同的生成指令 + 全局负向/反编造约束（禁元话题/禁泛问/问句配额）。"""
     instruction = KIND_INSTRUCTION.get(kind) or KIND_INSTRUCTION["care"]
     prompt = (
         f"你现在心情 {mood:.2f}，分享欲 {share_drive:.2f}。你想主动给对方发条微信。"
         + instruction
         + TOPIC_CONSTRAINTS
+        + GROUNDING_CONSTRAINTS
         + "只输出你要说的话，1-2 句，口语；不要客服腔、不报能力、不列清单。"
     )
     anchor = str(candidate.get("anchor") or "").strip()
     topic = str(candidate.get("topic") or "").strip()
     if kind == "followup" and anchor:
         prompt += f"必须提到这个具体内容：「{anchor}」，不要换成泛泛的近况。"
+        prompt += f"（例外：可以引用这条真实锚点「{anchor}」，其他共同经历一律不许编造。）"
     elif kind == "share" and topic:
         prompt += f"可以从对方之前说过的「{topic}」自然引到你自己的想法。"
     if force_statement:
@@ -489,6 +576,9 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
     if regenerate:
         prompt += ("\n【重生成】上一次生成的内容和最近发过的消息主题太像了，"
                    "换一个完全不同的具体话题重说一句。")
+    if own_only:
+        prompt += ("\n【重生成】不要提对方做过/说过的事，也不要提你们共同的经历；"
+                   "只说你自己的事（你的经历/想法/刚观察到的小事）。")
     prompt += "如果实在没话说，输出 SKIP。最近对话：" + dialog
     return prompt
 
@@ -617,6 +707,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     kind = str(best.get("kind") or "care")
     recent = memory.recent_messages(path, limit=8)
     dialog = " | ".join(f"{m['role']}:{m['text']}" for m in recent[-6:])
+    anchors = _grounding_anchors(path, best)
     # P0-8：问句配额（最近 3 条里 ≥2 条问号结尾 → 本次强制陈述句）
     recent_proactive = _recent_proactive_texts(path, TOPIC_WINDOW)
     recent_questions = sum(1 for old in recent_proactive[:QUESTION_WINDOW]
@@ -629,6 +720,17 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         # 明确让 LLM 自己决定"这次不说话"：它说 SKIP 就不发，不再用模板兜底
         return {"ok": True, "available": False, "reason": "llm_skip"}
     text = _normalize_content(text, kind, best, force_statement=force_statement)
+    # P0-9 反编造：命中共同经历断言但 anchors 里没有依据 → 重生成 1 次（只讲自己），
+    # 仍不过 → 该 kind 的安全兜底句（只讲自己的事）。
+    if not grounding_ok(text, anchors):
+        own_prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
+                                  force_statement=force_statement, own_only=True)
+        own_text, own_answered = _ask_llm(client, own_prompt)
+        if own_answered and own_text and not own_text.upper().startswith("SKIP"):
+            text = _normalize_content(own_text, kind, best,
+                                      force_statement=force_statement)
+        if not grounding_ok(text, anchors):
+            text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
     # P0-8 主题去重：与最近 10 条已发主动消息 2-gram Jaccard ≥0.35 →
     # 同 kind 重生成 1 次（prompt 要求换话题）；仍超标 → 换低重叠兜底句。
     if recent_proactive and max_topic_overlap(text, recent_proactive) >= TOPIC_SIMILARITY_MAX:
@@ -640,6 +742,9 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
                                       force_statement=force_statement)
         if max_topic_overlap(text, recent_proactive) >= TOPIC_SIMILARITY_MAX:
             text = _low_overlap_fallback(kind, best, recent_proactive)
+    # P0-9 最后一道：主题兜底句也不能编造共同经历
+    if not grounding_ok(text, anchors):
+        text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
     text = style_profile.tune_reply("", text)[:200]
     max_bubbles = 3 if share_drive >= 0.7 else (2 if share_drive >= 0.55 or mood >= 0.7 else 1)
     if int(init_info.get("max_bubbles") or 0) > 0:

@@ -276,3 +276,27 @@ td.num { text-align: right; font-family: "Cascadia Mono", Consolas, monospace; }
 .prompt-default summary { cursor: pointer; color: var(--dim); font-size: 12px; }
 
 
+
+/* ---------------- P5-d 媒体页 ---------------- */
+.asset-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
+}
+.asset-card {
+  background: #202123; border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px; cursor: pointer; display: flex; flex-direction: column; gap: 4px;
+  min-width: 0;
+}
+.asset-card:hover { border-color: #4a4d52; }
+.asset-card.selected { border-color: var(--primary-2); box-shadow: 0 0 0 1px var(--primary-2) inset; }
+.asset-card img {
+  width: 100%; height: 86px; object-fit: contain; background: #17181a;
+  border-radius: 6px; image-rendering: auto;
+}
+.asset-missing {
+  height: 86px; display: grid; place-items: center; color: var(--dim);
+  background: #17181a; border-radius: 6px; font-size: 11px;
+}
+.asset-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asset-meta { display: flex; gap: 4px; flex-wrap: wrap; font-size: 10px; }
+.asset-tags { display: flex; gap: 4px; flex-wrap: wrap; }

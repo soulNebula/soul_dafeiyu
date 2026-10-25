@@ -40,6 +40,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | 总览 | `/api/status`（网关 801 代理）+ `/api/feed` + `/api/config` + `/api/models` |
 | 对话流 | `agi/data/wechat/gateway.log`（JSONL 事件，只读 tail，3s 自动刷新） |
 | 内状态 | 联系人库 `inner_states`（只读 URI 连接；mode/injected/state_json/block/延迟/fallback） |
+| 媒体 | `agi/wechat_gateway/media.capabilities()`（import 失败降级静态矩阵）+ `emoji_archive`/目录扫描 + `agi/data/media_wishes.jsonl`；测试发送只允许文件传输助手 |
 | 记忆 | `agi/selflearn/memory.metrics()` + `user_memories` 最近 50 条 + `/api/tone`（AI 语气 vs `agi/eval_data/human_tone/profile.md` 真人基线） |
 | 提示词 | `agi/selflearn/prompt_store`（11 个内置键的 defaults/overrides/effective；降级时直读 `agi/data/prompts.json`）。左列选键 → 右侧大文本框编辑 → 保存/恢复默认/全部恢复默认 |
 | 模型 | `agi/selflearn/model_registry`（list/health/start/stop；`soul-05b` 可启停，`qwen15` reserved 拒绝；含 inner mode 开关，写回网关 config 热加载） |
@@ -50,6 +51,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 只读（GET，Host 回环校验）：
 `/api/health` `/api/status` `/api/feed?limit=&kind=` `/api/inner?limit=` `/api/messages?limit=`
 `/api/memory` `/api/tone?limit=` `/api/models` `/api/config` `/api/prompts`
+`/api/media/capabilities` `/api/media/library?limit=` `/api/media/assets?limit=&kind=` `/api/media/stats` `/api/media/wishes` `/api/media/acquisition` `/api/media/file?path=`
 
 写（POST，`X-Admin-Token`，全部写 `agi/data/console_audit.log`）：
 
@@ -61,6 +63,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | `/api/models/start` `/api/models/stop` | `{"name":"soul-05b"}` | 只允许 `soul-05b`；qwen15 reserved / 未知模型拒绝 |
 | `/api/prompts` | `{"prompts":{key:text}}` | 优先 `prompt_store.set_many`（11 键白名单、单条 ≤4000 字、原子写）；import 失败降级直写 `prompts.json` |
 | `/api/prompts/reset` | `{"keys":[...]}` 或 `{"all":true}` | 恢复默认（`prompt_store.delete/delete_all`，降级时删 JSON 键/文件） |
+| `/api/media/send`（别名 `/api/media/test-send`） | `{"type":"text|emoji_text|image|gif|sticker|native_emoji","text?":"...","path?":"...","name?":"..."}` | 测试发送；**联系人强制覆盖为「文件传输助手」**；网关暂无媒体接口时返回 501（等 P5-a） |
 
 ## 界面结构（AstrBot 风格深色）
 
@@ -83,6 +86,21 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
   warning `#faad14`、error `#ff4d4f`、text `#e8eaed`、border `#333`、气泡 `#2d2e30`。
 - 侧边栏 240px + 顶部 header 56px + 圆角 10px 卡片；JSON 用等宽字体。
 - 所有页面右上角显示「刷新于 HH:MM:SS」；接口失败显示红色原因而不是空白。
+
+## 媒体页（P5-d）
+
+- **能力矩阵**：text / unicode_emoji / image / gif / sticker_as_image / sticker_native / sticker_collect / mixed，
+  每项 ✅支持 / ⚠️降级 / 🔒预留 / ❌不可用 + 说明。优先读 `agi/wechat_gateway/media.capabilities()`，
+  import 失败自动降级静态矩阵（页面不崩）。
+- **素材库**：优先读联系人库 `emoji_archive`（使用次数/标签）；表为空时回退扫描
+  `wx_core/emoji_assets` + `media/stickers` + `selflearn/media`（当前 120+ 个文件），网格缩略图
+  （经 `/api/media/file` 白名单读取，路径穿越 404）。
+- **统计卡**：总数 / 已使用 / 未使用 / 最常用 top5（emoji_usage 计数；扫描回退时无使用记录）。
+- **测试发送**：选类型（文本/Unicode emoji/图片/GIF/贴纸）→ 素材或文本 → 发送；
+  **联系人强制为「文件传输助手」**（body 里传别人也覆盖，服务端强制），显示 sent/blocked/error。
+  P5-a 的 gateway `/api/media/send` 未落地时返回 **501 + 说明**，不会真的发消息。
+- **愿望清单**：读 `agi/data/media_wishes.jsonl`（模型想发但库里没有的表情），标注
+  「获取管线预留、未实现下载」（P5-e task-63）。
 
 ## 提示词页 v2（P4-d）
 

@@ -17,6 +17,7 @@ const state = {
   config: null,
   models: null,
   memory: null,
+  media: null,
   status: null,
   inner: null,
   tone: null,
@@ -26,6 +27,7 @@ const PAGES = {
   overview: '总览',
   feed: '对话流',
   inner: '内状态',
+  media: '媒体',
   memory: '记忆',
   prompts: '提示词',
   models: '模型',
@@ -995,11 +997,200 @@ async function saveConfig(updates) {
   } catch (e) { toast(e.message, 'err'); throw e; }
 }
 
+/* ---------------- 媒体（P5-d） ---------------- */
+function mediaStatusBadge(status) {
+  const map = {
+    ok: ['✅ 支持', 'green'],
+    degraded: ['⚠️ 降级', 'orange'],
+    reserved: ['🔒 预留', 'blue'],
+    no: ['❌ 不可用', 'red'],
+  };
+  const [label, cls] = map[status] || ['· 未知', ''];
+  return badge(label, cls);
+}
+
+function mediaKindLabel(kind) {
+  return ({ text: '文本', emoji_text: 'Unicode emoji', image: '图片',
+    gif: 'GIF', sticker: '贴纸', sticker_as_image: '贴纸(降级图片)' })[kind] || kind;
+}
+
+async function renderMedia() {
+  $('#app').innerHTML = '<div class="empty">加载媒体页…</div>';
+  const errors = [];
+  let caps = null, stats = null, assets = null, wishes = null;
+  try { caps = await api('/api/media/capabilities'); } catch (e) { errors.push('能力矩阵: ' + e.message); }
+  try { stats = await api('/api/media/stats'); } catch (e) { errors.push('统计: ' + e.message); }
+  try { assets = await api('/api/media/library?limit=300'); } catch (e) { errors.push('素材库: ' + e.message); }
+  try { wishes = await api('/api/media/wishes'); } catch (e) { errors.push('愿望清单: ' + e.message); }
+  const prev = state.media || {};
+  state.media = {
+    caps, stats, assets, wishes,
+    type: prev.type || 'text',
+    assetPath: prev.assetPath || '',
+    assetFilter: prev.assetFilter || '',
+    result: prev.result || null,
+  };
+  renderMediaPage(errors);
+}
+
+function mediaCapabilityOptions(caps) {
+  const rows = (caps && caps.matrix) || [];
+  const preferred = ['text', 'emoji_text', 'image', 'gif', 'sticker', 'native_emoji'];
+  const seen = new Set();
+  const options = [];
+  for (const row of rows) {
+    let type = row.key;
+    if (type === 'sticker_as_image') type = 'sticker';
+    if (type === 'sticker_native') type = 'native_emoji';
+    if (!preferred.includes(type) || seen.has(type)) continue;
+    seen.add(type);
+    options.push([type, mediaKindLabel(type)]);
+  }
+  return options;
+}
+
+function renderMediaPage(errors) {
+  const data = state.media || {};
+  const caps = data.caps || {};
+  const stats = data.stats || {};
+  const assets = data.assets || {};
+  const wishes = data.wishes || {};
+  const items = (assets.items || []).filter((item) => !data.assetFilter || item.kind === data.assetFilter);
+  const options = mediaCapabilityOptions(caps);
+  if (!options.length) options.push(['text', '文本']);
+  if (!options.some(([type]) => type === data.type)) data.type = options[0][0];
+  const isText = ['text', 'emoji_text', 'native_emoji'].includes(data.type);
+  const assetItems = assets.items || [];
+  const selectedAsset = assetItems.find((item) => item.path === data.assetPath) || null;
+  const top = stats.top || [];
+  const selectedCap = ((caps.matrix) || []).find((row) => row.key === data.type) || {};
+
+  const statCards = `<div class="grid cols-4">
+    ${card('素材总数', `<div class="big">${num(stats.total)}</div><div class="muted">来源：${esc(stats.source || '—')}</div>`)}
+    ${card('已使用', `<div class="big">${num(stats.used)}</div><div class="muted">emoji_usage 计数</div>`)}
+    ${card('未使用', `<div class="big">${num(stats.unused)}</div><div class="muted">可以先用它们测试发送</div>`)}
+    ${card('最常用 top5', top.length ? `<div class="list" style="gap:4px">${top.slice(0, 5).map((row) =>
+      `<div class="row between"><span class="mono">${esc(row.name || row.id)}</span><span class="hint">${esc(row.usage_count || 0)} 次</span></div>`).join('')}</div>`
+      : '<div class="muted">还没有使用记录</div>')}
+  </div>`;
+
+  const capTable = `<table><thead><tr><th>能力</th><th>状态</th><th>说明</th></tr></thead><tbody>
+    ${((caps.matrix) || []).map((row) => `<tr><td><b>${esc(row.label)}</b><br><span class="mono hint">${esc(row.key)}</span></td>
+      <td>${mediaStatusBadge(row.status)}</td><td class="hint">${esc(row.note || '')}</td></tr>`).join('') ||
+      '<tr><td colspan="3" class="empty">能力矩阵不可用</td></tr>'}</tbody></table>
+    <p class="hint" style="margin-top:8px">来源：${esc(caps.source || 'static')}；media_enabled=${esc(String(caps.media_enabled))}；sticker_native=${esc(String(caps.sticker_native_enabled))}。${esc(caps.note || '')}</p>`;
+
+  const sendPanel = `<div class="grid cols-2">
+    <div class="field"><label>测试类型</label><select id="media-type">
+      ${options.map(([type, label]) => `<option value="${esc(type)}" ${type === data.type ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+    </select></div>
+    <div class="field"><label>联系人（强制）</label><input type="text" value="${esc(caps.test_contact || '文件传输助手')}" disabled></div>
+    ${isText ? `<div class="field" style="grid-column: 1 / -1"><label>文本内容</label>
+      <input type="text" id="media-text" placeholder="${data.type === 'native_emoji' ? '输入系统表情名称（如「微笑」）' : '输入要测试的文本（可含 emoji）'}"></div>`
+      : `<div class="field" style="grid-column: 1 / -1"><label>选择素材</label><select id="media-asset">
+        <option value="">— 选一个素材 —</option>
+        ${assetItems.map((item) => `<option value="${esc(item.path || '')}" ${item.path === data.assetPath ? 'selected' : ''}>${esc(item.name || item.filename || item.id)}${item.kind ? ' · ' + esc(item.kind) : ''}</option>`).join('')}
+      </select><div class="hint">${selectedAsset ? '已选：' + esc(selectedAsset.path) : '也可以直接选下方素材卡'}</div></div>`}
+    <div class="row" style="grid-column: 1 / -1">
+      <button class="btn primary" id="btn-media-send">发送测试</button>
+      <span class="hint">只允许发「${esc(caps.test_contact || '文件传输助手')}」；body 里传别的联系人会被强制覆盖。${selectedCap.status === 'no' ? '当前类型不可用。' : ''}</span>
+    </div>
+    <div style="grid-column: 1 / -1" id="media-send-result">${renderMediaResult(data.result)}</div>
+  </div>`;
+
+  const assetGrid = items.length ? `<div class="asset-grid">${items.map((item) => `
+    <div class="asset-card ${item.path === data.assetPath ? 'selected' : ''}" data-asset-path="${esc(item.path || '')}" data-asset-kind="${esc(item.kind || '')}">
+      ${item.thumb ? `<img src="${esc(item.thumb)}" alt="${esc(item.name || '')}" loading="lazy">` : `<div class="asset-missing">无预览</div>`}
+      <div class="asset-name">${esc(item.name || item.filename || item.id)}</div>
+      <div class="asset-meta"><span class="badge">${esc(item.kind || '')}</span>
+        ${item.usage_count ? `<span class="badge green">${esc(item.usage_count)} 次</span>` : ''}
+        ${item.source === 'scan' ? '<span class="badge blue">扫描</span>' : ''}</div>
+      ${(item.tags || []).length ? `<div class="asset-tags">${item.tags.slice(0, 3).map((tag) => `<span class="badge">${esc(tag)}</span>`).join('')}</div>` : ''}
+    </div>`).join('')}</div>` : '<div class="empty">素材库为空</div>';
+
+  const wishesHtml = (wishes.items || []).length ? `<div class="list">${wishes.items.map((item) => `
+    <div class="list-item" style="cursor:default"><div class="grow">
+      <div class="title">「${esc(item.wish || '')}」</div>
+      <div class="hint">${esc(item.source || item.context || 'model')} · ${item.created_at ? fmtDateTime(item.created_at) : ''}</div>
+    </div><span class="badge orange">待获取</span></div>`).join('')}</div>`
+    : `<div class="empty">还没有愿望（${esc(wishes.path || 'agi/data/media_wishes.jsonl')} 暂时为空）</div>`;
+
+  $('#app').innerHTML = `${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
+    ${statCards}
+    ${card('能力矩阵', capTable)}
+    ${card('测试发送（只发文件传输助手）', sendPanel)}
+    ${card('素材库', `
+      <div class="row between" style="margin-bottom:10px">
+        <div class="row"><select id="media-filter">
+          <option value="">全部类型</option>
+          <option value="image" ${data.assetFilter === 'image' ? 'selected' : ''}>图片</option>
+          <option value="gif" ${data.assetFilter === 'gif' ? 'selected' : ''}>GIF</option>
+        </select><span class="hint">${items.length} 个素材 · 来源 ${esc(assets.source || '—')}</span></div>
+        <span class="hint">${esc(assets.note || '')}</span>
+      </div>${assetGrid}`)}
+    ${card('愿望清单（获取管线预留，未实现下载）', `
+      <p class="hint">${esc(wishes.note || '')}</p>${wishesHtml}`)}`;
+
+  const typeSelect = $('#media-type');
+  if (typeSelect) typeSelect.onchange = () => { data.type = typeSelect.value; renderMediaPage([]); };
+  const filter = $('#media-filter');
+  if (filter) filter.onchange = () => { data.assetFilter = filter.value; renderMediaPage([]); };
+  $$('[data-asset-path]').forEach((node) => {
+    node.onclick = () => {
+      data.assetPath = node.dataset.assetPath;
+      const type = node.dataset.assetKind === 'gif' ? 'gif' : 'image';
+      if (data.type !== 'sticker') data.type = type;
+      renderMediaPage([]);
+    };
+  });
+  const sendBtn = $('#btn-media-send');
+  if (sendBtn) sendBtn.onclick = () => sendMediaTest(false);
+}
+
+function renderMediaResult(result) {
+  if (!result) return '<span class="hint">还没有发送记录。</span>';
+  const status = result.status || (result.ok ? 'sent' : 'error');
+  const cls = result.ok ? 'ok' : (status === 'unsupported' ? 'warn' : 'err');
+  const detail = result.error || result.hint || result.note || '';
+  return `<div class="row"><span class="pill ${cls}">${esc(status)}</span>
+    <span class="mono hint">${esc(JSON.stringify(result.gateway || {}).slice(0, 200))}</span></div>
+    ${detail ? `<div class="hint">${esc(detail)}</div>` : ''}`;
+}
+
+async function sendMediaTest(silent) {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const data = state.media || {};
+  const type = data.type || 'text';
+  const body = { type };
+  if (type === 'text' || type === 'emoji_text' || type === 'native_emoji') {
+    const input = $('#media-text');
+    const value = input ? input.value : '';
+    if (!String(value).trim()) { toast('先输入测试内容', 'err'); return; }
+    if (type === 'native_emoji') body.name = value;
+    else body.text = value;
+  } else {
+    const select = $('#media-asset');
+    body.path = data.assetPath || (select ? select.value : '');
+    if (!body.path) { toast('先选一个素材', 'err'); return; }
+  }
+  try {
+    const result = await api('/api/media/send', { method: 'POST', body });
+    data.result = result;
+    toast(result.ok ? '测试消息已发送（文件传输助手）' : ('未发送：' + (result.error || result.status)), result.ok ? 'ok' : 'err');
+    renderMediaPage([]);
+  } catch (e) {
+    data.result = { ok: false, status: 'error', error: e.message };
+    toast(e.message, 'err');
+    renderMediaPage([]);
+  }
+}
+
 /* ---------------- 路由 ---------------- */
 const RENDERERS = {
   overview: renderOverview,
   feed: renderFeed,
   inner: renderInner,
+  media: renderMedia,
   memory: renderMemory,
   prompts: renderPrompts,
   models: renderModels,

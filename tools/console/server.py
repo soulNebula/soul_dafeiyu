@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import hmac
 import json
 import mimetypes
@@ -26,7 +27,7 @@ import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:            # 以脚本方式启动时也能 import agi.*
@@ -495,20 +496,28 @@ def tone_snapshot(limit: int = 100) -> dict:
 # --------------------------------------------------------------------------- #
 # 模型 / 设置 / 提示词
 # --------------------------------------------------------------------------- #
-def models_snapshot() -> dict:
+def _model_registry():
+    """尝试 import 本地模型注册表；不可用返回 None（单测可 monkeypatch 本函数注入假表）。"""
     try:
         from agi.selflearn import model_registry
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "models": []}
+        return model_registry
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def models_snapshot() -> dict:
+    registry = _model_registry()
+    if registry is None:
+        return {"ok": False, "error": "model_registry unavailable", "models": []}
     try:
-        models = model_registry.list_models()
+        models = registry.list_models()
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "models": []}
     items = []
     for model in models:
         name = str(model.get("name") or "")
         try:
-            healthy = bool(model_registry.health(name))
+            healthy = bool(registry.health(name))
         except Exception:  # noqa: BLE001
             healthy = False
         items.append({
@@ -1080,11 +1089,14 @@ def start_model(name: str, *, client: str = "") -> dict:
               client=client)
         return {"ok": False, "error": "model_not_editable",
                 "hint": f"只允许启停 {sorted(MODEL_ALLOWLIST)}；reserved/研究模型不可动"}
-    try:
-        from agi.selflearn import model_registry
-        result = model_registry.start(name)
-    except Exception as exc:  # noqa: BLE001
-        result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    registry = _model_registry()
+    if registry is None:
+        result = {"ok": False, "error": "model_registry unavailable"}
+    else:
+        try:
+            result = registry.start(name)
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     audit("model_start", {"name": name, "result": result}, ok=bool(result.get("ok")),
           client=client)
     return result
@@ -1097,14 +1109,349 @@ def stop_model(name: str, *, client: str = "") -> dict:
               client=client)
         return {"ok": False, "error": "model_not_editable",
                 "hint": f"只允许启停 {sorted(MODEL_ALLOWLIST)}"}
-    try:
-        from agi.selflearn import model_registry
-        result = model_registry.stop(name)
-    except Exception as exc:  # noqa: BLE001
-        result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    registry = _model_registry()
+    if registry is None:
+        result = {"ok": False, "error": "model_registry unavailable"}
+    else:
+        try:
+            result = registry.stop(name)
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     audit("model_stop", {"name": name, "result": result}, ok=bool(result.get("ok")),
           client=client)
     return result
+
+
+# --------------------------------------------------------------------------- #
+# P5-d：媒体页（能力矩阵 / 素材库 / 愿望清单 / 测试发送）
+# --------------------------------------------------------------------------- #
+MEDIA_WISHES_PATH = DATA_DIR / "media_wishes.jsonl"
+MEDIA_ASSET_DIRS: tuple[Path, ...] = (
+    ROOT / "wx_core" / "emoji_assets",
+    ROOT / "media" / "stickers",
+    SELFLEARN_DIR / "media",
+)
+MEDIA_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+MEDIA_TEST_CONTACT = "文件传输助手"
+
+
+def _gateway_media():
+    """P5-a 的媒体能力模块；还没落地时返回 None（降级静态矩阵）。"""
+    try:
+        from agi.wechat_gateway import media
+        return media
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _sticker_native():
+    try:
+        from agi.wechat_gateway import sticker_native
+        return sticker_native
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _media_kind(path: str) -> str:
+    suffix = Path(str(path or "")).suffix.lower()
+    if suffix == ".gif":
+        return "gif"
+    return "image"
+
+
+def _media_roots() -> list[Path]:
+    return [Path(item).resolve() for item in MEDIA_ASSET_DIRS]
+
+
+def _media_file_ok(raw: str) -> Path | None:
+    """只允许读白名单素材目录里的图片（缩略图用）。"""
+    target = Path(str(raw or "")).resolve()
+    for root in _media_roots():
+        try:
+            target.relative_to(root)
+            return target
+        except ValueError:
+            continue
+    return None
+
+
+def _media_thumb(path: str) -> str:
+    try:
+        if Path(str(path or "")).is_file():
+            return "/api/media/file?path=" + quote(str(path))
+    except OSError:
+        pass
+    return ""
+
+
+def media_capabilities() -> dict:
+    media_mod = _gateway_media()
+    source = "static"
+    caps: dict = {}
+    enabled = False
+    if media_mod is not None:
+        source = "agi.wechat_gateway.media"
+        try:
+            caps = media_mod.capabilities() or {}
+            enabled = bool(caps.get("media_enabled"))
+        except Exception:  # noqa: BLE001
+            caps = {}
+    sticker = _sticker_native()
+    native_enabled = False
+    if sticker is not None:
+        try:
+            native_enabled = bool(sticker.enabled())
+        except Exception:  # noqa: BLE001
+            native_enabled = False
+    ok = "ok"
+    matrix = [
+        {"key": "text", "label": "文本", "status": ok if caps.get("text", True) else "no",
+         "note": "SendMsg 文本；单条 ≤500 字"},
+        {"key": "unicode_emoji", "label": "Unicode emoji",
+         "status": ok if caps.get("unicode_emoji", True) else "no",
+         "note": "emoji 作为普通文本字符发送，不需要额外接口"},
+        {"key": "image", "label": "图片", "status": ok if caps.get("image", True) else "no",
+         "note": "SendFiles(png/jpg/webp)，单文件 ≤10MB"},
+        {"key": "gif", "label": "GIF 动图", "status": ok if caps.get("gif", True) else "no",
+         "note": "SendFiles(.gif)，微信客户端渲染成动图"},
+        {"key": "sticker_as_image", "label": "贴纸（降级为图片）",
+         "status": "degraded" if caps.get("sticker_as_image", True) else "no",
+         "note": "wxauto4 无贴纸 API，贴纸图当图片发"},
+        {"key": "sticker_native", "label": "原生系统表情",
+         "status": "ok" if native_enabled else "reserved",
+         "note": f"实验性（sticker_native enabled={native_enabled}）；需 wxauto4 backend，默认关闭；收藏贴纸不支持"},
+        {"key": "sticker_collect", "label": "收藏贴纸", "status": "no",
+         "note": "❌ 自定义表情 tab 不暴露 Name/索引，无法枚举"},
+        {"key": "mixed", "label": "文字+表情混排",
+         "status": ok if caps.get("mixed", True) else "no",
+         "note": "多气泡按顺序逐条发送，间隔 80–150ms"},
+    ]
+    notes = {row["key"]: row["note"] for row in matrix}
+    supported = {row["key"]: row["status"] in ("ok", "degraded") for row in matrix}
+    capabilities = {
+        "text": {"supported": bool(caps.get("text", True)), "note": notes["text"]},
+        "unicode_emoji": {"supported": bool(caps.get("unicode_emoji", True)),
+                          "note": notes["unicode_emoji"]},
+        "image": {"supported": bool(caps.get("image", True)), "note": notes["image"]},
+        "gif": {"supported": bool(caps.get("gif", True)), "note": notes["gif"]},
+        "sticker_as_image": {"supported": bool(caps.get("sticker_as_image", True)),
+                             "note": notes["sticker_as_image"]},
+        "sticker_native": {"supported": native_enabled, "note": notes["sticker_native"]},
+        "sticker_collect": {"supported": False, "note": notes["sticker_collect"]},
+        "mixed": {"supported": bool(caps.get("mixed", True)), "note": notes["mixed"]},
+        "media_enabled": {"supported": enabled, "note": "P5-a 发送层媒体总开关"},
+    }
+    return {"ok": True, "source": source, "media_enabled": enabled,
+            "sticker_native_enabled": native_enabled,
+            "test_contact": MEDIA_TEST_CONTACT, "capabilities": capabilities,
+            "matrix": matrix,
+            "note": "" if enabled else "发送层 media_enabled=false（P5-a 媒体总开关默认关闭）"}
+
+
+def _scan_media_files(limit: int) -> list[dict]:
+    rows: list[tuple[float, Path]] = []
+    for directory in MEDIA_ASSET_DIRS:
+        try:
+            if not Path(directory).is_dir():
+                continue
+            for item in Path(directory).rglob("*"):
+                if not item.is_file() or item.suffix.lower() not in MEDIA_IMAGE_SUFFIXES:
+                    continue
+                try:
+                    rows.append((item.stat().st_mtime, item))
+                except OSError:
+                    continue
+        except OSError:
+            continue
+    rows.sort(key=lambda pair: pair[0], reverse=True)
+    items: list[dict] = []
+    for _mtime, item in rows[:max(1, limit)]:
+        digest = hashlib.sha1(str(item.resolve()).encode("utf-8", "surrogatepass")).hexdigest()
+        items.append({
+            "id": "SCAN-" + digest[:14], "name": item.stem, "filename": item.name,
+            "path": str(item.resolve()), "file_exists": True,
+            "kind": _media_kind(str(item)), "tags": [],
+            "usage_count": 0, "source": "scan", "thumb": _media_thumb(str(item)),
+        })
+    return items
+
+
+def media_assets(limit: int = 200, kind: str = "") -> dict:
+    try:
+        limit = max(1, min(MAX_LIMIT, int(limit)))
+    except (TypeError, ValueError):
+        limit = 200
+    kind = str(kind or "").strip().lower()
+    items: list[dict] = []
+    source = "scan"
+    db = contact_db_path()
+    if db is not None:
+        try:
+            from agi.selflearn import emoji as emoji_archive
+            rows = emoji_archive.list_emojis(db, limit=limit)
+        except Exception:  # noqa: BLE001
+            rows = []
+        for row in rows:
+            path = str(row.get("path") or "")
+            items.append({
+                "id": row.get("id"), "name": row.get("name"),
+                "filename": row.get("filename"), "path": path,
+                "file_exists": Path(path).is_file() if path else False,
+                "kind": _media_kind(path), "tags": row.get("tags") or [],
+                "usage_count": int(row.get("usage_count") or 0),
+                "source": "emoji_archive", "thumb": _media_thumb(path),
+            })
+        if items:
+            source = "emoji_archive"
+    if not items:
+        items = _scan_media_files(limit)
+    if kind:
+        items = [item for item in items if item.get("kind") == kind]
+    return {"ok": True, "source": source, "items": items, "total": len(items),
+            "dirs": [str(item) for item in MEDIA_ASSET_DIRS],
+            "note": "" if items else "素材库为空：等 P5-b/P5-e 索引或往 wx_core/emoji_assets、media/stickers 放图"}
+
+
+def media_library(limit: int = 100) -> dict:
+    """素材库清单（P5-d 契约字段：name/path/ext/usage_count/tags/mtime/indexed）。"""
+    data = media_assets(limit=limit)
+    items = []
+    for item in data.get("items") or []:
+        path = str(item.get("path") or "")
+        try:
+            mtime = Path(path).stat().st_mtime if path else None
+        except OSError:
+            mtime = None
+        items.append({
+            "name": item.get("name"), "path": path,
+            "ext": (Path(path).suffix.lower().lstrip(".") if path else ""),
+            "usage_count": int(item.get("usage_count") or 0),
+            "tags": item.get("tags") or [], "mtime": mtime,
+            "indexed": item.get("source") == "emoji_archive",
+            "kind": item.get("kind"), "thumb": item.get("thumb"),
+            "file_exists": bool(item.get("file_exists")),
+        })
+    return {"ok": True, "items": items, "total": len(items),
+            "source": data.get("source"), "note": data.get("note") or ""}
+
+
+def media_stats() -> dict:
+    library = media_library(limit=MAX_LIMIT)
+    items = library.get("items") or []
+    total = len(items)
+    by_ext: dict[str, int] = {}
+    for item in items:
+        ext = str(item.get("ext") or "unknown")
+        by_ext[ext] = by_ext.get(ext, 0) + 1
+    used = sum(1 for item in items if int(item.get("usage_count") or 0) > 0)
+    top = sorted([item for item in items if int(item.get("usage_count") or 0) > 0],
+                 key=lambda item: (-int(item.get("usage_count") or 0),
+                                   str(item.get("name") or "")))[:10]
+    return {"ok": True, "source": library.get("source"),
+            "total": total, "used": used, "unused": max(0, total - used),
+            "by_ext": by_ext, "top": top,
+            "note": "" if library.get("source") == "emoji_archive"
+                    else "emoji_archive 为空，统计来自目录扫描（无使用次数）"}
+
+
+def media_acquisition() -> dict:
+    """P5-e 预留：素材获取/下载管线未实现。"""
+    wishes = media_wishes()
+    return {"ok": True, "enabled": False, "wishes": int(wishes.get("count") or 0),
+            "note": "预留接口，未实现下载（P5-e task-63）"}
+
+
+def media_wishes() -> dict:
+    items: list[dict] = []
+    try:
+        from agi import media_acquisition
+        items = media_acquisition.search_wishes(MEDIA_WISHES_PATH)
+    except Exception:  # noqa: BLE001 - 降级直接读 JSONL
+        try:
+            if MEDIA_WISHES_PATH.is_file():
+                for line in MEDIA_WISHES_PATH.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(entry, dict) and entry.get("wish"):
+                        items.append(entry)
+        except OSError:
+            items = []
+    return {"ok": True, "items": items, "count": len(items),
+            "path": str(MEDIA_WISHES_PATH),
+            "note": "获取/下载管线预留（P5-e task-63）：当前不联网、不下载"}
+
+
+def _post_gateway_media(payload: dict) -> dict:
+    """把测试发送请求转发给网关（P5-a 的 HTTP 接口）；测试可 monkeypatch 本函数。"""
+    base = GATEWAY_STATUS_URL.rsplit("/status", 1)[0]
+    request = urllib.request.Request(base + "/api/media/send",
+                                     data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                                     method="POST")
+    request.add_header("Content-Type", "application/json")
+    token = admin_token()
+    if token:
+        request.add_header("X-Admin-Token", token)
+    with urllib.request.urlopen(request, timeout=5.0) as response:
+        raw = response.read().decode("utf-8", "replace") or "{}"
+    return json.loads(raw)
+
+
+def media_send(body: dict, *, client: str = "") -> dict:
+    body = body if isinstance(body, dict) else {}
+    kind = str(body.get("type") or body.get("kind") or "text").strip().lower()
+    allowed = ("text", "emoji_text", "image", "gif", "sticker", "native_emoji")
+    if kind not in allowed:
+        return {"ok": False, "status": "invalid", "error": f"不支持的媒体类型: {kind}"}
+    item: dict = {"type": kind}
+    if kind in ("text", "emoji_text"):
+        item["text"] = str(body.get("text") or "")
+        if not item["text"].strip():
+            return {"ok": False, "status": "invalid", "error": "text 不能为空"}
+    elif kind == "native_emoji":
+        name = str(body.get("name") or body.get("text") or body.get("path") or "")
+        if not name:
+            return {"ok": False, "status": "invalid", "error": "需要系统表情 name"}
+        item["name"] = name
+    else:
+        path = str(body.get("path") or body.get("name") or "")
+        if not path:
+            return {"ok": False, "status": "invalid", "error": "需要 path/name"}
+        item["path"] = path
+    media_mod = _gateway_media()
+    if media_mod is not None and kind != "native_emoji":
+        try:
+            ok_item, error_code = media_mod.validate_item(item)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "status": "invalid", "error": f"{type(exc).__name__}: {exc}"}
+        if not ok_item:
+            return {"ok": False, "status": "invalid", "error": error_code}
+    # 强制覆盖联系人：测试发送只允许文件传输助手
+    payload = {"contact": MEDIA_TEST_CONTACT, "items": [item]}
+    try:
+        result = _post_gateway_media(payload)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (404, 405, 501):
+            return {"ok": False, "status": "unsupported", "http": exc.code,
+                    "error": "media_api_not_landed",
+                    "contact": MEDIA_TEST_CONTACT,
+                    "hint": "网关暂无 /api/media/send，等 P5-a 落地后再试"}
+        return {"ok": False, "status": "gateway_error", "http": exc.code,
+                "error": f"gateway http {exc.code}", "contact": MEDIA_TEST_CONTACT}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "status": "gateway_unavailable",
+                "error": f"{type(exc).__name__}: {exc}", "contact": MEDIA_TEST_CONTACT}
+    ok = bool(result.get("ok"))
+    audit("media_send", {"type": kind, "contact": MEDIA_TEST_CONTACT,
+                         "ok": ok, "gateway_status": result.get("status")},
+          ok=ok, client=client)
+    return {"ok": ok, "status": result.get("status") or ("sent" if ok else "blocked"),
+            "contact": MEDIA_TEST_CONTACT, "test": True, "gateway": result,
+            "note": "测试发送只允许文件传输助手；不会发给真实好友"}
 
 
 # --------------------------------------------------------------------------- #
@@ -1250,6 +1597,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, models_snapshot()); return
             if path == "/api/config":
                 self._json(200, _config_view()); return
+            if path == "/api/media/capabilities":
+                self._json(200, media_capabilities()); return
+            if path == "/api/media/assets":
+                kind = str((query.get("kind") or [""])[0] or "")
+                self._json(200, media_assets(self._limit(query, 200), kind)); return
+            if path == "/api/media/library":
+                self._json(200, media_library(self._limit(query, 100))); return
+            if path == "/api/media/acquisition":
+                self._json(200, media_acquisition()); return
+            if path == "/api/media/stats":
+                self._json(200, media_stats()); return
+            if path == "/api/media/wishes":
+                self._json(200, media_wishes()); return
+            if path == "/api/media/file":
+                raw_path = str((query.get("path") or [""])[0] or "")
+                target = _media_file_ok(raw_path)
+                if target is None or not target.is_file():
+                    self._json(404, {"ok": False, "error": "file not in media dirs"}); return
+                content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+                self._bytes(200, target.read_bytes(), content_type); return
             if path == "/api/prompts":
                 self._json(200, prompts_state()); return
         except Exception as exc:  # noqa: BLE001 - 页面要有错误态而不是空白
@@ -1295,6 +1662,17 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/prompts":
                 result = save_prompts(body.get("prompts") or {}, client=client)
                 self._json(200 if result.get("ok") else 400, result); return
+            if path in ("/api/media/send", "/api/media/test-send"):
+                result = media_send(body, client=client)
+                if result.get("ok"):
+                    code = 200
+                elif result.get("status") == "unsupported":
+                    code = 501
+                elif result.get("status") in ("gateway_error", "gateway_unavailable"):
+                    code = 502
+                else:
+                    code = 400
+                self._json(code, result); return
             if path == "/api/prompts/reset":
                 raw_keys = body.get("keys") or []
                 if isinstance(raw_keys, str):

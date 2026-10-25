@@ -7,6 +7,8 @@ import io
 import json
 import sqlite3
 import sys
+import urllib.error
+import urllib.parse
 import zipfile
 from pathlib import Path
 
@@ -272,15 +274,35 @@ def test_model_allowlist_rejects_reserved(write_env):
 
 
 def test_model_start_missing_gguf_returns_error(write_env, tmp_path, monkeypatch):
-    fake = type("FakeRegistry", (), {
-        "start": staticmethod(lambda name: {"ok": False, "error": "gguf_not_found",
-                                           "path": "missing.gguf"}),
+    """完全自包含：tmp registry 里放一条 gguf 不存在的模型；不碰真实配置/端口。"""
+    registry_path = tmp_path / "local_models.json"
+    missing_gguf = tmp_path / "not_there.gguf"
+    registry_path.write_text(json.dumps({
+        "llama_bin": str(tmp_path / "llama"),
+        "models": [{"name": "soul-05b", "gguf": str(missing_gguf), "port": 18081,
+                    "role": "soul", "status": "ready"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    from agi.selflearn import model_registry as real_registry   # 纯函数，不触发 spawn
+    fake = type("TmpRegistry", (), {
+        "list_models": staticmethod(lambda: real_registry.list_models(registry_path)),
+        "health": staticmethod(lambda name: False),
+        "start": staticmethod(lambda name: real_registry.start(name, path=registry_path)),
         "stop": staticmethod(lambda name: {"ok": True, "pid": 1}),
     })
-    monkeypatch.setitem(sys.modules, "agi.selflearn.model_registry", fake)
+    monkeypatch.setattr(console, "_model_registry", lambda: fake)
     result = console.start_model("soul-05b")
-    assert result["ok"] is False and result["error"] == "gguf_not_found"
+    assert result["ok"] is False
+    assert result["error"] == "gguf_not_found"
+    assert result["path"] == str(missing_gguf)
     assert console.stop_model("soul-05b")["ok"] is True
+
+
+def test_model_registry_unavailable_returns_error(write_env, monkeypatch):
+    monkeypatch.setattr(console, "_model_registry", lambda: None)
+    assert console.start_model("soul-05b")["error"] == "model_registry unavailable"
+    assert console.stop_model("soul-05b")["error"] == "model_registry unavailable"
+    snapshot = console.models_snapshot()
+    assert snapshot["ok"] is False and snapshot["models"] == []
 
 
 def test_models_snapshot_with_fake_registry(write_env, monkeypatch):
@@ -291,7 +313,7 @@ def test_models_snapshot_with_fake_registry(write_env, monkeypatch):
         ]),
         "health": staticmethod(lambda name: name == "soul-05b"),
     })
-    monkeypatch.setitem(sys.modules, "agi.selflearn.model_registry", fake)
+    monkeypatch.setattr(console, "_model_registry", lambda: fake)
     snapshot = console.models_snapshot()
     assert snapshot["ok"] is True
     by_name = {item["name"]: item for item in snapshot["models"]}
@@ -326,7 +348,10 @@ def _call(method: str, path: str, body=None, *, token=None,
         return status, payload
 
 
-def test_http_get_host_guard_and_health(write_env):
+def test_http_get_host_guard_and_health(write_env, tmp_path, monkeypatch):
+    monkeypatch.setattr(console, "DEFAULT_CONTACT_DB", None)
+    monkeypatch.setattr(console, "CONTACTS_DIR", tmp_path / "empty")
+    monkeypatch.setattr(console, "GATEWAY_LOG", tmp_path / "gateway.log")
     status, data = _call("GET", "/api/health")
     assert status == 200 and data["ok"] is True
     status, data = _call("GET", "/api/health", host="evil.example.com:802")
@@ -552,3 +577,210 @@ def test_factory_reset_whitelist_rejects_outside_path(tmp_path, write_env, monke
     assert result["ok"] is False and "unsafe_target" in result["error"]
     assert outside.exists()
     assert env["gateway_log"].exists()
+
+# ============================================================ P5-d 媒体页
+def _media_env(tmp_path, monkeypatch, write_env):
+    emoji = tmp_path / "emoji_assets"
+    stickers = tmp_path / "stickers"
+    inbound = tmp_path / "inbound_media"
+    for directory in (emoji, stickers, inbound):
+        directory.mkdir(parents=True, exist_ok=True)
+    (emoji / "cat.png").write_bytes(b"PNG-cat")
+    (emoji / "dog.jpg").write_bytes(b"JPG-dog")
+    (stickers / "happy.gif").write_bytes(b"GIF88a-happy")
+    (stickers / "notes.txt").write_text("not an image", encoding="utf-8")
+    wishes = tmp_path / "media_wishes.jsonl"
+    wishes.write_text(
+        json.dumps({"wish": "想发一只布偶猫的表情", "source": "model",
+                    "created_at": 1800000000.0}, ensure_ascii=False) + "\n"
+        + json.dumps({"wish": "想发「晚安」贴纸"}, ensure_ascii=False) + "\n"
+        + "broken line\n", encoding="utf-8")
+    monkeypatch.setattr(console, "MEDIA_ASSET_DIRS", (emoji, stickers, inbound))
+    monkeypatch.setattr(console, "MEDIA_WISHES_PATH", wishes)
+    monkeypatch.setattr(console, "DEFAULT_CONTACT_DB", None)
+    monkeypatch.setattr(console, "CONTACTS_DIR", tmp_path / "no_contacts")
+    return {"emoji": emoji, "stickers": stickers, "wishes": wishes, "tmp": tmp_path}
+
+
+def test_media_capabilities_static_matrix(tmp_path, write_env, monkeypatch):
+    monkeypatch.setattr(console, "_gateway_media", lambda: None)
+    monkeypatch.setattr(console, "_sticker_native", lambda: None)
+    caps = console.media_capabilities()
+    assert caps["ok"] is True and caps["source"] == "static"
+    assert caps["test_contact"] == "文件传输助手"
+    matrix = {row["key"]: row for row in caps["matrix"]}
+    assert len(matrix) == 8
+    assert matrix["text"]["status"] == "ok"
+    assert matrix["unicode_emoji"]["status"] == "ok"
+    assert matrix["image"]["status"] == "ok"
+    assert matrix["gif"]["status"] == "ok"
+    assert matrix["sticker_as_image"]["status"] == "degraded"
+    assert matrix["sticker_native"]["status"] == "reserved"
+    assert matrix["sticker_collect"]["status"] == "no"
+    assert matrix["mixed"]["status"] == "ok"
+
+
+def test_media_capabilities_real_media_module(write_env):
+    caps = console.media_capabilities()
+    assert caps["ok"] is True
+    assert caps["source"] == "agi.wechat_gateway.media"
+    keys = {row["key"] for row in caps["matrix"]}
+    assert {"sticker_native", "sticker_collect", "mixed"} <= keys
+
+
+def test_media_assets_scan_and_thumbnail_endpoint(tmp_path, write_env, monkeypatch):
+    env = _media_env(tmp_path, monkeypatch, write_env)
+    assets = console.media_assets(limit=50)
+    assert assets["ok"] is True and assets["source"] == "scan"
+    assert assets["total"] == 3
+    kinds = {item["kind"] for item in assets["items"]}
+    assert kinds == {"image", "gif"}
+    assert all(item["thumb"].startswith("/api/media/file?path=") for item in assets["items"])
+    assert all(item["file_exists"] for item in assets["items"])
+
+    status, data = _call("GET", "/api/media/assets?limit=10")
+    assert status == 200 and data["total"] == 3
+
+    target = env["emoji"] / "cat.png"
+    status, body = _call("GET", "/api/media/file?path=" + urllib.parse.quote(str(target)))
+    assert status == 200 and body == "PNG-cat"
+
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"secret")
+    status, data = _call("GET", "/api/media/file?path=" + urllib.parse.quote(str(outside)))
+    assert status == 404 and data["ok"] is False
+
+
+def test_media_assets_from_emoji_archive(tmp_path, write_env, monkeypatch):
+    db = tmp_path / "archive.sqlite3"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE emoji_archive(id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+                "path TEXT NOT NULL, tags_json TEXT NOT NULL DEFAULT '[]', "
+                "usage_count INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL)")
+    image = tmp_path / "assets" / "cat.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"PNG")
+    con.execute("INSERT INTO emoji_archive VALUES(?,?,?,?,?,?)",
+                ("EMO-1", "cat", str(image), '["猫","可爱"]', 7, 1800000000.0))
+    con.execute("INSERT INTO emoji_archive VALUES(?,?,?,?,?,?)",
+                ("EMO-2", "dog", str(tmp_path / "missing.png"), "[]", 0, 1800000001.0))
+    con.commit()
+    con.close()
+    monkeypatch.setattr(console, "DEFAULT_CONTACT_DB", db)
+    assets = console.media_assets(limit=10)
+    assert assets["source"] == "emoji_archive" and assets["total"] == 2
+    first = assets["items"][0]
+    assert first["id"] == "EMO-1" and first["usage_count"] == 7
+    assert first["tags"] == ["猫", "可爱"]
+    assert assets["items"][1]["file_exists"] is False
+    stats = console.media_stats()
+    assert stats["source"] == "emoji_archive" and stats["total"] == 2
+    assert stats["used"] == 1 and stats["unused"] == 1   # cat 有 usage_count=7
+    assert stats["by_ext"]["png"] == 2
+    assert stats["top"] and stats["top"][0]["name"] == "cat"
+
+
+def test_media_wishes_reads_jsonl_and_missing_file(tmp_path, write_env, monkeypatch):
+    env = _media_env(tmp_path, monkeypatch, write_env)
+    wishes = console.media_wishes()
+    assert wishes["ok"] is True and wishes["count"] == 2
+    assert "布偶猫" in wishes["items"][0]["wish"]
+    assert wishes["note"].startswith("获取/下载管线预留")
+    monkeypatch.setattr(console, "MEDIA_WISHES_PATH", tmp_path / "missing.jsonl")
+    assert console.media_wishes()["count"] == 0
+
+
+def test_media_send_forces_file_transfer_assistant(tmp_path, write_env, monkeypatch):
+    monkeypatch.setattr(console, "_gateway_media", lambda: None)
+    captured = {}
+
+    def fake_post(payload):
+        captured.update(payload)
+        return {"ok": True, "status": "sent", "contact": payload["contact"]}
+
+    monkeypatch.setattr(console, "_post_gateway_media", fake_post)
+    status, data = _call("POST", "/api/media/send",
+                         {"type": "text", "text": "测试 emoji 😄",
+                          "contact": "真实好友A"}, token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["contact"] == "文件传输助手" and data["test"] is True
+    assert captured["contact"] == "文件传输助手"      # body 里的联系人被强制覆盖
+    assert captured["items"][0]["text"] == "测试 emoji 😄"
+    audits = console.AUDIT_PATH.read_text(encoding="utf-8").splitlines()
+    entry = [json.loads(line) for line in audits if "media_send" in line][-1]
+    assert entry["action"] == "media_send" and entry["ok"] is True
+    assert entry["payload"]["contact"] == "文件传输助手"
+
+
+def test_media_send_501_when_gateway_has_no_api(write_env, monkeypatch):
+    monkeypatch.setattr(console, "_gateway_media", lambda: None)
+
+    def missing(payload):
+        raise urllib.error.HTTPError("http://127.0.0.1:801/api/media/send", 404,
+                                     "Not Found", {}, None)
+
+    monkeypatch.setattr(console, "_post_gateway_media", missing)
+    status, data = _call("POST", "/api/media/send",
+                         {"type": "text", "text": "hi"}, token="tok")
+    assert status == 501, data
+    assert data["ok"] is False and data["status"] == "unsupported"
+    assert data["error"] == "media_api_not_landed"
+    assert "P5-a" in data["hint"]
+
+
+def test_media_send_validation_and_token(write_env, monkeypatch):
+    monkeypatch.setattr(console, "_gateway_media", lambda: None)
+    status, _ = _call("POST", "/api/media/send", {"type": "text", "text": "hi"})
+    assert status == 401
+    status, data = _call("POST", "/api/media/send",
+                         {"type": "video", "path": "x.mp4"}, token="tok")
+    assert status == 400 and data["status"] == "invalid"
+    status, data = _call("POST", "/api/media/send",
+                         {"type": "text", "text": "   "}, token="tok")
+    assert status == 400 and data["status"] == "invalid"
+    status, data = _call("POST", "/api/media/send",
+                         {"type": "image", "path": ""}, token="tok")
+    assert status == 400 and data["status"] == "invalid"
+
+
+def test_media_library_acquisition_and_capability_contract(tmp_path, write_env, monkeypatch):
+    env = _media_env(tmp_path, monkeypatch, write_env)
+    status, data = _call("GET", "/api/media/library?limit=10")
+    assert status == 200 and data["ok"] is True and data["total"] == 3
+    assert data["source"] == "scan"
+    item = data["items"][0]
+    assert {"name", "path", "ext", "usage_count", "tags", "mtime", "indexed"} <= set(item)
+    assert item["indexed"] is False and item["ext"] in ("png", "jpg", "gif")
+    assert item["mtime"] is not None
+
+    status, acq = _call("GET", "/api/media/acquisition")
+    assert status == 200 and acq["enabled"] is False
+    assert acq["wishes"] == 2 and "预留" in acq["note"]
+
+    caps = console.media_capabilities()
+    assert len(caps["capabilities"]) == 9
+    for key in ("text", "unicode_emoji", "image", "gif", "sticker_as_image",
+                "sticker_native", "sticker_collect", "mixed", "media_enabled"):
+        assert key in caps["capabilities"]
+        assert isinstance(caps["capabilities"][key]["supported"], bool)
+    assert caps["capabilities"]["sticker_collect"]["supported"] is False
+
+    captured = {}
+
+    def fake_post(payload):
+        captured.update(payload)
+        return {"ok": True, "status": "sent", "contact": payload["contact"]}
+
+    monkeypatch.setattr(console, "_gateway_media", lambda: None)
+    monkeypatch.setattr(console, "_post_gateway_media", fake_post)
+    status, data = _call("POST", "/api/media/test-send",
+                         {"type": "text", "text": "hi", "contact": "真实好友B"},
+                         token="tok")
+    assert status == 200 and data["contact"] == "文件传输助手"
+    assert captured["contact"] == "文件传输助手"
+
+    status, data = _call("POST", "/api/media/test-send",
+                         {"type": "native_emoji", "name": "微笑"}, token="tok")
+    assert status == 200
+    assert captured["items"][0]["type"] == "native_emoji"
+    assert captured["items"][0]["name"] == "微笑"

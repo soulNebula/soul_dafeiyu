@@ -7,6 +7,7 @@ import io
 import json
 import sqlite3
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -320,3 +321,158 @@ def test_http_missing_data_does_not_crash(tmp_path, write_env, monkeypatch):
         status, data = _call("GET", path)
         assert status == 200
         assert data is not None
+
+
+# ============================================================ P4-c 恢复出厂
+def _factory_env(tmp_path, monkeypatch, write_env):
+    """把 reset 涉及的全部路径重定向到 tmp（含 data/、log/、backup/）。"""
+    data_dir = tmp_path / "data"
+    gateway_dir = data_dir / "wechat"
+    selflearn = data_dir / "selflearn"
+    contacts = selflearn / "wechat_contacts"
+    log_dir = tmp_path / "log"
+    backup_dir = tmp_path / "backups"
+    for directory in (gateway_dir, contacts, log_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    (selflearn / "media").mkdir(parents=True, exist_ok=True)
+    (selflearn / "inner.log").write_text("inner log\n", encoding="utf-8")
+
+    contact_db = contacts / "contact.sqlite3"
+    con = sqlite3.connect(contact_db)
+    con.execute("CREATE TABLE messages(id TEXT, role TEXT, text TEXT, ts REAL)")
+    con.execute("CREATE TABLE user_memories(id TEXT, content TEXT)")
+    con.execute("CREATE TABLE claims(id TEXT)")
+    con.execute("CREATE TABLE inner_states(id TEXT)")
+    con.executemany("INSERT INTO messages VALUES(?,?,?,?)",
+                    [(f"M{i}", "user", f"消息{i}", 1.0 + i) for i in range(3)])
+    con.executemany("INSERT INTO user_memories VALUES(?,?)",
+                    [("UM1", "用户喜欢猫"), ("UM2", "用户住杭州")])
+    con.execute("INSERT INTO claims VALUES('C1')")
+    con.execute("INSERT INTO inner_states VALUES('IS1')")
+    con.commit()
+    con.close()
+    default_db = selflearn / "selflearn.sqlite3"
+    sqlite3.connect(default_db).close()
+
+    gateway_log = gateway_dir / "gateway.log"
+    gateway_log.write_text("\n".join(json.dumps({"ts": i, "kind": "inbound"})
+                                     for i in range(4)) + "\n", encoding="utf-8")
+    drafts = gateway_dir / "drafts.jsonl"
+    drafts.write_text('{"id":"D1"}\n', encoding="utf-8")
+    prompts = data_dir / "prompts.json"
+    prompts.write_text(json.dumps({"version": 1, "prompts": {"care": "问近况"}},
+                                  ensure_ascii=False), encoding="utf-8")
+    log_messages = log_dir / "messages.jsonl"
+    log_messages.write_text("line1\nline2\n", encoding="utf-8")
+    log_chat = log_dir / "聊天记录.txt"
+    log_chat.write_text("聊天记录\n", encoding="utf-8")
+
+    monkeypatch.setattr(console, "DATA_DIR", data_dir)
+    monkeypatch.setattr(console, "SELFLEARN_DIR", selflearn)
+    monkeypatch.setattr(console, "CONTACTS_DIR", contacts)
+    monkeypatch.setattr(console, "GATEWAY_LOG", gateway_log)
+    monkeypatch.setattr(console, "DRAFTS_PATH", drafts)
+    monkeypatch.setattr(console, "PROMPTS_PATH", prompts)
+    monkeypatch.setattr(console, "LOG_DIR", log_dir)
+    monkeypatch.setattr(console, "LOG_MESSAGES", log_messages)
+    monkeypatch.setattr(console, "LOG_CHAT", log_chat)
+    monkeypatch.setattr(console, "BACKUP_DIR", backup_dir)
+    # write_env 已经把 config/STOP/audit/prompts 指到 tmp 根；proimpts 上面覆盖成 data 下
+    return {
+        "data": data_dir, "selflearn": selflearn, "contacts": contacts,
+        "gateway_log": gateway_log, "drafts": drafts, "prompts": prompts,
+        "log_messages": log_messages, "log_chat": log_chat, "backup": backup_dir,
+        "config": write_env["config"],
+    }
+
+
+def test_factory_preview_counts_without_deleting(tmp_path, write_env, monkeypatch):
+    env = _factory_env(tmp_path, monkeypatch, write_env)
+    status, data = _call("POST", "/api/factory/preview", {})
+    assert status == 200 and data["ok"] is True
+    stats = data["stats"]
+    assert stats["contacts"] == 1
+    assert stats["messages"] == 3
+    assert stats["memories"] == 2
+    assert stats["claims"] == 1
+    assert stats["inner_states"] == 1
+    assert stats["prompt_overrides"] == 1
+    assert stats["gateway_events"] == 4
+    assert data["phrase_hint"] == console.FACTORY_PHRASE
+    assert data["backup_preview"].endswith(".zip")
+    # 只读：一个文件都没删、备份也没建
+    assert env["gateway_log"].exists() and env["prompts"].exists()
+    assert env["contacts"].exists()
+    assert not env["backup"].exists()
+
+
+def test_factory_reset_rejects_wrong_confirm_or_missing_token(tmp_path, write_env, monkeypatch):
+    env = _factory_env(tmp_path, monkeypatch, write_env)
+    status, data = _call("POST", "/api/factory/reset",
+                         {"confirm": "错的短语"}, token="tok")
+    assert status == 400 and data["ok"] is False
+    assert env["gateway_log"].exists() and env["prompts"].exists()
+    assert env["contacts"].exists()
+
+    status, data = _call("POST", "/api/factory/reset",
+                         {"confirm": console.FACTORY_PHRASE})
+    assert status == 401 and data["ok"] is False
+    assert env["gateway_log"].exists() and env["contacts"].exists()
+    assert not list(env["backup"].glob("*.zip")) if env["backup"].exists() else True
+
+
+def test_factory_reset_backup_then_clear(tmp_path, write_env, monkeypatch):
+    env = _factory_env(tmp_path, monkeypatch, write_env)
+    status, data = _call("POST", "/api/factory/reset",
+                         {"confirm": console.FACTORY_PHRASE, "backup": True},
+                         token="tok")
+    assert status == 200 and data["ok"] is True, data
+    backup_path = Path(data["backup_path"])
+    assert backup_path.exists() and backup_path.suffix == ".zip"
+    with zipfile.ZipFile(backup_path) as archive:
+        assert archive.testzip() is None
+        names = archive.namelist()
+    assert any(name.endswith("contact.sqlite3") for name in names)
+    assert any(name.endswith("gateway.log") for name in names)
+
+    # 数据被清空：selflearn 目录只剩空壳、日志/提示词/草稿都没了
+    assert env["selflearn"].exists()
+    assert list(env["selflearn"].iterdir()) == []
+    assert not env["gateway_log"].exists()
+    assert not env["drafts"].exists()
+    assert not env["prompts"].exists()
+    assert not env["log_messages"].exists()
+    assert not env["log_chat"].exists()
+    # 保留 config
+    assert env["config"].exists()
+    deleted = data["deleted"]
+    assert deleted["messages"] == 3 and deleted["memories"] == 2
+    assert deleted["contacts"] == 1
+    assert "restart_hint" in data
+
+
+def test_factory_reset_backup_failure_aborts(tmp_path, write_env, monkeypatch):
+    env = _factory_env(tmp_path, monkeypatch, write_env)
+    blocked = tmp_path / "blocked_backup"
+    blocked.write_text("not a dir", encoding="utf-8")
+    monkeypatch.setattr(console, "BACKUP_DIR", blocked)
+    status, data = _call("POST", "/api/factory/reset",
+                         {"confirm": console.FACTORY_PHRASE, "backup": True},
+                         token="tok")
+    assert status == 400 and data["ok"] is False
+    assert "backup_failed" in data["error"]
+    assert env["gateway_log"].exists() and env["prompts"].exists()
+    assert env["contacts"].exists()
+
+
+def test_factory_reset_whitelist_rejects_outside_path(tmp_path, write_env, monkeypatch):
+    env = _factory_env(tmp_path, monkeypatch, write_env)
+    outside = tmp_path / "outside.sqlite3"
+    outside.write_text("keep me", encoding="utf-8")
+    inside_root = tmp_path / "data"
+    monkeypatch.setattr(console, "reset_roots", lambda: [inside_root])
+    monkeypatch.setattr(console, "reset_targets", lambda: ([], [outside]))
+    result = console.factory_reset(console.FACTORY_PHRASE, backup=True, client="test")
+    assert result["ok"] is False and "unsafe_target" in result["error"]
+    assert outside.exists()
+    assert env["gateway_log"].exists()

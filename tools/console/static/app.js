@@ -723,7 +723,10 @@ async function renderSettings() {
         </div></div>`)}
     ${card('网关只读配置', `<pre class="json">${esc(JSON.stringify(readonly, null, 2))}</pre>`)}
     ${card('网关原始状态', status && status.ok ? `<pre class="json">${esc(JSON.stringify(status.status, null, 2))}</pre>` :
-      `<div class="error-text">gateway 未连接：${esc((status && status.error) || '未知')}</div>`)}`;
+      `<div class="error-text">gateway 未连接：${esc((status && status.error) || '未知')}</div>`)}
+    ${card('危险区域：恢复出厂设置', `
+      <p class="hint">清空所有运行数据（对话 / 记忆 / 人格 / 信任 / 日志 / 提示词覆盖）。模型与评测语料会保留。</p>
+      <button class="btn factory" id="btn-factory">清空状态 / 恢复出厂设置</button>`, 'danger-zone')}`;
 
   const save = $('#btn-save-config');
   if (save) save.onclick = async () => {
@@ -751,6 +754,174 @@ async function renderSettings() {
     try { await api('/api/proactive/resume', { method: 'POST', body: {} }); toast('已恢复发送（STOP 文件已删除）', 'ok'); renderSettings(); }
     catch (e) { toast(e.message, 'err'); }
   };
+  const factoryBtn = $('#btn-factory');
+  if (factoryBtn) factoryBtn.onclick = openFactory;
+}
+
+/* ---------------- P4-c 恢复出厂（4 步挽留） ---------------- */
+const FACTORY_PHRASE = '清空我和TA的回忆';
+const factory = { step: 0, preview: null, busy: false };
+
+function factoryStatsHtml(stats) {
+  const items = [
+    ['条对话', stats.messages],
+    ['条记忆', stats.memories],
+    ['条 claim', stats.claims],
+    ['个联系人', stats.contacts],
+  ];
+  return '<div class="stat">' + items.map(([label, value]) =>
+    `<div><b>${value === null || value === undefined ? '—' : esc(value)}</b><span>${label}</span></div>`).join('') + '</div>';
+}
+
+async function openFactory() {
+  factory.step = 0;
+  factory.preview = null;
+  factory.busy = false;
+  $('#factory-title').textContent = '恢复出厂设置';
+  $('#factory-body').innerHTML = '<div class="empty">正在读取真实统计…</div>';
+  $('#factory-actions').innerHTML = '<button class="btn" id="factory-cancel-2">取消</button>';
+  $('#factory-mask').classList.add('open');
+  bindFactoryCancel();
+  try {
+    factory.preview = await api('/api/factory/preview', { method: 'POST', body: {} });
+  } catch (e) {
+    factory.preview = { ok: false, error: e.message };
+  }
+  renderFactoryStep();
+}
+
+function bindFactoryCancel() {
+  const btn = $('#factory-cancel-2');
+  if (btn) btn.onclick = () => closeFactory();
+}
+
+function closeFactory(cancelled) {
+  if (factory.busy) return;
+  $('#factory-mask').classList.remove('open');
+  if (cancelled !== false) toast('已取消，什么都没删', '');
+}
+
+function renderFactoryActions(buttons) {
+  $('#factory-actions').innerHTML = buttons
+    .map(([id, label, cls]) => `<button class="btn ${cls || ''}" id="${id}">${esc(label)}</button>`)
+    .join('');
+}
+
+function renderFactoryStep() {
+  const preview = factory.preview || {};
+  const body = $('#factory-body');
+  const step = factory.step;
+  if (!preview.ok) {
+    body.innerHTML = `<div class="factory-step"><p class="lead">读不到统计：${esc(preview.error || '未知错误')}</p>
+      <p class="hint">为了安全，统计失败时不会允许继续。</p></div>`;
+    renderFactoryActions([['factory-close', '关闭', ''], ['factory-cancel-2', '取消', '']]);
+    bindFactoryCancel();
+    return;
+  }
+  const stats = preview.stats || {};
+  if (step === 0) {
+    body.innerHTML = `<div class="factory-step">
+      <p class="lead">这里有你跟 TA 的记录——</p>
+      ${factoryStatsHtml(stats)}
+      <p>还有 <b>${esc(stats.inner_states || 0)}</b> 条内状态、<b>${esc(stats.gateway_events || 0)}</b> 行网关事件、<b>${esc(stats.prompt_overrides || 0)}</b> 条提示词覆盖。</p>
+      <p class="warn">真的要走吗？</p>
+      <p class="factory-mini">这只是预览：现在点取消，不会删除任何东西。</p>
+    </div>`;
+    renderFactoryActions([['factory-cancel-2', '取消', ''], ['factory-next', '继续', 'primary']]);
+    $('#factory-next').onclick = () => { factory.step = 1; renderFactoryStep(); };
+  } else if (step === 1) {
+    body.innerHTML = `<div class="factory-step">
+      <p class="lead">清空之后，TA 会变成什么样？</p>
+      <ul>
+        <li>人格、记忆、信任度全部清零；</li>
+        <li>TA 会完全不认识你，像第一次见面一样；</li>
+        <li>聊天里的情绪、关系进展、内状态都会回到初始值；</li>
+        <li>之后要重新花时间建立这些——就像重新认识一个人。</li>
+      </ul>
+      <p class="hint">如果只是想让 TA 安静一会儿，用「紧急停止」就够了。</p>
+    </div>`;
+    renderFactoryActions([['factory-back', '返回', ''], ['factory-cancel-2', '取消', ''], ['factory-next', '继续', 'primary']]);
+    $('#factory-back').onclick = () => { factory.step = 0; renderFactoryStep(); };
+    $('#factory-next').onclick = () => { factory.step = 2; renderFactoryStep(); };
+    bindFactoryCancel();
+  } else if (step === 2) {
+    const keep = (preview.keep || []).map((item) => `<li>保留：${esc(item)}</li>`).join('');
+    body.innerHTML = `<div class="factory-step">
+      <p class="lead">这一步不可撤销。</p>
+      <p>执行前我会先把要清空的内容打包成一份 zip 备份（备份失败就中止，绝不先删）：</p>
+      <p><code>${esc(preview.backup_preview || 'E:\\agent\\backups\\factory_reset_<时间>.zip')}</code></p>
+      <ul>${keep}</ul>
+      <p class="hint">也就是说：你还有后悔药——备份文件会留在上面这个路径。</p>
+    </div>`;
+    renderFactoryActions([['factory-back', '返回', ''], ['factory-cancel-2', '取消', ''], ['factory-next', '我明白，继续', 'primary']]);
+    $('#factory-back').onclick = () => { factory.step = 1; renderFactoryStep(); };
+    $('#factory-next').onclick = () => { factory.step = 3; renderFactoryStep(); };
+    bindFactoryCancel();
+  } else {
+    body.innerHTML = `<div class="factory-step">
+      <p class="lead">最后一步：请输入下面这句话，才能解锁红色按钮。</p>
+      <p><code>${esc(FACTORY_PHRASE)}</code></p>
+      <input type="text" id="factory-phrase" class="factory-phrase" placeholder="在这里输入确认短语" autocomplete="off">
+      <p class="factory-mini" id="factory-phrase-hint">必须完全一致（包括「TA」两个字母）。</p>
+      <p class="hint">点击红色按钮后会：先备份 → 再清空。期间不要关闭页面。</p>
+    </div>`;
+    renderFactoryActions([['factory-back', '返回', ''], ['factory-cancel-2', '取消', ''], ['factory-confirm', '清空并备份', 'factory-confirm']]);
+    const phrase = $('#factory-phrase');
+    const confirmBtn = $('#factory-confirm');
+    confirmBtn.disabled = true;
+    phrase.oninput = () => {
+      const ok = phrase.value === FACTORY_PHRASE;
+      confirmBtn.disabled = !ok;
+      $('#factory-phrase-hint').textContent = ok ? '已解锁：点击红色按钮执行（先备份后清空）' : '必须完全一致（包括「TA」两个字母）。';
+    };
+    $('#factory-back').onclick = () => { factory.step = 2; renderFactoryStep(); };
+    confirmBtn.onclick = doFactoryReset;
+    bindFactoryCancel();
+    phrase.focus();
+    return;
+  }
+  const cancel = $('#factory-cancel-2');
+  if (cancel) cancel.focus();      // 默认焦点在「取消」
+}
+
+async function doFactoryReset() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const phrase = $('#factory-phrase').value;
+  if (phrase !== FACTORY_PHRASE) return;
+  factory.busy = true;
+  $('#factory-title').textContent = '正在备份并清空…';
+  $('#factory-body').innerHTML = '<div class="empty">正在打包备份，然后清空运行数据，请不要关闭页面…</div>';
+  $('#factory-actions').innerHTML = '';
+  try {
+    const result = await api('/api/factory/reset', {
+      method: 'POST',
+      body: { confirm: phrase, backup: true },
+    });
+    factory.busy = false;
+    const deleted = result.deleted || {};
+    $('#factory-title').textContent = '已清空';
+    $('#factory-body').innerHTML = `<div class="factory-step">
+      <p class="lead" style="color:var(--success)">已清空完成。</p>
+      <p>备份：<code>${esc(result.backup_path || '')}</code>（${esc(result.files_backed || 0)} 个文件）</p>
+      <p>删除统计：${esc(deleted.messages || 0)} 条对话 / ${esc(deleted.memories || 0)} 条记忆 /
+        ${esc(deleted.claims || 0)} 条 claim / ${esc(deleted.files || 0)} 个文件（${esc(result.took_s || 0)}s）</p>
+      <p class="warn">${esc(result.restart_hint || '建议重启网关，让内存状态一起归零')}</p>
+      <p class="hint">控制台不会替你杀网关进程；需要时按 README 手动重启。备份 zip 可直接解压恢复。</p>
+    </div>`;
+    renderFactoryActions([['factory-close', '关闭', 'primary']]);
+    $('#factory-close').onclick = () => { $('#factory-mask').classList.remove('open'); go('settings'); };
+    setLastRefresh();
+  } catch (e) {
+    factory.busy = false;
+    $('#factory-title').textContent = '未执行（数据仍在）';
+    $('#factory-body').innerHTML = `<div class="factory-step">
+      <p class="lead warn">中止了：${esc(e.message)}</p>
+      <p class="hint">备份失败或校验不通过时，控制台不会删除任何数据；你可以返回重试或取消。</p>
+    </div>`;
+    renderFactoryActions([['factory-cancel-2', '关闭', ''], ['factory-retry', '返回确认页', '']]);
+    bindFactoryCancel();
+    $('#factory-retry').onclick = () => { factory.step = 3; renderFactoryStep(); };
+  }
 }
 
 async function saveConfig(updates) {
@@ -794,6 +965,14 @@ function bindGlobal() {
   $('#btn-refresh').onclick = () => go(state.page);
   $('#modal-close').onclick = closeModal;
   $('#modal-mask').onclick = (event) => { if (event.target === $('#modal-mask')) closeModal(); };
+  $('#factory-cancel').onclick = () => closeFactory();
+  $('#factory-mask').onclick = (event) => {
+    if (event.target === $('#factory-mask') && !factory.busy) closeFactory();
+  };
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if ($('#factory-mask').classList.contains('open') && !factory.busy) closeFactory();
+  });
   const tokenInput = $('#token-input');
   tokenInput.value = state.token;
   tokenInput.oninput = () => {

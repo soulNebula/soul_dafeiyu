@@ -83,6 +83,42 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 - 侧边栏 240px + 顶部 header 56px + 圆角 10px 卡片；JSON 用等宽字体。
 - 所有页面右上角显示「刷新于 HH:MM:SS」；接口失败显示红色原因而不是空白。
 
+## 恢复出厂设置（P4-c）
+
+设置页最下方有红色「清空状态 / 恢复出厂设置」按钮，点击后是 **4 步挽留**：
+
+1. **真实统计**：会聊过多少条消息 / 多少条记忆 / 多少条 claim / 多少个联系人（`/api/factory/preview` 实读），
+   "真的要走吗？"
+2. **后果**：人格、记忆、信任度清零，TA 会完全不认识你，像第一次见面。
+3. **不可撤销 + 先备份**：会先把要清的内容打包到 `E:\agent\backups\factory_reset_<时间>.zip`，
+   备份失败就中止（绝不先删）。
+4. **最终确认**：必须手动输入 `清空我和TA的回忆` 才解锁红色按钮；输入不一致按钮保持禁用。
+
+任意一步都可以取消（取消按钮 / ESC / 点遮罩），默认焦点在「取消」；取消后提示"已取消，什么都没删"。
+执行完页面显示备份路径与删除统计，并提示"建议重启网关让内存状态一起归零"（控制台不会替你杀进程）。
+
+**清空范围**（删除前会校验路径白名单）：
+
+- `agi/data/selflearn/` 整个目录内容（所有联系人库、默认库、inner.log、media 等）
+- `agi/data/wechat/gateway.log`、`drafts.jsonl`
+- `agi/data/prompts.json`
+- `log/messages.jsonl`、`log/聊天记录.txt`
+
+**保留**：模型权重/GGUF（E:\agent）、`agi/eval_data/`、`agi/data/wechat/config.json`、
+`agi/data/local_models.json`、代码本身。
+
+接口（reset 需 `X-Admin-Token`；preview 只读不需要）：
+
+```bash
+# 只读预览（不会删任何东西）
+curl -s -X POST http://127.0.0.1:802/api/factory/preview | python -m json.tool
+
+# 真正执行：先 zip 备份，备份成功才清理
+curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"confirm":"清空我和TA的回忆","backup":true}' \
+     http://127.0.0.1:802/api/factory/reset
+```
+
 ## 说明与限制
 
 - 对话流只读 `gateway.log` 尾部，不会触发任何生成/发送；日志轮转/超大文件按块 tail。

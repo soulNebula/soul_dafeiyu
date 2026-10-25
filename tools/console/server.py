@@ -17,11 +17,13 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -33,13 +35,30 @@ DATA_DIR = ROOT / "agi" / "data"
 GATEWAY_DIR = DATA_DIR / "wechat"
 GATEWAY_LOG = GATEWAY_DIR / "gateway.log"
 GATEWAY_CONFIG = GATEWAY_DIR / "config.json"
+DRAFTS_PATH = GATEWAY_DIR / "drafts.jsonl"
 STOP_PATH = GATEWAY_DIR / "STOP"
 GATEWAY_STATUS_URL = "http://127.0.0.1:801/status"
-CONTACTS_DIR = DATA_DIR / "selflearn" / "wechat_contacts"
+SELFLEARN_DIR = DATA_DIR / "selflearn"
+CONTACTS_DIR = SELFLEARN_DIR / "wechat_contacts"
 PROMPTS_PATH = DATA_DIR / "prompts.json"
+LOG_DIR = ROOT / "log"
+LOG_MESSAGES = LOG_DIR / "messages.jsonl"
+LOG_CHAT = LOG_DIR / "聊天记录.txt"
+BACKUP_DIR = Path(r"E:\agent\backups")
 AUDIT_PATH = DATA_DIR / "console_audit.log"
 TONE_PROFILE = ROOT / "agi" / "eval_data" / "human_tone" / "profile.md"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+#: P4-c 恢复出厂：必须手动输入的短语
+FACTORY_PHRASE = "清空我和TA的回忆"
+#: 对话框里写明的「保留」清单（只展示，不删除）
+FACTORY_KEEP = [
+    "模型权重与 GGUF（E:\\agent）",
+    "评测/训练语料 agi/eval_data/",
+    "agi/data/wechat/config.json",
+    "agi/data/local_models.json",
+    "代码本身",
+]
 
 HOST = "127.0.0.1"
 PORT = 802
@@ -653,6 +672,241 @@ def save_prompts(prompts: dict, *, client: str = "") -> dict:
     return {"ok": True, "prompts": merged, "note": "已保存；下一条消息生效"}
 
 
+# --------------------------------------------------------------------------- #
+# P4-c：恢复出厂设置（先备份 → 白名单路径 → 删除运行数据）
+# --------------------------------------------------------------------------- #
+def reset_roots() -> list[Path]:
+    """白名单根：只允许删 data/ 与 log/ 下的内容（以及其中的指定文件）。"""
+    return [Path(DATA_DIR), Path(LOG_DIR)]
+
+
+def reset_targets() -> tuple[list[Path], list[Path]]:
+    """返回 (要清空的目录, 要删除的文件)；目录只清内容、保留目录本身。"""
+    dirs = [Path(SELFLEARN_DIR)]
+    files = [Path(GATEWAY_LOG), Path(DRAFTS_PATH), Path(PROMPTS_PATH),
+             Path(LOG_MESSAGES), Path(LOG_CHAT)]
+    return dirs, files
+
+
+def _resolved_within(path: Path | str, roots: list[Path]) -> Path:
+    target = Path(path).resolve()
+    for root in roots:
+        try:
+            target.relative_to(Path(root).resolve())
+            return target
+        except ValueError:
+            continue
+    raise ValueError(f"unsafe_target:{path}")
+
+
+def _safe_targets() -> tuple[list[Path], list[Path], list[Path]]:
+    roots = reset_roots()
+    dirs, files = reset_targets()
+    safe_dirs = [_resolved_within(item, roots) for item in dirs]
+    safe_files = [_resolved_within(item, roots) for item in files]
+    return safe_dirs, safe_files, roots
+
+
+def _arcname(path: Path) -> str:
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        return "external/" + resolved.name
+
+
+def _count_file_lines(path: Path, limit: int = 2_000_000) -> int | None:
+    try:
+        target = Path(path)
+        if not target.is_file():
+            return 0
+        if target.stat().st_size > 50 * 1024 * 1024:
+            return None
+        with target.open("r", encoding="utf-8", errors="replace") as handle:
+            return sum(1 for _ in handle)
+    except OSError:
+        return None
+
+
+def _count_table(con: sqlite3.Connection, table: str) -> int:
+    try:
+        return int(con.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
+    except sqlite3.Error:
+        return 0
+
+
+def _factory_stats() -> dict:
+    contacts = 0
+    messages = memories = claims = inner = 0
+    try:
+        db_files = sorted(Path(SELFLEARN_DIR).rglob("*.sqlite3"))
+    except OSError:
+        db_files = []
+    for db in db_files:
+        is_contact = "wechat_contacts" in db.parts
+        try:
+            con = _ro_connect(db)
+        except sqlite3.Error:
+            continue
+        try:
+            messages += _count_table(con, "messages")
+            memories += _count_table(con, "user_memories")
+            claims += _count_table(con, "claims")
+            inner += _count_table(con, "inner_states")
+        finally:
+            con.close()
+        if is_contact:
+            contacts += 1
+    prompts = read_json(PROMPTS_PATH, {})
+    prompt_overrides = len(prompts.get("prompts") or {}) if isinstance(prompts, dict) else 0
+    return {
+        "contacts": contacts,
+        "messages": messages,
+        "memories": memories,
+        "claims": claims,
+        "inner_states": inner,
+        "prompt_overrides": prompt_overrides,
+        "gateway_events": _count_file_lines(GATEWAY_LOG),
+        "drafts": _count_file_lines(DRAFTS_PATH),
+        "log_messages": _count_file_lines(LOG_MESSAGES),
+    }
+
+
+def factory_preview() -> dict:
+    """只读统计 + 将删除清单 + 备份路径预演；不创建/删除任何文件。"""
+    dirs, files = reset_targets()
+    stats = _factory_stats()
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    delete_dirs = [{"path": str(path), "exists": Path(path).exists()} for path in dirs]
+    delete_files = [{"path": str(path), "exists": Path(path).exists()} for path in files]
+    return {
+        "ok": True,
+        "stats": stats,
+        "delete_dirs": delete_dirs,
+        "delete_files": delete_files,
+        "keep": FACTORY_KEEP,
+        "backup_preview": str(Path(BACKUP_DIR) / f"factory_reset_{stamp}.zip"),
+        "phrase_hint": FACTORY_PHRASE,
+        "note": "预览不会删除任何东西；真正执行前会先做 zip 备份。",
+    }
+
+
+def create_backup(now: float | None = None) -> dict:
+    """把重置范围内所有文件打包成 zip；失败抛异常（调用方必须中止）。"""
+    now = time.time() if now is None else float(now)
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(now))
+    target_dir = Path(BACKUP_DIR)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = target_dir / f"factory_reset_{stamp}.zip"
+    dirs, files, _roots = _safe_targets()
+    written = 0
+    try:
+        with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            for directory in dirs:
+                if not directory.exists():
+                    continue
+                for item in sorted(directory.rglob("*")):
+                    if item.is_file():
+                        archive.write(item, _arcname(item))
+                        written += 1
+            for item in files:
+                if item.is_file():
+                    archive.write(item, _arcname(item))
+                    written += 1
+        with zipfile.ZipFile(backup_path, "r") as archive:
+            bad = archive.testzip()
+            if bad is not None:
+                raise OSError(f"backup_corrupt:{bad}")
+    except Exception:
+        try:
+            backup_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return {"ok": True, "path": str(backup_path), "files": written,
+            "bytes": backup_path.stat().st_size}
+
+
+def factory_reset(confirm: str = "", *, backup: bool = True,
+                  client: str = "") -> dict:
+    """真正执行：校验短语/备份/白名单后清空；任何一步失败都中止且不删数据。"""
+    started = time.time()
+    if str(confirm or "").strip() != FACTORY_PHRASE:
+        audit("factory_reset", {"confirm": str(confirm or "")[:40]}, ok=False,
+              note="confirm_phrase_mismatch", client=client)
+        return {"ok": False, "error": "confirm_phrase_mismatch",
+                "hint": f"必须原样输入：{FACTORY_PHRASE}"}
+    if not backup:
+        audit("factory_reset", {}, ok=False, note="backup_required", client=client)
+        return {"ok": False, "error": "backup_required",
+                "hint": "必须先备份再清空（backup=true）"}
+    try:
+        dirs, files, roots = _safe_targets()
+    except ValueError as exc:
+        audit("factory_reset", {}, ok=False, note=str(exc), client=client)
+        return {"ok": False, "error": str(exc), "aborted": True}
+    stats = _factory_stats()
+    try:
+        backup_info = create_backup(started)
+    except Exception as exc:  # noqa: BLE001 - 备份失败必须中止
+        audit("factory_reset", {"stats": stats}, ok=False,
+              note=f"backup_failed:{exc}", client=client)
+        return {"ok": False, "error": f"backup_failed:{type(exc).__name__}: {exc}",
+                "aborted": True, "stats": stats}
+
+    deleted = {"contacts": 0, "messages": stats["messages"],
+               "memories": stats["memories"], "claims": stats["claims"],
+               "inner_states": stats["inner_states"], "files": 0, "dirs": 0}
+    errors: list[str] = []
+    for directory in dirs:
+        if not directory.exists():
+            continue
+        deleted["dirs"] += 1
+        try:
+            children = list(directory.iterdir())
+        except OSError as exc:
+            errors.append(f"{directory}: {exc}")
+            continue
+        for child in children:
+            try:
+                _resolved_within(child, roots)    # 再次校验，绝不动白名单外
+            except ValueError as exc:
+                errors.append(str(exc))
+                continue
+            try:
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink(missing_ok=True)
+                deleted["files"] += 1
+            except OSError as exc:
+                errors.append(f"{child}: {exc}")
+    for item in files:
+        if not item.is_file():
+            continue
+        try:
+            _resolved_within(item, roots)
+            item.unlink(missing_ok=True)
+            deleted["files"] += 1
+        except (ValueError, OSError) as exc:
+            errors.append(f"{item}: {exc}")
+
+    deleted["contacts"] = stats["contacts"]
+    took_s = round(time.time() - started, 2)
+    audit("factory_reset", {"backup_path": backup_info["path"], "stats": stats,
+                            "deleted": deleted, "errors": errors[:5],
+                            "took_s": took_s}, ok=not errors, client=client)
+    result = {"ok": True, "backup_path": backup_info["path"],
+              "files_backed": backup_info["files"], "deleted": deleted,
+              "took_s": took_s,
+              "restart_hint": "已清空。建议重启网关，让内存里的状态一起归零；"
+                              "备份 zip 在 backup_path，需要时可手工恢复。"}
+    if errors:
+        result["ok"] = False
+        result["errors"] = errors[:10]
+    return result
+
+
 def start_model(name: str, *, client: str = "") -> dict:
     name = str(name or "").strip()
     if name not in MODEL_ALLOWLIST:
@@ -839,10 +1093,20 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ POST
     def do_POST(self) -> None:
-        if not self._guard_write():
+        if not self._guard_read():
             return
         path = self.path.split("?", 1)[0]
         client = self._client()
+        if path == "/api/factory/preview":
+            # 只读统计：不需要 token（But 仍需回环 Host；不删除任何东西）
+            try:
+                self._json(200, factory_preview())
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if not token_ok(self.headers):
+            self._json(401, {"ok": False, "error": "admin token required"})
+            return
         try:
             body = self._read_body()
         except ValueError as exc:
@@ -864,6 +1128,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/prompts":
                 result = save_prompts(body.get("prompts") or {}, client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/factory/reset":
+                result = factory_reset(str(body.get("confirm") or ""),
+                                       backup=bool(body.get("backup", True)),
+                                       client=client)
                 self._json(200 if result.get("ok") else 400, result); return
         except Exception as exc:  # noqa: BLE001
             self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})

@@ -260,7 +260,8 @@ class SelfLearnAgent:
                 "history": memory.recent_messages(self.path, limit=6),
                 "had_image": had_image}
 
-    def send(self, text: str, *, image: str | None = None) -> dict[str, Any]:
+    def send(self, text: str, *, image: str | None = None,
+             proactive: bool = False) -> dict[str, Any]:
         # W3-A：延迟埋点起点；到写 turn 为止（不含把回复发出去）
         t0 = time.perf_counter()
         text = str(text or "").strip()
@@ -472,27 +473,33 @@ class SelfLearnAgent:
                 inner_meta = {"mode": "shadow", "source": "rule", "fallback": "",
                               "latency_ms": None, "injected": False}
             elif inner_mode == "model":
-                # P3-a：本地灵魂模型产出 InnerState；超时/解析失败 → 自动回退 rule。
-                # inner_shadow_only=true 时只记录不注入（灰度），prompt 与 off 逐字节一致。
+                # P3-a/b：本地灵魂模型产出 InnerState（slim 4 字段）；
+                # scope 默认 proactive_only → 被动消息直接 rule（0 延迟）；
+                # 超时/解析失败 → 自动回退 rule；shadow_only 时只记录不注入。
                 shadow_only = bool(inner_settings["shadow_only"])
                 inner_client = self._resolve_inner_client(inner_settings)
                 try:
                     outcome = inner_inject.build_inner_ctx_ex(
                         self.path, "model", inner_client, text_for_inner, recent, st,
-                        shadow_only=shadow_only)
+                        shadow_only=shadow_only, proactive=proactive,
+                        scope=inner_settings["scope"])
                 except Exception:  # noqa: BLE001
                     outcome = {"ctx": "", "injected": False, "source": "rule",
                                "state": {}, "fallback": "internal_error",
-                               "latency_ms": None}
+                               "latency_ms": None, "model_attempted": False,
+                               "scope": inner_settings["scope"]}
                 inner_block = str(outcome.get("ctx") or "")
                 inner_ctx = inner_block if outcome.get("injected") else ""
                 inner_state_dict = outcome.get("state") or {}
                 inner_meta = {
-                    "mode": "model", "source": str(outcome.get("source") or "rule"),
+                    # scope 拦下模型时 mode=rule（不落 inner_states、0 延迟）
+                    "mode": "model" if outcome.get("model_attempted") else "rule",
+                    "source": str(outcome.get("source") or "rule"),
                     "fallback": str(outcome.get("fallback") or ""),
                     "latency_ms": outcome.get("latency_ms"),
                     "injected": bool(outcome.get("injected")),
                     "shadow_only": shadow_only,
+                    "scope": str(outcome.get("scope") or inner_settings["scope"]),
                 }
             elif inner_mode in ("static", "rule"):
                 # W2 兼容路径（人工开关/回退对照），零副作用
@@ -633,9 +640,10 @@ class SelfLearnAgent:
             con.commit()
         finally:
             con.close()
-        # W3-A/P3-a：内状态落库（shadow 只记不注入；model 记录实际来源/延迟/回退原因）。
+        # W3-A/P3-a/P3-b：内状态落库（shadow 只记不注入；model 记录实际来源/延迟/回退原因；
+        # scope 拦下模型时 mode=rule，不落库、0 延迟）。
         # 失败静默降级，不影响主链。
-        if not crisis and (shadow_mode or inner_mode == "model"):
+        if not crisis and (shadow_mode or inner_meta.get("mode") == "model"):
             record_mode = "shadow" if shadow_mode else "model"
             block = shadow_block if shadow_mode else inner_block
             state_json = (json.dumps(inner_state_dict, ensure_ascii=False)

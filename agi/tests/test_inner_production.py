@@ -47,7 +47,8 @@ VALID_INNER = json.dumps({
 def _isolate_inner(monkeypatch, tmp_path):
     """每个用例：清观测状态、隔离日志/配置、清内状态相关环境变量。"""
     inject.reset_stats()
-    for name in ("INNER_MODE", "INNER_SHADOW_ONLY", "SOUL_SERVER_URL", "SOUL_TIMEOUT_S"):
+    for name in ("INNER_MODE", "INNER_MODE_SCOPE", "INNER_SCHEMA", "INNER_SHADOW_ONLY",
+                 "SOUL_SERVER_URL", "SOUL_TIMEOUT_S"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("INNER_HEALTH_CACHE_S", "0")
     monkeypatch.setattr(inject, "INNER_LOG_PATH", tmp_path / "inner.log")
@@ -397,7 +398,9 @@ def test_old_inner_states_db_gets_observability_columns(tmp_path):
 def test_config_switch_enables_local_for_production_agent(monkeypatch, tmp_path):
     monkeypatch.setattr(inject, "_read_gateway_config",
                         lambda: {"inner_mode": "model", "soul_timeout_s": 2.0,
-                                 "soul_server_url": "http://127.0.0.1:8123"})
+                                 "soul_server_url": "http://127.0.0.1:8123",
+                                 # P3-b：生产默认 scope=proactive_only，本用例测 model 注入
+                                 "inner_mode_scope": "all"})
     inner = FakeLocalClient()
     monkeypatch.setattr(inject, "make_local_client", lambda settings=None: inner)
     path = tmp_path / "config_mode.sqlite3"

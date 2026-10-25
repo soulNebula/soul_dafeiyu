@@ -27,6 +27,47 @@ TRAIN_STATE_FIELDS = ("mood", "energy", "sharing", "battery", "trust", "stage", 
 MAX_TURNS = 4
 
 # --------------------------------------------------------------------------- #
+# 输出 schema（P3-b 精简版）
+# --------------------------------------------------------------------------- #
+#: 灵魂模型单轮**必须产出**的 4 个字段：行为与内心独白。
+#: mood/energy/sharing/battery/trust/stage 不再让模型生成——推理侧本来就会用
+#: 真实会话状态覆盖（见 ``agi/inner/inject._generate_model``），多生成只是白花
+#: ~60 个 token。P3-a 实测完整 13 字段 ≈123 completion tokens @240 tok/s ≈510ms，
+#: 精简到 4 字段后 ≈50–60 tokens，P95 从 696ms 降到 350–450ms 区间。
+#:
+#: ⚠ 只改推理侧 grammar，不改训练数据 target（先不重训 adapter）；如果 slim 输出
+#: 质量（行为字段与 teacher 一致率）明显下降，再对 ``soul_sft_v1`` 重训 4 字段 target。
+INNER_OUTPUT_FIELDS = ("stance", "intent", "monologue", "behavior")
+
+INNER_SCHEMA_SLIM: dict = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "InnerStateSlim",
+    "description": (
+        "灵魂蒸馏模型单轮输出（精简版）：只产 stance/intent/monologue/behavior；"
+        "mood/energy/sharing/battery/trust/stage 由推理侧用真实状态覆盖，不要模型生成。"
+    ),
+    "type": "object",
+    "additionalProperties": False,
+    "required": list(INNER_OUTPUT_FIELDS),
+    "properties": {
+        "stance": {"type": "string", "maxLength": 30},
+        "intent": {"type": "string", "maxLength": 60},
+        "monologue": {"type": "string", "maxLength": 40},
+        "behavior": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["length", "ask", "advice", "emoji"],
+            "properties": {
+                "length": {"type": "string", "enum": ["short", "normal", "long"]},
+                "ask": {"type": "boolean"},
+                "advice": {"type": "boolean"},
+                "emoji": {"type": "string", "enum": ["偶尔", "不用"]},
+            },
+        },
+    },
+}
+
+# --------------------------------------------------------------------------- #
 # 角色设定 / 状态档案（state_profile）
 # --------------------------------------------------------------------------- #
 SOUL_PERSONA = (

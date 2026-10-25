@@ -59,6 +59,14 @@ DEFAULT_HEALTH_CACHE_S = 15.0
 FALLBACK_LOG_INTERVAL_S = 600.0
 #: 回退计数窗口（/status fallbacks_24h）
 FALLBACK_WINDOW_S = 86400.0
+#: P3-b：内状态调用范围（延迟兜底）。被动对话默认 rule（0 延迟），主动消息才用 model。
+SCOPES = ("all", "proactive_only", "off")
+DEFAULT_SCOPE = "proactive_only"
+#: 测试/离线（显式注入 client）上下文默认 all，保持 W2/W4 的 model 语义不变。
+DEFAULT_SCOPE_NON_PROD = "all"
+#: P3-b：输出 schema。slim=只要求 4 字段（省 ~60 tokens）；full=完整 InnerState（对照用）。
+SCHEMA_MODES = ("slim", "full")
+DEFAULT_SCHEMA_MODE = "slim"
 
 ROOT = Path(__file__).resolve().parents[2]
 #: inner_fallback JSONL 日志；测试可 monkeypatch 本模块属性
@@ -69,7 +77,7 @@ _FALLBACK_TIMES: deque[float] = deque(maxlen=10000)
 _LAST_LATENCY_MS: float | None = None
 _LAST_FALLBACK_LOG_TS: float = 0.0
 _HEALTH_CACHE: dict[str, tuple[float, bool]] = {}
-_LOCAL_CLIENTS: dict[tuple[str, float], Any] = {}
+_LOCAL_CLIENTS: dict[tuple[str, float, str], Any] = {}
 
 _WS = re.compile(r"\s+")
 _SECOND_PERSON = re.compile(r"你(?:必须|应该|需要|不能|不准|可以|得|要|是|别)")
@@ -207,7 +215,8 @@ def resolve_settings(*, production: bool = True) -> dict:
 
     ``production=False``（调用方显式注入 client 的测试/离线场景）时**不读配置文件**，
     只认环境变量，保证线上灰度配置不会污染测试套件。
-    返回 ``{mode, shadow_only, server_url, timeout_s}``；mode 非法一律回退 off。
+    返回 ``{mode, shadow_only, server_url, timeout_s, scope, schema}``；
+    mode/scope/schema 非法值一律回退安全默认。
     """
     cfg: dict = _read_gateway_config() if production else {}
     raw_mode = os.environ.get("INNER_MODE")
@@ -228,23 +237,73 @@ def resolve_settings(*, production: bool = True) -> dict:
         except (TypeError, ValueError):
             timeout = DEFAULT_SOUL_TIMEOUT_S
     timeout = max(0.05, min(float(timeout), 30.0))
+    # P3-b：scope（all/proactive_only/off）。生产默认 proactive_only（被动 0 延迟），
+    # 测试/消融默认 all（保持 W2/W4 的 model 全量语义）。
+    env_scope = os.environ.get("INNER_MODE_SCOPE")
+    raw_scope = env_scope
+    if raw_scope is None:
+        raw_scope = cfg.get("inner_mode_scope")
+    if raw_scope is None:
+        raw_scope = DEFAULT_SCOPE if production else DEFAULT_SCOPE_NON_PROD
+    scope = str(raw_scope or "").strip().lower()
+    if scope not in SCOPES:
+        scope = DEFAULT_SCOPE if production else DEFAULT_SCOPE_NON_PROD
+    # P3-b：输出 schema（slim=4 字段省 token；full=对照）。
+    raw_schema = os.environ.get("INNER_SCHEMA") or cfg.get("inner_schema")
+    schema_mode = str(raw_schema or DEFAULT_SCHEMA_MODE).strip().lower()
+    if schema_mode not in SCHEMA_MODES:
+        schema_mode = DEFAULT_SCHEMA_MODE
     return {"mode": mode, "shadow_only": bool(shadow_only),
             "server_url": str(url or DEFAULT_SOUL_SERVER_URL).rstrip("/"),
-            "timeout_s": round(timeout, 3)}
+            "timeout_s": round(timeout, 3), "scope": scope,
+            "schema": schema_mode}
+
+
+def scope_allows_model(scope: Any, *, proactive: bool) -> bool:
+    """scope → 这次调用是否允许走 model（P3-b 延迟兜底）。
+
+    - ``all``：被动/主动都用 model；
+    - ``proactive_only``（生产默认）：被动消息用 rule（0 延迟），主动消息才用 model；
+    - ``off``：都不用 model（等价内状态只用 rule）。
+    """
+    value = str(scope or "").strip().lower()
+    if value == "all":
+        return True
+    if value == "proactive_only":
+        return bool(proactive)
+    return False
+
+
+def client_schema(settings: dict | None = None) -> dict | None:
+    """按 settings 选 llama-client 的 response_format schema。
+
+    - ``slim``（默认）→ ``agi/soul/prompt.INNER_SCHEMA_SLIM``（4 字段，省 token）；
+    - ``full`` → None（LlamaClient 用默认完整 InnerState schema，对照用）。
+    """
+    current = settings or resolve_settings()
+    if str(current.get("schema") or DEFAULT_SCHEMA_MODE).strip().lower() != "slim":
+        return None
+    from ..soul import prompt as soul_prompt
+
+    return soul_prompt.INNER_SCHEMA_SLIM
 
 
 def make_local_client(settings: dict | None = None, *, force_new: bool = False) -> Any:
-    """构造/复用本地 llama-server client（按 url+timeout 缓存）。"""
+    """构造/复用本地 llama-server client（按 url+timeout+schema 缓存）。
+
+    P3-b：默认用 slim schema（4 字段）；``settings["schema"] == "full"`` 时用完整 schema。
+    """
     current = settings or resolve_settings()
     key = (str(current.get("server_url") or DEFAULT_SOUL_SERVER_URL),
-           float(current.get("timeout_s") or DEFAULT_SOUL_TIMEOUT_S))
+           float(current.get("timeout_s") or DEFAULT_SOUL_TIMEOUT_S),
+           str(current.get("schema") or DEFAULT_SCHEMA_MODE))
     if not force_new:
         client = _LOCAL_CLIENTS.get(key)
         if client is not None:
             return client
     from ..soul.llama_client import LlamaClient
 
-    client = LlamaClient(key[0], timeout_s=key[1])
+    client = LlamaClient(key[0], timeout_s=key[1], schema=client_schema(current))
     _LOCAL_CLIENTS[key] = client
     return client
 
@@ -320,7 +379,7 @@ def log_fallback(reason: str, *, now: float | None = None,
 
 
 def stats(*, now: float | None = None) -> dict:
-    """``/status`` 用的内状态观测：mode / last_latency_ms / fallbacks_24h。"""
+    """``/status`` 用的内状态观测：mode / scope / last_latency_ms / fallbacks_24h。"""
     now = time.time() if now is None else float(now)
     with _LOCK:
         recent = sum(1 for ts in _FALLBACK_TIMES if now - ts <= FALLBACK_WINDOW_S)
@@ -329,6 +388,8 @@ def stats(*, now: float | None = None) -> dict:
     return {
         "mode": settings["mode"],
         "shadow_only": settings["shadow_only"],
+        "scope": settings["scope"],
+        "schema": settings["schema"],
         "backend": "local" if settings["mode"] == "model" else "rule",
         "server_url": settings["server_url"],
         "timeout_s": settings["timeout_s"],
@@ -424,8 +485,13 @@ def _generate_model(path, client, text: str, recent: list | None,
     obj = parse_json(str(result.get("text") or ""))
     if not isinstance(obj, dict):
         return "", {}, "bad_json"
-    if not any(key in obj for key in ("stance", "intent", "monologue", "behavior")):
+    # P3-b：slim schema 下 4 个字段都必须有；缺字段视为输出不可用 → 回退 rule
+    required = ("stance", "intent", "monologue", "behavior")
+    if not any(key in obj for key in required):
         return "", {}, "empty_json"
+    missing = [key for key in required if key not in obj]
+    if missing:
+        return "", {}, "missing_fields"
     try:
         st = schema.validate({**obj, "source": "model"})
     except (TypeError, ValueError):
@@ -487,25 +553,32 @@ def build_inner_ctx(path, mode: str = "off", client=None, text: str = "",
 def build_inner_ctx_ex(path, mode: str = "off", client=None, text: str = "",
                        recent: list | None = None, state: dict | None = None,
                        *, is_local: bool | None = None,
-                       shadow_only: bool = False) -> dict:
+                       shadow_only: bool = False, proactive: bool = False,
+                       scope: str | None = None) -> dict:
     """生产接入入口：构建内状态并返回元数据。
 
     返回::
 
-        {"mode": off|static|rule|model,   # 归一化后的模式
+        {"mode": off|static|rule|model,   # 实际生效模式（scope 拦下 model 时为 rule）
+         "model_attempted": 是否真的调了模型（scope 拦截/off/rule 时 False）,
+         "scope": all|proactive_only|off（本次判定所用策略）,
          "ctx": 渲染块（可能为空串）,
          "injected": 是否允许注入 prompt（shadow_only 时恒 False）,
          "source": "off"|"static"|"rule"|"local"|"remote",
          "state": 落库用 InnerState dict（失败/static/off 时为空 dict）,
          "fallback": "" | 回退原因,
-         "latency_ms": 模型调用耗时（rule/static/off 为 None；失败也记）}
+         "latency_ms": 模型调用耗时（rule/static/off/scope 拦截为 None；失败也记）}
 
-    model 模式：本地 client 不可用/超时/返回非法 → 自动回退 rule（不阻塞主链），
-    回退计数 + 节流日志由本函数负责。
+    model 模式：``scope`` 不允许（如默认 proactive_only 下的被动消息）→ 直接 rule
+    渲染、**0 模型延迟**；允许时本地 client 不可用/超时/返回非法 → 自动回退 rule
+    （不阻塞主链），回退计数 + 节流日志由本函数负责。
     """
     mode = normalize_mode(mode)
-    result: dict = {"mode": mode, "ctx": "", "injected": False, "source": "off",
-                    "state": {}, "fallback": "", "latency_ms": None}
+    effective_scope = str(scope or ("all" if proactive else DEFAULT_SCOPE)).strip().lower()
+    result: dict = {"mode": mode, "model_attempted": False,
+                    "scope": effective_scope, "ctx": "", "injected": False,
+                    "source": "off", "state": {}, "fallback": "",
+                    "latency_ms": None}
     if mode == "off":
         return result
     if mode == "static":
@@ -521,6 +594,16 @@ def build_inner_ctx_ex(path, mode: str = "off", client=None, text: str = "",
                       injected=not shadow_only)
         return result
 
+    # P3-b：scope 兜底——被动消息默认不调模型，直接 rule（0 延迟）
+    if not scope_allows_model(effective_scope, proactive=bool(proactive)):
+        try:
+            rule_ctx, rule_state = _rule_ctx_ex(path, text, state)
+        except Exception:  # noqa: BLE001
+            rule_ctx, rule_state = "", {}
+        result.update(mode="rule", ctx=rule_ctx, state=rule_state, source="rule",
+                      injected=not shadow_only)
+        return result
+
     local = _is_local_client(client, is_local)
     started = time.perf_counter()
     block, state_dict, fallback = "", {}, "internal_error"
@@ -531,6 +614,7 @@ def build_inner_ctx_ex(path, mode: str = "off", client=None, text: str = "",
         fallback = _classify_failure(f"{type(exc).__name__}: {exc}")
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
     result["latency_ms"] = latency_ms
+    result["model_attempted"] = True
     record_latency(latency_ms)
     if block:
         result.update(ctx=block, state=state_dict, fallback="",

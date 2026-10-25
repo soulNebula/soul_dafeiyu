@@ -12,7 +12,9 @@ from .config import DB_PATH
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages(
   id TEXT PRIMARY KEY, role TEXT NOT NULL, text TEXT NOT NULL, ts REAL NOT NULL,
-  proactive INTEGER NOT NULL DEFAULT 0
+  proactive INTEGER NOT NULL DEFAULT 0,
+  -- P1-d：>90 天原文冷归档标记（只标记，不删不改写；旧库 connect() 幂等 ALTER）
+  archived_at REAL
 );
 CREATE TABLE IF NOT EXISTS user_memories(
   id TEXT PRIMARY KEY, scope TEXT NOT NULL DEFAULT 'user', kind TEXT NOT NULL,
@@ -133,7 +135,11 @@ CREATE TABLE IF NOT EXISTS practice_runs(
 );
 CREATE TABLE IF NOT EXISTS summaries(
   id TEXT PRIMARY KEY, content TEXT NOT NULL, evidence_json TEXT NOT NULL,
-  turns_count INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL
+  turns_count INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL,
+  -- P1-c/P1-d：阶段摘要 / 月度 gist 标记（旧库 connect() 幂等 ALTER）
+  kind TEXT NOT NULL DEFAULT 'stage',
+  year_month TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'llm'
 );
 CREATE TABLE IF NOT EXISTS attachments(
   id TEXT PRIMARY KEY, message_id TEXT, kind TEXT NOT NULL, mime TEXT NOT NULL,
@@ -284,9 +290,20 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
     mcols = {r[1] for r in con.execute("PRAGMA table_info(messages)").fetchall()}
     if "proactive" not in mcols:
         con.execute("ALTER TABLE messages ADD COLUMN proactive INTEGER NOT NULL DEFAULT 0")
+    # P1-d：原文冷归档标记（只标记 archived_at，不动 content/ts）
+    if "archived_at" not in mcols:
+        con.execute("ALTER TABLE messages ADD COLUMN archived_at REAL")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_messages_archived ON messages(archived_at)")
     tcols = {r[1] for r in con.execute("PRAGMA table_info(turns)").fetchall()}
     if "latency_ms" not in tcols:
         con.execute("ALTER TABLE turns ADD COLUMN latency_ms REAL")
+    # P1-c/P1-d：月度 gist 的三列统一在 connect() 迁移（summary.context 不再每轮 PRAGMA）
+    scols = {r[1] for r in con.execute("PRAGMA table_info(summaries)").fetchall()}
+    for col, ddl in (("kind", "kind TEXT NOT NULL DEFAULT 'stage'"),
+                     ("year_month", "year_month TEXT NOT NULL DEFAULT ''"),
+                     ("source", "source TEXT NOT NULL DEFAULT 'llm'")):
+        if col not in scols:
+            con.execute(f"ALTER TABLE summaries ADD COLUMN {ddl}")
     con.commit()
     return con
 

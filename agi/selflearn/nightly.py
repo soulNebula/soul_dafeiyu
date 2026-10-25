@@ -51,6 +51,11 @@ def run(path: Path | str, client=None, *, force: bool = False) -> dict[str, Any]
         steps["memory_decay"] = memory.decay(path)
     except Exception as exc:  # noqa: BLE001
         steps["memory_decay"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    # P1-d：>90 天原文冷归档（只加 archived_at 标记，不删不改写；每日一次、幂等）
+    try:
+        steps["archive_cold"] = memory.archive_cold(path)
+    except Exception as exc:  # noqa: BLE001
+        steps["archive_cold"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     # P1-c：月度 gist（只从原始 messages 重建；每月最多一次，最多补最近 3 个月）
     try:
         steps["monthly_gist"] = summary.maintenance_monthly(path, client)

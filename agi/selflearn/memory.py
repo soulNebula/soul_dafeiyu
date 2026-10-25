@@ -778,3 +778,88 @@ def apply_correction(path: Path | str, text: str) -> dict[str, Any] | None:
     result["matched"] = target["content"]
     result["trigger"] = "chat_correction"
     return result
+
+
+# --------------------------------------------------------------------------- #
+# P1-d：>90 天原文冷归档（只加 archived_at 标记，不删、不改写 content/ts）
+# --------------------------------------------------------------------------- #
+def archive_cold(path: Path | str = DB_PATH, now: float | None = None, *,
+                 days: float = 90, batch: int = 500) -> dict:
+    """把超过 ``days`` 天的原始 messages 标记为冷归档（幂等、分批）。
+
+    只写 ``messages.archived_at``：content/text 与 ts **逐字节不变**，永不删除。
+    蒸馏层（user_memories / claims / summaries）不归档——它们已是压缩层。
+    """
+    now = time.time() if now is None else float(now)
+    cutoff = now - max(0.0, float(days)) * 86400.0
+    size = max(1, int(batch))
+    con = db.connect(path)
+    try:
+        scanned = int(con.execute(
+            "SELECT count(*) FROM messages WHERE ts<?", (cutoff,)).fetchone()[0])
+        before = int(con.execute(
+            "SELECT count(*) FROM messages WHERE archived_at IS NULL AND ts<?",
+            (cutoff,)).fetchone()[0])
+        while True:
+            rows = con.execute(
+                "SELECT id FROM messages WHERE archived_at IS NULL AND ts<? LIMIT ?",
+                (cutoff, size)).fetchall()
+            if not rows:
+                break
+            ids = [str(row["id"]) for row in rows]
+            con.executemany(
+                "UPDATE messages SET archived_at=? WHERE id=? AND archived_at IS NULL",
+                [(now, mid) for mid in ids])
+            con.commit()
+            if len(ids) < size:
+                break
+        remaining = int(con.execute(
+            "SELECT count(*) FROM messages WHERE archived_at IS NULL AND ts<?",
+            (cutoff,)).fetchone()[0])
+    finally:
+        con.close()
+    return {"ok": True, "archived": before - remaining, "scanned": scanned,
+            "remaining": remaining, "cutoff": cutoff, "days": float(days)}
+
+
+def archive_stats(path: Path | str = DB_PATH, now: float | None = None) -> dict:
+    """冷归档指标：总消息数 / 已归档 / 活跃 / 最老活跃天数。"""
+    now = time.time() if now is None else float(now)
+    con = db.connect(path)
+    try:
+        total = int(con.execute("SELECT count(*) FROM messages").fetchone()[0])
+        archived = int(con.execute(
+            "SELECT count(*) FROM messages WHERE archived_at IS NOT NULL").fetchone()[0])
+        row = con.execute(
+            "SELECT min(ts) AS oldest FROM messages WHERE archived_at IS NULL").fetchone()
+        oldest_ts = float(row["oldest"] or 0.0) if row is not None else 0.0
+    finally:
+        con.close()
+    active = total - archived
+    oldest_active_days = max(0.0, (now - oldest_ts) / 86400.0) if active and oldest_ts else 0.0
+    return {"messages_total": total, "archived": archived, "active": active,
+            "oldest_active_days": round(oldest_active_days, 1)}
+
+
+def export_archive(path: Path | str = DB_PATH, out_path: Path | str = "") -> dict:
+    """把已归档 messages 导出 JSONL 冷备（覆盖写，不追加、不删库内数据）。"""
+    if not out_path:
+        return {"ok": False, "error": "out_path 不能为空"}
+    target = Path(out_path)
+    con = db.connect(path)
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT id, ts, role, text, archived_at FROM messages "
+            "WHERE archived_at IS NOT NULL ORDER BY ts ASC, id ASC").fetchall()]
+    finally:
+        con.close()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps({
+                "id": str(row["id"]), "ts": float(row["ts"]),
+                "role": str(row["role"]), "content": str(row["text"]),
+                "archived_at": float(row["archived_at"]),
+            }, ensure_ascii=False) + "\n")
+    return {"ok": True, "rows": len(rows), "out": str(target)}
+

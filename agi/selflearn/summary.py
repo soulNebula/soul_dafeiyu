@@ -50,7 +50,6 @@ def _ensure_monthly_schema(con) -> None:
 def latest(path: Path | str = DB_PATH) -> dict | None:
     con = db.connect(path)
     try:
-        _ensure_monthly_schema(con)
         row = con.execute(
             "SELECT * FROM summaries WHERE kind<>'monthly' "
             "ORDER BY created_at DESC LIMIT 1").fetchone()
@@ -67,7 +66,6 @@ def context(path: Path | str = DB_PATH, max_chars: int = 900,
     """最新阶段摘要优先，其次附最近 N 份月度 gist（更早以前的要点），总长 ≤ max_chars。"""
     con = db.connect(path)
     try:
-        _ensure_monthly_schema(con)
         stage = con.execute(
             "SELECT * FROM summaries WHERE kind<>'monthly' "
             "ORDER BY created_at DESC LIMIT 1").fetchone()
@@ -311,7 +309,6 @@ def build_monthly(path: Path | str, year_month: str, client=None, *,
     start, end, label = _month_bounds(year_month)
     con = db.connect(path)
     try:
-        _ensure_monthly_schema(con)
         messages = [dict(r) for r in con.execute(
             "SELECT id, role, text, ts FROM messages WHERE ts>=? AND ts<? "
             "ORDER BY ts ASC, id ASC", (start, end)).fetchall()]
@@ -374,7 +371,6 @@ def build_monthly(path: Path | str, year_month: str, client=None, *,
 
     con = db.connect(path)
     try:
-        _ensure_monthly_schema(con)
         existing = con.execute(
             "SELECT id FROM summaries WHERE kind='monthly' AND year_month=? "
             "ORDER BY created_at DESC LIMIT 1", (year_month,)).fetchone()
@@ -403,7 +399,6 @@ def build_monthly(path: Path | str, year_month: str, client=None, *,
 def latest_monthly_month(path: Path | str = DB_PATH) -> str:
     con = db.connect(path)
     try:
-        _ensure_monthly_schema(con)
         row = con.execute(
             "SELECT max(year_month) AS ym FROM summaries WHERE kind='monthly'").fetchone()
         return str(row["ym"] or "") if row is not None else ""

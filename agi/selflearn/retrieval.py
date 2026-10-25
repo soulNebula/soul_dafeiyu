@@ -25,10 +25,61 @@ def _grams(text: str) -> set[str]:
     return out
 
 
+def _archived_message_ids(path: Path | str, source_ids: list[str]) -> set[str]:
+    """P1-d：返回这些 message source_id 里已冷归档的集合（缺行/无列时按未归档）。
+
+    用轻量 sqlite3 连接（不跑 db.connect 的全量表迁移），避免给每轮检索加开销。
+    """
+    ids = [str(i) for i in source_ids if str(i)]
+    if not ids:
+        return set()
+    try:
+        import sqlite3
+        con = sqlite3.connect(str(path), timeout=5.0)
+    except (sqlite3.Error, OSError):
+        return set()
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(messages)").fetchall()}
+        if "archived_at" not in cols:
+            return set()
+        marks = ",".join("?" for _ in ids)
+        rows = con.execute(
+            f"SELECT id FROM messages WHERE archived_at IS NOT NULL "
+            f"AND id IN ({marks})", ids).fetchall()
+        return {str(r[0]) for r in rows}
+    except sqlite3.Error:
+        return set()
+    finally:
+        con.close()
+
+
 def hybrid(path: Path | str, query: str, *, k: int = 6, now: float | None = None) -> list[dict[str, Any]]:
     now = time.time() if now is None else float(now)
     limit = max(1, int(k))
     raw = search.search(path, query, limit=max(8, limit * 4))
+    if not raw:
+        return []
+    # P1-d：默认排除已冷归档（>90 天）的原文消息；用户明确"翻旧账"时才允许检索，
+    # 并在结果上标 archived=True 供下游做时间模糊（"更早以前"）。
+    try:
+        from . import memory as _memory
+        lookback = _memory.wants_lookback(query)
+    except Exception:  # noqa: BLE001
+        lookback = False
+    archived_ids = _archived_message_ids(
+        path, [str(r.get("source_id") or "") for r in raw
+               if str(r.get("source_type") or "") == "message"])
+    filtered: list[dict[str, Any]] = []
+    for r in raw:
+        st = str(r.get("source_type") or "text")
+        sid = str(r.get("source_id") or "")
+        is_archived = st == "message" and sid in archived_ids
+        if is_archived and not lookback:
+            continue
+        item = dict(r)
+        item["archived"] = is_archived
+        filtered.append(item)
+    raw = filtered
     if not raw:
         return []
     max_score = max(float(r.get("score") or 0) for r in raw) or 1.0
@@ -42,7 +93,10 @@ def hybrid(path: Path | str, query: str, *, k: int = 6, now: float | None = None
         score = 0.6 * rel + 0.25 * source + 0.15 * recency
         cands.append({"source_type": st, "source_id": str(r.get("source_id") or ""),
                       "text": text, "score": round(score, 4), "relevance": round(rel, 4),
-                      "source_weight": source, "tokens": _grams(text)})
+                      "source_weight": source,
+                      "archived": bool(r.get("archived")),
+                      "tokens": _grams(text)})
+
     selected = []
     while cands and len(selected) < limit:
         best = None
@@ -64,4 +118,9 @@ def hybrid(path: Path | str, query: str, *, k: int = 6, now: float | None = None
 
 def context(path: Path | str, query: str, *, k: int = 5) -> str:
     hits = hybrid(path, query, k=k)
-    return "\n".join(f"- [{h['source_type']}] {h['text'][:160]}" for h in hits)
+    lines = []
+    for h in hits:
+        # P1-d：归档内容用模糊时间前缀渲染，绝不输出具体日期/天数
+        prefix = "[更早以前] " if h.get("archived") else ""
+        lines.append(f"- {prefix}[{h['source_type']}] {h['text'][:160]}")
+    return "\n".join(lines)

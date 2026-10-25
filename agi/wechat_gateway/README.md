@@ -121,6 +121,71 @@ max_chars: 500             单条长度上限（超长直接拒发）
 疑似凭据赋值（`API key: …` / `password=…`）、`wxid_` 内部 ID、`sk-…`、私钥头。
 所有拦截都记 `send_blocked` + 原因，不会调用 wxauto。
 
+## STOP 开关与测试隔离（P0-22b）
+
+### 用法
+
+STOP 是"最高优先级"的发送总闸：**文件存在 = 立即停止一切外发（含 reactive/force）**，
+删除即恢复，不需要重启进程。
+
+```bash
+# 手动急停 / 恢复（生产路径 = 与 config.json 同目录）
+touch agi/data/wechat/STOP      # 停
+rm -f agi/data/wechat/STOP      # 恢复
+```
+
+也可走管理接口（需 token，幂等）：
+
+```bash
+curl -X POST -H "X-Admin-Token: $TOKEN" http://127.0.0.1:801/api/proactive/stop
+curl -X POST -H "X-Admin-Token: $TOKEN" http://127.0.0.1:801/api/proactive/resume
+```
+
+- `/status` 的 `proactive.stopped` 反映当前状态；
+- 命中后 `_send` 返回 `{ok:false, status:"blocked", error:"stop_file"}`，并记
+  `send_blocked(reason=stop_file)`；`run_cycle` 直接返回
+  `{ran:false, reason:"stopped", stopped:true}`（不调 ticker、不发消息）；
+- **blocked 不算失败**：不计 `failed`、不参与熔断计数（不会因为 STOP 期误开熔断），
+  但会在 `/status` 与日志里可见；日志 `proactive_stopped` 10 分钟节流一次。
+
+### 为什么测试必须隔离
+
+事故（2026-10-25）：运维为保险在 `agi/data/wechat/STOP` 建了停止文件，结果
+`test_wechat_draft_flow.py` 4 条全部失败——测试里的 `Gateway` 读的是**生产 STOP 路径**，
+被真实文件拦成 `blocked`。**生产文件的存在不应该改变任何测试结果。**
+
+`agi/tests/conftest.py` 的 autouse fixture `_isolate_stop_path` 把 STOP 路径重定向到
+`tmp_path/"STOP"`：
+
+- 常规测试：`config.stop_path()` → `tmp_path/"STOP"`，生产 STOP 永远读不到；
+- 测试自己把 `CONFIG_PATH` 指到 tmp 时（如 `test_config_hot_reload`），STOP 仍跟随
+  `config.json` 同目录，保持"开关与配置同目录"的语义；
+- 解析结果落在生产 `config.DATA_DIR` 下一律改写为 tmp 路径；
+- 每个测试结束恢复原 `STOP_PATH`，不会串味。
+
+### 代码里的注入点（测试/多实例）
+
+```python
+from agi.wechat_gateway import config as gw_config
+
+gw_config.set_stop_path("/tmp/STOP")   # 模块级覆盖（None = 恢复默认）
+gw_config.stop_path()                  # 已应用覆盖的路径
+gw_config.stopped()                    # 该路径是否存在
+
+Gateway(cfg, stop_path="/tmp/STOP")    # 单实例显式注入（优先级最高）
+```
+
+`STOP_PATH` 支持 `Path`/`str`/`callable`（callable 每次调用求值，conftest 用它做动态重定向）。
+
+**验收**：在 `agi/data/wechat/STOP` 真实存在的情况下跑
+
+```bash
+python -m pytest agi/tests/test_wechat_draft_flow.py agi/tests/test_interval_random.py \
+                 agi/tests/test_config_hot_reload.py agi/tests/test_stop_isolation.py -q
+```
+
+应全绿（实测 31 passed）；删掉生产 STOP 后全量 `pytest agi/tests -q` 同样全绿。
+
 ## 窗口级兜底（默认关闭）
 
 wxauto 失败时可以用窗口级兜底，但**默认只做"人工协助"**——因为窗口输入无法可靠校验
@@ -185,6 +250,5 @@ complaint_stop: true               # 收到投诉/举报/机器人识别 → 立
 ## 尚未做
 
 - 主动消息若落在草稿（confirm）里，批准后不会补登记 last_turns（只对直接发送的登记）；
-- 在线急停（改 `stop` 需要重启；目标 <1s 的 HTTP 开关还没做）；
 - 草稿的列表界面（目前只有 JSON 接口）；
 - 发送频率的按小时窗口（现在只有每分钟/每日两个窗口）。

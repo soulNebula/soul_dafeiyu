@@ -70,10 +70,12 @@ def _log(entry: dict, path: Path | None = None) -> None:
 
 
 class Gateway:
-    def __init__(self, cfg_obj: dict):
+    def __init__(self, cfg_obj: dict, *, stop_path: Path | str | None = None):
         self.cfg = dict(cfg_obj)
         self.draft_path = self.cfg.get("drafts_path") or drafts.DEFAULT_PATH
         self.log_path = Path(self.cfg.get("log_path") or LOG_PATH)
+        # P0-22b：STOP 路径显式注入（None = 走 config.stop_path()，可被测试隔离）
+        self._stop_path = Path(stop_path) if stop_path is not None else None
         self.receiver = None
         self.backend = None
         self.sender = WxAutoSender()
@@ -206,10 +208,20 @@ class Gateway:
     # ------------------------------------------------------------------ #
     # P0-22：紧急停止 / 夜间静默硬保护 / 热加载辅助
     # ------------------------------------------------------------------ #
+    def _stop_file(self) -> Path:
+        """STOP 文件路径：显式注入 > ``config.stop_path()``（测试可隔离）。
+
+        每次都重新解析而不是在 ``__init__`` 缓存，这样 Gateway 创建之后再重定向
+        ``config.STOP_PATH``（或 conftest autouse fixture）也能生效。
+        """
+        if self._stop_path is not None:
+            return self._stop_path
+        return cfg.stop_path()
+
     def stop_present(self) -> bool:
         """STOP 文件存在 = 立即停止一切外发（删除即恢复）。"""
         try:
-            return bool(cfg.stopped())
+            return bool(self._stop_file().exists())
         except Exception:  # noqa: BLE001
             return False
 
@@ -220,12 +232,13 @@ class Gateway:
         if last and now - last < STOP_LOG_INTERVAL_S:
             return
         self._last_stop_log_ts = now
-        self._record("proactive_stopped", {"reason": "stop_file", "path": str(cfg.stop_path())})
+        self._record("proactive_stopped", {"reason": "stop_file",
+                                          "path": str(self._stop_file())})
 
     def set_stop(self, stopped: bool, *, now: float | None = None) -> dict:
         """创建/删除 STOP 文件（幂等）；返回 {ok, stopped}。"""
         now = time.time() if now is None else float(now)
-        target = cfg.stop_path()
+        target = self._stop_file()
         wanted = bool(stopped)
         try:
             if wanted:

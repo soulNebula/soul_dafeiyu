@@ -190,10 +190,37 @@ def contact_db(contact: str) -> Path:
 #: 每个 CONFIG_PATH 最近一次成功加载的 mtime_ns（热加载用）
 _LAST_MTIME: dict[str, int] = {}
 
+#: P0-22b：STOP 路径覆盖（测试/多实例隔离注入点）。
+#: - ``None``（默认）= 与 ``CONFIG_PATH`` 同目录的 ``STOP``；
+#: - ``Path``/``str`` = 直接用该路径；
+#: - callable = 每次调用时求值（conftest 用它做"生产目录→tmp"的动态重定向）。
+#: 用 :func:`set_stop_path` 修改；单独读写这个模块属性也生效。
+STOP_PATH: Any = None
+
+
+def default_stop_path() -> Path:
+    """默认 STOP 路径：与当前 ``CONFIG_PATH`` 同目录（忽略 ``STOP_PATH`` 覆盖）。"""
+    return Path(CONFIG_PATH).parent / "STOP"
+
 
 def stop_path() -> Path:
-    """紧急停止开关文件路径：与 config.json 同目录的 ``STOP``。"""
-    return Path(CONFIG_PATH).parent / "STOP"
+    """紧急停止开关文件路径（已应用 ``STOP_PATH`` 注入）。
+
+    默认与 ``config.json`` 同目录的 ``STOP``；``STOP_PATH`` 非 None 时覆盖，
+    供测试/多实例隔离，避免读到生产 ``agi/data/wechat/STOP``。
+    """
+    override = STOP_PATH
+    if override is not None:
+        if callable(override):
+            return Path(override())
+        return Path(override)
+    return default_stop_path()
+
+
+def set_stop_path(path: Path | str | None) -> None:
+    """设置/清除 STOP 路径覆盖（``None`` 恢复默认）。"""
+    global STOP_PATH
+    STOP_PATH = Path(path) if path is not None else None
 
 
 def stopped() -> bool:

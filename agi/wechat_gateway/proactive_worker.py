@@ -401,9 +401,13 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 gateway.cfg.update(loaded)
             except Exception:  # noqa: BLE001
                 pass
-    # P0-22：紧急停止开关是最优先判断——STOP 文件存在则本轮不发任何消息
+    # P0-22b：紧急停止开关是最优先判断——STOP 文件存在则本轮不发任何消息。
+    # 路径必须是「注入后的」：优先 Gateway.stop_present()（显式 stop_path 或
+    # config.stop_path()，conftest 已把生产路径隔离到 tmp）；轻量 FakeGateway
+    # 没有该方法时才回退模块级 config.stopped()（同样走隔离后的 stop_path）。
     try:
-        stop_file = bool(gw_cfg.stopped())
+        checker = getattr(gateway, "stop_present", None)
+        stop_file = bool(checker()) if callable(checker) else bool(gw_cfg.stopped())
     except Exception:  # noqa: BLE001
         stop_file = False
     if stop_file:

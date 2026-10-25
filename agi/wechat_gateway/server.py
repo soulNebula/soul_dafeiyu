@@ -54,6 +54,10 @@ STALE_REPEAT_S = 1800.0     # 同一告警 30 分钟内最多写一次（防刷�
 #: 内部调度/心跳事件不是"真实活动"，不刷新 last_event_ts（避免调度喂饱哨兵）
 STALE_IGNORED_KINDS = frozenset({"gateway_stale", "proactive_schedule"})
 
+# P0-22：紧急停止日志节流 / 静默覆盖有效期
+STOP_LOG_INTERVAL_S = 600.0        # proactive_stopped 每 10 分钟最多 1 条
+QUIET_OVERRIDE_S = 86400.0         # proactive_override_quiet 24h 后自动失效
+
 
 def _log(entry: dict, path: Path | None = None) -> None:
     target = Path(path) if path else LOG_PATH
@@ -94,6 +98,12 @@ class Gateway:
         # P0-2 死区哨兵：任何事件都会刷新 last_event_ts；长时间没有事件就写 gateway_stale
         self.last_event_ts = self.started_at
         self._last_stale_ts = 0.0
+        # P0-22：配置热加载 / 紧急停止 / 夜间静默硬保护
+        self._config_hot_reload = True       # run_cycle 每轮按 mtime 重读 config.json
+        self._last_stop_log_ts = 0.0         # proactive_stopped 日志节流（10 分钟）
+        self._override_started_ts: float | None = None
+        self._override_expired_logged = False
+        self._quiet_warned_value: str | None = None
 
     def start(self) -> None:
         if not self.cfg.get("enabled"):
@@ -192,6 +202,99 @@ class Gateway:
             "interval_max_s": round(float(self.cfg.get("proactive_interval_max_s") or 7200.0), 1),
         })
         return True
+
+    # ------------------------------------------------------------------ #
+    # P0-22：紧急停止 / 夜间静默硬保护 / 热加载辅助
+    # ------------------------------------------------------------------ #
+    def stop_present(self) -> bool:
+        """STOP 文件存在 = 立即停止一切外发（删除即恢复）。"""
+        try:
+            return bool(cfg.stopped())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _log_stopped(self, now: float | None = None) -> None:
+        """proactive_stopped 日志节流：每 10 分钟最多 1 条（首次必写）。"""
+        now = time.time() if now is None else float(now)
+        last = float(getattr(self, "_last_stop_log_ts", 0.0) or 0.0)
+        if last and now - last < STOP_LOG_INTERVAL_S:
+            return
+        self._last_stop_log_ts = now
+        self._record("proactive_stopped", {"reason": "stop_file", "path": str(cfg.stop_path())})
+
+    def set_stop(self, stopped: bool, *, now: float | None = None) -> dict:
+        """创建/删除 STOP 文件（幂等）；返回 {ok, stopped}。"""
+        now = time.time() if now is None else float(now)
+        target = cfg.stop_path()
+        wanted = bool(stopped)
+        try:
+            if wanted:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if not target.exists():
+                    target.write_text("stopped\n", encoding="utf-8")
+            else:
+                target.unlink(missing_ok=True)
+        except OSError as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "stopped": self.stop_present()}
+        self._record("proactive_stop_toggled", {"stopped": wanted, "path": str(target), "ts": now})
+        return {"ok": True, "stopped": wanted}
+
+    def _quiet_hours_value(self) -> list[int]:
+        """夜间静默配置：``quiet_hours=[]`` 视为非法 → 回退默认 [23,8] 并告警一次。"""
+        raw = self.cfg.get("quiet_hours")
+        if raw is None:
+            return []  # 未配置：不做硬保护（旧 cfg/测试兼容）
+        quiet: list[int] = []
+        if isinstance(raw, (list, tuple)) and len(raw) == 2:
+            try:
+                quiet = [int(raw[0]), int(raw[1])]
+            except (TypeError, ValueError):
+                quiet = []
+        if not quiet:
+            fallback = list(cfg.DEFAULTS.get("quiet_hours") or [23, 8])
+            marker = f"{raw!r}"
+            if self._quiet_warned_value != marker:
+                self._quiet_warned_value = marker
+                self._record("quiet_hours_invalid", {"value": raw, "fallback": fallback})
+            return fallback
+        return quiet
+
+    def _quiet_override_active(self, now: float) -> tuple[bool, bool]:
+        """返回 (是否处于 24h override 有效期内, 本次是否刚激活)。"""
+        if not bool(self.cfg.get("proactive_override_quiet")):
+            self._override_started_ts = None
+            self._override_expired_logged = False
+            return False, False
+        if self._override_started_ts is None:
+            self._override_started_ts = now
+            self._record("quiet_override", {"started_at": now, "expires_in_s": QUIET_OVERRIDE_S})
+            return True, True
+        if now - self._override_started_ts < QUIET_OVERRIDE_S:
+            return True, False
+        if not self._override_expired_logged:
+            self._override_expired_logged = True
+            self._record("quiet_override_expired", {
+                "started_at": self._override_started_ts, "ttl_s": QUIET_OVERRIDE_S})
+        return False, False
+
+    def _quiet_blocked(self, now: float | None = None) -> bool:
+        """夜间静默硬保护：发送前最后一道，quiet_hours=[] 也不得绕过。
+
+        允许两种情况放行：① 显式 ``proactive_override_quiet=true`` 且 24h 内
+        （记 quiet_override 日志，过期自动失效）；② 显式 ``[0,0]`` 历史语义。
+        """
+        now = time.time() if now is None else float(now)
+        quiet = self._quiet_hours_value()
+        if not quiet or len(quiet) != 2:
+            return False
+        start, end = quiet
+        if int(start) == int(end):
+            return False
+        hour = time.localtime(now).tm_hour
+        if not policy.in_quiet_hours(hour, start, end):
+            return False
+        active, just = self._quiet_override_active(now)
+        return not active
 
     def on_inbound(self, msg: dict) -> None:
         self._record("inbound", {"friend": msg.get("friend"), "text": msg.get("text"),
@@ -399,6 +502,11 @@ class Gateway:
 
     def _send(self, contact: str, text: str, *, force: bool = False,
               reactive: bool = False, proactive: bool = False) -> dict:
+        # P0-22：STOP 文件是最高优先级，先于任何发送判断（含 reactive/force）
+        if self.stop_present():
+            self._log_stopped()
+            self._record("send_blocked", {"friend": contact, "reason": "stop_file"})
+            return {"ok": False, "status": "blocked", "error": "stop_file"}
         # 纵深防御：出站文本里的微信内部 ID 一律摘掉（2026-10-24 引用事故）
         original = str(text or "")
         text = textguard.strip_internal_ids(original)
@@ -429,6 +537,17 @@ class Gateway:
             self._record("send_blocked", {"friend": contact, "reason": "stop_switch"})
             return {"ok": False, "status": "blocked", "error": "stop_switch"}
         now = time.time()
+        # P0-22：夜间静默硬保护（发送前最后一道；quiet_hours=[] 会回退默认 [23,8]，
+        # 只有显式 proactive_override_quiet=true 且 24h 内才能放行）
+        override_active, _just = self._quiet_override_active(now)
+        if self._quiet_blocked(now):
+            self._record("send_blocked", {"friend": contact, "reason": "quiet_hours"})
+            return {"ok": False, "status": "blocked", "error": "quiet_hours"}
+        policy_cfg = self.cfg
+        if override_active:
+            # 覆盖期内把 policy 的静默临时置空，避免 policy.check_send 先一步拦掉
+            policy_cfg = dict(self.cfg)
+            policy_cfg["quiet_hours"] = [0, 0]
         day = time.strftime("%Y-%m-%d", time.localtime(now))
         if day != self.sent_day:
             self.sent_day = day
@@ -440,7 +559,7 @@ class Gateway:
         last_sent_at = max(self.send_times) if self.send_times else 0.0
         verdict = policy.check_send(now=now, hour=time.localtime(now).tm_hour,
                                     recent_60s=recent, today_count=self.sent_today,
-                                    cfg=self.cfg, reactive=reactive and not proactive,
+                                    cfg=policy_cfg, reactive=reactive and not proactive,
                                     text=text, last_sent_at=last_sent_at,
                                     hourly_count=hourly)
         if not verdict.get("ok"):
@@ -602,6 +721,7 @@ class Gateway:
             "fallback": {"enabled": bool(self.cfg.get("fallback_enabled")),
                          "mode": str(self.cfg.get("fallback_mode") or "manual")},
             "proactive": {"enabled": bool(self.cfg.get("proactive_enabled")),
+                          "stopped": self.stop_present(),
                           "interval_s": {
                               "min": self.cfg.get("proactive_interval_min_s"),
                               "max": self.cfg.get("proactive_interval_max_s")},
@@ -712,6 +832,13 @@ def make_handler(gateway: Gateway):
                 gateway._record("draft_rejected", {"draft_id": draft_id,
                                                    "friend": item.get("contact")})
                 self._json(200, {"ok": True, "rejected": draft_id})
+                return
+
+            if path in ("/api/proactive/stop", "/api/proactive/resume"):
+                # P0-22：紧急停止开关（admin_token 已由 _guard 校验；幂等）
+                stopped = path.endswith("/stop")
+                result = gateway.set_stop(stopped)
+                self._json(200 if result.get("ok") else 500, result)
                 return
 
             if path == "/api/test/inbound":

@@ -379,6 +379,46 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     from . import config as gw_cfg
 
     now = time.time() if now is None else float(now)
+    # P0-22：每轮先重读配置（真实 Gateway 才开；mtime 变了才重载，读失败沿用旧配置）
+    if getattr(gateway, "_config_hot_reload", False):
+        try:
+            loaded, changes, warning = gw_cfg.hot_reload(gateway.cfg)
+        except Exception as exc:  # noqa: BLE001
+            loaded, changes, warning = dict(gateway.cfg), {}, f"{type(exc).__name__}: {exc}"
+        if warning:
+            try:
+                gateway._record("config_reload_failed", {"error": str(warning)[:200]})
+            except Exception:  # noqa: BLE001
+                pass
+        elif changes:
+            try:
+                gateway._record("config_reloaded", {"changed": sorted(changes),
+                                                    "changes": changes})
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                gateway.cfg.clear()
+                gateway.cfg.update(loaded)
+            except Exception:  # noqa: BLE001
+                pass
+    # P0-22：紧急停止开关是最优先判断——STOP 文件存在则本轮不发任何消息
+    try:
+        stop_file = bool(gw_cfg.stopped())
+    except Exception:  # noqa: BLE001
+        stop_file = False
+    if stop_file:
+        try:
+            gateway._log_stopped(now)
+        except AttributeError:
+            try:
+                gateway._record("proactive_stopped", {"reason": "stop_file", "ts": now})
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "ran": False, "reason": "stopped", "stopped": True,
+                "contacts": 0, "sent": 0, "drafts": 0, "deduped": 0,
+                "clipboard": 0, "skipped": []}
     until = float(gateway.cfg.get("proactive_until_ts") or 0)
     if until and now >= until:
         gateway.cfg["proactive_enabled"] = False

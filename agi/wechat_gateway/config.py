@@ -182,3 +182,61 @@ def contact_db(contact: str) -> Path:
     safe = hashlib.sha1(str(contact).encode("utf-8")).hexdigest()[:14]
     CONTACT_DB_DIR.mkdir(parents=True, exist_ok=True)
     return CONTACT_DB_DIR / f"{safe}.sqlite3"
+
+
+# --------------------------------------------------------------------------- #
+# P0-22：配置热加载 + 紧急停止开关（事故防线）
+# --------------------------------------------------------------------------- #
+#: 每个 CONFIG_PATH 最近一次成功加载的 mtime_ns（热加载用）
+_LAST_MTIME: dict[str, int] = {}
+
+
+def stop_path() -> Path:
+    """紧急停止开关文件路径：与 config.json 同目录的 ``STOP``。"""
+    return Path(CONFIG_PATH).parent / "STOP"
+
+
+def stopped() -> bool:
+    """STOP 文件存在 = 立即停止一切外发（删除即恢复）。"""
+    try:
+        return stop_path().exists()
+    except OSError:
+        return False
+
+
+def hot_reload(current: dict | None = None) -> tuple[dict, dict, str]:
+    """每轮调度前重读配置（mtime 变了才真正重载）。
+
+    返回 ``(新配置, changes, warning)``：
+    - 文件没变 → 原样返回 current（changes 空、warning 空）
+    - 文件变了且读取成功 → 返回生效配置 + 逐键 changes（old/new）
+    - 读取/解析失败 → 返回 current 并给 warning（沿用旧配置，不崩）
+    """
+    cur = dict(current or {})
+    target = Path(CONFIG_PATH)
+    key = str(target)
+    try:
+        stat = target.stat()
+    except OSError as exc:
+        return cur, {}, f"{type(exc).__name__}: {exc}"
+    mtime = int(stat.st_mtime_ns)
+    if _LAST_MTIME.get(key) == mtime:
+        return cur, {}, ""
+    try:  # 先校验 JSON 可读，损坏时沿用旧配置并给 warning（load 内部会吞异常）
+        json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return cur, {}, f"{type(exc).__name__}: {exc}"
+    try:
+        fresh = load()
+    except Exception as exc:  # noqa: BLE001 - 读失败沿用旧配置
+        return cur, {}, f"{type(exc).__name__}: {exc}"
+    try:  # load() 里可能触发迁移写盘，记录写盘后的 mtime，避免下一轮重复读
+        _LAST_MTIME[key] = int(target.stat().st_mtime_ns)
+    except OSError:
+        _LAST_MTIME[key] = mtime
+    changes: dict[str, dict] = {}
+    for name in sorted(set(cur) | set(fresh)):
+        if cur.get(name) != fresh.get(name):
+            changes[name] = {"old": cur.get(name), "new": fresh.get(name)}
+    return fresh, changes, ""
+

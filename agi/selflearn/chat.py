@@ -377,6 +377,7 @@ class SelfLearnAgent:
             except Exception:  # noqa: BLE001
                 research = {"used": False, "context": "", "sources": []}
         gen_meta = {"two_stage": False, "claims": []}
+        budget_meta: dict = {}
         # W3-A：INNER_MODE=shadow 只记录不注入。模式值先归一化出是否 shadow；
         # shadow 时 inner_ctx 恒为空串 → prompt 与 off 逐字节一致（test_shadow 逐字节锁）。
         inner_mode = os.environ.get("INNER_MODE", "off")
@@ -410,7 +411,12 @@ class SelfLearnAgent:
                                    retrieval_ctx=retrieval_ctx, profile_ctx=profile_ctx,
                                    layer_ctx=layer_ctx,
                                    research_ctx=research.get("context", ""),
-                                   inner_ctx=inner_ctx)
+                                   inner_ctx=inner_ctx, budget_out=budget_meta)
+            if budget_meta.get("dropped"):
+                try:
+                    self._record_context_budget(budget_meta)
+                except Exception:  # noqa: BLE001
+                    pass
             if image:
                 content = [{"type": "text", "text": prompt},
                            {"type": "image_url", "image_url": {"url": image}}]
@@ -542,6 +548,10 @@ class SelfLearnAgent:
                 "new_memories": new_memories, "memory_ids": [m["id"] for m in mems],
                 "claims": claim_result, "retrieval_count": len(hits),
                 "retrieval_dropped_stale": dropped_stale,
+                "context_budget": {
+                    "tokens": int(budget_meta.get("tokens") or 0),
+                    "dropped": list(budget_meta.get("dropped") or []),
+                    "truncated": list(budget_meta.get("truncated") or [])},
                 "media": media_info, "profile": profile_info,
                 "persona": pctx, "variant": variant, "crisis": crisis,
                 "guard": guard_info, "attachment": attachment, "generation": gen_meta,
@@ -557,12 +567,24 @@ class SelfLearnAgent:
     @staticmethod
     def _prompt(text, mems, pctx, variant, recent, *, st=None, lessons="",
                 conflict_q="", sum_ctx="", retrieval_ctx="", profile_ctx="",
-                layer_ctx="", research_ctx="", inner_ctx="") -> str:
-        # P1-b：hot 不带时间前缀（与旧格式逐字节一致）；warm/cold 用"前阵子/更早以前"模糊，
-        # 绝不输出具体日期或天数。
-        mem_lines = "\n".join(memory.render_memories(mems)) or "（暂无长期记忆）"
+                layer_ctx="", research_ctx="", inner_ctx="",
+                budget_out: dict | None = None) -> str:
+        """拼 prompt：先构造 sections（顺序/文本与旧实现逐字节一致），再交给
+        ``context.assemble`` 按优先级裁剪；未超预算时输出与改动前完全相同。"""
+        now = time.time()
+        # P1-b：按时间层拆记忆行；同层内顺序稳定，三组按 hot→warm→cold 拼接后
+        # 与 memory.render_memories(mems) 的输出逐字节一致。
+        groups: dict[str, list[dict]] = {"hot": [], "warm": [], "cold": []}
+        for mem in mems or []:
+            tier = str(mem.get("tier") or "")
+            if tier not in groups:
+                tier = memory.tier_of(mem.get("created_at"), now)
+            groups[tier].append(mem)
+        rendered = {tier: memory.render_memories(group, now=now)
+                    for tier, group in groups.items()}
         dialog = "\n".join(
-            f"{'用户' if m['role'] == 'user' else '你'}：{m['text']}" for m in recent[-8:]
+            f"{'用户' if m['role'] == 'user' else '你'}：{m['text']}"
+            for m in recent[-8:]
         ) or "（第一次对话）"
         research_block = ""
         if research_ctx:
@@ -577,28 +599,108 @@ class SelfLearnAgent:
         if inner_ctx:
             inner_block = ("\n\n你的内在状态（只影响语气与选择，不是事实，不要说出口）：\n"
                            + inner_ctx)
-        prompt = (
-            "长期记忆（由你自己决定留存；其中关于用户的只用于理解对方，不要当成人格）：\n" +
-            mem_lines +
-            "\n\n用户画像（仅作理解，不要复述）：\n" + (profile_ctx or "（暂无）") +
-            "\n\n人格层（core/evolving/relations）：\n" + (layer_ctx or "（暂无）") +
-            "\n\n阶段摘要：\n" + (sum_ctx or "（暂无）") +
-            research_block +
-            "\n\n相关片段（可参考，不当作事实）：\n" + (retrieval_ctx or "（无）") +
-            "\n\n未解决冲突提醒：\n" + (conflict_q or "（无）") +
-            "\n\n你从自己过去行动中形成的自画像/规则：\n" + (pctx or "（还没有；通过之后的反馈形成）") +
-            "\n\n本次可尝试策略：\n" + (variant.get("hint") or "自然回应") +
-            "\n\n当前情绪：" + (st["emotion"]["label"] if st else "neutral") +
-            "；关系：" + (st["relationship"]["stage"] if st else "陌生") +
-            inner_block +
-            "；教训：\n" + (lessons or "（还没有）") +
-            "\n\n最近对话：\n" + dialog +
-            "\n\n用户刚刚说：\n" + text +
-            "\n\n直接回复。不要提“记忆库/策略/系统/画像/检索”，不要假装真人。"
-        )
+        mem_header = (
+            "长期记忆（由你自己决定留存；其中关于用户的只用于理解对方，不要当成人格）：\n")
+        sections: list[dict] = []
+        memory_priority = {"hot": 70, "warm": 40, "cold": 30}
+        first = True
+        for tier in ("hot", "warm", "cold"):
+            lines = rendered[tier]
+            if not lines:
+                continue
+            sections.append({
+                "name": f"memory_{tier}",
+                "text": (mem_header if first else "\n") + "\n".join(lines),
+                "priority": memory_priority[tier], "protect": False, "min_tokens": 0})
+            first = False
+        if first:
+            sections.append({
+                "name": "memory_hot", "text": mem_header + "（暂无长期记忆）",
+                "priority": 70, "protect": False, "min_tokens": 0})
+        sections.extend([
+            {"name": "profile",
+             "text": "\n\n用户画像（仅作理解，不要复述）：\n" + (profile_ctx or "（暂无）"),
+             "priority": 55, "protect": False, "min_tokens": 0},
+            {"name": "persona_layers",
+             "text": "\n\n人格层（core/evolving/relations）：\n" + (layer_ctx or "（暂无）"),
+             "priority": 100, "protect": True, "min_tokens": 0},
+            {"name": "summary",
+             "text": "\n\n阶段摘要：\n" + (sum_ctx or "（暂无）"),
+             "priority": 50, "protect": False, "min_tokens": 0},
+        ])
+        if research_block:
+            sections.append({"name": "research", "text": research_block,
+                             "priority": 25, "protect": False, "min_tokens": 0})
+        sections.extend([
+            {"name": "retrieval",
+             "text": "\n\n相关片段（可参考，不当作事实）：\n" + (retrieval_ctx or "（无）"),
+             "priority": 60, "protect": False, "min_tokens": 0},
+            {"name": "conflict",
+             "text": "\n\n未解决冲突提醒：\n" + (conflict_q or "（无）"),
+             "priority": 65, "protect": False, "min_tokens": 0},
+            {"name": "persona_self",
+             "text": ("\n\n你从自己过去行动中形成的自画像/规则：\n"
+                      + (pctx or "（还没有；通过之后的反馈形成）")),
+             "priority": 68, "protect": False, "min_tokens": 0},
+            {"name": "strategy",
+             "text": "\n\n本次可尝试策略：\n" + (variant.get("hint") or "自然回应"),
+             "priority": 66, "protect": False, "min_tokens": 0},
+            {"name": "state",
+             "text": ("\n\n当前情绪：" + (st["emotion"]["label"] if st else "neutral")
+                      + "；关系：" + (st["relationship"]["stage"] if st else "陌生")),
+             "priority": 100, "protect": True, "min_tokens": 0},
+        ])
+        if inner_block:
+            sections.append({"name": "inner", "text": inner_block,
+                             "priority": 99, "protect": True, "min_tokens": 0})
+        sections.extend([
+            {"name": "lessons",
+             "text": "；教训：\n" + (lessons or "（还没有）"),
+             "priority": 80, "protect": False, "min_tokens": 0},
+            {"name": "recent_dialog",
+             "text": "\n\n最近对话：\n" + dialog,
+             "priority": 100, "protect": True, "min_tokens": 0},
+            {"name": "user_text",
+             "text": "\n\n用户刚刚说：\n" + str(text or ""),
+             "priority": 100, "protect": True, "min_tokens": 0},
+            {"name": "closing",
+             "text": "\n\n直接回复。不要提“记忆库/策略/系统/画像/检索”，不要假装真人。",
+             "priority": 100, "protect": True, "min_tokens": 0},
+        ])
+        assembled = context.assemble(sections)
+        if budget_out is not None:
+            budget_out.update({
+                "tokens": assembled["tokens"],
+                "dropped": assembled["dropped"],
+                "truncated": assembled["truncated"],
+                "kept": assembled["kept"],
+            })
         # P1-e：最终兜底——注入 LLM 的 prompt 不允许出现绝对日期/精确天数
         # （各渲染层已走 timefuzz，这里是防漏网的最后一道；无日期时逐字节不变）
-        return context.fit(timefuzz.strip_absolute(prompt))
+        prompt = timefuzz.strip_absolute(assembled["text"])
+        return context.fit(prompt)
+
+    def _record_context_budget(self, meta: dict) -> None:
+        """P1-f：上下文裁剪事件写进 raw_events（复用现有事件表，不新建系统）。"""
+        dropped = list(meta.get("dropped") or [])
+        if not dropped:
+            return
+        now = time.time()
+        rid = _id("RE-", "context_budget", now, json.dumps(dropped, ensure_ascii=False))
+        payload = {"tokens": int(meta.get("tokens") or 0),
+                   "dropped": dropped,
+                   "truncated": list(meta.get("truncated") or [])}
+        con = db.connect(self.path)
+        try:
+            con.execute(
+                "INSERT OR IGNORE INTO raw_events(id,source,source_id,friend,sender,"
+                "kind,text,ts,meta_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                (rid, "context_budget", rid, "selflearn", "system", "context_budget",
+                 json.dumps(payload, ensure_ascii=False), now,
+                 json.dumps(payload, ensure_ascii=False)))
+            con.commit()
+        finally:
+            con.close()
 
     @staticmethod
     def _fallback(text: str) -> str:

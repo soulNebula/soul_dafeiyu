@@ -26,9 +26,38 @@ INTERNAL_QUERY = re.compile(
     r"分享欲|系统提示|prompt|数据库|内部|检索|反馈记录)", re.I
 )
 INTERNAL_TERMS = ("记忆库", "技能树", "自画像", "聊天策略", "当前状态", "分享欲", "系统提示")
+#: P0-26：内部结构泄露词（比 INTERNAL_TERMS 多几个技术词；只用于安全重写，不做前置分流）
+INTERNAL_LEAK_TERMS = INTERNAL_TERMS + ("数据库", "提示词", "prompt", "字段", "数据表")
 MOOD_QUERY = re.compile(r"(心情|开心吗|高兴吗|难过吗|累不累|状态怎么样|最近怎么样|还好吗|你怎么样)", re.I)
 META_QUERY = re.compile(r"(问号|又发|听不懂|没听懂|你在说啥|你在说什么|老发这个|怎么老)", re.I)
-INTERNAL_ANSWERS = ("？", "我听不明白你在说什么。", "换个问法。", "……")
+#: P0-26：「你记得我什么」——问的是用户自己的信息，可以自然概括（不是内部结构）
+USER_MEMORY_QUERY = re.compile(
+    r"(记得我|记不记得我|还记得我|知道我什么|了解我什么|关于我.*(记得|知道)|"
+    r"我.*(你记得|你记不记得|你了解多少))", re.I)
+#: P0-26：保密但不敷衍的话术池（自然、短、口语、无结尾句号、不含内部术语）。
+#: 最近 5 条 assistant 回复不重复（_pick_line）。
+INTERNAL_SECRET_LINES = (
+    "算是有些关于你的小笔记吧，具体就不翻出来了",
+    "我记性还行，但不太习惯把本子摊开给人看",
+    "这个算我的私事，聊点别的？",
+    "有些零零碎碎的印象，但不方便逐条念",
+    "我能记住点事，不过这本子只自己看",
+    "记是记了点，细节就不展开了",
+    "心里有数就行，翻本子多见外",
+)
+#: 实在没有内容时的自然话（禁止「？」兜底）
+MEANINGFUL_FALLBACKS = (
+    "刚才那句没组织好，你再说一次？",
+    "这次我没接住，你再说一遍？",
+)
+META_HONEST_LINE = "刚才卡了一下，不是不想回你，你刚说的我没接住，再来一次？"
+META_HONEST_ALT = "刚才真卡住了，不是不理你，你再说一遍，我好好回"
+NO_MEMORY_LINE = "记了点你平时说过的事，一时想不全，你提醒我一句？"
+#: 纯占位回复（≤2 字 / 纯标点）一律视为无意义
+MEANINGLESS_REPLIES = frozenset({
+    "？", "?", "？？", "??", "。", "……", "…", "...", "，", "、",
+    "好", "好的", "嗯", "哦", "啊", "呃", "嗯嗯", "行", "收到", "在",
+})
 MOOD_LINES = {
     "good": ("挺好的，刚还在想些有的没的。你呢？", "还不错，今天没什么烦心事。"),
     "mid": ("还行，老样子。你呢？", "就那样吧，不好不坏。"),
@@ -59,6 +88,112 @@ def _system_prompt() -> str:
 def _id(prefix: str, *parts) -> str:
     h = hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:14]
     return prefix + h
+
+
+# ---------------------------------------------------------------- P0-26 兜底
+def _visible_len(text: Any) -> int:
+    """可见字符数（去掉空白/标点/emoji），用于判断「纯问号 / ≤2 字」占位回复。"""
+    return len(re.sub(r"[\W_]+", "", str(text or "")))
+
+
+def _is_meaningless(reply: Any) -> bool:
+    """是否是无意义回复：空 / 纯标点 / ≤2 字 / 明确占位词。"""
+    value = str(reply or "").strip()
+    if not value:
+        return True
+    if value in MEANINGLESS_REPLIES:
+        return True
+    return _visible_len(value) <= 2
+
+
+def _recent_assistant_texts(path: Path | str, limit: int = 5) -> list[str]:
+    """最近 N 条 assistant 文本（反重复用）；读失败返回 []。"""
+    try:
+        rows = memory.recent_messages(path, limit=20)
+    except Exception:  # noqa: BLE001
+        return []
+    texts = [str(m.get("text") or "").strip() for m in rows
+             if m.get("role") == "assistant"]
+    texts = [text for text in texts if text]
+    return texts[-max(1, int(limit)):]
+
+
+def _pick_line(pool, recent: list[str] | None = None) -> str:
+    """从话术池里挑一条不在最近回复里的；都撞了就返回第一条。"""
+    recent_set = set(recent or [])
+    for line in pool:
+        if line not in recent_set:
+            return line
+    return str(pool[0]) if pool else ""
+
+
+def _safe_internal_rewrite(reply: str, *, fallback: str) -> str:
+    """P0-26：生成结果里出现内部术语时不整句替换成「？」，而是安全重写。
+
+    优先删掉含内部术语的短句；删完仍 ≥6 个可见字则用剩余内容，
+    否则用保密话术兜底（非「？」）。
+    """
+    value = str(reply or "")
+    if not any(term in value for term in INTERNAL_LEAK_TERMS):
+        return value
+    kept = [part for part in re.split(r"(?<=[。！？!?])", value)
+            if part.strip() and not any(term in part for term in INTERNAL_LEAK_TERMS)]
+    candidate = re.sub(r"\s+", "", "".join(kept)).strip("，,；;：: ")
+    if _visible_len(candidate) >= 6 and not _is_meaningless(candidate):
+        return candidate
+    return fallback or MEANINGFUL_FALLBACKS[0]
+
+
+def _ensure_meaningful(reply: Any, *, user_text: str, path: Path | str,
+                       recent: list[str] | None = None) -> str:
+    """P0-26：最终回复兜底。
+
+    - 纯问号 / 纯标点 / ≤2 字 → 结合上下文换一句自然话（禁止「？」）；
+    - 与最近 5 条 assistant 回复完全相同 → 换一句（禁止复读占位）。
+    """
+    history = list(recent) if recent is not None else _recent_assistant_texts(path)
+    value = str(reply or "").strip()
+    question = str(user_text or "")
+    if _is_meaningless(value):
+        if META_QUERY.search(question):
+            value = _pick_line((META_HONEST_LINE, META_HONEST_ALT), history)
+        elif INTERNAL_QUERY.search(question):
+            value = _pick_line(INTERNAL_SECRET_LINES, history)
+        else:
+            value = _pick_line(MEANINGFUL_FALLBACKS, history)
+    if value in set(history):
+        pool = (INTERNAL_SECRET_LINES if INTERNAL_QUERY.search(question)
+                else MEANINGFUL_FALLBACKS)
+        value = _pick_line(pool, history) or MEANINGFUL_FALLBACKS[-1]
+    return value
+
+
+def _user_memory_summary(path: Path | str) -> str:
+    """P0-26：「你记得我什么」→ 自然概括用户自己的信息（不泄露内部结构）。"""
+    try:
+        items = memory.list_user_memories(path)
+    except Exception:  # noqa: BLE001
+        items = []
+    snippets: list[str] = []
+    for item in items or []:
+        if str((item or {}).get("status") or "active") not in ("active", ""):
+            continue
+        content = str((item or {}).get("content") or "").strip()
+        content = re.sub(r"^用户", "", content).strip(" ，,。.;；：:")
+        content = _safe_internal_rewrite(content, fallback="").strip()
+        if not content:
+            continue
+        snippet = content[:16].rstrip("，,。.；;：: ")
+        if snippet and snippet not in snippets:
+            snippets.append(snippet)
+        if len(snippets) >= 2:
+            break
+    if snippets:
+        line = "记得你" + "；".join(snippets) + "，别的就不细说了"
+    else:
+        line = NO_MEMORY_LINE
+    line = re.sub(r"\s+", "", line)[:40].rstrip("，,。.；;：: ")
+    return line or NO_MEMORY_LINE
 
 
 SHADOW_MODE = "shadow"
@@ -236,6 +371,8 @@ class SelfLearnAgent:
         # 先口语化再清句号：voice_polished 事件里保留的 before 是原始回复串
         reply = self._polish_outbound(reply)
         reply = style_profile.strip_periods(reply)
+        # P0-26：禁止「？」/纯标点/复读占位进入最终外发文本
+        reply = _ensure_meaningful(reply, user_text="", path=self.path)
         assistant_id = memory.store_message(self.path, "assistant", reply)
         try:
             live_ingest.record_message(self.path, "assistant", reply, message_id=assistant_id)
@@ -341,18 +478,19 @@ class SelfLearnAgent:
             return self._simple_reply(user_id, lines[n % len(lines)], st, attachment,
                                       had_image=bool(image), t0=t0)
         if META_QUERY.search(text):
-            return self._simple_reply(user_id, "那个我没法细说。你问点别的。", st, attachment,
+            # P0-26：用户抱怨「你怎么老发问号/听不懂」→ 诚实回应，不敷衍
+            reply = _pick_line((META_HONEST_LINE, META_HONEST_ALT),
+                               _recent_assistant_texts(self.path))
+            return self._simple_reply(user_id, reply, st, attachment,
                                       had_image=bool(image), t0=t0)
+        if USER_MEMORY_QUERY.search(text):
+            # P0-26：问「你记得我什么」= 用户自己的信息，可以自然概括（不泄露内部结构）
+            return self._simple_reply(user_id, _user_memory_summary(self.path), st,
+                                      attachment, had_image=bool(image), t0=t0)
         if INTERNAL_QUERY.search(text):
-            recent_users = [m for m in memory.recent_messages(self.path, limit=20)
-                            if m["role"] == "user"]
-            count = 0
-            for m in reversed(recent_users):
-                if INTERNAL_QUERY.search(m["text"]):
-                    count += 1
-                else:
-                    break
-            reply = INTERNAL_ANSWERS[min(max(count - 1, 0), len(INTERNAL_ANSWERS) - 1)]
+            # P0-26：问内部结构/提示词/数据库 → 保密但不敷衍，禁止「？」；最近 5 条不重复
+            reply = _pick_line(INTERNAL_SECRET_LINES,
+                               _recent_assistant_texts(self.path))
             return self._simple_reply(user_id, reply, st, attachment, had_image=bool(image),
                                       t0=t0)
         # 固定的模型身份，不靠模型自己猜
@@ -520,14 +658,22 @@ class SelfLearnAgent:
                 inner_meta = {"mode": inner_mode, "source": inner_mode,
                               "fallback": "", "latency_ms": None,
                               "injected": bool(inner_ctx)}
-            # off：inner_ctx 为空串 → prompt 与改动前逐字节一致
+            # P5-b：media 开启时才注入素材清单；关闭时 prompt 逐字节不变
+            media_ctx = ""
+            try:
+                from . import media_choice
+                media_ctx = media_choice.media_prompt_block(self.path)
+            except Exception:  # noqa: BLE001
+                media_ctx = ""
+            # off：inner_ctx/media_ctx 为空串 → prompt 与改动前逐字节一致
             prompt = self._prompt(text or "我发了一张图片，请看看并回应我。", mems, pctx,
                                    variant, recent, st=st, lessons=lessons,
                                    conflict_q=conflict_q, sum_ctx=sum_ctx,
                                    retrieval_ctx=retrieval_ctx, profile_ctx=profile_ctx,
                                    layer_ctx=layer_ctx,
                                    research_ctx=research.get("context", ""),
-                                   inner_ctx=inner_ctx, budget_out=budget_meta)
+                                   inner_ctx=inner_ctx, media_ctx=media_ctx,
+                                   budget_out=budget_meta)
             if budget_meta.get("dropped"):
                 try:
                     self._record_context_budget(budget_meta)
@@ -575,8 +721,11 @@ class SelfLearnAgent:
             reply = guard_info["reply"][:800]
             if not image:
                 reply = style_profile.tune_reply(text, reply)
-            if any(term in reply for term in INTERNAL_TERMS):
-                reply = "？"
+            if any(term in reply for term in INTERNAL_LEAK_TERMS):
+                # P0-26：不整句替换成「？」——删掉含内部术语的短句，删不动就换保密话术
+                reply = _safe_internal_rewrite(
+                    reply, fallback=_pick_line(INTERNAL_SECRET_LINES,
+                                               _recent_assistant_texts(self.path)))
             sk_gate = skilltree.gate_output(self.path, reply)
             if sk_gate:
                 reply = sk_gate["message"]
@@ -596,6 +745,12 @@ class SelfLearnAgent:
                     _host = ""
                 if _host:
                     reply = f"{reply}（来源：{_host}）"
+        chat_media_directives = None
+        try:
+            from . import media_choice
+            reply, chat_media_directives = media_choice.parse_media_directive(reply)
+        except Exception:  # noqa: BLE001
+            chat_media_directives = None
         mood = float(st["self"].get("mood", 0.55))
         sharing = float(st["self"].get("sharing", 0.45))
         max_bubbles = 3 if (mood >= 0.75 or sharing >= 0.7) else (2 if (mood >= 0.6 or sharing >= 0.6) else 1)
@@ -615,6 +770,39 @@ class SelfLearnAgent:
         if not bubbles:
             bubbles = [style_profile.strip_periods(reply) or reply]
         turn_reply = " ".join(bubbles)
+        # P5-b：被动回复默认只加 emoji（media_sticker_in_reply=False）；关闭时零变化。
+        reply_media = None
+        if not crisis:
+            try:
+                from . import media_choice
+                settings = media_choice.media_settings()
+                reply_media = media_choice.build_plan(
+                    self.path, chat_media_directives, turn_reply,
+                    state={"mood": mood, "crisis": bool(crisis)},
+                    recent_media=media_choice.recent_media(self.path),
+                    allow_sticker=bool(settings.get("sticker_in_reply")),
+                    now=time.time())
+                media_choice.record_media(
+                    self.path, bool(reply_media and reply_media.get("bubbles")))
+                if reply_media and reply_media.get("bubbles"):
+                    first = reply_media["bubbles"][0]
+                    candidate = str(first.get("text") or "")
+                    if first.get("type") == "emoji_text" and candidate.startswith(turn_reply) and candidate != turn_reply:
+                        bubbles[-1] = bubbles[-1] + candidate[len(turn_reply):]
+                        turn_reply = " ".join(bubbles)
+                    elif first.get("type") == "text":
+                        pass
+                    else:
+                        reply_media = None
+            except Exception:  # noqa: BLE001
+                reply_media = None
+        # P0-26：最终外发文本兜底——纯问号/占位/与最近 5 条完全相同 → 换成有意义的自然话
+        if not crisis:
+            meaningful = _ensure_meaningful(turn_reply, user_text=text, path=self.path)
+            if meaningful != turn_reply:
+                bubbles = [meaningful]
+                turn_reply = meaningful
+                reply_media = None
         assistant_id = memory.store_message(self.path, "assistant", bubbles[0])
         try:
             live_ingest.record_message(self.path, "assistant", bubbles[0], message_id=assistant_id)
@@ -696,7 +884,7 @@ class SelfLearnAgent:
                     "tokens": int(budget_meta.get("tokens") or 0),
                     "dropped": list(budget_meta.get("dropped") or []),
                     "truncated": list(budget_meta.get("truncated") or [])},
-                "media": media_info, "profile": profile_info,
+                "media": media_info, "reply_media": reply_media, "profile": profile_info,
                 "persona": pctx, "variant": variant, "crisis": crisis,
                 "guard": guard_info, "attachment": attachment, "generation": gen_meta,
                 "research": {"used": bool(research.get("used")),
@@ -712,7 +900,7 @@ class SelfLearnAgent:
     def _prompt(text, mems, pctx, variant, recent, *, st=None, lessons="",
                 conflict_q="", sum_ctx="", retrieval_ctx="", profile_ctx="",
                 layer_ctx="", research_ctx="", inner_ctx="",
-                budget_out: dict | None = None) -> str:
+                media_ctx: str = "", budget_out: dict | None = None) -> str:
         """拼 prompt：先构造 sections（顺序/文本与旧实现逐字节一致），再交给
         ``context.assemble`` 按优先级裁剪；未超预算时输出与改动前完全相同。"""
         now = time.time()
@@ -811,6 +999,9 @@ class SelfLearnAgent:
              "text": "\n\n直接回复。不要提“记忆库/策略/系统/画像/检索”，不要假装真人。",
              "priority": 100, "protect": True, "min_tokens": 0},
         ])
+        if media_ctx:
+            sections.append({"name": "media", "text": "\n" + media_ctx,
+                             "priority": 30, "protect": False, "min_tokens": 0})
         assembled = context.assemble(sections)
         if budget_out is not None:
             budget_out.update({

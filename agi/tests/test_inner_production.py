@@ -470,8 +470,11 @@ def test_chat_clean_reply_is_byte_identical_and_idempotent(monkeypatch, tmp_path
     assert first["bubbles"] == ["嗯，我在"]
     assert _raw_events(path, "voice_polished") == []
 
+    # 换一条干净的回复再发一次（P0-26 会把「与上一条完全相同」的回复替换掉，
+    # 所以反重复用例不放这里；本用例只锁 voice_polish 的 changed=False 逐字节不变）。
+    main.reply = "在的，你说"
     second = agent.send("在吗")
-    assert _joined(second) == "嗯，我在"
+    assert _joined(second) == "在的，你说"
     assert _raw_events(path, "voice_polished") == []
 
 

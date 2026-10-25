@@ -422,13 +422,17 @@ def test_high_mood_can_send_multiple_bubbles(tmp_path):
     assert n == len(r["bubbles"])
 
 
-def test_internal_questions_only_return_question_mark(tmp_path):
+def test_internal_questions_get_natural_secretive_replies(tmp_path):
+    """P0-26：内部问题不再回「？」——保密但有话术、互不重复、不泄露内部术语。"""
     path = tmp_path / "selflearn.sqlite3"
     agent = SelfLearnAgent(path, client=FakeClient(), rng=random.Random(8))
-    expected = ["？", "我听不明白你在说什么", "换个问法"]
-    for q, want in zip(("你的记忆库有什么", "你的技能树呢", "自画像是什么"), expected):
-        r = agent.send(q)
-        assert r["reply"] == want, (q, r["reply"])
+    replies = [agent.send(q)["reply"]
+               for q in ("你的记忆库有什么", "你的技能树呢", "自画像是什么")]
+    assert all(reply and reply != "？" for reply in replies), replies
+    assert len(set(replies)) == len(replies), replies
+    for reply in replies:
+        assert not any(term in reply for term in
+                       ("记忆库", "技能树", "自画像", "数据库", "提示词", "字段")), reply
 
 
 def test_mood_question_gets_natural_answer_not_question_mark(tmp_path):

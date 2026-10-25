@@ -2129,7 +2129,8 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
                  fix_runon: bool = False, opener_mode: str = "",
                  style_fix: bool = False, continuity_ctx: str = "",
                  continuity_fix: bool = False, continuity_hint: str = "",
-                 concrete_fix: bool = False, inner_ctx: str = "") -> str:
+                 concrete_fix: bool = False, inner_ctx: str = "",
+                 media_ctx: str = "") -> str:
     """按 kind 选生成指令 + 全局约束（禁元话题/反编造/标点/人格边界/开头/问句/连续性）。"""
     instruction = prompt_store.get(
         f"proactive.kind.{kind}",
@@ -2188,6 +2189,8 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
         prompt += ("\n【重生成】只写数字生活/自己的感受，不要写任何物理起居、身体、"
                    "天气、位置、出行细节；开头按指定模式、不要用「刚」开头；"
                    "必须带你自己的感受或想法；句子可短可长，换一种结构。")
+    if media_ctx:
+        prompt += "\n" + media_ctx
     prompt += "如果实在没话说，输出 SKIP。最近对话：" + dialog
     return prompt
 
@@ -2343,14 +2346,27 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     advice_allowed = inner_behavior.get("advice") is not False
     emoji_allowed = inner_behavior.get("emoji") != "不用"
     opener_mode = choose_opener_mode(recent_proactive)
+    media_ctx = ""
+    try:
+        from . import media_choice
+        media_ctx = media_choice.media_prompt_block(path)
+    except Exception:  # noqa: BLE001
+        media_ctx = ""
     prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
                           force_statement=force_statement,
                           opener_mode=opener_mode,
-                          continuity_ctx=continuity_ctx, inner_ctx=inner_ctx)
+                          continuity_ctx=continuity_ctx, inner_ctx=inner_ctx,
+                          media_ctx=media_ctx)
     text, llm_answered = _ask_llm(client, prompt)
     if llm_answered and (not text or text.upper().startswith("SKIP")):
         # 明确让 LLM 自己决定"这次不说话"：它说 SKIP 就不发，不再用模板兜底
         return {"ok": True, "available": False, "reason": "llm_skip"}
+    media_directives = None
+    try:
+        from . import media_choice
+        text, media_directives = media_choice.parse_media_directive(text)
+    except Exception:  # noqa: BLE001
+        media_directives = None
     voice_choice, choice_body = parse_voice_choice(text)
     if choice_body:
         text = choice_body
@@ -2574,6 +2590,21 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     text = limit_voice_length(text, 200 if kind == "followup" else voice_max)
     text = strip_trailing_period(text)
     text = style_profile.tune_reply("", text)[:200]
+    # P5-b：文本定稿（已过 grounding/物理/元话语/voice 复检）后解析模型 media 指令
+    media_plan = None
+    try:
+        from . import media_choice
+        media_plan = media_choice.build_plan(
+            path, media_directives, text,
+            state={"mood": mood, "crisis": bool(own.get("crisis"))},
+            recent_media=media_choice.recent_media(path),
+            allow_sticker=True, now=now)
+        media_choice.record_media(path, bool(media_plan and media_plan.get("bubbles")))
+    except Exception:  # noqa: BLE001 - 媒体解析失败不影响文本
+        media_plan = None
+    if (media_plan and media_plan.get("bubbles")
+            and media_plan["bubbles"][0].get("type") == "emoji_text"):
+        text = str(media_plan["bubbles"][0].get("text") or text)
     max_bubbles = 3 if share_drive >= 0.7 else (2 if share_drive >= 0.55 or mood >= 0.7 else 1)
     if int(init_info.get("max_bubbles") or 0) > 0:
         max_bubbles = min(max_bubbles, int(init_info["max_bubbles"]))
@@ -2614,6 +2645,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
             "message_id": ids[0], "turn_id": turn_id,
             "kind": best["kind"], "action": action, "score": best["score"],
             "inner": inner_info, "voice_polished": voice_info,
+            "media": media_plan,
             "reason": best["reason"], "mood": mood, "sharing": share_drive,
             "initiative": {k: init_info.get(k) for k in
                             ("available", "score", "reason", "max_bubbles", "bubble_count",

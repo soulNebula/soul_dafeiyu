@@ -470,8 +470,10 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     client = client if client is not None else default_client()
     out: dict[str, Any] = {"ok": True, "ran": True, "contacts": len(contact_list),
                            "sent": 0, "drafts": 0, "deduped": 0,
-                           "clipboard": 0, "breaker_open": False, "skipped": []}
+                           "clipboard": 0, "media_sent": 0,
+                           "breaker_open": False, "skipped": []}
     idle_gap = float(gateway.cfg.get("proactive_idle_s") or 0)
+    media_sent = 0
     for contact in contact_list:
         probability = _probability(gateway)
         roll = random.random()
@@ -538,6 +540,9 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             else:
                 outbound.append(polished)
         sent_any = False
+        media_plan = pro.get("media") or {}
+        media_items = [item for item in (media_plan.get("bubbles") or [])
+                       if isinstance(item, dict) and item.get("type") in ("sticker", "gif", "image")]
         for text in outbound:
             # P0-2 同内容去重：窗口内发过相同/高度相似文本 → 跳过并记事件
             try:
@@ -605,6 +610,21 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 _note_send_success(gateway)  # 只有真正送达才清零
             elif status.get("status") == "draft":
                 out["drafts"] += 1  # confirm 人工草稿（非故障，不影响熔断）
+        # P5-b：文本已发送后，媒体作为额外气泡发；失败不影响文本结果
+        if sent_any and media_items and gateway.cfg.get("media_enabled"):
+            sender = getattr(gateway, "send_bubbles", None)
+            if callable(sender):
+                try:
+                    results = sender(contact, media_items, proactive=True)
+                    media_sent = sum(1 for item in (results or [])
+                                     if isinstance(item, dict) and item.get("ok"))
+                    out["media_sent"] = int(out.get("media_sent") or 0) + media_sent
+                    gateway._record("proactive_media", {
+                        "friend": contact, "items": media_items,
+                        "results": results or [], "reason": media_plan.get("reason")})
+                except Exception as exc:  # noqa: BLE001
+                    gateway._record("proactive_media_failed", {
+                        "friend": contact, "error": f"{type(exc).__name__}: {exc}"[:200]})
         if sent_any and turn_id:
             # 只有真的发出去了才登记：草稿还没到对方手里，反馈会错位
             gateway.last_turns[contact] = turn_id
@@ -613,6 +633,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     outcome = {"ts": now, "contacts": out["contacts"],
                "sent": out["sent"], "drafts": out["drafts"],
                "deduped": out["deduped"], "clipboard": out["clipboard"],
+               "media_sent": media_sent,
                "breaker": breaker_snapshot(gateway, now),
                "skipped": len(out["skipped"])}
     try:

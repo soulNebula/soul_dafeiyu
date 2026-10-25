@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-import time
 
 import pytest
 
@@ -232,23 +231,38 @@ def test_scope_matrix(monkeypatch, tmp_path, scope, proactive, expected_model):
         assert _inner_rows(path) == [], "scope 拦截不落 inner_states"
 
 
-def test_scope_block_is_zero_latency(monkeypatch, tmp_path):
-    """proactive_only 下被动消息不得产生模型延迟（turns.latency 与 off 同量级）。"""
+def test_scope_block_does_not_call_model_or_record_latency(monkeypatch, tmp_path):
+    """proactive_only 下被动消息必须零模型调用（结构性断言，不用墙钟时间）。
+
+    断言链（全部来自可观测结构，不受机器负载影响）：
+    1. fake 内状态 client 的 calls 为空（没调模型）；
+    2. gen_meta.inner: mode=rule / source=rule / latency_ms=None / injected=True；
+    3. inject.stats() 的 last_latency_ms 仍为 None（没有任何模型延迟被记录）；
+    4. inner_states 不落库（scope 拦截不算一次 model 尝试）；
+    5. turns.latency_ms 正常写入（主链延迟埋点本身不受影响）。
+    """
     monkeypatch.setenv("INNER_MODE", "model")
     monkeypatch.setenv("INNER_MODE_SCOPE", "proactive_only")
     inner = FakeLocalClient()
     main = FakeMainClient()
     agent, path = _agent(tmp_path, "zero_latency", main=main, inner_client=inner)
     agent.send("先热一下库")                       # 首次调用有建库/FTS 一次性开销
-    started = time.perf_counter()
     result = agent.send(TEXT)                      # 被动
-    elapsed_ms = (time.perf_counter() - started) * 1000
+
     assert result["ok"] is True
-    assert inner.calls == []
-    assert elapsed_ms < 500, elapsed_ms            # 不含任何 0.5s 级模型调用
+    assert inner.calls == [], "scope 拦截时不得调用本地模型"
+    meta = result["generation"]["inner"]
+    assert meta["mode"] == "rule" and meta["source"] == "rule"
+    assert meta["latency_ms"] is None
+    assert meta["injected"] is True                 # rule 行为指令仍注入
+    assert meta["scope"] == "proactive_only"
+    assert inject.stats()["last_latency_ms"] is None
+    assert _inner_rows(path) == [], "scope 拦截不落 inner_states"
+
     con = db.connect(path)
     try:
-        turn_latency = con.execute("SELECT latency_ms FROM turns").fetchone()[0]
+        turn_latency = con.execute(
+            "SELECT latency_ms FROM turns ORDER BY rowid DESC LIMIT 1").fetchone()[0]
     finally:
         con.close()
     assert turn_latency is not None

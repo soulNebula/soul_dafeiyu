@@ -1192,8 +1192,14 @@ def media_capabilities() -> dict:
     if media_mod is not None:
         source = "agi.wechat_gateway.media"
         try:
-            caps = media_mod.capabilities() or {}
-            enabled = bool(caps.get("media_enabled"))
+            # 传真实配置，否则 capabilities() 会按默认值把 media_enabled 报成 false
+            try:
+                from agi.wechat_gateway import config as gw_config
+                _cfg = gw_config.load()
+            except Exception:  # noqa: BLE001
+                _cfg = {}
+            caps = media_mod.capabilities(_cfg) or {}
+            enabled = bool(caps.get("media_enabled", _cfg.get("media_enabled")))
         except Exception:  # noqa: BLE001
             caps = {}
     sticker = _sticker_native()

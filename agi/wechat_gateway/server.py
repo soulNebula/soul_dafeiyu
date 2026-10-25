@@ -1206,6 +1206,28 @@ def make_handler(gateway: Gateway):
                 self._json(200 if result.get("ok") else 500, result)
                 return
 
+            if path in ("/api/media/send", "/api/send/media"):
+                # P5-a 媒体发送 HTTP 入口（控制台/调试用）：{contact, items:[{type,...}], proactive?}
+                # 鉴权/_guard 已校验；contact 必须在白名单；items 为 media.py 契约。
+                contact = str(body.get("contact") or "")
+                items = body.get("items")
+                if not contact or contact not in (gateway.cfg.get("allowed_contacts") or []):
+                    self._json(400, {"ok": False, "error": "contact 不在白名单"})
+                    return
+                if not isinstance(items, list) or not items:
+                    self._json(400, {"ok": False, "error": "items 必须是非空列表"})
+                    return
+                if len(items) > 10:
+                    self._json(400, {"ok": False, "error": "单次最多 10 条气泡"})
+                    return
+                result = gateway.send_media_batch(
+                    contact, items,
+                    proactive=bool(body.get("proactive")),
+                    reactive=bool(body.get("reactive")),
+                    force=bool(body.get("force")))
+                self._json(200 if result.get("ok") or result.get("sent") else 502, result)
+                return
+
             if path == "/api/test/inbound":
                 if not gateway.cfg.get("dry_run", True):
                     self._json(403, {"ok": False, "error": "测试注入接口只允许 dry_run=true"})

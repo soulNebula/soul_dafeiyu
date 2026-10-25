@@ -1431,7 +1431,8 @@ def media_send(body: dict, *, client: str = "") -> dict:
         if not ok_item:
             return {"ok": False, "status": "invalid", "error": error_code}
     # 强制覆盖联系人：测试发送只允许文件传输助手
-    payload = {"contact": MEDIA_TEST_CONTACT, "items": [item]}
+    # force=True：管理员手动触发的调试发送，绕过夜间静默（P0-25：force 放行）
+    payload = {"contact": MEDIA_TEST_CONTACT, "items": [item], "force": True}
     try:
         result = _post_gateway_media(payload)
     except urllib.error.HTTPError as exc:

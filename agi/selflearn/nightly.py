@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import ingest, personality, profile, summary, weak_validation
+from . import ingest, memory, personality, profile, summary, weak_validation
 
 
 def run(path: Path | str, client=None, *, force: bool = False) -> dict[str, Any]:
@@ -46,6 +46,11 @@ def run(path: Path | str, client=None, *, force: bool = False) -> dict[str, Any]
         steps["weak"] = weak_validation.status(path)
     except Exception as exc:  # noqa: BLE001
         steps["weak"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    # P1-a：记忆重要性按天衰减 + 长期低重要且未访问 → dormant（不删除、检索排除）
+    try:
+        steps["memory_decay"] = memory.decay(path)
+    except Exception as exc:  # noqa: BLE001
+        steps["memory_decay"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     out["steps"] = steps
     out["ok"] = all(not (isinstance(v, dict) and v.get("error")) for v in steps.values())
     out["finished_at"] = time.time()

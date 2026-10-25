@@ -2,6 +2,8 @@
 """selflearn 独立 SQLite。用户记忆与 Agent 自人格分表。"""
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -16,7 +18,13 @@ CREATE TABLE IF NOT EXISTS user_memories(
   id TEXT PRIMARY KEY, scope TEXT NOT NULL DEFAULT 'user', kind TEXT NOT NULL,
   content TEXT NOT NULL, evidence TEXT NOT NULL,
   evidence_message_id TEXT, confidence REAL NOT NULL, status TEXT NOT NULL DEFAULT 'active',
-  conflict_group TEXT, created_at REAL NOT NULL, UNIQUE(content)
+  conflict_group TEXT, created_at REAL NOT NULL,
+  -- P1-a：记忆重要性 / 访问统计 / 历史证据（旧库由 connect() 幂等 ALTER 补齐）
+  importance REAL NOT NULL DEFAULT 0.5,
+  access_count INTEGER NOT NULL DEFAULT 0,
+  last_accessed REAL NOT NULL DEFAULT 0,
+  evidence_history TEXT NOT NULL DEFAULT '',
+  UNIQUE(content)
 );
 CREATE TABLE IF NOT EXISTS emoji_archive(
   id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL,
@@ -240,6 +248,33 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         con.execute("ALTER TABLE user_memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'user'")
     if "conflict_group" not in cols:
         con.execute("ALTER TABLE user_memories ADD COLUMN conflict_group TEXT")
+    # P1-a：重要性/访问统计/历史证据（幂等 ALTER；首次迁移时按 kind 回填 importance）
+    added: list[str] = []
+    for col, ddl in (
+        ("importance", "importance REAL NOT NULL DEFAULT 0.5"),
+        ("access_count", "access_count INTEGER NOT NULL DEFAULT 0"),
+        ("last_accessed", "last_accessed REAL NOT NULL DEFAULT 0"),
+        ("evidence_history", "evidence_history TEXT NOT NULL DEFAULT ''"),
+    ):
+        if col not in cols:
+            con.execute(f"ALTER TABLE user_memories ADD COLUMN {ddl}")
+            added.append(col)
+    if "importance" in added:
+        con.execute(
+            "UPDATE user_memories SET importance = CASE lower(kind) "
+            "WHEN 'value' THEN 0.8 WHEN 'plan' THEN 0.8 WHEN 'preference' THEN 0.7 "
+            "WHEN 'insight' THEN 0.6 WHEN 'fact' THEN 0.5 WHEN 'event' THEN 0.4 "
+            "ELSE 0.5 END")
+    if "evidence_history" in added:
+        for row in con.execute(
+                "SELECT id, evidence FROM user_memories WHERE evidence_history=''").fetchall():
+            snippet = re.sub(r"\s+", " ", str(row[1] or "")).strip()[:120]
+            history = json.dumps([snippet], ensure_ascii=False) if snippet else "[]"
+            con.execute("UPDATE user_memories SET evidence_history=? WHERE id=?",
+                        (history, row[0]))
+    # 索引放在列补齐之后建（极早期库可能缺 scope 列）
+    con.execute("CREATE INDEX IF NOT EXISTS ix_user_memories_kind "
+                "ON user_memories(status, scope, kind)")
     ecols = {r[1] for r in con.execute("PRAGMA table_info(errors)").fetchall()}
     for col, ddl in (("root_cause", "root_cause TEXT NOT NULL DEFAULT ''"),
                      ("fix_verified", "fix_verified INTEGER NOT NULL DEFAULT 0"),

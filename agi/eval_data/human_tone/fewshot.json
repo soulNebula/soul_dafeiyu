@@ -1,0 +1,146 @@
+{
+ "description": "真人语气 few-shot 示例（全部来自 self 语料，已去隐私）",
+ "count": 20,
+ "examples": [
+  {
+   "id": "ht-0001",
+   "text": "那还是去体育中心吧",
+   "source": "ocr:183c205ab73b",
+   "length": 9,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0003",
+   "text": "可以",
+   "source": "ocr:183c205ab73b",
+   "length": 2,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0005",
+   "text": "我在吃饭",
+   "source": "ocr:183c205ab73b",
+   "length": 4,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0006",
+   "text": "吃完先",
+   "source": "ocr:183c205ab73b",
+   "length": 3,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0007",
+   "text": "订了",
+   "source": "ocr:183c205ab73b",
+   "length": 2,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0015",
+   "text": "8点半？",
+   "source": "ocr:372e42b83015",
+   "length": 4,
+   "ending": "问号"
+  },
+  {
+   "id": "ht-0050",
+   "text": "有星星看吗？",
+   "source": "ocr:part03",
+   "length": 6,
+   "ending": "问号"
+  },
+  {
+   "id": "ht-0060",
+   "text": "不是早说了吗？",
+   "source": "ocr:part05",
+   "length": 7,
+   "ending": "问号"
+  },
+  {
+   "id": "ht-0067",
+   "text": "在吗？",
+   "source": "contacts_db",
+   "length": 3,
+   "ending": "问号"
+  },
+  {
+   "id": "ht-0081",
+   "text": "看得到吗？",
+   "source": "contacts_db",
+   "length": 5,
+   "ending": "问号"
+  },
+  {
+   "id": "ht-0009",
+   "text": "ok",
+   "source": "ocr:183c205ab73b",
+   "length": 2,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0011",
+   "text": "那明天再去吧",
+   "source": "ocr:372e42b83015",
+   "length": 6,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0012",
+   "text": "打球，去不去",
+   "source": "ocr:372e42b83015",
+   "length": 6,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0020",
+   "text": "好像是这个",
+   "source": "ocr:aa816337b1cd",
+   "length": 5,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0021",
+   "text": "今晚请你喝水",
+   "source": "ocr:aa816337b1cd",
+   "length": 6,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0023",
+   "text": "定了吗",
+   "source": "ocr:aa816337b1cd",
+   "length": 3,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0024",
+   "text": "是不是这个号码",
+   "source": "ocr:aa816337b1cd",
+   "length": 7,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0026",
+   "text": "咋了呀",
+   "source": "ocr:part00",
+   "length": 3,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0031",
+   "text": "不过找到了就好",
+   "source": "ocr:part01",
+   "length": 7,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0034",
+   "text": "播到一半，电影出问题了",
+   "source": "ocr:part01",
+   "length": 11,
+   "ending": "无标点"
+  }
+ ]
+}

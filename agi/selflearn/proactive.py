@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import re
 import time
@@ -1611,6 +1612,20 @@ def apply_voice_polish(text: Any, kind: str, anchors: list[str] | None = None,
     return candidate, info
 
 
+_ADVICE_RE = re.compile(r"建议|最好|记得|应该|试试|不妨|可以试|不妨试")
+
+
+def strip_advice(text: Any, kind: str) -> str:
+    """P3-d：behavior.advice=false 时不出现建议类句式（删建议小句）。"""
+    value = str(text or "").strip()
+    if not value or not _ADVICE_RE.search(value):
+        return value
+    parts = [part.strip() for part in re.split(r"[，,。！？!?；;]", value) if part.strip()]
+    kept = [part for part in parts if not _ADVICE_RE.search(part)]
+    result = "，".join(kept).strip("，,；; ")
+    return result or _safe_fallback(kind)
+
+
 def _particle_spans(text: Any) -> list[tuple[int, int, str]]:
     """非重叠命中（「笑死我了」不会被同时算成「笑死」+「笑死我了」）。"""
     value = str(text or "")
@@ -1715,10 +1730,10 @@ def apply_oral_particle(text: Any, recent_texts: list[str] | None = None) -> str
 
 
 def apply_emoji(text: Any, recent_texts: list[str] | None = None,
-                now: float = 0.0) -> str:
+                now: float = 0.0, enabled: bool = True) -> str:
     """真实画像约 5% 消息带 1 个 emoji；已有则不再加。"""
     value = str(text or "").strip()
-    if not value:
+    if not value or not enabled:
         return value
     if any(emoji in value for emoji in VOICE_EMOJIS):
         return value
@@ -1985,17 +2000,117 @@ def _mentions_anchor(text: str, anchor: str) -> bool:
     return any(compact[i:i + 2] in value for i in range(len(compact) - 1))
 
 
+_INNER_FALLBACK_LAST = 0.0
+
+
+def _resolve_proactive_inner() -> str:
+    """P3-d：proactive_inner 开关（off|auto|force，默认 auto）。"""
+    raw = os.environ.get("PROACTIVE_INNER")
+    if raw is None:
+        try:
+            from ..wechat_gateway import config as gateway_config
+            data = json.loads(Path(gateway_config.CONFIG_PATH).read_text(encoding="utf-8"))
+            raw = data.get("proactive_inner") if isinstance(data, dict) else None
+        except Exception:  # noqa: BLE001
+            raw = None
+    value = str(raw or "auto").strip().lower()
+    return value if value in ("off", "auto", "force") else "auto"
+
+
+def _log_proactive_inner_fallback(reason: str, now: float | None = None) -> bool:
+    """proactive_inner_fallback：JSONL 10 分钟节流（不影响主链）。"""
+    global _INNER_FALLBACK_LAST
+    now = time.time() if now is None else float(now)
+    if now - _INNER_FALLBACK_LAST < 600.0:
+        return False
+    _INNER_FALLBACK_LAST = now
+    try:
+        from ..inner import inject
+        target = Path(inject.INNER_LOG_PATH)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": round(now, 3), "kind": "proactive_inner_fallback",
+                                 "reason": str(reason or "unknown")[:200]},
+                                ensure_ascii=False) + "\n")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _build_proactive_inner(path, client, inner_client=None,
+                           recent_messages: list | None = None) -> dict:
+    """P3-d：tick 生成前取一次内状态（每 tick 只调一次），返回 ctx/元数据。"""
+    info = {"mode": "off", "source": "off", "latency_ms": None,
+            "injected": False, "behavior": {}, "fallback": "", "ctx": ""}
+    if _resolve_proactive_inner() == "off":
+        return info
+    try:
+        from ..inner import inject
+        settings = inject.resolve_settings(production=True)
+    except Exception as exc:  # noqa: BLE001
+        return info
+    mode = str(settings.get("mode") or "off")
+    if mode == "off":
+        return info
+    settings = dict(settings)
+    settings["timeout_s"] = min(1.5, float(settings.get("timeout_s") or 1.5))
+    soc = inner_client
+    if soc is None and getattr(client, "local_soul", False):
+        soc = client
+    auto = _resolve_proactive_inner() == "auto"
+    call_mode = mode
+    if soc is None:
+        try:
+            soc = inject.make_local_client(settings)
+        except Exception:  # noqa: BLE001
+            soc = None
+    if soc is not None and mode == "model" and auto:
+        try:
+            available = inject.probe_local(soc)
+        except Exception:  # noqa: BLE001
+            available = False
+        if not available:
+            call_mode = "rule"
+            _log_proactive_inner_fallback("server_unavailable")
+    try:
+        outcome = inject.build_inner_ctx_ex(
+            path, call_mode, soc, "", list(recent_messages or []), None,
+            proactive=True, scope="all",
+            shadow_only=bool(settings.get("shadow_only")))
+        info["mode"] = str(outcome.get("mode") or call_mode)
+        info["source"] = str(outcome.get("source") or "off")
+        info["latency_ms"] = outcome.get("latency_ms")
+        info["injected"] = bool(outcome.get("injected"))
+        state = outcome.get("state") or {}
+        info["behavior"] = dict(state.get("behavior") or {})
+        info["ctx"] = str(outcome.get("ctx") or "") if info["injected"] else ""
+        info["fallback"] = str(outcome.get("fallback") or "")
+        if info["fallback"]:
+            _log_proactive_inner_fallback(info["fallback"])
+    except Exception as exc:  # noqa: BLE001 - 内状态失败绝不阻塞主动消息
+        info["mode"] = "rule"
+        info["source"] = "rule"
+        _log_proactive_inner_fallback(f"internal:{type(exc).__name__}")
+    if not info["ctx"]:
+        info["injected"] = False
+    return info
+
+
 def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
                  dialog: str, *, force_statement: bool = False,
                  regenerate: bool = False, own_only: bool = False,
                  fix_runon: bool = False, opener_mode: str = "",
                  style_fix: bool = False, continuity_ctx: str = "",
                  continuity_fix: bool = False, continuity_hint: str = "",
-                 concrete_fix: bool = False) -> str:
+                 concrete_fix: bool = False, inner_ctx: str = "") -> str:
     """按 kind 选生成指令 + 全局约束（禁元话题/反编造/标点/人格边界/开头/问句/连续性）。"""
     instruction = KIND_INSTRUCTION.get(kind) or KIND_INSTRUCTION["care"]
+    persona = (f"你现在心情 {mood:.2f}，分享欲 {share_drive:.2f}。你想主动给对方发条微信。")
+    if inner_ctx:
+        persona += ("\n你的内在状态（只影响语气与选择，不是事实，不要说出口）：\n"
+                    + str(inner_ctx))
     prompt = (
-        f"你现在心情 {mood:.2f}，分享欲 {share_drive:.2f}。你想主动给对方发条微信。"
+        persona
         + instruction
         + TOPIC_CONSTRAINTS
         + GROUNDING_CONSTRAINTS
@@ -2122,7 +2237,8 @@ def record_proactive_turn(path: Path | str, assistant_message_id: str, reply: st
 
 def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
          idle_seconds: float = 30, cooldown: float = 900,
-         min_score: float | None = None, respect_state: bool = True) -> dict[str, Any]:
+         min_score: float | None = None, respect_state: bool = True,
+         inner_client=None) -> dict[str, Any]:
     """网页轮询：由它自己的心情/分享欲决定说不说，可一次说 1-2 条。"""
     now = time.time() if now is None else float(now)
     own = state.load(path)["self"]
@@ -2190,14 +2306,24 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     previous_text = continuity_history[0] if continuity_history else ""
     previous_polarity = emotion_polarity(previous_text) if previous_text else "neutral"
     continuity_ctx = _continuity_context(recent_own, user_recent, mood, energy)
+    # P3-d：主动消息用自己的小模型内状态（每 tick 只调一次；off 时 prompt 不变）
+    inner_messages = memory.recent_messages(path, 12)
+    inner_info = _build_proactive_inner(path, client, inner_client, inner_messages)
+    inner_ctx = str(inner_info.pop("ctx", "") or "")
+    inner_behavior = dict(inner_info.get("behavior") or {})
     # P0-14：问句概率化（最近 3 条已有任一问句 → 禁问；否则按 energy/mood 掷骰）
     allow_question = should_ask_question(mood, energy, recent_proactive)
+    if inner_behavior.get("ask") is False:
+        allow_question = False
     force_statement = not allow_question
+    voice_max = 12 if inner_behavior.get("length") == "short" else 25
+    advice_allowed = inner_behavior.get("advice") is not False
+    emoji_allowed = inner_behavior.get("emoji") != "不用"
     opener_mode = choose_opener_mode(recent_proactive)
     prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
                           force_statement=force_statement,
                           opener_mode=opener_mode,
-                          continuity_ctx=continuity_ctx)
+                          continuity_ctx=continuity_ctx, inner_ctx=inner_ctx)
     text, llm_answered = _ask_llm(client, prompt)
     if llm_answered and (not text or text.upper().startswith("SKIP")):
         # 明确让 LLM 自己决定"这次不说话"：它说 SKIP 就不发，不再用模板兜底
@@ -2315,7 +2441,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     text = fix_single_topic(text, kind)
     text = limit_voice_length(text, 200 if kind == "followup" else 18)
     text = apply_oral_particle(text, recent_proactive)
-    text = apply_emoji(text, recent_proactive, now)
+    text = apply_emoji(text, recent_proactive, now, enabled=emoji_allowed)
     # P0-23 软约束：单条纯情绪放行；仅连续≥3 或完全无上下文时兜底补事由
     concrete_sources = [str(best.get("topic") or ""), str(best.get("anchor") or "")]
     concrete_sources.extend(continuity_history)
@@ -2406,18 +2532,23 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     text = dedupe_opener_prefixes(text)
     text = collapse_leading_prefixes(text)
     text = clean_reaction_text(text, action == "new_topic")
-    text = limit_voice_length(text, 200 if kind == "followup" else 25)
+    text = limit_voice_length(text, 200 if kind == "followup" else voice_max)
     if not has_concrete_subject(text):
         text = ensure_concrete_subject(text, kind, concrete_sources) if force_concrete else text
     text = clean_reaction_text(text, action == "new_topic")
     text = ensure_opener_distinct(text, recent_proactive, opener_mode)
     text = clean_reaction_text(text, action == "new_topic")
+    if not advice_allowed:
+        text = strip_advice(text, kind)
     text = strip_trailing_period(text)
     # P0-24：口语化安全层（在 polish 之后、grounding/物理/元话语复检之前）
     text = polish_outbound(text)
-    text, voice_info = apply_voice_polish(text, kind, anchors)
+    text, voice_info = apply_voice_polish(text, kind, anchors, max_chars=voice_max)
     if not grounding_ok(text, anchors):
         text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
+    if not advice_allowed:
+        text = strip_advice(text, kind)
+    text = limit_voice_length(text, 200 if kind == "followup" else voice_max)
     text = strip_trailing_period(text)
     text = style_profile.tune_reply("", text)[:200]
     max_bubbles = 3 if share_drive >= 0.7 else (2 if share_drive >= 0.55 or mood >= 0.7 else 1)
@@ -2459,7 +2590,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     return {"ok": True, "available": True, "message": bubbles[0], "messages": bubbles,
             "message_id": ids[0], "turn_id": turn_id,
             "kind": best["kind"], "action": action, "score": best["score"],
-            "voice_polished": voice_info,
+            "inner": inner_info, "voice_polished": voice_info,
             "reason": best["reason"], "mood": mood, "sharing": share_drive,
             "initiative": {k: init_info.get(k) for k in
                             ("available", "score", "reason", "max_bubbles", "bubble_count",

@@ -196,3 +196,30 @@ python -m pytest agi/tests/test_inner_latency_slim.py agi/tests/test_inner_produ
   agi/tests/test_latency.py -q
 ```
 
+## 5. 主动消息链路（P3-d）
+
+主动消息文本由 `agi/selflearn/proactive.py::tick` 自己生成，不经过 `chat.send`；P3-d 在 tick
+生成前显式调用内状态，把「灵魂」带进主动消息。
+
+- **调用点**：`tick()` 在计算 prompt 前调用一次
+  `inject.build_inner_ctx_ex(path, mode, client, "", recent_messages, None,
+  proactive=True, scope="all", shadow_only=...)`；每 tick 只调一次。
+  渲染块拼进 `_kind_prompt` 的人物设定之后、具体 kind 指令之前。
+- **延迟预算**：主动消息是异步发送，可接受 ~400ms；`SOUL_TIMEOUT_S` 在主动链路被压到
+  `min(1.5, 配置值)`，模型不可用/超时/非法 JSON → rule 渲染兜底，不阻塞 tick。
+- **开关**：
+  - `proactive_inner`：`off | auto | force`，默认 `auto`。
+    `off` 完全不调用；`auto` 仅在 `/health`（15s TTL）可用时试模型，不可用直接用 rule；
+    `force` 始终尝试模型（失败回退 rule）。
+  - `inner_mode`：总开关；为 `off` 时主动链路完全不注入，prompt 与改动前逐字节一致。
+  - `inner_mode_scope`：主动链路固定用 `scope="all"`（主动消息本来就允许延迟）；
+    被动回复仍按 `scope` 策略，默认 `proactive_only` 时 0 模型延迟。
+- **behavior 落地**（slim `behavior{length,ask,advice,emoji}`）：
+  - `ask=false` → 主动消息禁问（prompt 不提问、输出不出现问号）；
+  - `length=short` → 输出长度上限收到 12 字；
+  - `advice=false` → 去掉「建议/最好/记得/应该」类建议小句；
+  - `emoji=不用` → 不追加 emoji；`偶尔` → 按 5% 概率加 1 个。
+- **观测**：`tick()` 返回 `inner{mode, source, latency_ms, injected, behavior, fallback}`；
+  模型回退额外写 `proactive_inner_fallback` JSONL（10 分钟节流）。
+- **测试**：`agi/tests/test_proactive_inner.py`（注入/behavior/超时回退/off 字节锁/
+  每 tick 一次/20 tick 注入率 ≥90%/fallback 节流）。

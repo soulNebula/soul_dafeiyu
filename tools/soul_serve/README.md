@@ -197,3 +197,55 @@ E:\agent\venv312\Scripts\python.exe tools\soul_serve\smoke_eval.py `
 | `tools/soul_serve/smoke_eval.py` | 20 条端到端验收（G1/延迟/tok/s，可选 HF 对比） |
 | `agi/soul/llama_client.py` | HTTP 客户端（与 llm.Client 同接口，json_mode 带 json_schema） |
 | `agi/soul/inner_state_schema.json` | InnerState JSON schema（服务端/请求级约束共用） |
+
+
+---
+
+## 9. 模型资产与预留接口（P3-c，2026-10-26）
+
+> **所有模型/适配器/GGUF 一律禁止删除**（用户要求保留；清单见 `E:\agent\output\MANIFEST.md`）。
+> 1.5B 模型先不删、先不合并：`qwen15` 以 `status=reserved / port=8124` 登记在
+> `agi/data/local_models.json`（gitignore），默认不启动；以后需要再改 status/role。
+
+### 9.1 注册表（`agi/selflearn/model_registry.py`）
+
+```powershell
+E:\agent\venv312\Scripts\python.exe -m agi.selflearn.model_registry --list
+E:\agent\venv312\Scripts\python.exe -m agi.selflearn.model_registry --get qwen15
+E:\agent\venv312\Scripts\python.exe -m agi.selflearn.model_registry --resolve reserved
+E:\agent\venv312\Scripts\python.exe -m agi.selflearn.model_registry --health qwen15
+E:\agent\venv312\Scripts\python.exe -m agi.selflearn.model_registry --missing
+E:\agent\venv312\Scripts\python.exe -m agi.selflearn.model_registry --start soul-05b
+E:\agent\venv312\Scripts\python.exe -m agi.selflearn.model_registry --stop soul-05b
+```
+
+- `start/stop` 只操作注册表登记的端口，并且只 kill 自己启动的 PID（state 在
+  `agi/data/local_models_state.json`）；`reserved` 模型默认拒绝启动；
+- `health` 探测 `http://127.0.0.1:<port>/health`，带 5s TTL 缓存，端口未开返回 `False` 不抛异常；
+- `missing_files` 校验 base/adapter/gguf 路径是否存在。
+
+### 9.2 1.5B 预留位怎么用
+
+1. 现状：`qwen15`（`E:\agent\models\Qwen2.5-1.5B-Instruct` + 适配器 `soul_qwen25_15b_v1` +
+   GGUF `soul_qwen25_15b_v1-q4_k_m.gguf`），端口 8124，`status=reserved`；
+2. 需要启用时：编辑 `agi/data/local_models.json`，把 `status/role` 改成 `ready/...`，
+   然后 `--start qwen15`；**本仓库默认不启动它**；
+3. 也可以直接 `python -m agi.selflearn.model_registry --health qwen15` 确认当前没占用端口。
+
+### 9.3 任意适配器 → 可服务模型
+
+```powershell
+# 只预览（本任务只验证 dry-run，不执行合并/转换）
+E:\agent\venv312\Scripts\python.exe tools\soul_serve\prepare_model.py `
+  --adapter E:\agent\output\<adapter> --base E:\agent\models\<base> `
+  --name <new_name> --dry-run
+
+# 真跑（以后新任务用；默认 CPU merge + llama.cpp convert/quantize，不占训练 GPU）
+E:\agent\venv312\Scripts\python.exe tools\soul_serve\prepare_model.py `
+  --adapter ... --base ... --name <new_name> --out-dir E:\agent\output\gguf --register --port 8125
+```
+
+### 9.4 资产清单
+
+所有基座/适配器/GGUF 的路径、大小、用途、评测数字与“禁止删除”标记见
+`E:\agent\output\MANIFEST.md`（在 `E:\agent` 下，不进仓库）。

@@ -1,0 +1,98 @@
+# -*- coding: utf-8 -*-
+"""模型注册表单测（P3-c）：预留位/健康检查/缺文件/安全启停。"""
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from agi.selflearn import model_registry as registry
+
+
+def test_qwen15_reserved_entry_and_port():
+    """防误删：1.5B 预留位必须存在、reserved、端口 8124、gguf 指向已有文件。"""
+    entry = registry.get("qwen15")
+    assert entry is not None
+    assert entry["role"] == "reserved"
+    assert entry["status"] == "reserved"
+    assert int(entry["port"]) == 8124
+    assert entry["gguf"].endswith("soul_qwen25_15b_v1-q4_k_m.gguf")
+    assert registry.resolve_by_role("reserved") == [entry]
+
+
+def test_extra_adapters_registered():
+    adapters = {item["name"]: item for item in registry.list_extra_adapters()}
+    assert "tone_qwen15_v1" in adapters
+    assert "tone_style_qwen15_v3" in adapters
+    assert adapters["tone_qwen15_v1"]["path"].endswith("tone_qwen15_v1")
+    assert adapters["tone_style_qwen15_v3"]["path"].endswith("tone_style_qwen15_v3")
+
+
+def test_missing_or_corrupt_config_returns_empty(tmp_path):
+    missing = tmp_path / "nope.json"
+    assert registry.load_config(missing)["models"] == []
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    assert registry.load_config(broken)["models"] == []
+    assert registry.list_models(broken) == []
+
+
+def test_get_and_resolve_by_role():
+    assert registry.get("soul-05b")["role"] == "soul"
+    assert registry.get("no-such-model") is None
+    soul = registry.resolve_by_role("soul")
+    assert soul and all(item["role"] == "soul" for item in soul)
+    assert registry.resolve_by_role("no-such-role") == []
+
+
+def test_missing_files_detects_missing_paths(tmp_path):
+    config = {
+        "models": [{"name": "ghost", "base": str(tmp_path / "missing_base"),
+                    "adapter": None, "gguf": None, "port": None,
+                    "role": "test", "status": "ready"}],
+        "extra_adapters": [],
+    }
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    missing = registry.missing_files(path=path)
+    assert missing
+    assert missing[0]["name"] == "ghost"
+    assert missing[0]["kind"] == "base"
+
+
+def test_health_closed_port_and_unknown_do_not_raise():
+    # qwen15 预留端口 8124 当前没有服务 → False，不抛异常
+    assert registry.health("qwen15") is False
+    assert registry.health("no-such-model") is False
+
+
+def test_start_reserved_and_unknown_refused():
+    reserved = registry.start("qwen15")
+    assert reserved["ok"] is False
+    assert reserved["error"] == "reserved_model_not_started"
+    unknown = registry.start("no-such-model")
+    assert unknown["ok"] is False
+    assert "unknown_model" in unknown["error"]
+
+
+def test_stop_unstarted_refused():
+    result = registry.stop("qwen15")
+    assert result["ok"] is False
+    assert result["error"] in ("not_started_by_registry", "pid_not_alive")
+
+
+def test_cli_list_returns_json(capsys):
+    exit_code = registry.main(["--list"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert isinstance(payload, list)
+    assert any(item["name"] == "qwen15" for item in payload)
+
+
+def test_validate_registry_no_duplicate():
+    result = registry.validate_registry()
+    assert result["models"] >= 3
+    assert result["duplicate_names"] == []
+    assert result["duplicate_ports"] == []
+    assert result["missing_files"] == []

@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import db, initiative, memory, share_store, sharing, state, style_profile, trust
+from . import db, initiative, memory, prompt_store, share_store, sharing, state, style_profile, trust
 from .config import DB_PATH
 
 COOLDOWN = 2 * 3600
@@ -1471,7 +1471,7 @@ def _load_human_fewshot() -> tuple[str, ...]:
 
 #: 只学语气/长度/标点习惯，不照抄内容
 VOICE_FEWSHOT = _load_human_fewshot()
-VOICE_CONSTRAINTS = (
+VOICE_RULES = (
     "聊天语气（最重要，读起来要像人在聊天，别像写作文）：\n"
     "- 只说你此刻的**内心念头/感受/评价**，不要汇报自己在做什么"
     "（禁止「在整理资料」「在听专辑」「刚做完…」这种动作流水账）；\n"
@@ -1481,9 +1481,12 @@ VOICE_CONSTRAINTS = (
     "这种极短句；一条只说一件事，不要「在X的时候…在Y」并置；\n"
     "- **句尾默认不加任何标点**；只有真提问才用？，绝不用。或！；\n"
     "- 偶尔可以带 1 个 emoji，不要多；\n"
+)
+VOICE_FEWSHOT_SECTION = (
     "- 参考你平时说话的样子（学语气/长度/标点习惯，不要照抄内容）：\n"
     + "\n".join(f"  · {example}" for example in VOICE_FEWSHOT)
 )
+VOICE_CONSTRAINTS = VOICE_RULES + VOICE_FEWSHOT_SECTION
 
 
 #: P0-23：泛指/时间/空结构词；判定"具体事由"时先剔掉
@@ -2058,20 +2061,32 @@ def _build_proactive_inner(path, client, inner_client=None,
     if soc is None and getattr(client, "local_soul", False):
         soc = client
     auto = _resolve_proactive_inner() == "auto"
+    if auto and settings.get("shadow_only"):
+        # 灰度只观测不注入：主动链路保持原样，避免无意义模型延迟
+        info["mode"] = "rule"
+        info["source"] = "rule"
+        info["fallback"] = "shadow_only"
+        return info
     call_mode = mode
     if soc is None:
         try:
             soc = inject.make_local_client(settings)
         except Exception:  # noqa: BLE001
             soc = None
-    if soc is not None and mode == "model" and auto:
+    if auto and mode == "model":
         try:
-            available = inject.probe_local(soc)
+            available = bool(soc is not None and inject.probe_local(soc))
         except Exception:  # noqa: BLE001
             available = False
         if not available:
-            call_mode = "rule"
+            # auto=server 可用才用；不可用时保持被动链路原样（不注入 rule 块）
+            info["mode"] = "rule"
+            info["source"] = "rule"
+            info["fallback"] = "server_unavailable"
             _log_proactive_inner_fallback("server_unavailable")
+            return info
+    if soc is None and not auto:
+        _log_proactive_inner_fallback("client_missing")
     try:
         outcome = inject.build_inner_ctx_ex(
             path, call_mode, soc, "", list(recent_messages or []), None,
@@ -2096,6 +2111,18 @@ def _build_proactive_inner(path, client, inner_client=None,
     return info
 
 
+#: P0-17 连续性静态约束（prompt_store 默认值；动态上下文另拼）
+CONTINUITY_CONSTRAINTS = (
+    "\n叙事连续性（强制二选一，正文前单独一行输出 action）：\n"
+    "- action: continuation → 承接上一条说的事：复用上一条里出现过的具体词"
+    "（名词/事件词，如「那批笔记」「旧结论」）或「那个/这事」指代；"
+    "**绝对不要出现「刚才/前面/接着」这类元话语**；\n"
+    "- action: new_topic → 换话题，正文必须以「对了/说起来/换个话题/顺带说个事/另外」"
+    "开头；\n"
+    "- 情绪要连贯：不要从上一句的低落/疲累突然变成特别开心。\n"
+)
+
+
 def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
                  dialog: str, *, force_statement: bool = False,
                  regenerate: bool = False, own_only: bool = False,
@@ -2104,7 +2131,10 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
                  continuity_fix: bool = False, continuity_hint: str = "",
                  concrete_fix: bool = False, inner_ctx: str = "") -> str:
     """按 kind 选生成指令 + 全局约束（禁元话题/反编造/标点/人格边界/开头/问句/连续性）。"""
-    instruction = KIND_INSTRUCTION.get(kind) or KIND_INSTRUCTION["care"]
+    instruction = prompt_store.get(
+        f"proactive.kind.{kind}",
+        KIND_INSTRUCTION.get(kind) or KIND_INSTRUCTION["care"])
+    voice_section = prompt_store.get("proactive.voice_fewshot", VOICE_FEWSHOT_SECTION)
     persona = (f"你现在心情 {mood:.2f}，分享欲 {share_drive:.2f}。你想主动给对方发条微信。")
     if inner_ctx:
         persona += ("\n你的内在状态（只影响语气与选择，不是事实，不要说出口）：\n"
@@ -2113,10 +2143,11 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
         persona
         + instruction
         + TOPIC_CONSTRAINTS
-        + GROUNDING_CONSTRAINTS
-        + RUNON_CONSTRAINTS
-        + PERSONA_CONSTRAINTS
-        + VOICE_CONSTRAINTS
+        + prompt_store.get("proactive.anti_fabrication", GROUNDING_CONSTRAINTS)
+        + prompt_store.get("proactive.punctuation", RUNON_CONSTRAINTS)
+        + prompt_store.get("proactive.persona_constraints", PERSONA_CONSTRAINTS)
+        + VOICE_RULES
+        + voice_section
         + ("表达方式（正文前单独一行输出 choice: share_with_anchor 或 reaction）：\n"
            "- share_with_anchor：你想分享一件事/一个观察，必须有具体事由+情绪；\n"
            "- reaction：纯情绪反应/承接上一条/回应对方，可以没有具体事由"
@@ -2127,16 +2158,8 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
     if opener_mode in _OPENER_INSTRUCTIONS:
         prompt += "\n开头模式：" + _OPENER_INSTRUCTIONS[opener_mode]
     if continuity_ctx:
-        prompt += (
-            "\n叙事连续性（强制二选一，正文前单独一行输出 action）：\n"
-            "- action: continuation → 承接上一条说的事：复用上一条里出现过的具体词"
-            "（名词/事件词，如「那批笔记」「旧结论」）或「那个/这事」指代；"
-            "**绝对不要出现「刚才/前面/接着」这类元话语**；\n"
-            "- action: new_topic → 换话题，正文必须以「对了/说起来/换个话题/顺带说个事/另外」"
-            "开头；\n"
-            "- 情绪要连贯：不要从上一句的低落/疲累突然变成特别开心。\n"
-            + continuity_ctx
-        )
+        prompt += (prompt_store.get("proactive.continuity", CONTINUITY_CONSTRAINTS)
+                   + continuity_ctx)
     if continuity_fix:
         prompt += ("\n【重生成】上一条和你之前说的话断开了：这次要么用上一条里的具体词"
                    "或「那个/这事」承接（不要写「刚才/前面/接着」），"

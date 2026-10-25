@@ -47,6 +47,15 @@ SYSTEM = """你是一个通过长期对话自我改进的 AI，不是客服，�
 有自伤/危机信号时优先安全，建议联系信任的人或专业帮助。"""
 
 
+def _system_prompt() -> str:
+    """P4-b：SYSTEM 支持 prompt_store 覆盖；未配置时返回代码常量（逐字节一致）。"""
+    try:
+        from . import prompt_store
+        return prompt_store.get("chat.system", SYSTEM)
+    except Exception:  # noqa: BLE001 - 覆盖读取失败不影响主链
+        return SYSTEM
+
+
 def _id(prefix: str, *parts) -> str:
     h = hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:14]
     return prefix + h
@@ -525,16 +534,18 @@ class SelfLearnAgent:
                 except Exception:  # noqa: BLE001
                     pass
             if image:
+                system_text = _system_prompt()
                 content = [{"type": "text", "text": prompt},
                            {"type": "image_url", "image_url": {"url": image}}]
-                messages = [{"role": "system", "content": SYSTEM},
+                messages = [{"role": "system", "content": system_text},
                             {"role": "user", "content": content}]
                 result = self.client.chat(messages, purpose="selflearn_chat_vision",
                                           max_tokens=1200, temperature=0.7)
                 gen_meta = {"two_stage": False, "claims": []}
             else:
+                system_text = _system_prompt()
                 result, gen_meta = generation.generate(
-                    self.client, SYSTEM, prompt, mems,
+                    self.client, system_text, prompt, mems,
                     purpose="selflearn_chat", max_tokens=500, temperature=0.7,
                 )
             reply = str(result.get("text") or "").strip() if result.get("ok") else ""

@@ -89,6 +89,7 @@ def _enable(monkeypatch):
     monkeypatch.setenv("INNER_MODE", "model")
     monkeypatch.setenv("PROACTIVE_INNER", "force")
     monkeypatch.setenv("INNER_MODE_SCOPE", "all")
+    monkeypatch.setenv("INNER_SHADOW_ONLY", "0")
 
 
 def _tick(path, *, gen, inner, now=T0):

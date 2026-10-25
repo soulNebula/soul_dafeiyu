@@ -704,6 +704,13 @@ class Gateway:
                 state = self.backend.get_state()
         except Exception:  # noqa: BLE001
             state = {}
+        # P3-a：内状态（本地灵魂模型）观测；import 失败不影响 /status
+        try:
+            from ..inner import inject as inner_inject
+            inner_status = inner_inject.stats()
+        except Exception:  # noqa: BLE001
+            inner_status = {"mode": "off", "last_latency_ms": None,
+                            "fallbacks_24h": 0}
         return {
             "ok": True,
             "service": "wechat_gateway",
@@ -742,6 +749,7 @@ class Gateway:
                               "min": self.cfg.get("proactive_probability_min"),
                               "max": self.cfg.get("proactive_probability_max")},
                           "last": self.last_proactive},
+            "inner": inner_status,
             "backend": state,
             "receiver": self.receiver.status() if self.receiver else None,
             "recent": list(self.recent)[-20:],

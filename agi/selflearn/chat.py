@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import random
 import re
 import time
@@ -15,6 +14,11 @@ from ..inner import inject as inner_inject
 from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, timefuzz, tool_reply, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
+
+try:  # P3：线上回复的口语化安全层（纯函数、无依赖）；缺失时退化为原文
+    from . import voice_polish
+except Exception:  # noqa: BLE001
+    voice_polish = None
 
 INTERNAL_QUERY = re.compile(
     r"(记忆库|记忆里|记得什么|记得哪些|记得啥|技能树|技能清单|"
@@ -129,15 +133,18 @@ def _inner_state_snapshot(path: Path, st: dict, text: str) -> str:
 
 
 def _record_inner_state(path: Path, turn_id: str, mode: str, state_json: str,
-                        block: str, injected: int = 0) -> None:
-    """W3-A：写 inner_states。shadow 只记录、不注入。"""
+                        block: str, injected: int = 0, *,
+                        latency_ms: float | None = None, fallback: str = "",
+                        source: str = "") -> None:
+    """W3-A/P3-a：写 inner_states。shadow 只记录、不注入。"""
     con = db.connect(path)
     try:
         con.execute(
-            "INSERT INTO inner_states(id,turn_id,mode,state_json,block,injected,created_at) "
-            "VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO inner_states(id,turn_id,mode,state_json,block,injected,"
+            "latency_ms,fallback,source,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
             (_id("IS-", turn_id, time.time()), turn_id, mode, state_json, block,
-             int(injected), time.time()),
+             int(injected), latency_ms, str(fallback or ""), str(source or ""),
+             time.time()),
         )
         con.commit()
     finally:
@@ -145,10 +152,24 @@ def _record_inner_state(path: Path, turn_id: str, mode: str, state_json: str,
 
 
 class SelfLearnAgent:
-    def __init__(self, path: Path | str = DB_PATH, client=None, rng=None) -> None:
+    def __init__(self, path: Path | str = DB_PATH, client=None, rng=None,
+                 inner_client=None) -> None:
         self.path = Path(path)
         self.client = client if client is not None else Client()
         self.rng = rng
+        # P3-a：内状态专用 client（本地灵魂模型）。显式注入时优先使用；
+        # 未注入且主 client 也是显式注入的（测试/离线消融）→ 沿用主 client，
+        # 保持 W2 行为；生产（网关/web/cli 都不传 client）→ 使用本地 llama-server。
+        self.inner_client = inner_client
+        self._client_injected = client is not None
+
+    def _resolve_inner_client(self, settings: dict) -> Any:
+        """model 模式下真正调内状态的 client（见 __init__ 的三种来源）。"""
+        if self.inner_client is not None:
+            return self.inner_client
+        if self._client_injected:
+            return self.client
+        return inner_inject.make_local_client(settings)
 
     def _count_user_messages(self) -> int:
         con = db.connect(self.path)
@@ -158,9 +179,53 @@ class SelfLearnAgent:
         finally:
             con.close()
 
+    # ---------------------------------------------------------- 口语化安全层
+    def _polish_outbound(self, text: str) -> str:
+        """P3：最终外发文本口语化（去句尾句号/书面词/超长截句）。
+
+        - 只改最终发出的文本；原始串写 ``voice_polished`` 事件留档，便于排查；
+        - ``changed=False`` 时逐字节不变；
+        - 纯函数、无额外模型调用；任何异常都返回原文（不影响主链）。
+        """
+        if voice_polish is None:
+            return text
+        try:
+            out = voice_polish.polish_reply(text, rng=self.rng, max_chars=40)
+        except Exception:  # noqa: BLE001
+            return text
+        if not isinstance(out, dict) or not out.get("changed"):
+            return text
+        polished = str(out.get("text") or text)
+        self._record_voice_polished(text, polished, list(out.get("reasons") or []))
+        return polished
+
+    def _record_voice_polished(self, before: str, after: str,
+                               reasons: list[str]) -> None:
+        """把口语化前后的文本写进 raw_events（原始生成结果留档，不进 gen_meta）。"""
+        now = time.time()
+        payload = {"before": str(before)[:800], "after": str(after)[:800],
+                   "reasons": list(reasons or [])[:20]}
+        rid = _id("RE-", "voice_polished", now, payload["before"], payload["after"])
+        try:
+            con = db.connect(self.path)
+            try:
+                con.execute(
+                    "INSERT OR IGNORE INTO raw_events(id,source,source_id,friend,sender,"
+                    "kind,text,ts,meta_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (rid, "voice_polished", rid, "selflearn", "system",
+                     "voice_polished", json.dumps(payload, ensure_ascii=False), now,
+                     json.dumps(payload, ensure_ascii=False)))
+                con.commit()
+            finally:
+                con.close()
+        except Exception:  # noqa: BLE001 - 留档失败不影响回复
+            pass
+
     def _simple_reply(self, user_id: str, reply: str, st: dict, attachment,
                       *, skill_gate=None, identity=False, had_image=False,
                       t0: float | None = None) -> dict[str, Any]:
+        # 先口语化再清句号：voice_polished 事件里保留的 before 是原始回复串
+        reply = self._polish_outbound(reply)
         reply = style_profile.strip_periods(reply)
         assistant_id = memory.store_message(self.path, "assistant", reply)
         try:
@@ -378,33 +443,68 @@ class SelfLearnAgent:
                 research = {"used": False, "context": "", "sources": []}
         gen_meta = {"two_stage": False, "claims": []}
         budget_meta: dict = {}
-        # W3-A：INNER_MODE=shadow 只记录不注入。模式值先归一化出是否 shadow；
-        # shadow 时 inner_ctx 恒为空串 → prompt 与 off 逐字节一致（test_shadow 逐字节锁）。
-        inner_mode = os.environ.get("INNER_MODE", "off")
-        shadow_mode = str(inner_mode).strip().lower() == SHADOW_MODE
+        # P3-a：解析内状态运行参数（INNER_MODE/SOUL_* 环境变量 > config.json > 默认 off）。
+        # 显式注入 client 的调用方（测试/离线消融）不读线上配置文件，避免灰度开关污染测试。
+        inner_settings = inner_inject.resolve_settings(
+            production=not self._client_injected)
+        inner_mode = inner_settings["mode"]
+        # W3-A：INNER_MODE=shadow 只记录不注入（旧语义，rule 渲染）。
+        shadow_mode = inner_mode == SHADOW_MODE
         shadow_block = ""
+        inner_ctx = ""
+        inner_block = ""
+        inner_state_dict: dict = {}
+        inner_meta: dict = {"mode": "off", "source": "off", "fallback": "",
+                            "latency_ms": None, "injected": False}
         if crisis:
+            # crisis 保持原路径：不算内状态、不落库
             reply = ("我在。先别一个人扛着。你现在安全吗？"
                      "如果可能，先联系你信任的人，或当地急救/心理援助。")
         else:
-            # W2-A：内状态注入（只影响语气与选择）。INNER_MODE 默认 off，
-            # off 时 inner_ctx 为空串，_prompt 拼出来的字符串与改动前逐字节一致。
-            inner_ctx = ""
+            text_for_inner = text or "我发了一张图片，请看看并回应我。"
             if shadow_mode:
-                # shadow 用 rule 渲染块，但绝不放进 prompt
+                # W3-A：shadow 用 rule 渲染块，只落库、绝不放进 prompt
                 try:
                     shadow_block = inner_inject.build_inner_ctx(
-                        self.path, "rule", self.client,
-                        text or "我发了一张图片，请看看并回应我。", recent, st)
+                        self.path, "rule", self.client, text_for_inner, recent, st)
                 except Exception:  # noqa: BLE001
                     shadow_block = ""
-            else:
+                inner_meta = {"mode": "shadow", "source": "rule", "fallback": "",
+                              "latency_ms": None, "injected": False}
+            elif inner_mode == "model":
+                # P3-a：本地灵魂模型产出 InnerState；超时/解析失败 → 自动回退 rule。
+                # inner_shadow_only=true 时只记录不注入（灰度），prompt 与 off 逐字节一致。
+                shadow_only = bool(inner_settings["shadow_only"])
+                inner_client = self._resolve_inner_client(inner_settings)
+                try:
+                    outcome = inner_inject.build_inner_ctx_ex(
+                        self.path, "model", inner_client, text_for_inner, recent, st,
+                        shadow_only=shadow_only)
+                except Exception:  # noqa: BLE001
+                    outcome = {"ctx": "", "injected": False, "source": "rule",
+                               "state": {}, "fallback": "internal_error",
+                               "latency_ms": None}
+                inner_block = str(outcome.get("ctx") or "")
+                inner_ctx = inner_block if outcome.get("injected") else ""
+                inner_state_dict = outcome.get("state") or {}
+                inner_meta = {
+                    "mode": "model", "source": str(outcome.get("source") or "rule"),
+                    "fallback": str(outcome.get("fallback") or ""),
+                    "latency_ms": outcome.get("latency_ms"),
+                    "injected": bool(outcome.get("injected")),
+                    "shadow_only": shadow_only,
+                }
+            elif inner_mode in ("static", "rule"):
+                # W2 兼容路径（人工开关/回退对照），零副作用
                 try:
                     inner_ctx = inner_inject.build_inner_ctx(
-                        self.path, inner_mode, self.client,
-                        text or "我发了一张图片，请看看并回应我。", recent, st)
+                        self.path, inner_mode, self.client, text_for_inner, recent, st)
                 except Exception:  # noqa: BLE001
                     inner_ctx = ""
+                inner_meta = {"mode": inner_mode, "source": inner_mode,
+                              "fallback": "", "latency_ms": None,
+                              "injected": bool(inner_ctx)}
+            # off：inner_ctx 为空串 → prompt 与改动前逐字节一致
             prompt = self._prompt(text or "我发了一张图片，请看看并回应我。", mems, pctx,
                                    variant, recent, st=st, lessons=lessons,
                                    conflict_q=conflict_q, sum_ctx=sum_ctx,
@@ -433,6 +533,11 @@ class SelfLearnAgent:
             reply = str(result.get("text") or "").strip() if result.get("ok") else ""
             if not reply:
                 reply = self._fallback(text or "")
+        # P3-a：内状态观测信息进 gen_meta（仅在启用内状态时附加，off 保持原结构）
+        if inner_meta.get("mode") != "off":
+            gen_meta = dict(gen_meta or {})
+            gen_meta["inner"] = dict(inner_meta)
+            gen_meta["inner_latency_ms"] = inner_meta.get("latency_ms")
         reply = reply[:800]
         guard_info = {"level": "L0", "issues": [], "reply": reply}
         if not crisis:
@@ -476,10 +581,21 @@ class SelfLearnAgent:
         mood = float(st["self"].get("mood", 0.55))
         sharing = float(st["self"].get("sharing", 0.45))
         max_bubbles = 3 if (mood >= 0.75 or sharing >= 0.7) else (2 if (mood >= 0.6 or sharing >= 0.6) else 1)
-        bubbles = style_profile.split_bubbles(reply, max_bubbles)
-        bubbles = [style_profile.strip_periods(b) for b in bubbles if style_profile.strip_periods(b)]
+        raw_bubbles = style_profile.split_bubbles(reply, max_bubbles) or [reply]
+        # P3：最终外发文本口语化（去句尾句号/书面词/超长截句）；原始串写事件留档，
+        # 只改这里产出的 bubbles/turn_reply，不动 gen_meta 与原始 reply 变量。
+        # crisis 安全话术不走截句/口语化（不能删掉「联系专业人士/急救」这类保命信息）。
+        bubbles: list[str] = []
+        for raw_bubble in raw_bubbles:
+            if crisis:
+                clean = style_profile.strip_periods(str(raw_bubble or ""))
+            else:
+                polished = self._polish_outbound(str(raw_bubble or ""))
+                clean = style_profile.strip_periods(polished)
+            if clean:
+                bubbles.append(clean)
         if not bubbles:
-            bubbles = [reply]
+            bubbles = [style_profile.strip_periods(reply) or reply]
         turn_reply = " ".join(bubbles)
         assistant_id = memory.store_message(self.path, "assistant", bubbles[0])
         try:
@@ -517,12 +633,21 @@ class SelfLearnAgent:
             con.commit()
         finally:
             con.close()
-        # W3-A：shadow 落库（只记不注入、injected=0）；失败静默降级，不影响主链
-        if shadow_mode and not crisis:
+        # W3-A/P3-a：内状态落库（shadow 只记不注入；model 记录实际来源/延迟/回退原因）。
+        # 失败静默降级，不影响主链。
+        if not crisis and (shadow_mode or inner_mode == "model"):
+            record_mode = "shadow" if shadow_mode else "model"
+            block = shadow_block if shadow_mode else inner_block
+            state_json = (json.dumps(inner_state_dict, ensure_ascii=False)
+                          if inner_state_dict else
+                          _inner_state_snapshot(self.path, st, text or ""))
             try:
                 _record_inner_state(
-                    self.path, turn_id, SHADOW_MODE,
-                    _inner_state_snapshot(self.path, st, text or ""), shadow_block, 0)
+                    self.path, turn_id, record_mode, state_json, block,
+                    int(inner_meta.get("injected") or 0),
+                    latency_ms=inner_meta.get("latency_ms"),
+                    fallback=str(inner_meta.get("fallback") or ""),
+                    source=str(inner_meta.get("source") or ""))
             except Exception:  # noqa: BLE001
                 pass
         learned = 0

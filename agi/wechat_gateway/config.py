@@ -63,6 +63,15 @@ DEFAULTS = {
     "proactive_breaker_cooldown_s": 1800,
     # P0-2：死区哨兵——超过该秒数没有任何事件就写 gateway_stale
     "gateway_stale_alert_s": 1800,
+    # P3-a：内状态（小模型灵魂）接入。默认 off；env INNER_MODE / SOUL_* 优先。
+    #   inner_mode: off | static | rule | model | shadow
+    #   soul_server_url: 本地 llama-server 地址（model 模式）
+    #   soul_timeout_s: 内状态调用超时（性能护栏，超时回退 rule）
+    #   inner_shadow_only: 灰度——只记录不注入（先跑 shadow 24h）
+    "inner_mode": "off",
+    "soul_server_url": "http://127.0.0.1:8123",
+    "soul_timeout_s": 2.0,
+    "inner_shadow_only": False,
 }
 
 #: P0-5 迁移阈值：低于这些值视为历史事故配置

@@ -172,6 +172,10 @@ CREATE TABLE IF NOT EXISTS inner_states(
   state_json TEXT NOT NULL,
   block TEXT NOT NULL DEFAULT '',
   injected INTEGER NOT NULL DEFAULT 0,
+  -- P3-a：内状态可观测性（本地小模型延迟 / 回退原因 / 实际来源 local|rule|static）
+  latency_ms REAL,
+  fallback TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS feedback(
@@ -297,6 +301,13 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
     tcols = {r[1] for r in con.execute("PRAGMA table_info(turns)").fetchall()}
     if "latency_ms" not in tcols:
         con.execute("ALTER TABLE turns ADD COLUMN latency_ms REAL")
+    # P3-a：inner_states 可观测列（旧库自动补列，老行为空字符串/NULL）
+    icols = {r[1] for r in con.execute("PRAGMA table_info(inner_states)").fetchall()}
+    for col, ddl in (("latency_ms", "latency_ms REAL"),
+                     ("fallback", "fallback TEXT NOT NULL DEFAULT ''"),
+                     ("source", "source TEXT NOT NULL DEFAULT ''")):
+        if col not in icols:
+            con.execute(f"ALTER TABLE inner_states ADD COLUMN {ddl}")
     # P1-c/P1-d：月度 gist 的三列统一在 connect() 迁移（summary.context 不再每轮 PRAGMA）
     scols = {r[1] for r in con.execute("PRAGMA table_info(summaries)").fetchall()}
     for col, ddl in (("kind", "kind TEXT NOT NULL DEFAULT 'stage'"),

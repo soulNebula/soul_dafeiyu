@@ -181,3 +181,95 @@ def test_kind_prompt_has_punctuation_constraints():
     fix = proactive._kind_prompt("care", {"kind": "care"}, 0.55, 0.45,
                                  "", fix_runon=True)
     assert "把两层意思用句号分开" in fix
+
+
+# --------------------------------------------------------------------------- #
+# 4) P0-13：6 字档（真机「有点凉你」）+ 防误伤
+# --------------------------------------------------------------------------- #
+RAW13 = "刚把阳台的鞋刷了，手上还有点凉你今天心情还行吗？"
+FIXED13 = "刚把阳台的鞋刷了，手上还有点凉。你今天心情还行吗？"
+
+#: 这些代词是宾语/介词宾语/动宾短语，必须原样（只补句末标点）
+NO_CUT_SAMPLES = (
+    "我今天下午一直在跟你说话",
+    "我今天下午一直在对你说",
+    "这杯饮料是我给你买的",
+    "我在楼下一直等你",
+    "我上午一直在找你",
+    "我晚上一直陪你吃饭",
+    "我下午想问你个事",
+    "我有个事要告诉你",
+    "我一直挺喜欢你",
+    "这些年一直谢谢你",
+    "我刚才偷偷看了你一眼",
+    "我在楼下等你一会儿",
+    # 额外常见动宾/领属/量词结构
+    "我今天问了你一个问题",
+    "我昨天下午去了你推荐的店",
+    "我昨天下午去了你说的那家店",
+    "我今天买了你喜欢的花",
+    # 心理/认知动词 + 你（动宾，不能切）
+    "我觉得你挺好的",
+    "我知道你很难受",
+    "我想告诉你一件事",
+    "我发现你今天不开心",
+    "我还记得你说过的话",
+    "别熬夜你早点睡",
+    "忙完了你给我发个消息",
+)
+
+
+def test_p013_real_message_fixed():
+    assert proactive.polish_outbound(RAW13) == FIXED13
+    # 幂等：修好后再调用逐字节不变
+    assert proactive.polish_outbound(FIXED13) == FIXED13
+
+
+def test_p013_second_required_case_cut():
+    assert proactive.polish_outbound("今天有点累你早点睡") == "今天有点累。你早点睡。"
+
+
+def test_p013_object_phrases_never_cut():
+    for text in NO_CUT_SAMPLES:
+        assert proactive.find_runon(text) is None, text
+        assert proactive.polish_outbound(text) == text + "。", text
+
+
+def test_p013_threshold_boundary_5_vs_6():
+    # 5 字且末字不是句末倾向 → 不切（只补句末）
+    five = "我刚吃完饭你吃了吗"
+    assert proactive.find_runon(five) is None
+    assert proactive.polish_outbound(five) == "我刚吃完饭你吃了吗？"
+    # 6 字 → 触发切分
+    six = "我刚吃过晚饭你吃了吗"
+    out = proactive.polish_outbound(six)
+    assert out.startswith("我刚吃过晚饭。你吃了吗"), out
+    assert proactive.find_runon(out) is None
+
+
+def test_p013_english_numbers_not_affected():
+    text = "我用iPhone 15 Pro拍了张照片你那边天气怎么样"
+    out = proactive.polish_outbound(text)
+    assert "iPhone 15 Pro" in out
+    assert proactive.find_runon(out) is None
+
+
+def test_p013_psychological_verb_pronoun_not_cut():
+    """「知道/觉得/发现…+你」是动宾，不能切（lead 真机批量试出的误切）。"""
+    text = "看了你一眼就知道你在想什么"
+    assert proactive.find_runon(text) is None
+    out = proactive.polish_outbound(text)
+    assert out == "看了你一眼就知道你在想什么？"   # 只补句末问号，不插句中句号
+    for text in ("我觉得你挺好的", "我知道你很难受", "我想告诉你一件事",
+                 "我发现你今天不开心", "我还记得你说过的话"):
+        assert proactive.find_runon(text) is None, text
+
+
+def test_p013_lead_regression_cases():
+    # 该切的切
+    assert proactive.polish_outbound("今天有点冷你多穿点") == "今天有点冷。你多穿点。"
+    # 5 字非句末倾向 → 只补句末问号
+    assert proactive.polish_outbound("刚吃完饭你吃了吗") == "刚吃完饭你吃了吗？"
+    # 偏保守的两例：不切（宁可漏标点也不切坏）
+    for text in ("别熬夜你早点睡", "忙完了你给我发个消息"):
+        assert proactive.find_runon(text) is None, text

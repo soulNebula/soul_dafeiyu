@@ -212,17 +212,19 @@ def test_choose_candidate_hard_caps_dominant_kind(tmp_path):
 # polish_outbound（纯函数）
 # --------------------------------------------------------------------------- #
 def test_polish_adds_terminal_punctuation_and_collapses_spaces():
-    assert proactive.polish_outbound("今天有点累") == "今天有点累。"
+    assert proactive.polish_outbound("今天有点累") == "今天有点累"
     assert proactive.polish_outbound("你在忙吗") == "你在忙吗？"
-    assert proactive.polish_outbound("  今天   有点累 ") == "今天 有点累。"
+    assert proactive.polish_outbound("  今天   有点累 ") == "今天 有点累"
     assert proactive.polish_outbound("还没睡？") == "还没睡？"
     assert proactive.polish_outbound("") == ""
     assert proactive.polish_outbound("   ") == ""
 
 
 def test_polish_compliant_text_is_byte_identical():
-    for text in ("今天有点累，先睡了。", "明天出去吃饭吗？", "好呀！", "嗯，在的。"):
-        assert proactive.polish_outbound(text) == text
+    for text, expected in (("今天有点累，先睡了。", "今天有点累，先睡了"),
+                           ("明天出去吃饭吗？", "明天出去吃饭吗？"),
+                           ("好呀！", "好呀"), ("嗯，在的。", "嗯，在的")):
+        assert proactive.polish_outbound(text) == expected, text
 
 
 def test_polish_splits_overlong_text_without_losing_chars():
@@ -233,9 +235,10 @@ def test_polish_splits_overlong_text_without_losing_chars():
     out = proactive.polish_outbound(text)
     pieces = out.split("\n")
     assert len(pieces) >= 2
-    assert "".join(pieces) == text           # 只加分隔符，不漏字
-    assert "".join(pieces) != out            # 确有切分
-    assert all(piece.endswith("。") for piece in pieces)
+    assert "".join(pieces) == text.rstrip("。")   # 只加分隔符，不漏字（尾句号按 P0-21 去掉）
+    assert "".join(pieces) != out                 # 确有切分
+    assert all(piece.endswith("。") for piece in pieces[:-1])
+    assert not pieces[-1].endswith("。")
 
 
 # --------------------------------------------------------------------------- #
@@ -284,16 +287,16 @@ def test_worker_polishes_before_send_and_logs_kind(monkeypatch, contact_db):
     g = FakeGateway()
     out = proactive_worker.run_cycle(g, client=object(), now=100.0)
     assert out["sent"] == 1
-    assert g.sent[0][1] == "在吗 今天有点累。"      # 合并空白 + 补句号
+    assert g.sent[0][1] == "在吗 今天有点累"      # 合并空白（P0-21 结尾不加句号）
     events = [data for kind, data in g.records if kind == "proactive_send"]
     assert events and events[0]["intent_kind"] == "care"
-    assert events[0]["text"] == "在吗 今天有点累。"
+    assert events[0]["text"] == "在吗 今天有点累"
     con = sqlite3.connect(contact_db)
     try:
         row = con.execute("SELECT kind, text, status FROM proactive_events").fetchone()
     finally:
         con.close()
-    assert row == ("care", "在吗 今天有点累。", "sent")
+    assert row == ("care", "在吗 今天有点累", "sent")
 
 
 def test_worker_splits_overlong_bubble_into_separate_sends(monkeypatch, contact_db):
@@ -306,8 +309,8 @@ def test_worker_splits_overlong_bubble_into_separate_sends(monkeypatch, contact_
     out = proactive_worker.run_cycle(g, client=object(), now=100.0)
     sent_texts = [item[1] for item in g.sent]
     assert len(sent_texts) >= 2 and out["sent"] == len(sent_texts)
-    assert "".join(sent_texts) == text
-    assert all(t.endswith("。") for t in sent_texts)
+    assert "".join(sent_texts) == text.rstrip("。")
+    assert not sent_texts[-1].endswith("。")
     events = [data for kind, data in g.records if kind == "proactive_send"]
     assert len(events) == len(sent_texts)
     assert all(event["intent_kind"] == "share" for event in events)

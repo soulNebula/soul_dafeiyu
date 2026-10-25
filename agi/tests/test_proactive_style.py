@@ -124,10 +124,10 @@ def test_choose_opener_mode_never_repeats_last():
 # 3) 问句概率 + 配额
 # --------------------------------------------------------------------------- #
 def test_question_probability_follows_energy_and_mood():
-    assert proactive.question_probability(0.1, 0.1) == 0.15
-    assert proactive.question_probability(0.9, 0.9) == 0.45
+    assert proactive.question_probability(0.1, 0.1) == 0.03
+    assert proactive.question_probability(0.9, 0.9) == 0.13
     mid = proactive.question_probability(0.55, 0.6)
-    assert 0.15 <= mid <= 0.45
+    assert 0.03 <= mid <= 0.13
     assert proactive.question_probability(0.9, 0.9) > mid > proactive.question_probability(0.1, 0.1)
 
 
@@ -194,5 +194,6 @@ def test_structure_varies_after_three_same_shapes():
     # 连续 3 条都是 1 个分句 → 本次要换结构（变长/变短都可以，但不能同为 1 句）
     out = proactive._style_postprocess(
         "在听播客，觉得挺舒服。", "care", "digital", recent, True)
-    assert proactive._clause_count(out) != 1
+    assert out != "在听播客，觉得挺舒服。"
+    assert len(out) > len("在听播客，觉得挺舒服。")
     assert proactive.has_self_feeling(out)

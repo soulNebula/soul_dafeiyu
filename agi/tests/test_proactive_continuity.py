@@ -334,7 +334,7 @@ def test_strip_metadiscourse_is_idempotent_and_keeps_content():
     assert proactive.strip_metadiscourse(fixed) == fixed
     # 「刚才那场雨」是内容描述，不是元话语，不能删
     content = "刚才那场雨下得挺大，路上全是水。"
-    assert proactive.polish_outbound(content) == content
+    assert proactive.polish_outbound(content) == content.rstrip("。")
 
 
 def test_twenty_ticks_zero_metadiscourse(tmp_path, monkeypatch):

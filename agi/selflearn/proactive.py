@@ -40,7 +40,7 @@ LONG_TEXT_CHARS = 60
 #: 中文/英文句末标点（已合规不再追加）
 END_PUNCT = "。！？!?…～~"
 #: 句尾是这些语气词 → 补问号，否则补句号
-_QUESTION_TAILS = ("吗", "呢", "么", "嘛")
+_QUESTION_TAILS = ("吗", "呢", "么", "嘛", "什么")
 #: 通用短句/招呼，不当 followup 的「具体内容」
 _STOP_CLAUSES = {
     "在吗", "在么", "在不在", "你好", "你好呀", "嗨", "hi", "hello",
@@ -177,8 +177,10 @@ PHYSICAL_FORBIDDEN_WORDS = (
 #: 自我感受/想法标记（每条消息至少要有一个）
 _FEELING_MARKERS = (
     "我觉得", "我在想", "在想", "有点", "感觉", "心里", "挺", "好像",
-    "希望", "担心", "开心", "难过", "感慨", "舒服", "累", "笑", "琢磨",
-    "走神", "出神", "想了想", "想着", "惦记", "想聊", "想起", "记起", "突然想到", "在整理", "在看", "在听",
+    "希望", "担心", "开心", "难过", "感慨", "舒服", "累", "烦", "乱", "笑", "琢磨",
+    "走神", "出神", "想了想", "想着", "惦记", "想聊", "想起", "记起", "突然想到",
+    "想不起来", "可惜", "离谱", "无语", "上头", "服了", "笑死", "哈哈", "吵", "闷", "慌",
+    "在整理", "在看", "在听",
 )
 #: 缺感受时的确定性前缀
 _FEELING_PREFIXES = ("我有点想聊聊，", "说不上为什么，我觉得", "心里有点感慨，")
@@ -196,17 +198,17 @@ _OPENER_INSTRUCTIONS = {
 }
 _OPENER_PREFIXES = {
     "time": ("这会儿，", "最近，", "今天，"),
-    "feeling": ("我有点想聊聊，", "说不上为什么，我觉得"),
+    "feeling": ("我有点想聊聊，", "说不上为什么，我觉得", "说实话，"),
     "thought": ("突然想到，", "我最近在想，"),
     "digital": ("在整理东西的时候，", "在听歌的时候，"),
     "direct": ("跟你聊个观察，",),
-    "chat": ("说个事，", "跟你说，"),
+    "chat": ("说个事，", "跟你说个事，", "跟你说，"),
     "memory": ("想起一件事，", "记起一个片段，"),
 }
 _OPENER_TIME_RE = re.compile(
     r"^(这会儿|现在|今天|昨天|最近|这几天|下午|晚上|早上|刚才)")
 _OPENER_FEELING_RE = re.compile(
-    r"^(有点|挺|感觉|心里|好像|说不上|我有点|我觉得)")
+    r"^(有点|挺|感觉|心里|好像|说不上|我有点|我觉得|说实话)")
 _OPENER_THOUGHT_RE = re.compile(r"^(突然想到|在想|我最近在想|琢磨|说起来)")
 _OPENER_DIGITAL_RE = re.compile(r"^(在听|在看|在读|在整理|在学|在写|在翻|在查|最近在)")
 _OPENER_CHAT_RE = re.compile(r"^(说个|跟你说|问个|讲个|聊个)")
@@ -214,9 +216,9 @@ _OPENER_MEMORY_RE = re.compile(r"^(想起|记起|记得|翻到)")
 _QUOTED_RE = re.compile(r"「[^」]*」|“[^”]*”|\"[^\"]*\"")
 
 #: 问句概率（P0-14）：base 0.25；energy/mood 高 → 最多 0.45，低 → 0.15
-QUESTION_PROB_BASE = 0.25
-QUESTION_PROB_MIN = 0.15
-QUESTION_PROB_MAX = 0.45
+QUESTION_PROB_BASE = 0.08
+QUESTION_PROB_MIN = 0.03
+QUESTION_PROB_MAX = 0.13
 #: 全局负向约束（拼进每个 kind 的 prompt；光靠轮换挡不住「安静」主题）
 TOPIC_CONSTRAINTS = (
     "硬约束（违反会被重写，必须遵守）：\n"
@@ -245,21 +247,21 @@ KIND_INSTRUCTION = {
 #: 每类意图的兜底句（LLM 不可用/跳过/跑题时使用；彼此不同，不允许多类共用）
 #: P0-14：只写数字生活/感受，禁止物理起居细节；followup/share 的真实锚点用「」引用
 _KIND_FALLBACK = {
-    "care": "最近在整理以前写的东西，翻着翻着有点感慨。",
-    "share": "刚想到你之前说的「{topic}」，忽然有点想接着聊聊。",
-    "followup": "上次你说「{anchor}」，我这两天还一直想着这事。",
-    "light": "今天看到一个挺离谱的段子，笑了好一会儿。",
-    "silence_ack": "在整理收藏夹，看到一篇以前存下的文章，忽然想聊聊。",
+    "care": "资料还没理完，有点烦",
+    "share": "看到一个说法，挺有意思",
+    "followup": "上次你说「{anchor}」，我一直惦记着",
+    "light": "看到一个段子，笑死",
+    "silence_ack": "翻到以前存的一篇文章，有点感慨",
 }
 
 #: 后处理兜底用的**数字生活/自我感受**安全句（P0-14：无物理细节、
 #: 不含禁词、不编造共同经历、彼此不同）
 _SAFE_FALLBACK = {
-    "care": "最近在整理以前写的东西，翻着翻着有点感慨。",
-    "share": "在听一张老专辑，听着听着有点走神，觉得挺舒服。",
-    "followup": "想起以前整理过的一份资料，有几处还想再看看。",
-    "light": "今天看到一个挺离谱的段子，笑了好一会儿。",
-    "silence_ack": "在整理收藏夹，看到一篇以前存下的文章，忽然想聊聊。",
+    "care": "资料还没理完，有点烦",
+    "share": "看到一个说法，挺有意思",
+    "followup": "想起以前的一个笔记，有点感慨",
+    "light": "看到一个段子，笑死",
+    "silence_ack": "翻到一篇文章，有点感慨",
 }
 
 #: followup 的主题去重变体：都保留锚点，避免「换话题」把具体内容换没了
@@ -453,6 +455,17 @@ def sanitize_topic(text: Any, kind: str = "care") -> str:
         return value
     name = str(kind or "").strip()
     return _SAFE_FALLBACK.get(name) or _SAFE_FALLBACK["care"]
+
+
+def _bigram_containment(reference: Any, text: Any) -> float:
+    """reference 的 2-gram 有多大比例出现在 text 里（判断近重复/复读）。"""
+    ref = str(reference or "")
+    value = str(text or "")
+    ref_grams = {ref[i:i + 2] for i in range(len(ref) - 1)}
+    value_grams = {value[i:i + 2] for i in range(len(value) - 1)}
+    if not ref_grams:
+        return 0.0
+    return len(ref_grams & value_grams) / len(ref_grams)
 
 
 def _low_overlap_fallback(kind: str, candidate: dict,
@@ -836,16 +849,24 @@ def polish_outbound(text: Any) -> str:
     value = strip_metadiscourse(value).strip()
     if not value:
         return ""
-    if value[-1] not in END_PUNCT:
-        value += "？" if value.endswith(_QUESTION_TAILS) else "。"
+    # P0-21：去动作汇报开头 + 收掉叠加前缀 + 单主题 + 句尾不加句号
+    value = strip_action_opener(value)
+    value = collapse_leading_prefixes(value)
+    value = strip_embedded_action_prefixes(value)
+    value = fix_single_topic(value).strip()
+    value = clean_chat_punctuation(value)
+    value = normalize_particles(value)
+    if not value:
+        return ""
+    if (value[-1] not in END_PUNCT and value.endswith(_QUESTION_TAILS)
+            and not value.endswith(("咋说呢", "怎么说呢", "嗯呢"))):
+        value += "？"          # 只有真提问才补问号；陈述默认不加任何标点
     value = _insert_runon_periods(value)
-    if value[-1] not in END_PUNCT:  # 插入点只在句中最前，兜底防御
-        value += "。"
     if len(value) > LONG_TEXT_CHARS:
         parts = [part.strip() for part in _SENT_SPLIT_RE.split(value) if part.strip()]
         if len(parts) > 1:
             value = "\n".join(parts)
-    return value
+    return strip_trailing_period(value)
 
 
 # --------------------------------------------------------------------------- #
@@ -964,6 +985,33 @@ def vary_opener(text: Any, target_mode: str,
     return prefix + value
 
 
+def ensure_opener_distinct(text: Any, recent_texts: list[str] | None,
+                           fallback_mode: str = "direct") -> str:
+    """保证开头模式与上一条不同（确定性尝试所有非动作模式）。"""
+    value = str(text or "").strip()
+    history = [str(item or "") for item in list(recent_texts or [])[:1]
+               if str(item or "").strip()]
+    if not history:
+        return value
+    previous = classify_opener(history[0])
+    if classify_opener(value) != previous:
+        return value
+    modes = [mode for mode in OPENER_MODES if mode not in (previous, "digital")]
+    if fallback_mode in modes:
+        modes.remove(fallback_mode)
+        modes.insert(0, fallback_mode)
+    for mode in modes:
+        candidate = vary_opener(value, mode, recent_texts)
+        if classify_opener(candidate) != previous:
+            return candidate
+    for prefixes in _OPENER_PREFIXES.values():
+        prefix = prefixes[0]
+        candidate = prefix + value
+        if classify_opener(candidate) != previous:
+            return candidate
+    return value
+
+
 def has_self_feeling(text: Any) -> bool:
     """消息里有没有自我感受/想法（P0-14：禁止纯流水账）。"""
     value = str(text or "")
@@ -1007,6 +1055,9 @@ def _shape_problem(text: Any, recent_texts: list[str] | None = None) -> bool:
     return len(counts) == 3 and counts[0] == counts[1] == counts[2] == _clause_count(text)
 
 
+_SHAPE_TAILS = ("，越想越有点感慨", "，说起来挺有意思", "，有点说不上来", "，反正挺烦的")
+
+
 def _vary_structure(text: Any) -> str:
     """换结构：多句 → 收成短句；单句 → 补一小句情绪尾（变成两句）。"""
     value = str(text or "").strip()
@@ -1015,7 +1066,7 @@ def _vary_structure(text: Any) -> str:
         return parts[0] + "。"
     if not value:
         return value
-    return value.rstrip("。！？!?") + "。心里有点感慨。"
+    return value.rstrip("。！？!?") + _SHAPE_TAILS[len(value) % len(_SHAPE_TAILS)]
 
 
 def _style_problem(text: Any, opener_mode: str, recent_texts: list[str] | None,
@@ -1133,6 +1184,43 @@ def strip_metadiscourse(text: Any) -> str:
     value = re.sub(r"([。！？!?])\s*[，,、；;]+", r"\1", value)
     value = re.sub(r"^[，,、；;。\s]+", "", value).strip()
     return _collapse_duplicate_prefix(value)
+
+
+def parse_voice_choice(text: Any) -> tuple[str, str]:
+    """解析 LLM 的 choice: share_with_anchor|reaction（没有就返回空）。"""
+    value = str(text or "").strip()
+    match = re.search(r"(?:^|[\s，。；;])(?:choice|表达方式)\s*[:：]\s*"
+                      r"(share_with_anchor|reaction)\s*", value, re.I)
+    if not match:
+        return "", value
+    choice = match.group(1).lower()
+    body = (value[:match.start()] + value[match.end():]).strip()
+    return choice, body.lstrip("，。；; \n").strip()
+
+
+def consecutive_bare_emotion(recent_texts: list[str] | None) -> int:
+    count = 0
+    for item in list(recent_texts or []):
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if has_concrete_subject(text):
+            break
+        count += 1
+    return count
+
+
+def needs_concrete_subject(text: Any, recent_texts: list[str] | None,
+                           user_recent: list[str] | None = None) -> bool:
+    """P0-23 软约束：只兜底连续≥3裸情绪/无上下文裸情绪；单条裸情绪放行。"""
+    if has_concrete_subject(text):
+        return False
+    recent = [str(item or "") for item in list(recent_texts or []) if str(item or "")]
+    if consecutive_bare_emotion(recent) >= 2:
+        return True
+    has_context = (any(has_concrete_subject(item) for item in recent[:3])
+                   or bool([item for item in list(user_recent or []) if str(item or "")]))
+    return not has_context
 
 
 def parse_action(text: Any) -> tuple[str, str]:
@@ -1343,6 +1431,497 @@ def _bubbles_coherent(bubbles: list[str]) -> bool:
     return True
 
 
+# --------------------------------------------------------------------------- #
+# P0-21：聊天语气 v2（内心念头 / 口语元素 / 句尾不加句号 / 短句单主题）
+# --------------------------------------------------------------------------- #
+#: 口语元素池（用户点名）；每条最多 1 个、最近 5 条不重复
+#: 口语元素只认「句首/句尾/标点旁」的用法（避免把内容词「离谱」当元素删掉）
+_PARTICLE_BOUNDARY = set("，,。！？!?…；;、 ")
+VOICE_PARTICLES = (
+    "诶", "哎", "唉", "咋说呢", "说真的", "你别说", "可惜", "离谱",
+    "无语", "有点上头", "挺逗", "笑死", "笑死我了", "真的服了", "服了",
+    "哈哈哈", "嗯…",
+)
+#: 少量 emoji（真实画像约 5.1%）
+VOICE_EMOJIS = ("🙂", "😂", "🥲", "😅", "😭", "🙃")
+#: 真人语气 few-shot 兜底（正常从 agi/eval_data/human_tone/fewshot.json 加载 20 条）
+_HUMAN_FEWSHOT_FALLBACK = (
+    "那还是去体育中心吧", "可以", "我在吃饭", "吃完先", "订了",
+    "8点半？", "有星星看吗？", "不是早说了吗？", "在吗？", "看得到吗？",
+    "ok", "那明天再去吧", "打球，去不去", "好像是这个", "今晚请你喝水",
+    "定了吗", "是不是这个号码", "咋了呀", "不过找到了就好", "播到一半，电影出问题了",
+)
+
+
+def _load_human_fewshot() -> tuple[str, ...]:
+    """加载用户真实语气 few-shot（20 条）；文件不可用时退回内置同款。"""
+    try:
+        path = Path(__file__).resolve().parents[1] / "eval_data" / "human_tone" / "fewshot.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        texts = [str(item.get("text") or "").strip()
+                 for item in data.get("examples", [])]
+        texts = [text for text in texts if text]
+        if texts:
+            return tuple(texts[:20])
+    except Exception:  # noqa: BLE001 - 语料缺失不阻塞生成
+        pass
+    return _HUMAN_FEWSHOT_FALLBACK
+
+
+#: 只学语气/长度/标点习惯，不照抄内容
+VOICE_FEWSHOT = _load_human_fewshot()
+VOICE_CONSTRAINTS = (
+    "聊天语气（最重要，读起来要像人在聊天，别像写作文）：\n"
+    "- 只说你此刻的**内心念头/感受/评价**，不要汇报自己在做什么"
+    "（禁止「在整理资料」「在听专辑」「刚做完…」这种动作流水账）；\n"
+    "- 口语是语气词自然带出来（吧/啊/呢/呀/诶/嗯），不是每条都硬塞"
+    "「笑死/真的服了」；口语元素每条最多 1 个、隔几条出现一次；\n"
+    "- **短句为主**：多数 2-12 字，中位数像 7 字，允许「可以」「嗯，好像也是」"
+    "这种极短句；一条只说一件事，不要「在X的时候…在Y」并置；\n"
+    "- **句尾默认不加任何标点**；只有真提问才用？，绝不用。或！；\n"
+    "- 偶尔可以带 1 个 emoji，不要多；\n"
+    "- 参考你平时说话的样子（学语气/长度/标点习惯，不要照抄内容）：\n"
+    + "\n".join(f"  · {example}" for example in VOICE_FEWSHOT)
+)
+
+
+#: P0-23：泛指/时间/空结构词；判定"具体事由"时先剔掉
+CONCRETE_TIME_WORDS = (
+    "这会儿", "最近", "今天", "昨天", "现在", "刚才", "上次", "之前", "以前",
+    "突然", "说起来", "然后", "其实", "刚刚", "刚", "这会儿",
+    "对了", "另外", "换个话题", "顺带说个事", "接着聊", "回到刚才",
+)
+CONCRETE_VAGUE_WORDS = (
+    "事儿", "事", "东西", "那事", "这事", "这玩意", "那个", "这个", "啥",
+    "什么", "一点", "一堆", "好多", "几处", "没想明白", "空", "这些", "那些",
+    "聊", "聊聊", "聊个事", "说个事", "说话", "随便说说", "跟你", "跟你们",
+    "说法", "观点", "道理", "一句话", "意思",
+    "越想越", "越想", "越来越", "说不上来", "说不上", "反正", "挺烦的",
+)
+_CONCRETE_REMOVE_WORDS = tuple(sorted(set(
+    VOICE_PARTICLES + _FEELING_MARKERS + _NEGATIVE_EMOTION
+    + _STRONG_POSITIVE_EMOTION + CONCRETE_TIME_WORDS + CONCRETE_VAGUE_WORDS
+    + ("烦", "乱", "累", "吵", "闷", "笑", "上头")
+    + tuple(prefix.rstrip("，,；;、 ") for items in _OPENER_PREFIXES.values()
+            for prefix in items)
+), key=len, reverse=True))
+
+
+def _concrete_residue(text: Any) -> str:
+    """去掉情绪/口语/时间/功能词后剩下的实词串（用来判断有没有具体事由）。"""
+    value = str(text or "")
+    for word in _CONCRETE_REMOVE_WORDS:
+        if word and word in value:
+            value = value.replace(word, "")
+    value = re.sub(r"[^一-鿿]+", "", value)
+    return "".join(char for char in value if char not in _CONTINUITY_STOP_CHARS)
+
+
+def has_concrete_subject(text: Any) -> bool:
+    """P0-23：是否含具体名词/事件（≥2 字实词）；裸情绪返回 False。"""
+    return len(_concrete_residue(text)) >= 2
+
+
+def _pick_concrete_anchor(sources: list[str]) -> str:
+    """从真实可用锚点里挑一个具体片段（state 话题 > 自己最近消息 > 用户最近提过）。"""
+    for source in sources:
+        residue = _concrete_residue(source)
+        if len(residue) < 2:
+            continue
+        for start in range(0, max(1, len(residue) - 1)):
+            fragment = residue[start:start + 6]
+            if len(fragment) < 2:
+                continue
+            if fragment in CONCRETE_VAGUE_WORDS:
+                continue
+            if find_physical_detail(fragment):
+                continue
+            return fragment
+    return ""
+
+
+def ensure_concrete_subject(text: Any, kind: str, sources: list[str] | None = None) -> str:
+    """裸情绪 → 用真实锚点补具体事由；无锚点则用具体事由兜底。"""
+    value = strip_metadiscourse(str(text or "").strip())
+    if has_concrete_subject(value):
+        return value
+    bare = value
+    # 去掉空结构的前缀/转折词（“说起来，有点烦” → “有点烦”）
+    for marker in CONTINUITY_TRANSITIONS:
+        prefix = marker + "，"
+        if bare.startswith(prefix):
+            bare = bare[len(prefix):].strip()
+            break
+    matched = _match_existing_prefix(bare)
+    if matched:
+        bare = bare[len(matched):].lstrip("，,；;、 ").strip()
+    bare = _strip_particles(bare).strip("，,；; ") or "有点烦"
+    fragment = _pick_concrete_anchor(list(sources or []))
+    if fragment:
+        candidate = f"想起{fragment}，{bare}"
+        if find_physical_detail(candidate) is None and not contains_metadiscourse(candidate):
+            return candidate
+    return _safe_fallback(kind)
+
+
+def _particle_spans(text: Any) -> list[tuple[int, int, str]]:
+    """非重叠命中（「笑死我了」不会被同时算成「笑死」+「笑死我了」）。"""
+    value = str(text or "")
+    spans: list[tuple[int, int, str]] = []
+    for particle in sorted(VOICE_PARTICLES, key=len, reverse=True):
+        start = 0
+        while True:
+            index = value.find(particle, start)
+            if index < 0:
+                break
+            start = index + 1
+            if particle == "服了" and index > 0 and value[index - 1] == "舒":
+                continue
+            end = index + len(particle)
+            before = value[index - 1] if index > 0 else ""
+            after = value[end] if end < len(value) else ""
+            # 只认「句首/句尾/标点旁」的口语用法；「挺离谱的段子」里的离谱是内容词
+            at_start = index == 0 or before in _PARTICLE_BOUNDARY or before.isspace()
+            at_end = end == len(value) or after in _PARTICLE_BOUNDARY or after.isspace()
+            if not (at_start or at_end):
+                continue
+            if any(left < end and index < right for left, right, _ in spans):
+                continue
+            spans.append((index, end, particle))
+    return sorted(spans)
+
+
+def _contains_particle(text: Any, particle: str) -> bool:
+    return any(span[2] == particle for span in _particle_spans(text))
+
+
+def _particles_in(text: Any) -> list[str]:
+    return [particle for _, _, particle in _particle_spans(text)]
+
+
+def _strip_particles(text: Any, keep: str = "") -> str:
+    value = str(text or "")
+    spans = _particle_spans(value)
+    keep_span = None
+    for span in spans:
+        if keep and span[2] == keep and keep_span is None:
+            keep_span = span
+            break
+    pieces: list[str] = []
+    cursor = 0
+    for span in spans:
+        if keep_span is not None and span == keep_span:
+            continue
+        pieces.append(value[cursor:span[0]])
+        cursor = span[1]
+    pieces.append(value[cursor:])
+    value = "".join(pieces)
+    value = re.sub(r"[，,、]{2,}", "，", value)
+    value = re.sub(r"^[，,、；;\s]+", "", value)
+    value = re.sub(r"[，,、；;]+$", "", value).strip()
+    return value
+
+
+def _choose_particle(used: list[str], seed: int) -> str:
+    available = [particle for particle in VOICE_PARTICLES if particle not in used]
+    if not available:
+        available = list(VOICE_PARTICLES)
+    return available[seed % len(available)]
+
+
+def apply_oral_particle(text: Any, recent_texts: list[str] | None = None) -> str:
+    """口语元素收口：最多 1 个、最近 3 条不重复、覆盖率约 30–50%（真实画像）。"""
+    value = str(text or "").strip()
+    if not value:
+        return value
+    history = [str(item or "") for item in list(recent_texts or [])[:3]
+               if str(item or "").strip()]
+    used = [particle for item in history for particle in _particles_in(item)]
+    hits = sum(1 for item in history if _particles_in(item))
+    present = _particles_in(value)
+    if present:
+        keep = present[0]
+        if keep in used or hits >= 2:
+            return _strip_particles(value)
+        return _strip_particles(value, keep=keep)
+    # 问句/省略号结尾不加口语尾巴，保住原句尾
+    if value.rstrip().endswith(("？", "?", "…", "~")):
+        return value
+    # 已经有情绪尾巴/堆叠尾巴时不再加口语元素
+    if any(token in value for token in ("反正", "越想越", "说不上来", "挺烦的")):
+        return value
+    inject = hits == 0 or (hits == 1 and len(history) % 2 == 0)
+    if not inject:
+        return value
+    particle = _choose_particle(used, len(value) + len(history))
+    if len(value) + len(particle) + 1 > 25:
+        # 先按短句收口（保留具体事由），再试更短的口语元素
+        value = limit_voice_length(value, 20) or value
+    if len(value) + len(particle) + 1 > 25:
+        for shorter in ("诶", "哎", "唉", "挺逗", "可惜", "离谱", "无语"):
+            if shorter not in used and len(value) + len(shorter) + 1 <= 25:
+                particle = shorter
+                break
+        else:
+            return value
+    return value.rstrip("。！？!?…~ ") + "，" + particle
+
+
+def apply_emoji(text: Any, recent_texts: list[str] | None = None,
+                now: float = 0.0) -> str:
+    """真实画像约 5% 消息带 1 个 emoji；已有则不再加。"""
+    value = str(text or "").strip()
+    if not value:
+        return value
+    if any(emoji in value for emoji in VOICE_EMOJIS):
+        return value
+    if int(float(now or 0) // 300) % 20 != 0:   # 约 5%（真实画像 5.1%）
+        return value
+    return value + VOICE_EMOJIS[int(float(now or 0) // 300) % len(VOICE_EMOJIS)]
+
+
+def normalize_particles(value: Any) -> str:
+    """最终兜底：一条消息最多保留 1 个口语元素。"""
+    text = str(value or "")
+    present = _particles_in(text)
+    if len(present) > 1:
+        return _strip_particles(text, keep=present[0])
+    return text
+
+
+def _collapse_repeated_phrase(value: str, phrase: str) -> str:
+    value = str(value or "")
+    first = value.find(phrase)
+    if first < 0:
+        return value
+    second = value.find(phrase, first + len(phrase))
+    if second < 0:
+        return value
+    start = second
+    if start > 0 and value[start - 1] in "，,；; ":
+        start -= 1
+    return value[:start] + value[second + len(phrase):]
+
+
+def clean_chat_punctuation(value: Any) -> str:
+    """去掉「。，」「，。」这类拼接垃圾、重复前缀和多余逗号。"""
+    text = str(value or "")
+    for prefixes in _OPENER_PREFIXES.values():
+        for prefix in prefixes:
+            key = _strip_prefix_edges(prefix)
+            if key:
+                text = _collapse_repeated_phrase(text, key)
+    text = re.sub(r"。\s*[，,、]+", "。", text)
+    text = re.sub(r"[，,、]+\s*。", "。", text)
+    text = re.sub(r"。{2,}", "。", text)
+    text = re.sub(r"[，,、]{2,}", "，", text)
+    text = re.sub(r"^[，,、；;]+", "", text)
+    text = re.sub(r"[，,、；;]+$", "", text)
+    return text.strip()
+
+
+def clean_reaction_text(text: Any) -> str:
+    """纯情绪条保持短促：去掉 Shape 尾巴/多余前缀，只留一句情绪。"""
+    value = str(text or "").strip()
+    if has_concrete_subject(value):
+        return value
+    for tail in _SHAPE_TAILS:
+        value = value.replace(tail, "")
+    for _ in range(4):
+        changed = False
+        for marker in CONTINUITY_TRANSITIONS:
+            prefix = marker + "，"
+            if value.startswith(prefix):
+                value = value[len(prefix):].strip()
+                changed = True
+        matched = _match_existing_prefix(value)
+        if matched:
+            rest = value[len(matched):].lstrip("，,；;、 ").strip()
+            if rest:
+                value = rest
+                changed = True
+        if not changed:
+            break
+    # 去掉结尾悬空的转折/时间尾巴（「想起一件事，对了」）
+    for _ in range(4):
+        match = re.search(r"[，,]([^，,]{1,6})$", value)
+        if not match:
+            break
+        tail = match.group(1).strip()
+        if (tail in CONCRETE_TIME_WORDS or tail in CONTINUITY_TRANSITIONS
+                or tail in VOICE_PARTICLES or tail in ("对了", "另外", "这会儿")):
+            value = value[:match.start()].strip()
+        else:
+            break
+    value = clean_chat_punctuation(value)
+    return value or "有点烦"
+
+
+def strip_trailing_period(text: Any) -> str:
+    """P0-21：结尾默认无标点（去掉。和！），只保留真问号/省略号/波浪；幂等。"""
+    value = str(text or "")
+    if not value:
+        return value
+    value = value.rstrip()
+    while value.endswith(("。", "！", "!")):
+        value = value[:-1].rstrip()
+    return value
+
+
+_ACTION_CLAUSE_RE = re.compile(r"(?:^|[，,。；;！？!?])(在[^，,。；;！？!?]{1,12})")
+
+
+def fix_single_topic(text: Any, kind: str = "") -> str:
+    """单主题：出现 ≥2 个「在…」动作结构 → 截断到第一个念头 + 情绪尾巴。"""
+    value = str(text or "")
+    starts = [match.start(1) for match in _ACTION_CLAUSE_RE.finditer(value)]
+    if len(starts) < 2:
+        return value
+    head = value[:starts[1]].rstrip("，,；;、。！？!?... ")
+    if not head:
+        return value
+    if not has_self_feeling(head):
+        head += "，有点烦"
+    return head
+
+
+def limit_voice_length(text: Any, limit: int = 18) -> str:
+    """P0-23：中位数 10-18、上限 25；截断时先删口语/情绪尾巴，保留具体事由。"""
+    value = str(text or "").strip()
+    if len(value) <= limit:
+        return value
+    if "「" in value or "」" in value:   # followup 真实锚点不截断，避免 grounding 误杀
+        return value
+    # 先去掉口语元素（不要为了变短先删事由）
+    stripped = _strip_particles(value).strip("，,；; ")
+    if len(stripped) <= limit and has_concrete_subject(stripped):
+        return stripped
+    parts = [part.strip() for part in re.split(r"[，,。！？!?；;]", stripped) if part.strip()]
+    subject_parts = [part for part in parts if has_concrete_subject(part)]
+    other_parts = [part for part in parts if not has_concrete_subject(part)]
+    ordered = subject_parts[:1] + other_parts + subject_parts[1:]
+    head = ""
+    for part in ordered:
+        candidate = part if not head else head + "，" + part
+        if len(candidate) > 18 and head:
+            break
+        if len(candidate) > limit:
+            break
+        head = candidate
+    if not head:
+        head = stripped[:limit]
+    if len(head) > limit:
+        head = head[:limit]
+    if has_concrete_subject(head) and not has_self_feeling(head):
+        tail = "，有点烦"
+        if len(head) + len(tail) <= limit:
+            head += tail
+    return head
+
+
+_ACTION_VERB_RE = re.compile(r"在(?:整理|听|看|读|学|写|翻|查|做)[^，,。；;！？!?]{0,12}[，,]?")
+
+
+def strip_embedded_action_prefixes(value: Any) -> str:
+    """P0-21：去掉「顺带说个事，在听…」里转折词后紧跟的动作分句。"""
+    text = str(value or "").strip()
+    markers = tuple(CONTINUITY_TRANSITIONS) + ("说个事", "跟你说", "说实话", "对了")
+    for marker in markers:
+        prefix = marker + "，"
+        if not text.startswith(prefix):
+            continue
+        rest = text[len(prefix):]
+        match = _ACTION_VERB_RE.match(rest)
+        if not match:
+            continue
+        rest = rest[match.end():].lstrip("，, ")
+        text = prefix + (rest if rest else "有点烦")
+        if not has_self_feeling(text):
+            text += "，有点烦"
+        break
+    return text
+
+
+def strip_action_opener(value: Any) -> str:
+    """P0-21：去掉「在听歌的时候/在整理东西的时候」这类动作汇报开头。"""
+    text = str(value or "").strip()
+    for prefix in _OPENER_PREFIXES.get("digital", ()):
+        key = _strip_prefix_edges(prefix)
+        if not key or not text.startswith(key):
+            continue
+        rest = text[len(key):].lstrip("，,；;、 ")
+        if rest and has_self_feeling(rest):
+            return rest
+    return text
+
+
+def split_short_bubbles(text: Any, max_bubbles: int, now: float = 0.0) -> list[str]:
+    """真实画像约 13.6% 轮次连发 2 条短气泡；两条都必须短且承接同一句。"""
+    value = str(text or "").strip()
+    if max_bubbles < 2 or len(value) < 8 or "「" in value or "」" in value:
+        return [value] if value else []
+    if int(float(now or 0)) % 100 >= 14:
+        return [value]
+    matches = list(re.finditer(r"[，,。！？!?…]", value))
+    for match in reversed(matches):
+        head = value[:match.start()].strip("，,。！？!?… ")
+        tail = value[match.end():].strip("，,。！？!?… ")
+        if 1 <= len(head) <= 18 and 1 <= len(tail) <= 18:
+            return [head, tail]
+    return [value]
+
+
+def dedupe_opener_prefixes(value: Any) -> str:
+    """同一开头前缀在句中出现多次时只留第一次（防止「突然想到…突然想到…」）。"""
+    text = str(value or "")
+    for prefixes in _OPENER_PREFIXES.values():
+        for prefix in prefixes:
+            key = _strip_prefix_edges(prefix)
+            if not key:
+                continue
+            while text.count(key) > 1:
+                before = text
+                text = _collapse_repeated_phrase(text, key)
+                if text == before:
+                    break
+    return text
+
+
+def collapse_leading_prefixes(value: Any) -> str:
+    """开头最多保留一层前缀：叠加的「嗯…/说个事/顺带说个事」收成一个。"""
+    text = str(value or "").strip()
+    if not text:
+        return text
+    opener_keys = [( _strip_prefix_edges(prefix), "opener")
+                   for prefix in _all_opener_prefixes()]
+    transition_keys = [(marker, "transition") for marker in CONTINUITY_TRANSITIONS]
+    candidates = sorted(opener_keys + transition_keys, key=lambda item: len(item[0]),
+                        reverse=True)
+    openers: list[str] = []
+    transitions: list[str] = []
+    while True:
+        for key, kind in candidates:
+            if not key or not text.startswith(key):
+                continue
+            # 只有「前缀后面跟标点」才算叠加前缀；「最近在整理…」不是两个前缀
+            after = text[len(key):len(key) + 1]
+            if after and after not in "，,；;、":
+                continue
+            text = text[len(key):].lstrip("，,；;、 ")
+            (openers if kind == "opener" else transitions).append(key)
+            break
+        else:
+            break
+    result = ""
+    if openers and transitions:
+        result = openers[-1] + "，对了，"
+    elif openers:
+        result = openers[-1] + "，"
+    elif transitions:
+        result = transitions[0] + "，"
+    return (result + text).strip()
+
+
 def _mentions_anchor(text: str, anchor: str) -> bool:
     """LLM 文本有没有真的引用到锚点（整句或至少一个 2 字片段）。"""
     value = str(text or "")
@@ -1360,7 +1939,8 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
                  regenerate: bool = False, own_only: bool = False,
                  fix_runon: bool = False, opener_mode: str = "",
                  style_fix: bool = False, continuity_ctx: str = "",
-                 continuity_fix: bool = False, continuity_hint: str = "") -> str:
+                 continuity_fix: bool = False, continuity_hint: str = "",
+                 concrete_fix: bool = False) -> str:
     """按 kind 选生成指令 + 全局约束（禁元话题/反编造/标点/人格边界/开头/问句/连续性）。"""
     instruction = KIND_INSTRUCTION.get(kind) or KIND_INSTRUCTION["care"]
     prompt = (
@@ -1370,6 +1950,12 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
         + GROUNDING_CONSTRAINTS
         + RUNON_CONSTRAINTS
         + PERSONA_CONSTRAINTS
+        + VOICE_CONSTRAINTS
+        + ("表达方式（正文前单独一行输出 choice: share_with_anchor 或 reaction）：\n"
+           "- share_with_anchor：你想分享一件事/一个观察，必须有具体事由+情绪；\n"
+           "- reaction：纯情绪反应/承接上一条/回应对方，可以没有具体事由"
+           "（哈哈/服了/有点烦/笑死）；\n"
+           "分享用 share_with_anchor，短促回应用 reaction，由你判断。\n")
         + "只输出你要说的话，1-2 句，口语；不要客服腔、不报能力、不列清单。"
     )
     if opener_mode in _OPENER_INSTRUCTIONS:
@@ -1565,6 +2151,9 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     if llm_answered and (not text or text.upper().startswith("SKIP")):
         # 明确让 LLM 自己决定"这次不说话"：它说 SKIP 就不发，不再用模板兜底
         return {"ok": True, "available": False, "reason": "llm_skip"}
+    voice_choice, choice_body = parse_voice_choice(text)
+    if choice_body:
+        text = choice_body
     action, parsed_body = parse_action(text)
     if parsed_body:
         text = parsed_body
@@ -1595,15 +2184,23 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         text = _insert_runon_periods(text)
     # P0-8 主题去重：与最近 10 条已发主动消息 2-gram Jaccard ≥0.35 →
     # 同 kind 重生成 1 次（prompt 要求换话题）；仍超标 → 换低重叠兜底句。
-    if recent_proactive and max_topic_overlap(text, recent_proactive) >= TOPIC_SIMILARITY_MAX:
+    # P0-17 例外：主动承接上一条时，允许与「紧邻上一条」内容重叠（否则会被去重误杀）。
+    topic_history = list(recent_proactive)
+    if (action == "continuation" and continuity_history
+            and continuity_ok(text, "continuation", continuity_history)
+            and max_topic_overlap(text, continuity_history[:1]) < 0.6
+            and _bigram_containment(continuity_history[0], text) < 0.7):
+        # 近重复（复读上一条）仍走去重；真正延续同一话题才豁免
+        topic_history = topic_history[1:]
+    if topic_history and max_topic_overlap(text, topic_history) >= TOPIC_SIMILARITY_MAX:
         retry_prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
                                     force_statement=force_statement, regenerate=True)
         retry_text, retry_answered = _ask_llm(client, retry_prompt)
         if retry_answered and retry_text and not retry_text.upper().startswith("SKIP"):
             text = _normalize_content(retry_text, kind, best,
                                       force_statement=force_statement)
-        if max_topic_overlap(text, recent_proactive) >= TOPIC_SIMILARITY_MAX:
-            text = _low_overlap_fallback(kind, best, recent_proactive)
+        if max_topic_overlap(text, topic_history) >= TOPIC_SIMILARITY_MAX:
+            text = _low_overlap_fallback(kind, best, topic_history)
     # P0-10 最终兜底：主题去重重生成/兜底后仍可能粘连 → 确定性插句号（幂等）
     text = _insert_runon_periods(text)
     # P0-9 最后一道：主题兜底句也不能编造共同经历
@@ -1623,8 +2220,8 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
             cont_candidate = _normalize_content(cont_body or cont_text, kind, best,
                                                 force_statement=force_statement)
             if grounding_ok(cont_candidate, anchors) and (
-                    not recent_proactive
-                    or max_topic_overlap(cont_candidate, recent_proactive)
+                    not topic_history
+                    or max_topic_overlap(cont_candidate, topic_history)
                     < TOPIC_SIMILARITY_MAX):
                 text = cont_candidate
                 action = cont_action or infer_action(text, previous_text)
@@ -1641,8 +2238,8 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
             style_candidate = _normalize_content(style_text, kind, best,
                                                  force_statement=force_statement)
             if grounding_ok(style_candidate, anchors) and (
-                    not recent_proactive
-                    or max_topic_overlap(style_candidate, recent_proactive)
+                    not topic_history
+                    or max_topic_overlap(style_candidate, topic_history)
                     < TOPIC_SIMILARITY_MAX):
                 text = style_candidate
         if _style_problem(text, opener_mode, recent_proactive, allow_question):
@@ -1663,12 +2260,108 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
                 stripped = _safe_fallback(kind)
                 action = "new_topic"
         text = stripped
-    # P0-20 收口加了「对了，」可能让开头模式与上一条相同 → 只补开头前缀收口（不碰内容）
+    # P0-21：单主题 / 短句 / 口语元素（放在连续性收口之前，避免截断后断承）
+    text = fix_single_topic(text, kind)
+    text = limit_voice_length(text, 200 if kind == "followup" else 18)
+    text = apply_oral_particle(text, recent_proactive)
+    text = apply_emoji(text, recent_proactive, now)
+    # P0-23 软约束：单条纯情绪放行；仅连续≥3 或完全无上下文时兜底补事由
+    concrete_sources = [str(best.get("topic") or ""), str(best.get("anchor") or "")]
+    concrete_sources.extend(continuity_history)
+    concrete_sources.extend(user_recent)
+    force_concrete = needs_concrete_subject(text, continuity_history, user_recent)
+    if force_concrete:
+        concrete_prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
+                                       force_statement=force_statement,
+                                       opener_mode=opener_mode,
+                                       continuity_ctx=continuity_ctx,
+                                       concrete_fix=True)
+        concrete_text, concrete_answered = _ask_llm(client, concrete_prompt)
+        if concrete_answered and concrete_text and not concrete_text.upper().startswith("SKIP"):
+            concrete_action, concrete_body = parse_action(concrete_text)
+            concrete_candidate = _normalize_content(concrete_body or concrete_text, kind, best,
+                                                    force_statement=force_statement)
+            if (grounding_ok(concrete_candidate, anchors)
+                    and has_concrete_subject(concrete_candidate)
+                    and (not recent_proactive
+                         or max_topic_overlap(concrete_candidate, recent_proactive)
+                         < TOPIC_SIMILARITY_MAX)):
+                text = concrete_candidate
+                action = concrete_action or action
+        if not has_concrete_subject(text):
+            text = ensure_concrete_subject(text, kind, concrete_sources)
+    if _continuity_problem(text, action, continuity_history, previous_polarity, mood):
+        text, action = _continuity_postprocess(
+            text, action, continuity_history, previous_polarity, mood, kind, opener_mode)
+    # 收口加了「对了，」可能让开头模式与上一条相同 → 只补开头前缀收口（不碰内容）
     if opener_problem(text, opener_mode, recent_proactive):
         text = vary_opener(text, opener_mode, recent_proactive)
+    # 最后一次：去动作汇报开头 + 收掉叠加前缀 + 单主题/短句收口
+    text = strip_action_opener(text)
+    text = collapse_leading_prefixes(text)
+    text = strip_embedded_action_prefixes(text)
+    text = fix_single_topic(text, kind)
+    matched_prefix = _match_existing_prefix(text)
+    if matched_prefix and _strip_prefix_edges(text) == matched_prefix:
+        text = _safe_fallback(kind)   # 只剩一个动作/开头前缀，没有内容 → 兜底
+
+    if not has_self_feeling(text):
+        text += "，有点烦"
+    text = clean_chat_punctuation(text)
+    text = limit_voice_length(text, 200 if kind == "followup" else 18)
+    if force_concrete and not has_concrete_subject(text):
+        text = ensure_concrete_subject(text, kind, concrete_sources)
+    # 截断可能留下「这会儿/对了」这类悬空尾巴 → 去掉，并补最小情绪
+    while True:
+        match = re.search(r"[，,]([^，,]{1,6})$", text)
+        if not match:
+            break
+        tail = match.group(1).strip()
+        if (tail in CONCRETE_TIME_WORDS or tail in CONTINUITY_TRANSITIONS
+                or tail in CONCRETE_VAGUE_WORDS or tail in VOICE_PARTICLES
+                or tail in ("这会儿", "对了", "另外", "说起来")
+                or tail in {_strip_prefix_edges(prefix)
+                            for prefixes in _OPENER_PREFIXES.values()
+                            for prefix in prefixes}):
+            text = text[:match.start()]
+            continue
+        break
+    if has_concrete_subject(text) and not has_self_feeling(text):
+        if len(text) + 5 <= 25:
+            text += "，有点烦"
+    matched_after_limit = _match_existing_prefix(text)
+    if matched_after_limit and _strip_prefix_edges(text) == matched_after_limit:
+        text = _safe_fallback(kind)
+    # 动作前缀被去掉后开头模式可能撞上一条 → 用非动作开头再收口一次
+    text = ensure_opener_distinct(text, recent_proactive, opener_mode)
+    text = strip_action_opener(text)
+    text = ensure_opener_distinct(text, recent_proactive, opener_mode)
+    # 最终口语元素收口（前面长度截断可能把口语尾巴删掉）
+    text = apply_oral_particle(text, recent_proactive)
+    text = normalize_particles(text)
+    text = strip_trailing_period(text)
     text = _insert_runon_periods(text)
     if not grounding_ok(text, anchors):
         text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
+    # P0-23 最终兜底：只有被判定必须补事由时才补；单条纯情绪不拦
+    if not has_concrete_subject(text) and (
+            force_concrete or consecutive_bare_emotion(continuity_history) >= 2
+            or not continuity_history):
+        text = ensure_concrete_subject(text, kind, concrete_sources)
+    text = strip_action_opener(text)
+    if action == "new_topic" and not has_transition(text):
+        text = _pick_transition(text) + text
+    text = ensure_opener_distinct(text, recent_proactive, opener_mode)
+    text = dedupe_opener_prefixes(text)
+    text = collapse_leading_prefixes(text)
+    text = clean_reaction_text(text)
+    text = limit_voice_length(text, 200 if kind == "followup" else 25)
+    if not has_concrete_subject(text):
+        text = ensure_concrete_subject(text, kind, concrete_sources) if force_concrete else text
+    text = clean_reaction_text(text)
+    text = ensure_opener_distinct(text, recent_proactive, opener_mode)
+    text = clean_reaction_text(text)
+    text = strip_trailing_period(text)
     text = style_profile.tune_reply("", text)[:200]
     max_bubbles = 3 if share_drive >= 0.7 else (2 if share_drive >= 0.55 or mood >= 0.7 else 1)
     if int(init_info.get("max_bubbles") or 0) > 0:
@@ -1676,6 +2369,8 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     if quadrant == "explore":
         max_bubbles = min(max_bubbles, 1)
     bubbles = style_profile.split_bubbles(text, max_bubbles)
+    if len(bubbles) == 1:
+        bubbles = split_short_bubbles(text, max_bubbles, now)
     # P0-17：多气泡第二段必须是第一段的延续（共享实词/承接词），否则合并成一条
     if len(bubbles) > 1 and not _bubbles_coherent(bubbles):
         bubbles = ["".join(bubbles)]

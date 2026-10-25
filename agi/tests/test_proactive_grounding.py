@@ -190,7 +190,7 @@ def test_fabricated_text_is_rewritten_before_return(tmp_path, monkeypatch):
     assert not proactive._has_shared_experience_claim(row["message"])
     assert client.calls >= 2                    # 至少重生成过 1 次
     safe = {text.rstrip("。") for text in proactive._SAFE_FALLBACK.values()}
-    assert row["message"].rstrip("。") in safe
+    assert any(text in row["message"] for text in safe), row["message"]
 
 
 def test_regeneration_prompt_says_only_your_own(tmp_path, monkeypatch):

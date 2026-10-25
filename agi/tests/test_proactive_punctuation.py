@@ -23,7 +23,7 @@ from agi.selflearn import db, proactive, trust
 T0 = time.mktime((2026, 10, 25, 10, 0, 0, 0, 0, -1))
 
 RAW = "我刚把窗台那盆绿萝的枯叶子剪了剪你这两天工作要是累，晚上吃点软和的。"
-FIXED = "我刚把窗台那盆绿萝的枯叶子剪了剪。你这两天工作要是累，晚上吃点软和的。"
+FIXED = "我刚把窗台那盆绿萝的枯叶子剪了剪。你这两天工作要是累，晚上吃点软和的"
 
 
 class FakeClient:
@@ -94,7 +94,7 @@ def test_find_runon_does_not_split_object_pronoun():
     for text in ("我把整件事的来龙去脉都告诉了你",
                  "我今天把这件事从头到尾跟你解释了一遍"):
         assert proactive.find_runon(text) is None, text
-        assert proactive.polish_outbound(text) == text + "。"
+        assert proactive.polish_outbound(text) == text
 
 
 # --------------------------------------------------------------------------- #
@@ -107,8 +107,8 @@ def test_polish_fixes_real_runon_message_exactly():
 
 
 def test_polish_short_sentences_not_harmed():
-    assert proactive.polish_outbound("今天有点累") == "今天有点累。"
-    assert proactive.polish_outbound("好的") == "好的。"
+    assert proactive.polish_outbound("今天有点累") == "今天有点累"
+    assert proactive.polish_outbound("好的") == "好的"
     assert proactive.polish_outbound("还没睡吗") == "还没睡吗？"
 
 
@@ -116,14 +116,16 @@ def test_polish_english_and_numbers_do_not_crash():
     text = "我用iPhone 15 Pro拍了张照片你那边天气怎么样"
     out = proactive.polish_outbound(text)
     assert "iPhone 15 Pro" in out
-    assert out.endswith("。")
+    assert not out.endswith("。")
     assert proactive.find_runon(out) is None
 
 
 def test_polish_compliant_text_is_byte_identical():
-    for text in ("今天有点累，先睡了。", "明天出去吃饭吗？", "好呀！",
-                 "嗯，在的。", FIXED):
-        assert proactive.polish_outbound(text) == text, text
+    for text, expected in (("今天有点累，先睡了。", "今天有点累，先睡了"),
+                           ("明天出去吃饭吗？", "明天出去吃饭吗？"),
+                           ("好呀！", "好呀"), ("嗯，在的。", "嗯，在的"),
+                           (FIXED, FIXED)):
+        assert proactive.polish_outbound(text) == expected, text
 
 
 def test_polish_fixes_multiple_runons_without_losing_content():
@@ -154,9 +156,8 @@ def test_tick_regenerates_runon_once_and_uses_second_result(tmp_path, monkeypatc
     row = _tick(path, client=client)
     assert row["available"] is True
     assert client.calls >= 2
-    # 用了第二次（合规、无 run-on）结果
+    # 用了第二次（合规、无 run-on）结果；P0-21 会为短句目标做长度收口
     assert "整理了一遍" in row["messages"][0]
-    assert "别硬撑" in row["messages"][0]
     assert any("把两层意思用句号分开" in prompt for prompt in client.prompts)
     assert proactive.find_runon(proactive.polish_outbound(row["message"])) is None
 
@@ -229,13 +230,13 @@ def test_p013_real_message_fixed():
 
 
 def test_p013_second_required_case_cut():
-    assert proactive.polish_outbound("今天有点累你早点睡") == "今天有点累。你早点睡。"
+    assert proactive.polish_outbound("今天有点累你早点睡") == "今天有点累。你早点睡"
 
 
 def test_p013_object_phrases_never_cut():
     for text in NO_CUT_SAMPLES:
         assert proactive.find_runon(text) is None, text
-        assert proactive.polish_outbound(text) == text + "。", text
+        assert proactive.polish_outbound(text) == text, text
 
 
 def test_p013_threshold_boundary_5_vs_6():
@@ -270,7 +271,7 @@ def test_p013_psychological_verb_pronoun_not_cut():
 
 def test_p013_lead_regression_cases():
     # 该切的切
-    assert proactive.polish_outbound("今天有点冷你多穿点") == "今天有点冷。你多穿点。"
+    assert proactive.polish_outbound("今天有点冷你多穿点") == "今天有点冷。你多穿点"
     # 5 字非句末倾向 → 只补句末问号
     assert proactive.polish_outbound("刚吃完饭你吃了吗") == "刚吃完饭你吃了吗？"
     # 偏保守的两例：不切（宁可漏标点也不切坏）
@@ -285,22 +286,22 @@ def test_p018_feeling_phrase_runon_fixed():
     first = ("这会儿，接着刚才说的，这会儿在整理之前存的一批笔记，"
              "翻到几条自己写歪的想法，有点想笑心里有点感慨。")
     out = proactive.polish_outbound(first)
-    assert "有点想笑。心里有点感慨。" in out, out
+    assert "有点想笑。心里有点感慨" in out, out
     assert "这会儿在整理" in out
     second = ("说个事，刚才说的那批笔记里有一条我自己的旧结论，"
               "现在看觉得有点意思，也在想当时怎么会那么写心里有点感慨。")
     out2 = proactive.polish_outbound(second)
-    assert "那么写。心里有点感慨。" in out2, out2
+    assert "那么写。心里有点感慨" in out2, out2
 
 
 def test_p018_feeling_phrase_no_false_split():
     keep = {
-        "我心里有点难受": "。",
+        "我心里有点难受": "",
         "你觉得自己行吗": "？",
-        "他觉得这不对": "。",
-        "我跟心里想的差不多": "。",
-        "现在看": "。",
-        "最近在整理以前写的东西，翻着翻着有点感慨。": "",
+        "他觉得这不对": "",
+        "我跟心里想的差不多": "",
+        "现在看": "",
+        "最近在整理以前写的东西，翻着翻着有点感慨": "",
     }
     for text, tail in keep.items():
         assert proactive.find_runon(text) is None, text
@@ -326,11 +327,11 @@ def test_p018_time_progression_runon_fixed():
 
 def test_p018_time_progression_no_false_split():
     cases = {
-        "我现在有点累": "。",
-        "后来我才明白": "。",
-        "越想越觉得不对": "。",
-        "他后来跟我说": "。",
-        "这时候": "。",
+        "我现在有点累": "",
+        "后来我才明白": "",
+        "越想越觉得不对": "",
+        "他后来跟我说": "",
+        "这时候": "",
     }
     for text, tail in cases.items():
         assert proactive.find_runon(text) is None, text
@@ -351,22 +352,22 @@ FALSE_SPLITS = (
 def test_p019_noun_ending_false_splits_fixed():
     for text in FALSE_SPLITS:
         assert proactive.find_runon(text) is None, text
-        assert proactive.polish_outbound(text) == text, text
+        assert proactive.polish_outbound(text) == text.rstrip("。"), text
 
 
 def test_p019_real_corpus_11_no_false_split():
     cases = {
-        "我心里有点难受": "。",
+        "我心里有点难受": "",
         "你觉得自己行吗": "？",
-        "他觉得这不对": "。",
-        "我现在有点累": "。",
-        "后来我才明白": "。",
-        "越想越觉得不对": "。",
-        "他后来跟我说了这件事": "。",
-        "最近在整理以前写的东西，翻着翻着有点感慨": "。",
-        "刚看完那本书，越想越觉得作者写得细": "。",
-        "其实我不太确定要不要去": "。",
-        "看了半天资料，突然发现方向搞错了": "。",
+        "他觉得这不对": "",
+        "我现在有点累": "",
+        "后来我才明白": "",
+        "越想越觉得不对": "",
+        "他后来跟我说了这件事": "",
+        "最近在整理以前写的东西，翻着翻着有点感慨": "",
+        "刚看完那本书，越想越觉得作者写得细": "",
+        "其实我不太确定要不要去": "",
+        "看了半天资料，突然发现方向搞错了": "",
     }
     for text, tail in cases.items():
         assert proactive.find_runon(text) is None, text
@@ -376,10 +377,10 @@ def test_p019_real_corpus_11_no_false_split():
 def test_p019_three_real_sentences_still_fixed():
     first = ("这会儿，接着刚才说的，这会儿在整理之前存的一批笔记，"
              "翻到几条自己写歪的想法，有点想笑心里有点感慨。")
-    assert "有点想笑。心里有点感慨。" in proactive.polish_outbound(first)
+    assert "有点想笑。心里有点感慨" in proactive.polish_outbound(first)
     second = ("说个事，刚才说的那批笔记里有一条我自己的旧结论，"
               "现在看觉得有点意思，也在想当时怎么会那么写心里有点感慨。")
-    assert "那么写。心里有点感慨。" in proactive.polish_outbound(second)
+    assert "那么写。心里有点感慨" in proactive.polish_outbound(second)
     third = ("心里还挂着那条旧结论，越想越觉得自己当时胆子挺大"
              "现在让我重写一遍，大概写不出那股劲儿了。")
     assert "胆子挺大。现在让我重写一遍" in proactive.polish_outbound(third)
@@ -387,7 +388,7 @@ def test_p019_three_real_sentences_still_fixed():
 
 def test_p019_polish_idempotent_and_english():
     for text in FALSE_SPLITS:
-        assert proactive.polish_outbound(proactive.polish_outbound(text)) == text
+        assert proactive.polish_outbound(proactive.polish_outbound(text)) == text.rstrip("。")
     mixed = "我用iPhone 15 Pro拍了张照片现在看还是不太满意"
     out = proactive.polish_outbound(mixed)
     assert "iPhone 15 Pro" in out

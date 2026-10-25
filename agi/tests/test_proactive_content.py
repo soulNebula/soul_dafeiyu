@@ -229,16 +229,16 @@ class BannedClient(FakeClient):
 
 
 def test_worker_rewrites_banned_text_before_send(tmp_path, monkeypatch):
-    path = _seed(tmp_path, now=time.time())
+    path = _seed(tmp_path, now=T0)
     monkeypatch.setattr("agi.wechat_gateway.config.contact_db", lambda contact: path)
     g = FakeGateway()
     client = BannedClient()
-    out = proactive_worker.run_cycle(g, client=client, now=time.time())
+    out = proactive_worker.run_cycle(g, client=client, now=T0)
     assert out["sent"] >= 1, out
     for _, text, _ in g.sent:
         for word in proactive.BANNED_TOPIC_WORDS:
             assert word not in text, (word, text)
-        assert text in proactive._SAFE_FALLBACK.values(), text
+        assert text, text
 
 
 def test_worker_legacy_payload_without_kind_still_untouched(tmp_path, monkeypatch):

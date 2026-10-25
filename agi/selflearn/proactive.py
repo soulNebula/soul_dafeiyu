@@ -162,7 +162,7 @@ PHYSICAL_FORBIDDEN_WORDS = (
 _FEELING_MARKERS = (
     "我觉得", "我在想", "在想", "有点", "感觉", "心里", "挺", "好像",
     "希望", "担心", "开心", "难过", "感慨", "舒服", "累", "笑", "琢磨",
-    "走神", "想聊", "想起", "记起", "突然想到", "在整理", "在看", "在听",
+    "走神", "出神", "想了想", "想聊", "想起", "记起", "突然想到", "在整理", "在看", "在听",
 )
 #: 缺感受时的确定性前缀
 _FEELING_PREFIXES = ("我有点想聊聊，", "说不上为什么，我觉得", "心里有点感慨，")
@@ -988,6 +988,204 @@ def _style_postprocess(text: Any, kind: str, opener_mode: str,
     return value
 
 
+# --------------------------------------------------------------------------- #
+# P0-17：相邻主动消息的逻辑/情绪连续性
+# --------------------------------------------------------------------------- #
+#: new_topic 必须带的转折标记
+CONTINUITY_TRANSITIONS = ("对了", "说起来", "换个话题", "顺带说", "另外")
+#: continuation 可以用指代承接
+CONTINUITY_REFS = ("刚才说的", "刚才", "那个", "这事", "前面", "上条", "接着")
+#: 功能字：算“实词重叠”时排除含这些字的 2-gram
+_CONTINUITY_STOP_CHARS = set(
+    "的了着过是我你他她它们在就都很太又这那一不没也还和与及把被让给对从到为以于而之其或但然后呢吗吧啊嘛哦")
+_NEGATIVE_EMOTION = (
+    "累", "沉", "烦", "闷", "难受", "低落", "焦虑", "疲惫", "困", "没劲",
+    "丧", "难过", "压力", "撑不住", "不想动",
+)
+_STRONG_POSITIVE_EMOTION = (
+    "巨开心", "特别开心", "超级开心", "太开心", "好开心", "开心极了",
+    "巨好", "特别爽", "太爽", "兴奋", "爽翻",
+)
+
+
+def _content_bigrams(text: Any) -> set[str]:
+    value = re.sub(r"[^\u4e00-\u9fff]+", "", str(text or ""))
+    grams = {value[index:index + 2] for index in range(len(value) - 1)}
+    return {gram for gram in grams
+            if not any(char in _CONTINUITY_STOP_CHARS for char in gram)}
+
+
+def _shares_content(first: Any, second: Any) -> bool:
+    """两段文本是否有 ≥2 字实词重叠（排除功能字 2-gram）。"""
+    return bool(_content_bigrams(first) & _content_bigrams(second))
+
+
+def has_transition(text: Any) -> bool:
+    value = str(text or "")
+    return any(marker in value for marker in CONTINUITY_TRANSITIONS)
+
+
+def has_continuation_reference(text: Any) -> bool:
+    value = str(text or "")
+    return any(ref in value for ref in CONTINUITY_REFS)
+
+
+def parse_action(text: Any) -> tuple[str, str]:
+    """解析 LLM 输出的 ``action: continuation|new_topic``，返回 (action, 正文)。"""
+    value = str(text or "").strip()
+    match = re.search(r"(?:^|[\s，。；;])(?:action|动作)\s*[:：]\s*(continuation|new_topic)\s*",
+                      value, re.I)
+    if not match:
+        return "", value
+    action = match.group(1).lower()
+    body = (value[:match.start()] + value[match.end():]).strip()
+    body = body.lstrip("，。；; \n").strip()
+    return action, body
+
+
+def infer_action(text: Any, previous: Any = "") -> str:
+    """LLM 没给结构化 action 时按文本推断。"""
+    value = str(text or "")
+    if has_transition(value):
+        return "new_topic"
+    if previous and (has_continuation_reference(value) or _shares_content(value, previous)):
+        return "continuation"
+    if previous and topic_overlap(value, previous) < 0.2:
+        return "new_topic"
+    return "continuation"
+
+
+def continuity_ok(text: Any, action: str, recent_sent: list[str] | None) -> bool:
+    """连续性校验：continuation 要有承接；new_topic 要有转折且与上条明显不同。"""
+    history = [str(item or "").strip() for item in list(recent_sent or [])
+               if str(item or "").strip()]
+    if not history:
+        return True
+    previous = history[0]
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if action == "new_topic":
+        return has_transition(value) and topic_overlap(value, previous) < 0.2
+    # continuation（默认）
+    if has_continuation_reference(value) or _shares_content(value, previous):
+        return True
+    return False
+
+
+def emotion_polarity(text: Any) -> str:
+    value = str(text or "")
+    if any(word in value for word in _NEGATIVE_EMOTION):
+        return "negative"
+    if any(word in value for word in _STRONG_POSITIVE_EMOTION):
+        return "positive"
+    return "neutral"
+
+
+def emotion_conflict(text: Any, previous_polarity: str, mood: float) -> bool:
+    """情绪大跳检测：上条低落/累，当前 mood 不高时不允许“巨开心”式强正向。"""
+    value = str(text or "")
+    if previous_polarity != "negative":
+        return False
+    if float(mood) >= 0.65:
+        return False
+    return any(word in value for word in _STRONG_POSITIVE_EMOTION)
+
+
+def _recent_proactive_messages(path: Path | str, limit: int = 3) -> list[dict]:
+    """最近 N 条自己发过的主动消息（kind/text/ts，新→旧）。"""
+    con = db.connect(path)
+    try:
+        rows = con.execute(
+            "SELECT kind,text,created_at FROM proactive WHERE status!='rejected' "
+            "ORDER BY created_at DESC LIMIT ?", (int(limit),)).fetchall()
+    finally:
+        con.close()
+    return [{"kind": str(row["kind"] or ""), "text": str(row["text"] or ""),
+             "ts": float(row["created_at"] or 0)} for row in rows]
+
+
+def _continuity_context(recent_own: list[dict], user_recent: list[str],
+                        mood: float, energy: float) -> str:
+    """给 prompt 的连续上下文（自己最近 3 条 + 用户最近 5 条 + 当前状态/情绪极性）。"""
+    lines = ["你最近发过的主动消息（新→旧）："]
+    if recent_own:
+        for item in recent_own:
+            lines.append(f"- [{item.get('kind') or '?'}] {str(item.get('text') or '')[:80]}")
+    else:
+        lines.append("- （暂无，前面没有你说过的话）")
+    lines.append("用户最近说过的：")
+    if user_recent:
+        for item in user_recent[-5:]:
+            lines.append(f"- {str(item or '')[:80]}")
+    else:
+        lines.append("- （暂无）")
+    previous = recent_own[0]["text"] if recent_own else ""
+    polarity = emotion_polarity(previous) if previous else "neutral"
+    lines.append(f"当前状态：mood={mood:.2f} energy={energy:.2f}；"
+                 f"上一条你的情绪倾向={polarity}。")
+    return "\n".join(lines)
+
+
+def _prepend_continuity(text: str, marker: str, opener_mode: str) -> str:
+    """在正文前加承接/转折标记；同时带目标开头模式前缀，避免破坏 P0-14 开头约束。"""
+    value = str(text or "").strip()
+    prefixes = _OPENER_PREFIXES.get(opener_mode) or _OPENER_PREFIXES["direct"]
+    prefix = prefixes[len(value) % len(prefixes)]
+    if value.startswith(prefix):
+        return prefix + marker + value[len(prefix):].lstrip("，, ")
+    return prefix + marker + value
+
+
+def _continuity_postprocess(text: Any, action: str, recent_sent: list[str] | None,
+                            previous_polarity: str, mood: float,
+                            kind: str, opener_mode: str) -> tuple[str, str]:
+    """连续性确定性收口：情绪软化 / continuation 加承接模板 / new_topic 加转折词。"""
+    value = str(text or "").strip()
+    if not value:
+        value = _safe_fallback(kind)
+    history = [str(item or "").strip() for item in list(recent_sent or [])
+               if str(item or "").strip()]
+    if emotion_conflict(value, previous_polarity, mood):
+        for strong in _STRONG_POSITIVE_EMOTION:
+            value = value.replace(strong, "心情还行")
+    if not history:
+        return value, action
+    previous = history[0]
+    if action == "new_topic":
+        if not has_transition(value):
+            value = _prepend_continuity(value, "对了，", opener_mode)
+        if topic_overlap(value, previous) >= 0.2:
+            # 说成新话题但内容太像 → 改成延续，更自然
+            action = "continuation"
+            value = _prepend_continuity(value, "接着刚才说的，", opener_mode)
+        return value, action
+    # continuation
+    if not continuity_ok(value, "continuation", history):
+        value = _prepend_continuity(value, "接着刚才说的，", opener_mode)
+    return value, "continuation"
+
+
+def _continuity_problem(text: Any, action: str, recent_sent: list[str] | None,
+                        previous_polarity: str, mood: float) -> bool:
+    if emotion_conflict(text, previous_polarity, mood):
+        return True
+    return not continuity_ok(text, action, recent_sent)
+
+
+def _bubbles_coherent(bubbles: list[str]) -> bool:
+    """多气泡：后面的气泡必须与第一个气泡有实词重叠/承接指代/转折词。"""
+    if len(bubbles) <= 1:
+        return True
+    first = bubbles[0]
+    for bubble in bubbles[1:]:
+        if _shares_content(first, bubble) or has_continuation_reference(bubble) \
+                or has_transition(bubble):
+            continue
+        return False
+    return True
+
+
 def _mentions_anchor(text: str, anchor: str) -> bool:
     """LLM 文本有没有真的引用到锚点（整句或至少一个 2 字片段）。"""
     value = str(text or "")
@@ -1004,8 +1202,9 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
                  dialog: str, *, force_statement: bool = False,
                  regenerate: bool = False, own_only: bool = False,
                  fix_runon: bool = False, opener_mode: str = "",
-                 style_fix: bool = False) -> str:
-    """按 kind 选生成指令 + 全局约束（禁元话题/反编造/标点/人格边界/开头/问句）。"""
+                 style_fix: bool = False, continuity_ctx: str = "",
+                 continuity_fix: bool = False, continuity_hint: str = "") -> str:
+    """按 kind 选生成指令 + 全局约束（禁元话题/反编造/标点/人格边界/开头/问句/连续性）。"""
     instruction = KIND_INSTRUCTION.get(kind) or KIND_INSTRUCTION["care"]
     prompt = (
         f"你现在心情 {mood:.2f}，分享欲 {share_drive:.2f}。你想主动给对方发条微信。"
@@ -1018,6 +1217,21 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
     )
     if opener_mode in _OPENER_INSTRUCTIONS:
         prompt += "\n开头模式：" + _OPENER_INSTRUCTIONS[opener_mode]
+    if continuity_ctx:
+        prompt += (
+            "\n叙事连续性（强制二选一，正文前单独一行输出 action）：\n"
+            "- action: continuation → 承接你上一条说的事/情绪（用「刚才说的/那个/这事」"
+            "或复用同一个主题词）；\n"
+            "- action: new_topic → 换话题，正文必须以「对了/说起来/换个话题/顺带说」开头；\n"
+            "- 情绪要连贯：不要从上一句的低落/疲累突然变成特别开心。\n"
+            + continuity_ctx
+        )
+    if continuity_fix:
+        prompt += ("\n【重生成】上一条和你之前说的话断开了：这次必须明确承接上一条，"
+                   "用「接着刚才说的/那个/这事」或复用同一个主题词；"
+                   "或改用 new_topic 并以转折词开头。")
+    if continuity_hint:
+        prompt += "\n" + str(continuity_hint)
     anchor = str(candidate.get("anchor") or "").strip()
     topic = str(candidate.get("topic") or "").strip()
     if kind == "followup" and anchor:
@@ -1172,17 +1386,30 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     anchors = _grounding_anchors(path, best)
     # P0-8：问句配额（最近 3 条里 ≥2 条问号结尾 → 本次强制陈述句）
     recent_proactive = _recent_proactive_texts(path, TOPIC_WINDOW)
+    # P0-17：最近 3 条自己的主动消息 + 用户最近 5 条，用于叙事/情绪连续性
+    recent_own = _recent_proactive_messages(path, 3)
+    continuity_history = [str(item.get("text") or "") for item in recent_own]
+    user_recent = [str(m.get("text") or "") for m in memory.recent_messages(path, 40)
+                   if m.get("role") == "user"][-5:]
+    previous_text = continuity_history[0] if continuity_history else ""
+    previous_polarity = emotion_polarity(previous_text) if previous_text else "neutral"
+    continuity_ctx = _continuity_context(recent_own, user_recent, mood, energy)
     # P0-14：问句概率化（最近 3 条已有任一问句 → 禁问；否则按 energy/mood 掷骰）
     allow_question = should_ask_question(mood, energy, recent_proactive)
     force_statement = not allow_question
     opener_mode = choose_opener_mode(recent_proactive)
     prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
                           force_statement=force_statement,
-                          opener_mode=opener_mode)
+                          opener_mode=opener_mode,
+                          continuity_ctx=continuity_ctx)
     text, llm_answered = _ask_llm(client, prompt)
     if llm_answered and (not text or text.upper().startswith("SKIP")):
         # 明确让 LLM 自己决定"这次不说话"：它说 SKIP 就不发，不再用模板兜底
         return {"ok": True, "available": False, "reason": "llm_skip"}
+    action, parsed_body = parse_action(text)
+    if parsed_body:
+        text = parsed_body
+    action = action or infer_action(text, previous_text)
     text = _normalize_content(text, kind, best, force_statement=force_statement)
     # P0-9 反编造：命中共同经历断言但 anchors 里没有依据 → 重生成 1 次（只讲自己），
     # 仍不过 → 该 kind 的安全兜底句（只讲自己的事）。
@@ -1223,6 +1450,28 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     # P0-9 最后一道：主题兜底句也不能编造共同经历
     if not grounding_ok(text, anchors):
         text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
+    # P0-17 叙事/情绪连续性：断裂先重生成 1 次（明确承接上条），再做确定性收口
+    if _continuity_problem(text, action, continuity_history, previous_polarity, mood):
+        hint = (f"上一条你自己说的是：{previous_text[:80]}" if previous_text else "")
+        cont_prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
+                                   force_statement=force_statement,
+                                   opener_mode=opener_mode,
+                                   continuity_ctx=continuity_ctx,
+                                   continuity_fix=True, continuity_hint=hint)
+        cont_text, cont_answered = _ask_llm(client, cont_prompt)
+        if cont_answered and cont_text and not cont_text.upper().startswith("SKIP"):
+            cont_action, cont_body = parse_action(cont_text)
+            cont_candidate = _normalize_content(cont_body or cont_text, kind, best,
+                                                force_statement=force_statement)
+            if grounding_ok(cont_candidate, anchors) and (
+                    not recent_proactive
+                    or max_topic_overlap(cont_candidate, recent_proactive)
+                    < TOPIC_SIMILARITY_MAX):
+                text = cont_candidate
+                action = cont_action or infer_action(text, previous_text)
+        if _continuity_problem(text, action, continuity_history, previous_polarity, mood):
+            text, action = _continuity_postprocess(
+                text, action, continuity_history, previous_polarity, mood, kind, opener_mode)
     # P0-14 人格边界/开头多样/自我感受/禁问：违规先重生成 1 次，再做确定性收口
     if _style_problem(text, opener_mode, recent_proactive, allow_question):
         style_prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
@@ -1232,11 +1481,18 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         if style_answered and style_text and not style_text.upper().startswith("SKIP"):
             style_candidate = _normalize_content(style_text, kind, best,
                                                  force_statement=force_statement)
-            if grounding_ok(style_candidate, anchors):
+            if grounding_ok(style_candidate, anchors) and (
+                    not recent_proactive
+                    or max_topic_overlap(style_candidate, recent_proactive)
+                    < TOPIC_SIMILARITY_MAX):
                 text = style_candidate
         if _style_problem(text, opener_mode, recent_proactive, allow_question):
             text = _style_postprocess(text, kind, opener_mode,
                                       recent_proactive, allow_question)
+    # 风格层可能改写文本，最后再确定性复检一次连续性（不再花 LLM）
+    if _continuity_problem(text, action, continuity_history, previous_polarity, mood):
+        text, action = _continuity_postprocess(
+            text, action, continuity_history, previous_polarity, mood, kind, opener_mode)
     text = _insert_runon_periods(text)
     if not grounding_ok(text, anchors):
         text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
@@ -1247,6 +1503,9 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     if quadrant == "explore":
         max_bubbles = min(max_bubbles, 1)
     bubbles = style_profile.split_bubbles(text, max_bubbles)
+    # P0-17：多气泡第二段必须是第一段的延续（共享实词/承接词），否则合并成一条
+    if len(bubbles) > 1 and not _bubbles_coherent(bubbles):
+        bubbles = ["".join(bubbles)]
     bubbles = [style_profile.strip_periods(b) for b in bubbles if style_profile.strip_periods(b)]
     if not bubbles:
         return {"ok": True, "available": False, "reason": "没组织好语言"}
@@ -1274,7 +1533,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         con.close()
     return {"ok": True, "available": True, "message": bubbles[0], "messages": bubbles,
             "message_id": ids[0], "turn_id": turn_id,
-            "kind": best["kind"], "score": best["score"],
+            "kind": best["kind"], "action": action, "score": best["score"],
             "reason": best["reason"], "mood": mood, "sharing": share_drive,
             "initiative": {k: init_info.get(k) for k in
                             ("available", "score", "reason", "max_bubbles", "bubble_count",

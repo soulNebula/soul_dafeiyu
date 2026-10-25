@@ -120,7 +120,9 @@ class WxAutoSender:
         """把审计事件追加到网关日志；日志失败绝不能影响发送。"""
         if self.log_path is None:
             return
-        entry = {"ts": time.time(), "kind": kind, **data}
+        entry = {"ts": time.time(), **data}
+        # kind 以事件名为准，防止 payload 里的同名字段把它覆盖掉（P0-7.1 实测踩到）
+        entry["kind"] = kind
         try:
             target = Path(self.log_path)
             target.parent.mkdir(parents=True, exist_ok=True)

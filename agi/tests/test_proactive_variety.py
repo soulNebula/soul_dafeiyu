@@ -283,7 +283,7 @@ def test_worker_polishes_before_send_and_logs_kind(monkeypatch, contact_db):
     assert out["sent"] == 1
     assert g.sent[0][1] == "在吗 今天有点累。"      # 合并空白 + 补句号
     events = [data for kind, data in g.records if kind == "proactive_send"]
-    assert events and events[0]["kind"] == "care"
+    assert events and events[0]["intent_kind"] == "care"
     assert events[0]["text"] == "在吗 今天有点累。"
     con = sqlite3.connect(contact_db)
     try:
@@ -307,7 +307,7 @@ def test_worker_splits_overlong_bubble_into_separate_sends(monkeypatch, contact_
     assert all(t.endswith("。") for t in sent_texts)
     events = [data for kind, data in g.records if kind == "proactive_send"]
     assert len(events) == len(sent_texts)
-    assert all(event["kind"] == "share" for event in events)
+    assert all(event["intent_kind"] == "share" for event in events)
 
 
 def test_worker_legacy_payload_without_kind_is_untouched(monkeypatch, contact_db):
@@ -351,3 +351,21 @@ def test_tick_records_kind_in_proactive_table(tmp_path):
         con.close()
     assert stored["kind"] == row["kind"].strip()
     assert row["kind"] in proactive.KINDS
+
+
+def test_gateway_record_does_not_let_payload_override_kind(tmp_path):
+    """P0-7.1 回归：payload 里的 kind 字段不得覆盖事件 kind（真实 log 是扁平 dict）。"""
+    import json
+    import threading
+    from agi.wechat_gateway import server as gw_server
+
+    g = gw_server.Gateway.__new__(gw_server.Gateway)
+    g.lock = threading.Lock()
+    g.recent = []
+    g.log_path = tmp_path / "gateway.log"
+    g.last_event_ts = 0.0
+    g.cfg = {}
+    g._record("proactive_send", {"friend": "A", "text": "hi", "kind": "care"})
+    line = json.loads(g.log_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert line["kind"] == "proactive_send"
+    assert line["friend"] == "A"

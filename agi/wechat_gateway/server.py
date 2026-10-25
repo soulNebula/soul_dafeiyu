@@ -135,7 +135,9 @@ class Gateway:
             self.worker.join(timeout=2)
 
     def _record(self, kind: str, data: dict) -> None:
-        entry = {"ts": time.time(), "kind": kind, **data}
+        entry = {"ts": time.time(), **data}
+        # kind 以事件名为准，防止 payload 里的同名字段把它覆盖掉（P0-7.1 实测踩到）
+        entry["kind"] = kind
         if kind != "gateway_stale":
             # 死区心跳自己不算"有活动"，否则哨兵会自我续命
             self.last_event_ts = entry["ts"]

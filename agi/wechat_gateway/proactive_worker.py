@@ -504,7 +504,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 out["deduped"] += 1
                 try:
                     gateway._record("proactive_deduped", {
-                        "friend": contact, "text": text[:120], "kind": kind,
+                        "friend": contact, "text": text[:120], "intent_kind": kind,
                         "hit_ts": round(float(hit_ts), 1),
                         "hit_text": str(hit_text)[:120],
                         "window_s": round(float(dedupe_window), 1)})
@@ -517,7 +517,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 status = {"ok": False, "status": "failed",
                           "error": f"{type(exc).__name__}: {exc}"}
             gateway._record("proactive_send", {
-                "friend": contact, "text": text[:120], "kind": kind,
+                "friend": contact, "text": text[:120], "intent_kind": kind,
                 "status": status.get("status"), "draft_id": status.get("draft_id"),
                 # P0-6：失败率统计口径 status∈{failed,draft}，真正失败证据看 send_failed
                 "send_failed": bool(status.get("send_failed")),
@@ -536,7 +536,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 out["clipboard"] += 1
                 try:
                     gateway._record("proactive_clipboard", {
-                        "friend": contact, "text": text[:120], "kind": kind,
+                        "friend": contact, "text": text[:120], "intent_kind": kind,
                         "status": status.get("status"),
                         "method": str(status.get("method") or "")[:40],
                         "verified": bool(status.get("verified", False)),

@@ -105,14 +105,57 @@ def test_grounding_ok_flags_fabricated_shared_experience():
 
 def test_grounding_ok_allows_real_anchors():
     anchors = ["周末去爬山了，累死", "喜欢喝手冲咖啡"]
-    # 引用真实锚点（≥2 字重叠）→ 允许
+    # 引用真实锚点（claim 里连续 ≥3 字出现在锚点中）→ 允许
     assert proactive.grounding_ok(
         "上次你说「周末去爬山了」，我这两天还一直想着这事", anchors)
     assert proactive.grounding_ok(
         "你之前说的手冲咖啡，我今天也试了一杯", anchors)
-    # anchors 里确实有「便当盒」→ 允许（不能误杀真实依据）
+    # anchors 里确实有便当盒这条真实依据（claim 尾「放这儿」也在锚点里）→ 不误杀
     assert proactive.grounding_ok(
-        "刚翻冰箱看见那个便当盒，是你上回放这儿的吧", ["便当盒"])
+        "刚翻冰箱看见那个便当盒，是你上回放这儿的吧",
+        ["上周你把便当盒放这儿了，别忘了拿"])
+
+
+# --------------------------------------------------------------------------- #
+# P0-11：收紧判定 —— 断言后 12 字 claim + 连续 ≥3 字匹配
+# --------------------------------------------------------------------------- #
+def test_sharpened_grounding_matches_real_anchor_cases():
+    """lead 真机数据复现的三条（用同构 anchors 模拟，不含对应实词）。"""
+    anchors = ["周末去爬山了，累死", "喜欢喝手冲咖啡", "今天加班到十点"]
+    # ① 胃不舒服句：claim 无依据 → 拦
+    assert not proactive.grounding_ok(
+        "刚煮了碗面，忽然想起你说过胃不太舒服…", anchors)
+    # ② 真机漏判的便当盒句：claim=「放这儿的吧」无证据 → 拦
+    assert not proactive.grounding_ok(
+        "刚翻冰箱看见角落那个旧便当盒，是你上回放这儿的吧。", anchors)
+    # ③ 绿萝句没有共同经历断言 → 放行（不受影响）
+    assert proactive.grounding_ok("我刚把窗台那盆绿萝的枯叶子剪了剪…", anchors)
+
+
+def test_sharpened_grounding_accepts_supported_claim():
+    # anchors 显式含「便当盒」+ claim 尾「放这儿」→ 放行
+    anchors = ["上周你把便当盒放这儿了，别忘了拿"]
+    assert proactive.grounding_ok(
+        "刚翻冰箱看见那个便当盒，是你上回放这儿的吧", anchors)
+    # anchors 含「周末去爬山了」→ 放行
+    assert proactive.grounding_ok(
+        "上次你说周末去爬山了", ["周末去爬山了，累死"])
+
+
+def test_sharpened_grounding_rejects_short_claim():
+    # claim 太短（<3 字）→ 无法验证 → 保守判编造
+    assert not proactive.grounding_ok("你上次说的", ["上次你说过要早点睡"])
+
+
+def test_sharpened_grounding_requires_all_claims_grounded():
+    anchors = ["周末去爬山了，累死"]
+    # 一句里两个断言：第二个（便当盒）没有依据 → 整句拦
+    assert not proactive.grounding_ok(
+        "上次你说周末去爬山了，你上回把便当盒放这儿了", anchors)
+    # 两个断言都有真实依据 → 放行
+    assert proactive.grounding_ok(
+        "上次你说周末去爬山了，你之前说的手冲咖啡我也试了",
+        ["周末去爬山了，累死", "喜欢喝手冲咖啡"])
 
 
 # --------------------------------------------------------------------------- #

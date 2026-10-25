@@ -215,29 +215,66 @@ def _has_shared_experience_claim(text: Any) -> bool:
     return any(pattern in value for pattern in SHARED_CLAIM_PATTERNS)
 
 
-def grounding_ok(text: Any, anchors) -> bool:
-    """反编造校验：命中共同经历断言的句子，必须与某个真实锚点有 ≥2 字重叠。
+#: P0-11：断言后截取的 claim 长度上限（到标点为止）
+CLAIM_MAX_CHARS = 12
+#: P0-11：claim 里必须存在连续 ≥N 字的子串出现在 anchors 中才算有依据
+CLAIM_MIN_MATCH = 3
+#: claim 截取到这些字符就停（标点/空白）
+_CLAIM_STOP_CHARS = "。！？!?；;，,、：:…\n "
 
+
+def _claim_after(text: str, start: int) -> str:
+    """取 pattern 结束位置之后最多 12 个字（到标点/空白为止）作为 claim。"""
+    segment = text[start:start + CLAIM_MAX_CHARS]
+    for index, char in enumerate(segment):
+        if char in _CLAIM_STOP_CHARS:
+            return segment[:index]
+    return segment
+
+
+def _claim_grounded(claim: str, anchors: list[str]) -> bool:
+    """claim 里是否存在连续 ≥3 字子串出现在 anchors 任一条中。"""
+    length = len(claim)
+    if length < CLAIM_MIN_MATCH:
+        return False
+    for index in range(length - CLAIM_MIN_MATCH + 1):
+        piece = claim[index:index + CLAIM_MIN_MATCH]
+        if any(piece in anchor for anchor in anchors):
+            return True
+    return False
+
+
+def grounding_ok(text: Any, anchors) -> bool:
+    """反编造校验（P0-11 收紧）：共同经历断言必须能被真实锚点支撑。
+
+    判定：
     - 没有共同经历断言 → 直接通过（只讲自己的事/中性事实）；
-    - 有断言但 ``anchors`` 里找不到对应实词（字符 2-gram 交集为空）→ 视为编造；
+    - 对**每个**命中的断言 pattern，取它后面最多 12 字（到标点为止）= claim；
+      claim 里必须存在**连续 ≥3 字**子串出现在 anchors 任一条中才放行；
+      claim 长度 <3 → 无法验证 → 判编造（保守）；
+    - 多个断言全部通过才算通过（任一编造即拦）；
     - ``anchors`` 为空时，任何共同经历断言都视为编造。
     """
     value = str(text or "").strip()
     if not value:
         return True
-    if not _has_shared_experience_claim(value):
+    hits: list[int] = []
+    for pattern in SHARED_CLAIM_PATTERNS:
+        start = 0
+        while True:
+            index = value.find(pattern, start)
+            if index < 0:
+                break
+            hits.append(index + len(pattern))
+            start = index + 1
+    if not hits:
         return True
     anchor_list = [str(item).strip() for item in list(anchors or [])
                    if str(item or "").strip()]
     if not anchor_list:
         return False
-    anchor_grams = [_bigrams(item) for item in anchor_list]
-    for sentence in re.split(r"[。！？!?；;\n]+", value):
-        sentence = sentence.strip()
-        if not sentence or not _has_shared_experience_claim(sentence):
-            continue
-        grams = _bigrams(sentence)
-        if not any(grams & other for other in anchor_grams if other):
+    for claim_start in sorted(hits):
+        if not _claim_grounded(_claim_after(value, claim_start), anchor_list):
             return False
     return True
 

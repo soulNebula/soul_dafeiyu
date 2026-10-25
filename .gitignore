@@ -40,3 +40,4 @@ agi/eval_data/human_tone/sft.jsonl
 # 语气改写训练数据（含真实对话上下文）不入库
 agi/eval_data/human_tone/style_sft_ai.jsonl
 agi/eval_data/human_tone/style_progress_ai.jsonl
+agi/eval_data/human_tone/style_preview_ai.jsonl

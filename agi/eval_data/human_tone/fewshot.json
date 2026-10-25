@@ -1,145 +1,215 @@
 {
  "description": "真人语气 few-shot 示例（全部来自 self 语料，已去隐私）",
- "count": 20,
+ "count": 30,
  "examples": [
   {
    "id": "ht-0001",
-   "text": "那还是去体育中心吧",
-   "source": "ocr:183c205ab73b",
-   "length": 9,
+   "text": "神了",
+   "source": "ocr:004392d1d4dd",
+   "length": 2,
    "ending": "无标点"
   },
   {
    "id": "ht-0003",
-   "text": "可以",
-   "source": "ocr:183c205ab73b",
-   "length": 2,
-   "ending": "无标点"
-  },
-  {
-   "id": "ht-0005",
-   "text": "我在吃饭",
-   "source": "ocr:183c205ab73b",
-   "length": 4,
-   "ending": "无标点"
-  },
-  {
-   "id": "ht-0006",
-   "text": "吃完先",
-   "source": "ocr:183c205ab73b",
-   "length": 3,
+   "text": "你明天发他",
+   "source": "ocr:004392d1d4dd",
+   "length": 5,
    "ending": "无标点"
   },
   {
    "id": "ht-0007",
-   "text": "订了",
-   "source": "ocr:183c205ab73b",
+   "text": "666",
+   "source": "ocr:004392d1d4dd",
+   "length": 3,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0009",
+   "text": "谁查",
+   "source": "ocr:004392d1d4dd",
    "length": 2,
    "ending": "无标点"
   },
   {
-   "id": "ht-0015",
+   "id": "ht-0012",
+   "text": "我电脑有开机吗",
+   "source": "ocr:004392d1d4dd",
+   "length": 7,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0099",
+   "text": "我电脑卡？",
+   "source": "ocr:0ee88b21ed0a",
+   "length": 5,
+   "ending": "问号"
+  },
+  {
+   "id": "ht-0101",
+   "text": "重启试试？",
+   "source": "ocr:0ee88b21ed0a",
+   "length": 5,
+   "ending": "问号"
+  },
+  {
+   "id": "ht-0118",
+   "text": "不能用了？",
+   "source": "ocr:0ee88b21ed0a",
+   "length": 5,
+   "ending": "问号"
+  },
+  {
+   "id": "ht-0140",
+   "text": "为啥不回。",
+   "source": "ocr:0ee88b21ed0a",
+   "length": 5,
+   "ending": "句号"
+  },
+  {
+   "id": "ht-0155",
+   "text": "那你清明就待宿舍？",
+   "source": "ocr:0ee88b21ed0a",
+   "length": 9,
+   "ending": "问号"
+  },
+  {
+   "id": "ht-0192",
    "text": "8点半？",
    "source": "ocr:372e42b83015",
    "length": 4,
    "ending": "问号"
   },
   {
-   "id": "ht-0050",
-   "text": "有星星看吗？",
-   "source": "ocr:part03",
-   "length": 6,
-   "ending": "问号"
-  },
-  {
-   "id": "ht-0060",
-   "text": "不是早说了吗？",
-   "source": "ocr:part05",
-   "length": 7,
-   "ending": "问号"
-  },
-  {
-   "id": "ht-0067",
-   "text": "在吗？",
-   "source": "contacts_db",
-   "length": 3,
-   "ending": "问号"
-  },
-  {
-   "id": "ht-0081",
-   "text": "看得到吗？",
-   "source": "contacts_db",
-   "length": 5,
-   "ending": "问号"
-  },
-  {
-   "id": "ht-0009",
-   "text": "ok",
-   "source": "ocr:183c205ab73b",
-   "length": 2,
+   "id": "ht-0015",
+   "text": "出来了吗",
+   "source": "ocr:004392d1d4dd",
+   "length": 4,
    "ending": "无标点"
   },
   {
-   "id": "ht-0011",
-   "text": "那明天再去吧",
-   "source": "ocr:372e42b83015",
+   "id": "ht-0017",
+   "text": "喂个ip地址",
+   "source": "ocr:004392d1d4dd",
    "length": 6,
    "ending": "无标点"
   },
   {
-   "id": "ht-0012",
-   "text": "打球，去不去",
-   "source": "ocr:372e42b83015",
-   "length": 6,
-   "ending": "无标点"
-  },
-  {
-   "id": "ht-0020",
-   "text": "好像是这个",
-   "source": "ocr:aa816337b1cd",
-   "length": 5,
-   "ending": "无标点"
-  },
-  {
-   "id": "ht-0021",
-   "text": "今晚请你喝水",
-   "source": "ocr:aa816337b1cd",
-   "length": 6,
-   "ending": "无标点"
-  },
-  {
-   "id": "ht-0023",
-   "text": "定了吗",
-   "source": "ocr:aa816337b1cd",
+   "id": "ht-0022",
+   "text": "怎么了",
+   "source": "ocr:004392d1d4dd",
    "length": 3,
    "ending": "无标点"
   },
   {
-   "id": "ht-0024",
-   "text": "是不是这个号码",
-   "source": "ocr:aa816337b1cd",
-   "length": 7,
+   "id": "ht-0025",
+   "text": "看不了的",
+   "source": "ocr:004392d1d4dd",
+   "length": 4,
    "ending": "无标点"
   },
   {
    "id": "ht-0026",
-   "text": "咋了呀",
-   "source": "ocr:part00",
+   "text": "只有服务器才能知道",
+   "source": "ocr:004392d1d4dd",
+   "length": 9,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0028",
+   "text": "这个ip访问了什么数据",
+   "source": "ocr:004392d1d4dd",
+   "length": 11,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0036",
+   "text": "我这是纯编译，没证书的",
+   "source": "ocr:004392d1d4dd",
+   "length": 11,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0037",
+   "text": "看看你朋友G怎么说吧",
+   "source": "ocr:004392d1d4dd",
+   "length": 10,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0039",
+   "text": "坤谝怎么说的",
+   "source": "ocr:004392d1d4dd",
+   "length": 6,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0041",
+   "text": "牛逼",
+   "source": "ocr:004392d1d4dd",
+   "length": 2,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0042",
+   "text": "发生什么了",
+   "source": "ocr:004392d1d4dd",
+   "length": 5,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0045",
+   "text": "什么表情",
+   "source": "ocr:004392d1d4dd",
+   "length": 4,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0052",
+   "text": "应该是了",
+   "source": "ocr:004392d1d4dd",
+   "length": 4,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0057",
+   "text": "全给我删掉了",
+   "source": "ocr:004392d1d4dd",
+   "length": 6,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0060",
+   "text": "好像都删掉了",
+   "source": "ocr:004392d1d4dd",
+   "length": 6,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0061",
+   "text": "电脑没关机的，息屏了而已",
+   "source": "ocr:004392d1d4dd",
+   "length": 12,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0062",
+   "text": "搞完关机就行",
+   "source": "ocr:004392d1d4dd",
+   "length": 6,
+   "ending": "无标点"
+  },
+  {
+   "id": "ht-0072",
+   "text": "向日葵",
+   "source": "ocr:004392d1d4dd",
    "length": 3,
    "ending": "无标点"
   },
   {
-   "id": "ht-0031",
-   "text": "不过找到了就好",
-   "source": "ocr:part01",
+   "id": "ht-0074",
+   "text": "你知道怎么剂吗",
+   "source": "ocr:004392d1d4dd",
    "length": 7,
-   "ending": "无标点"
-  },
-  {
-   "id": "ht-0034",
-   "text": "播到一半，电影出问题了",
-   "source": "ocr:part01",
-   "length": 11,
    "ending": "无标点"
   }
  ]

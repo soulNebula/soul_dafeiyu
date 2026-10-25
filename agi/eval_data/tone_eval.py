@@ -1,20 +1,16 @@
 # -*- coding: utf-8 -*-
-"""P2-b 语气适配器评测：分布对比 + 与真人原话的 pairwise（DeepSeek 当裁判）。
+"""P2-b 语气适配器评测（正式版）：分布对比（微信 vs QQ）+ 双维度 pairwise + 可读样例。
 
-对比指标（都在同一套函数下算，human 参考来自 `human_tone/profile.md` 的 self 语料）：
-- 长度中位数、句尾无标点率、句号率、问号率；
-- 口语词覆盖率（含 human_tone profile 的口语词表任一词的比例）；
-- 单条主题数（用逗号/句号/问号切句子数近似，1=一条只说一件事）。
-
-pairwise：对同一 context，A=真人原话、B=模型生成，问 DeepSeek
-「哪条更像真人在微信里跟朋友说话」，统计模型胜/平/负。val 不够 20 条时，
-不足部分从 train 抽样（标 in_sample=true，报告里分开统计）。
+与 smoke 版相比：
+- 分布对比同时对照 `profile.md`（微信）与 `qq_profile.md`（QQ）；
+- pairwise 每条问两维：更像真人 / 更接得上上下文（避免上一轮“短即真人”的假胜率）；
+- 只从 held-out val（微信 59 条，QQ 全 train）抽样做 pairwise，不再混 in-sample；
+- 输出 12 条含上下文的人工可读样例。
 
 用法::
 
     E:\\agent\\venv312\\Scripts\\python.exe agi/eval_data/tone_eval.py ^
-        --adapter E:\\agent\\output\\tone_qwen05_v1_smoke ^
-        --limit 7 --pairwise-n 20 --out E:\\agent\\logs\\tone_eval_smoke.json
+        --adapter E:\\agent\\output\\tone_qwen05_v1 --out E:\\agent\\logs\\tone_eval_formal.json
 """
 from __future__ import annotations
 
@@ -34,17 +30,17 @@ if str(ROOT) not in sys.path:
 from tools import build_human_tone as ht  # noqa: E402
 
 DATA_PATH = ROOT / "agi" / "eval_data" / "human_tone" / "sft.jsonl"
-CORPUS_PATH = ROOT / "agi" / "eval_data" / "human_tone" / "corpus.jsonl"
+PROFILE_WECHAT = ROOT / "agi" / "eval_data" / "human_tone" / "profile.md"
+PROFILE_QQ = ROOT / "agi" / "eval_data" / "human_tone" / "qq_profile.md"
 DEFAULT_MODEL = Path(r"E:\agent\models\Qwen2.5-0.5B-Instruct")
 CLAUSE_SPLIT = re.compile(r"[，,。！!？?；;…~、]+")
 LEXICON_TERMS = tuple(ht.LEXICON)
 
 
 # --------------------------------------------------------------------------- #
-# 文本指标（human 与 model 用同一套）
+# 指标
 # --------------------------------------------------------------------------- #
 def topic_count(text: str) -> int:
-    """单条主题数近似：按标点切出的非空片段数（1 = 一条只说一件事）。"""
     parts = [part for part in CLAUSE_SPLIT.split(str(text or "")) if part.strip()]
     return max(1, len(parts))
 
@@ -74,6 +70,28 @@ def text_stats(texts: list[str]) -> dict:
         "colloquial_coverage": colloquial_coverage(texts),
         "topics_mean": round(statistics.mean(topic_count(text) for text in texts), 2),
         "topics_median": statistics.median(topic_count(text) for text in texts),
+        "emoji_rate": round(sum(1 for text in texts if ht.has_emoji(text)) / total, 4),
+    }
+
+
+def read_profile_stats(path: Path) -> dict:
+    """读 profile.md / qq_profile.md 的机器可读 JSON，取 self 分布关键指标。"""
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"## \d+\. 机器可读统计.*?```json\s*(\{.*?\})\s*```", text, re.S)
+    if not match:
+        return {}
+    profile = json.loads(match.group(1))
+    ending = profile.get("ending", {})
+    return {
+        "self_rows": profile.get("self_rows"),
+        "length_median": profile.get("length", {}).get("median"),
+        "no_punct_rate": ending.get("无标点"),
+        "question_rate": ending.get("问号"),
+        "period_rate": ending.get("句号"),
+        "exclaim_rate": ending.get("感叹号"),
+        "emoji_rate": profile.get("emoji_rate"),
     }
 
 
@@ -96,7 +114,6 @@ def build_prompt(tokenizer, messages: list[dict]) -> str:
 
 
 def load_adapter(model_path: Path, adapter: Path):
-    import torch
     from peft import PeftModel
 
     from tools.train import smoke_lora
@@ -116,7 +133,8 @@ def generate_replies(model, tokenizer, rows: list[dict], *, max_new_tokens: int,
 
     device = model.get_input_embeddings().weight.device
     outputs: list[dict] = []
-    for index, row in enumerate(rows[: int(limit)] if limit else rows, 1):
+    selected = rows[: int(limit)] if limit else rows
+    for index, row in enumerate(selected, 1):
         messages = [{"role": m["role"], "content": m["content"]}
                     for m in row["messages"][:-1]]
         prompt_text = build_prompt(tokenizer, messages)
@@ -132,29 +150,54 @@ def generate_replies(model, tokenizer, rows: list[dict], *, max_new_tokens: int,
         text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
         outputs.append({
             "id": row["id"], "session": row.get("session"), "split": row.get("split"),
+            "channel": row.get("channel", "wechat"),
             "context": messages, "human": row["messages"][-1]["content"],
             "model": text, "elapsed_s": round(elapsed, 3),
             "generated_tokens": int(new_tokens.shape[0]),
             "prompt_tokens": int(inputs["input_ids"].shape[1]),
         })
-        if index % 5 == 0:
-            print(f"[tone_eval] generate {index}/{len(rows[:limit] if limit else rows)}",
-                  flush=True)
+        if index % 10 == 0:
+            print(f"[tone_eval] generate {index}/{len(selected)}", flush=True)
     return outputs
 
 
 # --------------------------------------------------------------------------- #
-# DeepSeek pairwise 裁判
+# DeepSeek 双维度 pairwise
 # --------------------------------------------------------------------------- #
 JUDGE_PROMPT = (
-    "你在判断两条微信回复哪条更像真人（真人=普通中国人用微信跟朋友聊天，短、口语、"
-    "经常不加标点；另一条可能是 AI 写的，可能更完整、更像客服/采访）。\n"
-    "只看语气和写法，不看内容对错。\n"
-    "对话上下文：\n{context}\n"
-    "回复 A：{a}\n"
-    "回复 B：{b}\n"
-    "哪条更像真人？只回答一个词：A、B 或 tie。"
+    "你在评估两条回复（A/B），只做二选一或平局。\n"
+    "上下文（对方/我）：\n{context}\n\n"
+    "回复 A：{a}\n回复 B：{b}\n\n"
+    "请回答两个问题，每个问题输出一行，格式必须严格是：\n"
+    "more_human=A|B|tie\n"
+    "more_contextual=A|B|tie\n"
+    "问题1 more_human：哪条更像真人（普通中国人在微信/QQ 跟朋友聊天：短、口语、常不加标点）？\n"
+    "问题2 more_contextual：哪条更接得上上下文（是在回应对方刚说的话，而不是自说自话/答非所问）？"
 )
+
+
+def _pick_verdict(raw: str, key: str) -> str:
+    match = re.search(rf"{key}\s*[=:：]\s*(A|B|tie)", raw, re.I)
+    if match:
+        return match.group(1).upper()
+    for line in raw.splitlines():
+        if key.lower() in line.lower():
+            upper = line.upper()
+            if "TIE" in upper or "平" in line:
+                return "TIE"
+            if re.search(r"\bA\b", upper):
+                return "A"
+            if re.search(r"\bB\b", upper):
+                return "B"
+    return "TIE"
+
+
+def _winner(verdict: str, model_left: bool) -> str:
+    if verdict == "TIE":
+        return "tie"
+    if (verdict == "A" and model_left) or (verdict == "B" and not model_left):
+        return "model"
+    return "human"
 
 
 def pairwise_judge(pairs: list[dict], *, judge_client, seed: int = 42) -> list[dict]:
@@ -163,7 +206,6 @@ def pairwise_judge(pairs: list[dict], *, judge_client, seed: int = 42) -> list[d
     for pair in pairs:
         human = pair["human"]
         model = pair["model"]
-        # 随机左右，避免位置偏差
         model_left = rng.random() < 0.5
         a, b = (model, human) if model_left else (human, model)
         context_lines = []
@@ -173,80 +215,89 @@ def pairwise_judge(pairs: list[dict], *, judge_client, seed: int = 42) -> list[d
         prompt = JUDGE_PROMPT.format(context="\n".join(context_lines) or "（无）",
                                       a=a or "（空）", b=b or "（空）")
         started = time.perf_counter()
-        result = judge_client.chat(
-            [{"role": "user", "content": prompt}], purpose="tone_pairwise",
-            max_tokens=16, temperature=0.2)
+        result = {}
+        raw = ""
+        for attempt in range(3):
+            result = judge_client.chat(
+                [{"role": "user", "content": prompt}], purpose="tone_pairwise",
+                max_tokens=64, temperature=0.2)
+            raw = str(result.get("text") or "").strip()
+            if raw:
+                break
+            time.sleep(0.4)
         elapsed = time.perf_counter() - started
-        raw = str(result.get("text") or "").strip()
-        verdict = "tie"
-        upper = raw.upper()
-        if "TIE" in upper or "平" in raw:
-            verdict = "tie"
-        elif re.search(r"\bA\b", upper) or raw.startswith("A"):
-            verdict = "A"
-        elif re.search(r"\bB\b", upper) or raw.startswith("B"):
-            verdict = "B"
-        # 映射回 human/model（A/B 的左右是随机的）
-        if verdict == "tie":
-            winner = "tie"
-        elif (verdict == "A" and model_left) or (verdict == "B" and not model_left):
-            winner = "model"
-        else:
-            winner = "human"
+        human_verdict = _pick_verdict(raw, "more_human")
+        contextual_verdict = _pick_verdict(raw, "more_contextual")
         results.append({
             "id": pair["id"], "in_sample": pair.get("split") != "val",
             "left": "model" if model_left else "human", "raw": raw,
-            "winner": winner, "elapsed_s": round(elapsed, 3),
-            "human": human, "model": model,
-            "ok": bool(result.get("ok")),
+            "human_winner": _winner(human_verdict, model_left),
+            "contextual_winner": _winner(contextual_verdict, model_left),
+            "human_verdict": human_verdict, "contextual_verdict": contextual_verdict,
+            "elapsed_s": round(elapsed, 3),
+            "human": human, "model": model, "ok": bool(result.get("ok")),
         })
     return results
 
 
 def summarize_pairwise(results: list[dict]) -> dict:
-    def summarize(items: list[dict]) -> dict:
+    def summarize(items: list[dict], key: str) -> dict:
         total = len(items)
         counts = {"model": 0, "human": 0, "tie": 0}
         for item in items:
-            counts[item["winner"]] = counts.get(item["winner"], 0) + 1
+            counts[item[key]] = counts.get(item[key], 0) + 1
         return {"n": total, "model_win": counts["model"], "human_win": counts["human"],
                 "tie": counts["tie"],
                 "model_win_rate": round(counts["model"] / total, 4) if total else 0.0,
                 "human_win_rate": round(counts["human"] / total, 4) if total else 0.0,
                 "tie_rate": round(counts["tie"] / total, 4) if total else 0.0}
 
-    val = [item for item in results if not item["in_sample"]]
-    train = [item for item in results if item["in_sample"]]
-    return {"all": summarize(results), "heldout_val": summarize(val),
-            "in_sample_train": summarize(train)}
+    return {
+        "human_likeness": summarize(results, "human_winner"),
+        "contextual": summarize(results, "contextual_winner"),
+        "per_item": results,
+    }
+
+
+def readable_samples(outputs: list[dict], count: int = 12) -> list[dict]:
+    samples = []
+    for item in outputs[:count]:
+        context_lines = [f"{'对方' if m['role'] == 'user' else '我'}：{m['content']}"
+                         for m in item["context"][-4:]]
+        samples.append({
+            "id": item["id"],
+            "context": context_lines,
+            "human": item["human"],
+            "model": item["model"],
+            "generated_tokens": item["generated_tokens"],
+        })
+    return samples
 
 
 # --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="P2-b 语气 adapter 评测")
+    parser = argparse.ArgumentParser(description="P2-b 语气 adapter 正式评测")
     parser.add_argument("--data", default=str(DATA_PATH))
-    parser.add_argument("--corpus", default=str(CORPUS_PATH))
     parser.add_argument("--model-path", default=str(DEFAULT_MODEL))
-    parser.add_argument("--adapter", default=r"E:\agent\output\tone_qwen05_v1_smoke")
+    parser.add_argument("--adapter", default=r"E:\agent\output\tone_qwen05_v1")
     parser.add_argument("--limit", type=int, default=0, help="最多生成多少条（0=全部 val）")
     parser.add_argument("--max-new-tokens", type=int, default=64)
     parser.add_argument("--pairwise-n", type=int, default=20)
-    parser.add_argument("--no-judge", action="store_true", help="跳过 DeepSeek pairwise")
-    parser.add_argument("--judge-mock", action="store_true", help="用固定判词自测（不联网）")
+    parser.add_argument("--no-judge", action="store_true")
+    parser.add_argument("--judge-mock", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--out", default=r"E:\agent\logs\tone_eval_smoke.json")
+    parser.add_argument("--out", default=r"E:\agent\logs\tone_eval_formal.json")
     args = parser.parse_args(argv)
 
     rows = load_rows(Path(args.data))
     val_rows = [row for row in rows if row.get("split") == "val"]
-    train_rows = [row for row in rows if row.get("split") == "train"]
     if args.limit:
         val_rows = val_rows[: int(args.limit)]
     if not val_rows:
         raise SystemExit("[tone_eval] val 为空，先跑 tone_train.py --dry-run")
-    print(f"[tone_eval] val={len(val_rows)} train={len(train_rows)}", flush=True)
+    print(f"[tone_eval] val={len(val_rows)}", flush=True)
 
     model, tokenizer = load_adapter(Path(args.model_path), Path(args.adapter))
     started = time.perf_counter()
@@ -254,12 +305,25 @@ def main(argv: list[str] | None = None) -> int:
                                max_new_tokens=args.max_new_tokens)
     gen_seconds = time.perf_counter() - started
 
-    # 人类参考：corpus 里的 self 语料
-    corpus = [json.loads(line) for line in
-              Path(args.corpus).read_text(encoding="utf-8").splitlines() if line.strip()]
-    human_texts = [row["text"] for row in corpus if row["speaker"] == "self"]
-    human_stats = text_stats(human_texts)
+    wechat_ref = read_profile_stats(PROFILE_WECHAT)
+    qq_ref = read_profile_stats(PROFILE_QQ)
+    corpus_path = ROOT / "agi" / "eval_data" / "human_tone" / "corpus.jsonl"
+    qq_corpus_path = ROOT / "agi" / "eval_data" / "human_tone" / "qq_corpus.jsonl"
+    wechat_corpus = text_stats([row["text"] for row in load_rows(corpus_path)
+                                if row.get("speaker") == "self"])
+    qq_corpus = text_stats([row["text"] for row in load_rows(qq_corpus_path)
+                            if row.get("speaker") == "self"])
     model_stats = text_stats([item["model"] for item in outputs])
+    comparison = {}
+    profile_keys = ("length_median", "no_punct_rate", "question_rate",
+                    "period_rate", "emoji_rate")
+    corpus_keys = ("colloquial_coverage", "topics_mean")
+    for key in profile_keys:
+        comparison[key] = {"model": model_stats.get(key),
+                           "wechat": wechat_ref.get(key), "qq": qq_ref.get(key)}
+    for key in corpus_keys:
+        comparison[key] = {"model": model_stats.get(key),
+                           "wechat": wechat_corpus.get(key), "qq": qq_corpus.get(key)}
     result = {
         "adapter": str(args.adapter),
         "model_path": str(args.model_path),
@@ -267,64 +331,55 @@ def main(argv: list[str] | None = None) -> int:
         "generation_seconds": round(gen_seconds, 2),
         "generation_seconds_per_item": round(gen_seconds / max(1, len(outputs)), 3),
         "max_new_tokens": args.max_new_tokens,
-        "human_reference": human_stats,
+        "human_reference_wechat": wechat_ref,
+        "human_reference_qq": qq_ref,
         "model_generated": model_stats,
-        "distribution_delta": {
-            key: round(model_stats.get(key, 0) - human_stats.get(key, 0), 4)
-            for key in ("length_median", "no_punct_rate", "question_rate",
-                        "period_rate", "colloquial_coverage", "topics_mean")
-        },
+        "comparison": comparison,
+        "samples_readable": readable_samples(outputs, 12),
         "samples": outputs,
     }
 
-    # pairwise：val 不够就从 train 补（标记 in_sample）
-    judge_available = False
     if not args.no_judge:
         judge = None
         if args.judge_mock:
             class _MockJudge:
                 def chat(self, messages, **kwargs):
-                    return {"ok": True, "text": "tie"}
+                    return {"ok": True, "text": "more_human=tie\nmore_contextual=tie"}
             judge = _MockJudge()
-            judge_available = True
         else:
             from agi.selflearn import llm
             client = llm.Client()
             if client.available():
                 judge = client
-                judge_available = True
             else:
                 print("[tone_eval] 没有 DeepSeek key，跳过 pairwise", flush=True)
         if judge is not None:
-            pool = list(outputs)
             rng = random.Random(args.seed)
-            while len(pool) < args.pairwise_n and train_rows:
-                row = train_rows[len(pool) % len(train_rows)]
-                messages = [{"role": m["role"], "content": m["content"]}
-                            for m in row["messages"][:-1]]
-                extra = generate_replies(model, tokenizer, [row],
-                                         max_new_tokens=args.max_new_tokens)[0]
-                extra["split"] = "train"
-                extra["context"] = messages
-                pool.append(extra)
+            pool = list(outputs)
             rng.shuffle(pool)
-            judged = pairwise_judge(pool[: args.pairwise_n], judge_client=judge,
-                                    seed=args.seed)
-            result["pairwise"] = {"judge": "deepseek" if not args.judge_mock else "mock",
-                                  "summary": summarize_pairwise(judged),
-                                  "details": judged}
+            judged = pairwise_judge(pool[: min(args.pairwise_n, len(pool))],
+                                    judge_client=judge, seed=args.seed)
+            result["pairwise"] = {
+                "judge": "mock" if args.judge_mock else "deepseek",
+                "summary": summarize_pairwise(judged),
+            }
             print("[tone_eval] pairwise: " + json.dumps(
-                result["pairwise"]["summary"], ensure_ascii=False), flush=True)
+                {k: v for k, v in result["pairwise"]["summary"].items() if k != "per_item"},
+                ensure_ascii=False), flush=True)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, ensure_ascii=False, indent=1) + "\n",
                    encoding="utf-8")
-    summary = {key: result[key] for key in
-               ("val_pairs", "generation_seconds_per_item", "human_reference",
-                "model_generated", "distribution_delta")}
+    summary = {
+        "val_pairs": result["val_pairs"],
+        "generation_seconds_per_item": result["generation_seconds_per_item"],
+        "comparison": comparison,
+        "samples_readable": result["samples_readable"][:3],
+    }
     if "pairwise" in result:
-        summary["pairwise"] = result["pairwise"]["summary"]["all"]
+        summary["pairwise"] = {k: v for k, v in result["pairwise"]["summary"].items()
+                               if k != "per_item"}
     print("[tone_eval] " + json.dumps(summary, ensure_ascii=False), flush=True)
     print(f"[tone_eval] full report -> {out}", flush=True)
     return 0

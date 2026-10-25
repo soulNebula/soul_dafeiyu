@@ -68,13 +68,26 @@ LANG = "zh"
 # --------------------------------------------------------------------------- #
 #: 截图里能识别的真实称呼 → 占位（小肥羊是用户本人昵称，quote 条会丢弃，仍兜底替换）
 NAME_MAP = OrderedDict([
+    # 长昵称/全名在前，避免子串漏替
     ("羽毛球群的小杰", "朋友A"),
     ("小杰", "朋友A"),
     ("罗煜莹", "朋友B"),
     ("犯错不睡觉", "朋友B"),
+    ("刘武广", "朋友C"),
+    ("邱宋凯", "朋友D"),
+    ("马骏", "朋友E"),
+    ("周酷诗", "朋友F"),
+    ("老梅菜", "朋友G"),
+    ("梅菜", "朋友G"),
+    ("坤哥", "朋友H"),
+    ("小黑子", "朋友I"),
+    ("汉堡", "朋友J"),
+    ("何工", "朋友K"),
     ("色逼", "朋友C"),
     ("小肥羊", "[昵称]"),
     ("白云一片去悠悠", "[昵称]"),
+    # 公司/组织名给占位
+    ("德赛", "[公司]"),
 ])
 #: 测试/隐私扫描用：这些真实称呼不得出现在任何产出里
 REAL_NAME_BLOCKLIST = tuple(NAME_MAP.keys()) + ("何工", "刘工", "周棋")
@@ -87,6 +100,7 @@ SYSTEM_PATTERNS = (
 )
 TIME_RE = re.compile(
     r"(凌晨|早上|上午|中午|下午|傍晚|晚上|昨天|今天|前天|星期|周[一二三四五六日天])"
+    r"|(\d{1,2}\s*月\s*\d{1,2}\s*[日号])"
 )
 URL_RE = re.compile(r"https?://\S+")
 WXID_RE = re.compile(r"wxid_[0-9A-Za-z_:]+")
@@ -162,33 +176,60 @@ $all | ConvertTo-Json -Depth 4 | Set-Content -Path $env:HT_OCR_OUT -Encoding UTF
 """
 
 
-def screenshot_files() -> list[Path]:
-    files = sorted(SCREENSHOT_DIR.glob("*.jpg"))
+def screenshot_files(extra_dirs: list[Path] | None = None) -> list[Path]:
+    """多目录截图（原 img + img/new 等）+ 长聊切片；逐目录收集 jpg/jpeg/png。"""
+    dirs = [SCREENSHOT_DIR, *(extra_dirs or [])]
+    files: list[Path] = []
+    for base in dirs:
+        if not base.exists():
+            continue
+        for pattern in ("*.jpg", "*.jpeg", "*.png"):
+            files.extend(sorted(base.glob(pattern)))
     files = [p for p in files if p.name != LONG_IMAGE]
     parts = sorted(GIRL_PARTS_DIR.glob("part*.png"))
     return files + parts
 
 
 OCR_SCALE = 2.0
+OCR_MAX_DIM = 9500   # Windows.Media.Ocr MaxImageDimension = 10000，留余量
+OCR_CHUNK = int((OCR_MAX_DIM - 200) / OCR_SCALE)   # 原图像素高度：超长图按这个切段
 
 
-def preprocess_for_ocr(files: list[Path], tmp_dir: Path, scale: float = OCR_SCALE) -> list[Path]:
-    """放大 + 提对比后再 OCR（直接 OCR 原图会漏掉小字/带表情的气泡）。"""
+def preprocess_for_ocr(files: list[Path], tmp_dir: Path,
+                       scale: float = OCR_SCALE) -> dict[str, dict]:
+    """放大 + 提对比后再 OCR；超长截图按高度切段（OCR 有 10000px 上限）。
+
+    返回 {准备文件名: {"file": 原图名, "y0": 段在原图的 y 偏移, "scale": 缩放,
+                        "img_w"/"img_h": 原图尺寸}}，用于把 bbox 映射回原图。
+    """
     from PIL import Image, ImageEnhance
 
-    prepared: list[Path] = []
+    mapping: dict[str, dict] = {}
     for path in files:
         image = Image.open(path).convert("RGB")
-        image = image.resize((max(1, round(image.width * scale)),
-                              max(1, round(image.height * scale))), Image.LANCZOS)
-        image = ImageEnhance.Contrast(image).enhance(1.15)
-        target = tmp_dir / path.name
-        if path.suffix.lower() in (".jpg", ".jpeg"):
-            image.save(target, quality=95)
+        width, height = image.size
+        chunk = max(400, int((OCR_MAX_DIM - 200) / scale))
+        if height <= chunk:
+            crops = [(image, 0)]
         else:
-            image.save(target)
-        prepared.append(target)
-    return prepared
+            crops = []
+            offset = 0
+            while offset < height:
+                crops.append((image.crop((0, offset, width, min(height, offset + chunk))), offset))
+                offset += chunk
+        for index, (crop, y0) in enumerate(crops):
+            scaled = crop.resize((max(1, round(crop.width * scale)),
+                                  max(1, round(crop.height * scale))), Image.LANCZOS)
+            scaled = ImageEnhance.Contrast(scaled).enhance(1.15)
+            name = path.name if len(crops) == 1 else f"{path.stem}__p{index}{path.suffix.lower()}"
+            target = tmp_dir / name
+            if path.suffix.lower() in (".jpg", ".jpeg"):
+                scaled.save(target, quality=95)
+            else:
+                scaled.save(target)
+            mapping[name] = {"file": path.name, "y0": y0, "scale": scale,
+                             "img_w": width, "img_h": height}
+    return mapping
 
 
 def run_windows_ocr(files: list[Path], cache_path: Path = OCR_CACHE) -> list[dict]:
@@ -201,7 +242,8 @@ def run_windows_ocr(files: list[Path], cache_path: Path = OCR_CACHE) -> list[dic
     import os
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
-        prepared = preprocess_for_ocr(list(files), tmp_dir)
+        mapping = preprocess_for_ocr(list(files), tmp_dir)
+        prepared = [tmp_dir / name for name in mapping]
         script = tmp_dir / "ocr_boxes.ps1"
         script.write_text(OCR_PS1, encoding="utf-8-sig")
         env = dict(os.environ, HT_OCR_OUT=str(cache_path))
@@ -211,13 +253,24 @@ def run_windows_ocr(files: list[Path], cache_path: Path = OCR_CACHE) -> list[dic
                               errors="replace", env=env)
         if proc.returncode != 0:
             raise SystemExit(f"[ocr] powershell 失败: {proc.stderr[-800:]}")
-    rows = json.loads(cache_path.read_text(encoding="utf-8-sig"))
-    if not rows or not any(CJK_RE.search(str(row.get("text") or "")) for row in rows):
+    raw_rows = json.loads(cache_path.read_text(encoding="utf-8-sig"))
+    if not raw_rows or not any(CJK_RE.search(str(row.get("text") or "")) for row in raw_rows):
         raise SystemExit("[ocr] 输出里没有中文，可能是编码问题；请检查 PowerShell/OCR 语言包")
-    for row in rows:
-        for key in ("x", "y", "w", "h", "img_w", "img_h"):
-            if row.get(key) is not None:
-                row[key] = round(float(row[key]) / OCR_SCALE, 1)
+    rows: list[dict] = []
+    for row in raw_rows:
+        name = Path(str(row.get("file") or "")).name
+        info = mapping.get(name)
+        if not info:
+            continue
+        scale = float(info["scale"])
+        row["file"] = info["file"]
+        row["x"] = round(float(row["x"]) / scale + 0, 1)
+        row["y"] = round(float(row["y"]) / scale + float(info["y0"]), 1)
+        row["w"] = round(float(row["w"]) / scale, 1)
+        row["h"] = round(float(row["h"]) / scale, 1)
+        row["img_w"] = info["img_w"]
+        row["img_h"] = info["img_h"]
+        rows.append(row)
     # 缓存里也必须存“原图坐标”，否则下次直接读缓存会用错坐标系
     cache_path.write_text(json.dumps(rows, ensure_ascii=False, indent=1),
                           encoding="utf-8")
@@ -398,8 +451,10 @@ def looks_like_garbage(text: str) -> bool:
         return True
     if set(text) & GARBAGE_CHARS:
         return True
-    if set(text) & set("亠丶冫彳亻丿乂々刁弳"):
+    if set(text) & set("亠丶冫彳亻丿乂々刁弳丨"):
         return True
+    if "「" in text or "」" in text:
+        return True   # 引用条/气泡圆角 OCR 残片
     compact = re.sub(r"[\s\W_]+", "", text)
     return not compact
 
@@ -857,8 +912,8 @@ def compute_profile(corpus: list[dict], info: dict) -> dict:
         "ocr_self_by_image": info.get("ocr_self_by_image", {}),
         "ocr_usable_images": len(info.get("ocr_files") or []),
         "ocr_coverage_note": (
-            "5 张截图全部可用（长聊天切成 part00–06 共 7 段 + 羽毛球群 4 张，共 11 个切片，"
-            "2x 放大后 OCR）。OCR 仍会漏掉 1–2 字短气泡和纯图片/表情消息"
+            f"{len(info.get('ocr_files') or [])} 个切片全部可用（多目录截图 img + img/new + "
+            "长聊天 part00–06，2x 放大后 OCR）。OCR 仍会漏掉 1–2 字短气泡和纯图片/表情消息"
             "（例：part00 底部的「哈哈哈」「可惨你」被切到下一段/截断、贴图与图片不进入语料），"
             "故 self 语料以“能稳定识别的文本”为准；句末标点也可能被 OCR 吞掉"
             "（问号常被识别成 7，脚本已还原；截图本身几乎不用句号/感叹号）。"
@@ -976,7 +1031,8 @@ def render_profile_md(profile: dict) -> str:
     lines.append("")
     lines.append("## 7. 数据来源与取舍")
     lines.append("")
-    lines.append("- 截图 OCR：羽毛球群短聊 4 张 + 长聊天 part00–06（Windows.Media.Ocr，带 bbox）")
+    lines.append("- 截图 OCR：微信截图（img + img/new 多目录）+ 长聊天 part00–06"
+                 "（Windows.Media.Ocr，带 bbox）")
     lines.append("- 项目联系人库：`agi/data/selflearn/wechat_contacts/*.sqlite3` 的 role=user（只读）")
     lines.append("- 排除：`log/messages.jsonl` 的 sender=self（AI 代发/测试回环，非真人输入）")
     lines.append("")
@@ -992,7 +1048,7 @@ def render_profile_md(profile: dict) -> str:
 # --------------------------------------------------------------------------- #
 # few-shot
 # --------------------------------------------------------------------------- #
-def select_fewshot(corpus: list[dict], count: int = 20) -> list[dict]:
+def select_fewshot(corpus: list[dict], count: int = 30) -> list[dict]:
     """挑 20 条短、干净、能体现长度/标点习惯的 self 真实短句。"""
     def clean(row: dict) -> bool:
         text = row["text"]
@@ -1049,13 +1105,21 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
 
 def build(out_dir: Path = OUT_DIR, *, force_ocr: bool = False, dry_run: bool = False,
           ocr_cache: Path = OCR_CACHE, contacts_dir: Path = CONTACTS_DIR,
-          ocr_lines: list[dict] | None = None) -> dict:
-    """完整构建；dry_run 只返回统计不写盘。"""
+          ocr_lines: list[dict] | None = None,
+          img_dirs: list[Path] | None = None, fewshot_count: int = 30) -> dict:
+    """完整构建；dry_run 只返回统计不写盘。
+
+    img_dirs: 额外的截图目录（除默认 SCREENSHOT_DIR 外，如 img/new）；
+    fewshot_count: few-shot 条数（默认 30）。
+    """
+    dirs = [SCREENSHOT_DIR, *(img_dirs or [])]
+    files = None if ocr_lines is not None else screenshot_files(img_dirs)
     lines = ocr_lines if ocr_lines is not None else load_ocr_lines(
-        force_ocr=force_ocr, cache_path=ocr_cache)
-    corpus, info = build_corpus(lines, contacts_dir=contacts_dir)
+        force_ocr=force_ocr, cache_path=ocr_cache, files=files)
+    store = ImageStore(base_dirs=[*dirs, GIRL_PARTS_DIR])
+    corpus, info = build_corpus(lines, contacts_dir=contacts_dir, image_store=store)
     profile = compute_profile(corpus, info)
-    fewshot = select_fewshot(corpus, 20)
+    fewshot = select_fewshot(corpus, fewshot_count)
     summary = {
         "corpus_rows": len(corpus),
         "self_rows": profile["self_rows"],
@@ -1088,12 +1152,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ocr", action="store_true", help="强制重新 OCR 截图")
     parser.add_argument("--ocr-cache", default=str(OCR_CACHE))
     parser.add_argument("--contacts-dir", default=str(CONTACTS_DIR))
+    parser.add_argument("--img-dir", action="append", default=None,
+                        help="额外截图目录（可多次指定；默认只读 Desktop/img）")
+    parser.add_argument("--fewshot-count", type=int, default=30)
     parser.add_argument("--dry-run", action="store_true", help="只打印统计，不写文件")
     args = parser.parse_args(argv)
 
+    img_dirs = [Path(item) for item in (args.img_dir or [])]
     result = build(Path(args.out_dir), force_ocr=args.ocr, dry_run=args.dry_run,
                    ocr_cache=Path(args.ocr_cache),
-                   contacts_dir=Path(args.contacts_dir))
+                   contacts_dir=Path(args.contacts_dir),
+                   img_dirs=img_dirs, fewshot_count=args.fewshot_count)
     summary = result["summary"]
     print(json.dumps({"summary": summary}, ensure_ascii=False, indent=1))
     if args.dry_run:

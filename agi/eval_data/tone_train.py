@@ -45,10 +45,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools import build_human_tone as ht  # noqa: E402
+from tools import build_qq_tone as bq  # noqa: E402
 
 DATA_PATH = ROOT / "agi" / "eval_data" / "human_tone" / "sft.jsonl"
 DEFAULT_MODEL = Path(r"E:\agent\models\Qwen2.5-0.5B-Instruct")
 DEFAULT_OUT = Path(r"E:\agent\output\tone_qwen05_v1")
+DEFAULT_QQ_EXPORT = Path(r"E:\agent\qq_export\c2c")
 MIN_PAIRS_FOR_FORMAL_TRAIN = 200
 MAX_CONTEXT = 4
 MIN_CONTEXT = 2
@@ -57,7 +59,7 @@ MIN_CONTEXT = 2
 # --------------------------------------------------------------------------- #
 # 1) 造 SFT 数据
 # --------------------------------------------------------------------------- #
-def collect_sequences() -> dict[str, list[dict]]:
+def collect_sequences(img_dirs: list[Path] | None = None) -> dict[str, list[dict]]:
     """按 session 收集真实会话序列：一截图=一 session；一联系人库=一 session。
 
     返回 {session_id: [{"speaker": "self"|"other", "text": ...}, ...]}。
@@ -65,7 +67,7 @@ def collect_sequences() -> dict[str, list[dict]]:
     """
     sequences: dict[str, list[dict]] = {}
     ocr_lines = ht.load_ocr_lines()
-    store = ht.ImageStore()
+    store = ht.ImageStore(base_dirs=[ht.SCREENSHOT_DIR, *(img_dirs or []), ht.GIRL_PARTS_DIR])
     files = sorted({str(row.get("file")) for row in ocr_lines})
     for name in files:
         if name == ht.LONG_IMAGE:
@@ -79,10 +81,15 @@ def collect_sequences() -> dict[str, list[dict]]:
     for path in sorted(Path(ht.CONTACTS_DIR).glob("*.sqlite3")):
         con = sqlite3.connect("file:" + path.as_posix() + "?mode=ro", uri=True)
         try:
-            rows = con.execute(
-                "SELECT role, text FROM messages "
-                "WHERE text IS NOT NULL AND TRIM(text)<>'' ORDER BY ts"
-            ).fetchall()
+            tables = {row[0] for row in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if "messages" not in tables:
+                rows = []
+            else:
+                rows = con.execute(
+                    "SELECT role, text FROM messages "
+                    "WHERE text IS NOT NULL AND TRIM(text)<>'' ORDER BY ts"
+                ).fetchall()
         finally:
             con.close()
         if not rows:
@@ -121,6 +128,58 @@ def build_pairs(sequences: dict[str, list[dict]]) -> list[dict]:
                 "session": session,
                 "messages": messages,
                 "target_len": len(messages[-1]["content"]),
+            })
+    return pairs
+
+
+def build_qq_pairs(export_dir: Path, max_context: int = MAX_CONTEXT,
+                   min_context: int = MIN_CONTEXT) -> list[dict]:
+    """QQ c2c 导出 JSON → (前 2–4 条上下文 → self 真实发言) 对。
+
+    复用 build_qq_tone 的清洗/匿名化口径；QQ 只有一个有效会话，全部进 train（无独立 val），
+    在报告里注明这是已知局限。channel="qq"。
+    """
+    data_by_peer: dict[str, list[dict]] = {}
+    for path in sorted(Path(export_dir).glob("*_full.json")):
+        try:
+            rows = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(rows, list) or not rows:
+            continue
+        peer = str(rows[0].get("peer") or path.stem.split("_")[0])
+        data_by_peer[peer] = rows
+    labels = {peer: f"朋友Q{index + 1}" for index, peer in enumerate(sorted(data_by_peer))}
+    pairs: list[dict] = []
+    for peer, rows in sorted(data_by_peer.items()):
+        label = labels[peer]
+        chat_name = str(rows[0].get("chat_name") or "")
+        cleaned: list[dict] = []
+        for row in rows:
+            text, kind = bq.classify_text(str(row.get("text") or ""))
+            if kind != "text":
+                continue
+            text = bq.anonymize(text, label=label, chat_name=chat_name)
+            if not text:
+                continue
+            cleaned.append({"speaker": "self" if row.get("is_self") else "other",
+                            "text": text})
+        for index, item in enumerate(cleaned):
+            if item["speaker"] != "self":
+                continue
+            context = cleaned[max(0, index - max_context):index]
+            if len(context) < min_context:
+                continue
+            messages = [{"role": "assistant" if ctx["speaker"] == "self" else "user",
+                         "content": ctx["text"]}
+                        for ctx in context + [item]]
+            pairs.append({
+                "source": "qq",
+                "session": f"qq:{peer}",
+                "channel": "qq",
+                "messages": messages,
+                "target_len": len(messages[-1]["content"]),
+                "split": "train",
             })
     return pairs
 
@@ -178,7 +237,7 @@ def write_sft(pairs: list[dict], path: Path = DATA_PATH) -> dict:
     with path.open("w", encoding="utf-8") as fh:
         for pair in pairs:
             record = {key: pair[key] for key in
-                      ("id", "source", "session", "messages", "target_len", "split")}
+                      ("id", "source", "session", "messages", "target_len", "split", "channel")}
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     train = [p for p in pairs if p["split"] == "train"]
     val = [p for p in pairs if p["split"] == "val"]
@@ -191,6 +250,7 @@ def write_sft(pairs: list[dict], path: Path = DATA_PATH) -> dict:
         "sessions": len({p["session"] for p in pairs}),
         "val_sessions": sorted({p["session"] for p in val}),
         "by_source": dict(Counter(p["source"] for p in pairs)),
+        "by_channel": dict(Counter(p.get("channel", "wechat") for p in pairs)),
         "target_len_median": sorted(p["target_len"] for p in pairs)[len(pairs) // 2] if pairs else 0,
         "gap_to_200": max(0, MIN_PAIRS_FOR_FORMAL_TRAIN - len(pairs)),
         "formal_train_ready": len(pairs) >= MIN_PAIRS_FOR_FORMAL_TRAIN,
@@ -234,6 +294,8 @@ def train(args: argparse.Namespace) -> dict:
     from tools.train import smoke_lora
 
     pairs = [p for p in load_sft(Path(args.data)) if p["split"] == "train"]
+    channels = Counter(p.get("channel", "wechat") for p in pairs)
+    print(f"[tone_train] train channels={dict(channels)}", flush=True)
     if args.limit:
         pairs = pairs[: int(args.limit)]
     if not pairs:
@@ -305,14 +367,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", choices=("bf16", "fp16", "fp32"), default="bf16")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--val-ratio", type=float, default=0.1)
+    parser.add_argument("--img-dir", action="append", default=None,
+                        help="额外微信截图目录（可多次指定，如 Desktop/img/new）")
+    parser.add_argument("--qq-export-dir", default=str(DEFAULT_QQ_EXPORT),
+                        help="QQ c2c *_full.json 目录；不存在则只造微信数据（传空字符串禁用）")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    sequences = collect_sequences()
+    sequences = collect_sequences([Path(item) for item in (args.img_dir or [])])
     pairs = build_pairs(sequences)
+    for pair in pairs:
+        pair["channel"] = "wechat"
     assign_split(pairs, val_ratio=args.val_ratio)
+    qq_pairs = build_qq_pairs(Path(args.qq_export_dir)) if args.qq_export_dir else []
+    for index, pair in enumerate(qq_pairs, 1):
+        pair["id"] = f"tone-qq-{index:04d}"
+    pairs = pairs + qq_pairs
     problems = validate_pairs(pairs)
     if problems:
         print("[tone_train][FATAL] 数据校验失败：\n  " + "\n  ".join(problems[:10]),

@@ -1,90 +1,1020 @@
-{"id": "ht-0001", "source": "ocr:183c205ab73b", "speaker": "self", "text": "那还是去体育中心吧", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0002", "source": "ocr:183c205ab73b", "speaker": "other", "text": "要不现在定", "ts_hint": "中午12：58", "lang": "zh", "count": 1}
-{"id": "ht-0003", "source": "ocr:183c205ab73b", "speaker": "self", "text": "可以", "ts_hint": "中午12：58", "lang": "zh", "count": 2}
-{"id": "ht-0004", "source": "ocr:183c205ab73b", "speaker": "other", "text": "你来定", "ts_hint": "中午12：58", "lang": "zh", "count": 1}
-{"id": "ht-0005", "source": "ocr:183c205ab73b", "speaker": "self", "text": "我在吃饭", "ts_hint": "中午12：58", "lang": "zh", "count": 1}
-{"id": "ht-0006", "source": "ocr:183c205ab73b", "speaker": "self", "text": "吃完先", "ts_hint": "中午12：58", "lang": "zh", "count": 1}
-{"id": "ht-0007", "source": "ocr:183c205ab73b", "speaker": "self", "text": "订了", "ts_hint": "下午2", "lang": "zh", "count": 1}
-{"id": "ht-0008", "source": "ocr:183c205ab73b", "speaker": "other", "text": "我现在过去哦", "ts_hint": "下午2：47", "lang": "zh", "count": 1}
-{"id": "ht-0009", "source": "ocr:183c205ab73b", "speaker": "self", "text": "ok", "ts_hint": "下午2：47", "lang": "zh", "count": 2}
-{"id": "ht-0010", "source": "ocr:372e42b83015", "speaker": "other", "text": "今晚去吃饭", "ts_hint": "", "lang": "zh", "count": 2}
-{"id": "ht-0011", "source": "ocr:372e42b83015", "speaker": "self", "text": "那明天再去吧", "ts_hint": "昨天下午4：29", "lang": "zh", "count": 2}
-{"id": "ht-0012", "source": "ocr:372e42b83015", "speaker": "self", "text": "打球，去不去", "ts_hint": "下午1：1", "lang": "zh", "count": 2}
-{"id": "ht-0013", "source": "ocr:372e42b83015", "speaker": "other", "text": "今晚几点？", "ts_hint": "下午2：02", "lang": "zh", "count": 2}
-{"id": "ht-0014", "source": "ocr:372e42b83015", "speaker": "other", "text": "问问朋友C", "ts_hint": "下午2：02", "lang": "zh", "count": 2}
-{"id": "ht-0015", "source": "ocr:372e42b83015", "speaker": "self", "text": "8点半？", "ts_hint": "下午2：02", "lang": "zh", "count": 2}
-{"id": "ht-0016", "source": "ocr:372e42b83015", "speaker": "other", "text": "可以", "ts_hint": "下午2：02", "lang": "zh", "count": 2}
-{"id": "ht-0017", "source": "ocr:372e42b83015", "speaker": "other", "text": "要不你先问问另外两个", "ts_hint": "下午2：02", "lang": "zh", "count": 1}
-{"id": "ht-0018", "source": "ocr:372e42b83015", "speaker": "other", "text": "他们来，我再来了", "ts_hint": "下午2：02", "lang": "zh", "count": 1}
-{"id": "ht-0019", "source": "ocr:99840b617744", "speaker": "other", "text": "明天才有空", "ts_hint": "昨天下午4：24", "lang": "zh", "count": 1}
-{"id": "ht-0020", "source": "ocr:aa816337b1cd", "speaker": "self", "text": "好像是这个", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0021", "source": "ocr:aa816337b1cd", "speaker": "self", "text": "今晚请你喝水", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0022", "source": "ocr:aa816337b1cd", "speaker": "other", "text": "8到9", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0023", "source": "ocr:aa816337b1cd", "speaker": "self", "text": "定了吗", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0024", "source": "ocr:aa816337b1cd", "speaker": "self", "text": "是不是这个号码", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0025", "source": "ocr:part00", "speaker": "other", "text": "我想紫砂", "ts_hint": "昨天中午12：2", "lang": "zh", "count": 1}
-{"id": "ht-0026", "source": "ocr:part00", "speaker": "self", "text": "咋了呀", "ts_hint": "昨天中午12：弘", "lang": "zh", "count": 1}
-{"id": "ht-0027", "source": "ocr:part00", "speaker": "other", "text": "我出门忘记带耳机了", "ts_hint": "一昨天中午12：4", "lang": "zh", "count": 1}
-{"id": "ht-0028", "source": "ocr:part00", "speaker": "other", "text": "然后围着高铁站找买耳机的店", "ts_hint": "一昨天中午12：4", "lang": "zh", "count": 1}
-{"id": "ht-0029", "source": "ocr:part00", "speaker": "other", "text": "但是都在外面", "ts_hint": "一昨天中午12：4", "lang": "zh", "count": 1}
-{"id": "ht-0030", "source": "ocr:part00", "speaker": "other", "text": "然后刚刚找纸巾发现在包里", "ts_hint": "一昨天中午12：4", "lang": "zh", "count": 1}
-{"id": "ht-0031", "source": "ocr:part01", "speaker": "self", "text": "不过找到了就好", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0032", "source": "ocr:part01", "speaker": "self", "text": "在家里太无聊了，去看下熊出没电", "ts_hint": "昨天下午1：58", "lang": "zh", "count": 1}
-{"id": "ht-0033", "source": "ocr:part01", "speaker": "self", "text": "真的服了，3D电影没带3D眼镜", "ts_hint": "昨天下午1：58", "lang": "zh", "count": 1}
-{"id": "ht-0034", "source": "ocr:part01", "speaker": "self", "text": "播到一半，电影出问题了", "ts_hint": "昨天下午2：19", "lang": "zh", "count": 1}
-{"id": "ht-0035", "source": "ocr:part02", "speaker": "other", "text": "笑死我了", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0036", "source": "ocr:part02", "speaker": "other", "text": "到了", "ts_hint": "昨天下午5：42", "lang": "zh", "count": 1}
-{"id": "ht-0037", "source": "ocr:part02", "speaker": "other", "text": "但是还要做两个小时的车", "ts_hint": "昨天下午5：42", "lang": "zh", "count": 1}
-{"id": "ht-0038", "source": "ocr:part02", "speaker": "other", "text": "我要吐了", "ts_hint": "昨天下午5：42", "lang": "zh", "count": 1}
-{"id": "ht-0039", "source": "ocr:part02", "speaker": "self", "text": "但是要气死了", "ts_hint": "昨天下午4：09", "lang": "zh", "count": 1}
-{"id": "ht-0040", "source": "ocr:part02", "speaker": "self", "text": "旁边那两个女的真的是气死我了", "ts_hint": "昨天下午4：09", "lang": "zh", "count": 1}
-{"id": "ht-0041", "source": "ocr:part02", "speaker": "self", "text": "电影看了多久，他就叫了多久", "ts_hint": "昨天下午4：09", "lang": "zh", "count": 1}
-{"id": "ht-0042", "source": "ocr:part02", "speaker": "self", "text": "叫，而且还是零零后", "ts_hint": "昨天下午4：09", "lang": "zh", "count": 1}
-{"id": "ht-0043", "source": "ocr:part02", "speaker": "self", "text": "我真的很想骂她，但是我奶奶在旁", "ts_hint": "昨天下午4：09", "lang": "zh", "count": 1}
-{"id": "ht-0044", "source": "ocr:part03", "speaker": "self", "text": "诶", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0045", "source": "ocr:part03", "speaker": "self", "text": "真的挺好看的，嗯", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0046", "source": "ocr:part03", "speaker": "other", "text": "你可以提醒她", "ts_hint": "胡昨天下午4：48", "lang": "zh", "count": 1}
-{"id": "ht-0047", "source": "ocr:part03", "speaker": "other", "text": "骂就别了", "ts_hint": "胡昨天下午4：48", "lang": "zh", "count": 1}
-{"id": "ht-0048", "source": "ocr:part03", "speaker": "other", "text": "待会别人脾气一上来就难搞", "ts_hint": "胡昨天下午4：48", "lang": "zh", "count": 1}
-{"id": "ht-0049", "source": "ocr:part03", "speaker": "self", "text": "我不会轻易骂别人的，后来我换了个位置就好点了", "ts_hint": "胡昨天下午4：48", "lang": "zh", "count": 1}
-{"id": "ht-0050", "source": "ocr:part03", "speaker": "self", "text": "有星星看吗？", "ts_hint": "昨天晚上11：45", "lang": "zh", "count": 1}
-{"id": "ht-0051", "source": "ocr:part03", "speaker": "other", "text": "不知道", "ts_hint": "昨天晚上11：49", "lang": "zh", "count": 1}
-{"id": "ht-0052", "source": "ocr:part04", "speaker": "self", "text": "好好好，吃上了是吧", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0053", "source": "ocr:part04", "speaker": "self", "text": "我还要再烧一串炮竹", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0054", "source": "ocr:part04", "speaker": "self", "text": "跟下邻居的风", "ts_hint": "昨天晚上11：53", "lang": "zh", "count": 1}
-{"id": "ht-0055", "source": "ocr:part04", "speaker": "other", "text": "我弟也买了一堆鞭炮", "ts_hint": "昨天晚上11：53", "lang": "zh", "count": 1}
-{"id": "ht-0056", "source": "ocr:part04", "speaker": "other", "text": "上年买的他都没烧完", "ts_hint": "昨天晚上11：53", "lang": "zh", "count": 1}
-{"id": "ht-0057", "source": "ocr:part05", "speaker": "self", "text": "我爸叫我一天放一串，放到开学说啥拜祖先，诶，他们去旅游了我也不知道什么时候搞，看邻居搞了我也跟着搞哈哈哈", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0058", "source": "ocr:part05", "speaker": "self", "text": "我也是啊", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0059", "source": "ocr:part05", "speaker": "other", "text": "你大过年就一个人吗", "ts_hint": "凌晨12：52", "lang": "zh", "count": 1}
-{"id": "ht-0060", "source": "ocr:part05", "speaker": "self", "text": "不是早说了吗？", "ts_hint": "凌晨12：48", "lang": "zh", "count": 1}
-{"id": "ht-0061", "source": "ocr:part05", "speaker": "self", "text": "我父母大年28就去旅游了，要等到大年初七才回来", "ts_hint": "凌晨12：48", "lang": "zh", "count": 1}
-{"id": "ht-0062", "source": "ocr:part05", "speaker": "self", "text": "家里真的就我一个人", "ts_hint": "凌晨12：48", "lang": "zh", "count": 1}
-{"id": "ht-0063", "source": "ocr:part05", "speaker": "other", "text": "sorry", "ts_hint": "凌晨2：14", "lang": "zh", "count": 1}
-{"id": "ht-0064", "source": "ocr:part05", "speaker": "other", "text": "我有病", "ts_hint": "凌晨2：14", "lang": "zh", "count": 1}
-{"id": "ht-0065", "source": "ocr:part06", "speaker": "other", "text": "问些莫名其妙的", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0066", "source": "ocr:part06", "speaker": "other", "text": "睡了", "ts_hint": "", "lang": "zh", "count": 1}
-{"id": "ht-0067", "source": "contacts_db", "speaker": "self", "text": "在吗？", "ts_hint": "1792780409.7160094", "lang": "zh", "count": 1}
-{"id": "ht-0068", "source": "contacts_db", "speaker": "self", "text": "你好", "ts_hint": "1792780492.852468", "lang": "zh", "count": 3}
-{"id": "ht-0069", "source": "contacts_db", "speaker": "self", "text": "你是谁", "ts_hint": "1792780550.906927", "lang": "zh", "count": 2}
-{"id": "ht-0070", "source": "contacts_db", "speaker": "self", "text": "我叫[昵称]", "ts_hint": "1792797436.484462", "lang": "zh", "count": 1}
-{"id": "ht-0071", "source": "contacts_db", "speaker": "self", "text": "我喜欢打羽毛球", "ts_hint": "1792797481.1626086", "lang": "zh", "count": 1}
-{"id": "ht-0072", "source": "contacts_db", "speaker": "self", "text": "帮我记住今天要好好学习", "ts_hint": "1792797494.898508", "lang": "zh", "count": 1}
-{"id": "ht-0073", "source": "contacts_db", "speaker": "self", "text": "行", "ts_hint": "1792797898.2347958", "lang": "zh", "count": 1}
-{"id": "ht-0074", "source": "contacts_db", "speaker": "self", "text": "你现在在哪里", "ts_hint": "1792797915.3894846", "lang": "zh", "count": 1}
-{"id": "ht-0075", "source": "contacts_db", "speaker": "self", "text": "这个怎么样", "ts_hint": "1792797973.6587718", "lang": "zh", "count": 1}
-{"id": "ht-0076", "source": "contacts_db", "speaker": "self", "text": "你还是有挺多问题的，加油", "ts_hint": "1792798215.0115128", "lang": "zh", "count": 1}
-{"id": "ht-0077", "source": "contacts_db", "speaker": "self", "text": "还没，9 点开始", "ts_hint": "1792798360.0929925", "lang": "zh", "count": 1}
-{"id": "ht-0078", "source": "contacts_db", "speaker": "self", "text": "现在要多说话才行，要积累数据", "ts_hint": "1792800714.9183612", "lang": "zh", "count": 1}
-{"id": "ht-0079", "source": "contacts_db", "speaker": "self", "text": "嗯", "ts_hint": "1792801812.9393423", "lang": "zh", "count": 1}
-{"id": "ht-0080", "source": "contacts_db", "speaker": "self", "text": "我给你搞了下，你现在能看懂表情包了吧", "ts_hint": "1792801892.6404445", "lang": "zh", "count": 1}
-{"id": "ht-0081", "source": "contacts_db", "speaker": "self", "text": "看得到吗？", "ts_hint": "1792801947.1406164", "lang": "zh", "count": 1}
-{"id": "ht-0082", "source": "contacts_db", "speaker": "self", "text": "刚买了一杯咖啡", "ts_hint": "1792802023.9881866", "lang": "zh", "count": 1}
-{"id": "ht-0083", "source": "contacts_db", "speaker": "self", "text": "囊看到吗？", "ts_hint": "1792802635.0163648", "lang": "zh", "count": 1}
-{"id": "ht-0084", "source": "contacts_db", "speaker": "self", "text": "你能识别到了？", "ts_hint": "1792805808.2077932", "lang": "zh", "count": 1}
-{"id": "ht-0085", "source": "contacts_db", "speaker": "self", "text": "什么玩意", "ts_hint": "1792805876.9926407", "lang": "zh", "count": 1}
-{"id": "ht-0086", "source": "contacts_db", "speaker": "self", "text": "帮你修了一下，你看看", "ts_hint": "1792807093.8475828", "lang": "zh", "count": 1}
-{"id": "ht-0087", "source": "contacts_db", "speaker": "self", "text": "有什么上下文关联呢？[疑问]", "ts_hint": "1792807502.415915", "lang": "zh", "count": 1}
-{"id": "ht-0088", "source": "contacts_db", "speaker": "self", "text": "看不懂英语吗？", "ts_hint": "1792812106.706098", "lang": "zh", "count": 1}
-{"id": "ht-0089", "source": "contacts_db", "speaker": "self", "text": "对不起我没看到[捂脸]", "ts_hint": "1792812153.7942882", "lang": "zh", "count": 1}
-{"id": "ht-0090", "source": "contacts_db", "speaker": "self", "text": "快下课了", "ts_hint": "1792812310.8661678", "lang": "zh", "count": 1}
+{"id": "ht-0001", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "神了", "ts_hint": "", "lang": "zh", "count": 5}
+{"id": "ht-0002", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "明天oc h会问你要那个动哐软件，待会我会发个烂的给你", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 1}
+{"id": "ht-0003", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "你明天发他", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 2}
+{"id": "ht-0004", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "好像在查那个东西了", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 2}
+{"id": "ht-0005", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "喊我们出来走廊了", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 2}
+{"id": "ht-0006", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "666", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 11}
+{"id": "ht-0007", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "666", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 11}
+{"id": "ht-0008", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "在你och电脑前站了好久", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 2}
+{"id": "ht-0009", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "谁查", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 1}
+{"id": "ht-0010", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "你朋友H", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 1}
+{"id": "ht-0011", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "和那个谁打电话", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 1}
+{"id": "ht-0012", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "我电脑有开机吗", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 1}
+{"id": "ht-0013", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "没有", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 1}
+{"id": "ht-0014", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "没看你的", "ts_hint": "3月28日22：34 4", "lang": "zh", "count": 1}
+{"id": "ht-0015", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "出来了吗", "ts_hint": "3月29日15：1", "lang": "zh", "count": 1}
+{"id": "ht-0016", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "喊我们把那个ipv4的地址发给", "ts_hint": "3月29日15：1", "lang": "zh", "count": 1}
+{"id": "ht-0017", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "喂个ip地址", "ts_hint": "3月29日15：1", "lang": "zh", "count": 1}
+{"id": "ht-0018", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "朋友C", "ts_hint": "3月29日15：1", "lang": "zh", "count": 2}
+{"id": "ht-0019", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "地址", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0020", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "20结尾那个", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0021", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "我靠", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0022", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "怎么了", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 3}
+{"id": "ht-0023", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "我用了什么东西", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0024", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "看这个电脑访问了什么东西", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0025", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "看不了的", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0026", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "只有服务器才能知道", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0027", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "他路由器啊", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0028", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "这个ip访问了什么数据", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0029", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "那个路由器可以看到我用了什么软件的我记得", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0030", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "访问什么数据只有[公司]的服务器那边才知道", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0031", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "我记得这个东西可以看到我发了什么东西的", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0032", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "刚刚好像是和你朋友G打电话", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0033", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "的服务器那边才知道", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0034", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "这个软件有没签名和证书，删掉就查不到了", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0035", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "软件的我记得", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0036", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "我这是纯编译，没证书的", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0037", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "看看你朋友G怎么说吧", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0038", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "没招", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 5}
+{"id": "ht-0039", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "坤谝怎么说的", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0040", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "就喊我把那个ipv4地址发给他", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0041", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "牛逼", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 8}
+{"id": "ht-0042", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "发生什么了", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0043", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "没事了", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0044", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "现在又回来做包了", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0045", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "什么表情", "ts_hint": "3月29日15 ℃ 6！", "lang": "zh", "count": 1}
+{"id": "ht-0046", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "明天不用上班", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0047", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "有点着急的样子", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0048", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "感觉明天很有可能会开电脑查", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0049", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "他们", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0050", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "等下我就把全部东西退了", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0051", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "删了", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0052", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "应该是了", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0053", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "牛逼", "ts_hint": "3月29日1534", "lang": "zh", "count": 11}
+{"id": "ht-0054", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "等下看朋友H不在帮我把我的飞书退了", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0055", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "OK", "ts_hint": "3月29日1534", "lang": "zh", "count": 12}
+{"id": "ht-0056", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "你在电脑本地没有吧？", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0057", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "全给我删掉了", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0058", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "那就好", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0059", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "你帮我看看我的电脑里面的下载，看看有没有吧", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0060", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "好像都删掉了", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0061", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "电脑没关机的，息屏了而已", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0062", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "搞完关机就行", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0063", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "你去手机端", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0064", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "点一下这个", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0065", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "我等下去电脑看看", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0066", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "让他记录都没有", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0067", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "你现在", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0068", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "先不要", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0069", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "等下我退了先", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0070", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "先不要点", "ts_hint": "3月29日1534", "lang": "zh", "count": 1}
+{"id": "ht-0071", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "等下朋友H不在的时候叫我吧我还要删一个东西", "ts_hint": "3月29日16：19 '", "lang": "zh", "count": 1}
+{"id": "ht-0072", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "向日葵", "ts_hint": "3月29日16：19 '", "lang": "zh", "count": 1}
+{"id": "ht-0073", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "不知道什么时候不在", "ts_hint": "3月29日16：19 '", "lang": "zh", "count": 1}
+{"id": "ht-0074", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "你知道怎么剂吗", "ts_hint": "3月29日16：19 '", "lang": "zh", "count": 1}
+{"id": "ht-0075", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "应该吧", "ts_hint": "3月29日16：19 '", "lang": "zh", "count": 1}
+{"id": "ht-0076", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "你现在不是可以远程？", "ts_hint": "3月29日16：19 '", "lang": "zh", "count": 1}
+{"id": "ht-0077", "source": "ocr:004392d1d4dd", "speaker": "self", "text": "不行喔，我没开软件", "ts_hint": "3月29日16：19 '", "lang": "zh", "count": 2}
+{"id": "ht-0078", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "也是", "ts_hint": "3月29日16：19 '", "lang": "zh", "count": 2}
+{"id": "ht-0079", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "1 3月29E 17 ℃ 9", "ts_hint": "3月29日16：19 '", "lang": "zh", "count": 1}
+{"id": "ht-0080", "source": "ocr:004392d1d4dd", "speaker": "other", "text": "凸怎么删", "ts_hint": "3月29日16：19 '", "lang": "zh", "count": 1}
+{"id": "ht-0081", "source": "ocr:0b096c8717dd", "speaker": "self", "text": "这个还能修吗", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0082", "source": "ocr:0b096c8717dd", "speaker": "other", "text": "可以是可以", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0083", "source": "ocr:0b096c8717dd", "speaker": "self", "text": "辶一在CCD上缘，冷冻室内", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0084", "source": "ocr:0b096c8717dd", "speaker": "other", "text": "不过要给点米", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0085", "source": "ocr:0b096c8717dd", "speaker": "other", "text": "我看看", "ts_hint": "", "lang": "zh", "count": 3}
+{"id": "ht-0086", "source": "ocr:0b096c8717dd", "speaker": "other", "text": "玻璃应该不用换了吧，换下干燥剂", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0087", "source": "ocr:0b096c8717dd", "speaker": "self", "text": "听你的", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0088", "source": "ocr:0b096c8717dd", "speaker": "other", "text": "简单收你50缘", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0089", "source": "ocr:0b096c8717dd", "speaker": "self", "text": "ok", "ts_hint": "", "lang": "zh", "count": 4}
+{"id": "ht-0090", "source": "ocr:0b096c8717dd", "speaker": "self", "text": "什么时候方便", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0091", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "怎么删", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0092", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "他睡觉了", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0093", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "你打开设置", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0094", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "找到应用和卸载应用", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0095", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "直接找到向日葵", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0096", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "删掉就好", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0097", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "飞书退了", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0098", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "好卡", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0099", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "我电脑卡？", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0100", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "动都动不了", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0101", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "重启试试？", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0102", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "这个是吧？", "ts_hint": "3月29日17：09", "lang": "zh", "count": 1}
+{"id": "ht-0103", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "可以了", "ts_hint": "3月29日17：12！", "lang": "zh", "count": 1}
+{"id": "ht-0104", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "没了吧？", "ts_hint": "3月29日17：12！", "lang": "zh", "count": 1}
+{"id": "ht-0105", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "那我关机了喔？西？的", "ts_hint": "3月29日17：12！", "lang": "zh", "count": 1}
+{"id": "ht-0106", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "刚刚你och问我外卖多少钱我说好几十", "ts_hint": "3月30日19：25", "lang": "zh", "count": 1}
+{"id": "ht-0107", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "他说十三？", "ts_hint": "3月30日19：25", "lang": "zh", "count": 1}
+{"id": "ht-0108", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "我说好几十就是好几十", "ts_hint": "3月30日19：25", "lang": "zh", "count": 1}
+{"id": "ht-0109", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "他说你说话怎么和何凯洋一样", "ts_hint": "3月30日19：25", "lang": "zh", "count": 1}
+{"id": "ht-0110", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "笑死我了", "ts_hint": "3月30日19：25", "lang": "zh", "count": 2}
+{"id": "ht-0111", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "傻逼来的", "ts_hint": "3月30日19：25", "lang": "zh", "count": 1}
+{"id": "ht-0112", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "刚刚外卖员打电话说快递到了", "ts_hint": "3月30日19：25", "lang": "zh", "count": 1}
+{"id": "ht-0113", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "后他直接在那说，好的好的我等你", "ts_hint": "3月30日19：25", "lang": "zh", "count": 1}
+{"id": "ht-0114", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "很傻逼啊", "ts_hint": "3月30日19：25", "lang": "zh", "count": 1}
+{"id": "ht-0115", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "你们宿舍这个月开了一个月空调还是只开了几天", "ts_hint": "3月30日19：25", "lang": "zh", "count": 1}
+{"id": "ht-0116", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "开了几天", "ts_hint": "3月30日19：25", "lang": "zh", "count": 1}
+{"id": "ht-0117", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "阻止安装拓展功能", "ts_hint": "4月2日11：37！", "lang": "zh", "count": 1}
+{"id": "ht-0118", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "不能用了？", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 1}
+{"id": "ht-0119", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "应该是", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 2}
+{"id": "ht-0120", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "怎么会有水印", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 1}
+{"id": "ht-0121", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "这个是[公司]那边的", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 1}
+{"id": "ht-0122", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "感觉这几天要给我们这边搞了", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 1}
+{"id": "ht-0123", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "[公司]那边本来就不能用件的我问过朋友I了", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 1}
+{"id": "ht-0124", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "他那个是企业内网来的", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 1}
+{"id": "ht-0125", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "电脑是直接连服务器的，我们这边是用燧道连服务器，也就是沙箱", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 1}
+{"id": "ht-0126", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "酒相当于多了一个网络，不会管到我们这边的", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 1}
+{"id": "ht-0127", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "装了我其实还有办法", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 1}
+{"id": "ht-0128", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "问题不大", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 1}
+{"id": "ht-0129", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "现在数据堂4800个包了", "ts_hint": "4月2日巧：35", "lang": "zh", "count": 1}
+{"id": "ht-0130", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "没有啊", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0131", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "办公室现在有开门吗", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0132", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "人家截图给我的", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0133", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "不知道啊", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0134", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "我都没去", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0135", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "刚刚睡醒又准备睡了", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0136", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "没招", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 3}
+{"id": "ht-0137", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "准备回家了", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0138", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "你不回吗", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0139", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "了，“，i4月2囗13：47", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0140", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "为啥不回。", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0141", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "回去干啥", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0142", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "车费贵", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0143", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "我用积分买免费啊", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0144", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "我还差181才解锁", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0145", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "12306的积分兑换列车", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0146", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "氐而且一万才100块钱", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0147", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "我都8万积分了", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0148", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "可以免费去北京了", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0149", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "去广州也行啊你", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0150", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "去广州干嘛", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0151", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "去广州60块钱再坐地铁", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0152", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "找你女朋友啊", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0153", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "她没空", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0154", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "回家啦", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0155", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "那你清明就待宿舍？", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0156", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "对啊", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0157", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "睡觉", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0158", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "我明天还要去广州看专升本机", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0159", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "多少钱报名", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0160", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "住宿lw", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0161", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "家长报销？", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0162", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "刚好现在存了1.7w了", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0163", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "自己存", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0164", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "发上下个月就2w了", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0165", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "住宿好贵", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0166", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "回家住咯", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0167", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "无所谓的", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0168", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "不远？", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0169", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "我在佛山，他在广州，地铁直达的", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0170", "source": "ocr:0ee88b21ed0a", "speaker": "other", "text": "这么方便", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 1}
+{"id": "ht-0171", "source": "ocr:0ee88b21ed0a", "speaker": "self", "text": "包爽的", "ts_hint": "你今天去办公室了？", "lang": "zh", "count": 2}
+{"id": "ht-0172", "source": "ocr:183c205ab73b", "speaker": "self", "text": "那还是去体育中心吧", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0173", "source": "ocr:183c205ab73b", "speaker": "other", "text": "要不现在定", "ts_hint": "中午12：58", "lang": "zh", "count": 1}
+{"id": "ht-0174", "source": "ocr:183c205ab73b", "speaker": "self", "text": "可以", "ts_hint": "中午12：58", "lang": "zh", "count": 3}
+{"id": "ht-0175", "source": "ocr:183c205ab73b", "speaker": "other", "text": "你来定", "ts_hint": "中午12：58", "lang": "zh", "count": 1}
+{"id": "ht-0176", "source": "ocr:183c205ab73b", "speaker": "self", "text": "我在吃饭", "ts_hint": "中午12：58", "lang": "zh", "count": 1}
+{"id": "ht-0177", "source": "ocr:183c205ab73b", "speaker": "self", "text": "吃完先", "ts_hint": "中午12：58", "lang": "zh", "count": 1}
+{"id": "ht-0178", "source": "ocr:183c205ab73b", "speaker": "self", "text": "订了", "ts_hint": "下午2", "lang": "zh", "count": 1}
+{"id": "ht-0179", "source": "ocr:183c205ab73b", "speaker": "other", "text": "我现在过去哦", "ts_hint": "下午2：47", "lang": "zh", "count": 1}
+{"id": "ht-0180", "source": "ocr:2881f65894d4", "speaker": "other", "text": "九沆深J", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0181", "source": "ocr:2881f65894d4", "speaker": "other", "text": "对不起啊Mary,我刚刚说话太冲了，你别生气，你别往心里去", "ts_hint": "晚上9：28", "lang": "zh", "count": 1}
+{"id": "ht-0182", "source": "ocr:2881f65894d4", "speaker": "self", "text": "奇怪了", "ts_hint": "晚上9：28", "lang": "zh", "count": 1}
+{"id": "ht-0183", "source": "ocr:2881f65894d4", "speaker": "self", "text": "我没生气啊", "ts_hint": "晚上9：28", "lang": "zh", "count": 1}
+{"id": "ht-0184", "source": "ocr:2881f65894d4", "speaker": "self", "text": "我去洗澡了", "ts_hint": "晚上9：28", "lang": "zh", "count": 1}
+{"id": "ht-0185", "source": "ocr:2881f65894d4", "speaker": "other", "text": "好", "ts_hint": "晚上9：28", "lang": "zh", "count": 1}
+{"id": "ht-0186", "source": "ocr:2881f65894d4", "speaker": "other", "text": "我怕你生气．", "ts_hint": "晚上9：28", "lang": "zh", "count": 1}
+{"id": "ht-0187", "source": "ocr:372e42b83015", "speaker": "other", "text": "今晚去吃饭", "ts_hint": "", "lang": "zh", "count": 2}
+{"id": "ht-0188", "source": "ocr:372e42b83015", "speaker": "self", "text": "那明天再去吧", "ts_hint": "昨天下午4：29", "lang": "zh", "count": 2}
+{"id": "ht-0189", "source": "ocr:372e42b83015", "speaker": "self", "text": "打球，去不去", "ts_hint": "下午1：1", "lang": "zh", "count": 2}
+{"id": "ht-0190", "source": "ocr:372e42b83015", "speaker": "other", "text": "今晚几点？", "ts_hint": "下午2：02", "lang": "zh", "count": 2}
+{"id": "ht-0191", "source": "ocr:372e42b83015", "speaker": "other", "text": "问问朋友C", "ts_hint": "下午2：02", "lang": "zh", "count": 2}
+{"id": "ht-0192", "source": "ocr:372e42b83015", "speaker": "self", "text": "8点半？", "ts_hint": "下午2：02", "lang": "zh", "count": 2}
+{"id": "ht-0193", "source": "ocr:372e42b83015", "speaker": "other", "text": "可以", "ts_hint": "下午2：02", "lang": "zh", "count": 3}
+{"id": "ht-0194", "source": "ocr:372e42b83015", "speaker": "other", "text": "要不你先问问另外两个", "ts_hint": "下午2：02", "lang": "zh", "count": 1}
+{"id": "ht-0195", "source": "ocr:372e42b83015", "speaker": "other", "text": "他们来，我再来了", "ts_hint": "下午2：02", "lang": "zh", "count": 1}
+{"id": "ht-0196", "source": "ocr:6e5e761890ce", "speaker": "self", "text": "你去问一下群里面那个日文的他去不去", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0197", "source": "ocr:6e5e761890ce", "speaker": "other", "text": "他很菜的", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0198", "source": "ocr:6e5e761890ce", "speaker": "self", "text": "杰说好不容易聚一下，不在乎实力", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0199", "source": "ocr:6e5e761890ce", "speaker": "self", "text": "到时候还可以打双打", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0200", "source": "ocr:6e5e761890ce", "speaker": "self", "text": "单打也可", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0201", "source": "ocr:6e5e761890ce", "speaker": "self", "text": "主要是多一个人A钱", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0202", "source": "ocr:6e5e761890ce", "speaker": "other", "text": "打双打可以叫那个董正生", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0203", "source": "ocr:6e5e761890ce", "speaker": "other", "text": "怎么样", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0204", "source": "ocr:6e5e761890ce", "speaker": "self", "text": "他是谁", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0205", "source": "ocr:6e5e761890ce", "speaker": "self", "text": "我不认识啊", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0206", "source": "ocr:6e5e761890ce", "speaker": "other", "text": "你见过的呀", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0207", "source": "ocr:6e5e761890ce", "speaker": "other", "text": "就是那个mmy", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0208", "source": "ocr:6e5e761890ce", "speaker": "self", "text": "你能叫的话你就去叫呗", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0209", "source": "ocr:6e5e761890ce", "speaker": "self", "text": "如果可以的话，凑够4个人", "ts_hint": "下午4：44", "lang": "zh", "count": 1}
+{"id": "ht-0210", "source": "ocr:70d6490156d3", "speaker": "self", "text": "这边是吧", "ts_hint": "", "lang": "zh", "count": 2}
+{"id": "ht-0211", "source": "ocr:70d6490156d3", "speaker": "other", "text": "汕头就没事", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0212", "source": "ocr:70d6490156d3", "speaker": "self", "text": "闯红灯都算轻了", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0213", "source": "ocr:70d6490156d3", "speaker": "self", "text": "还有人酒驾", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0214", "source": "ocr:70d6490156d3", "speaker": "self", "text": "昨晚就看到了", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0215", "source": "ocr:70d6490156d3", "speaker": "other", "text": "感觉是外省人", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0216", "source": "ocr:70d6490156d3", "speaker": "self", "text": "不清楚", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0217", "source": "ocr:70d6490156d3", "speaker": "other", "text": "因为好多人来汕头旅游", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0218", "source": "ocr:70d6490156d3", "speaker": "self", "text": "粤d牌的", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0219", "source": "ocr:70d6490156d3", "speaker": "other", "text": "没发生过", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0220", "source": "ocr:70d6490156d3", "speaker": "self", "text": "可能是租的车吧", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0221", "source": "ocr:70d6490156d3", "speaker": "other", "text": "廴治安没大城市好", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0222", "source": "ocr:70d6490156d3", "speaker": "other", "text": "太多人来玩了是这样", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0223", "source": "ocr:70d6490156d3", "speaker": "self", "text": "还是大湾区好", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0224", "source": "ocr:70d6490156d3", "speaker": "other", "text": "8 11日12：01", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0225", "source": "ocr:70d6490156d3", "speaker": "other", "text": "你刚好去遇到而已", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0226", "source": "ocr:70d6490156d3", "speaker": "other", "text": "从来没有这样的事情今年听", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0227", "source": "ocr:70d6490156d3", "speaker": "other", "text": "见了", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0228", "source": "ocr:70d6490156d3", "speaker": "other", "text": "等我回国处理", "ts_hint": "晚上全是刀枪炮", "lang": "zh", "count": 1}
+{"id": "ht-0229", "source": "ocr:70d6490156d3", "speaker": "self", "text": "你现在是不是做的是3D", "ts_hint": "10月8日20：57丿", "lang": "zh", "count": 1}
+{"id": "ht-0230", "source": "ocr:70d6490156d3", "speaker": "other", "text": "是啊", "ts_hint": "10月8日20：57丿", "lang": "zh", "count": 2}
+{"id": "ht-0231", "source": "ocr:70d6490156d3", "speaker": "other", "text": "服了", "ts_hint": "10月8日20：57丿", "lang": "zh", "count": 1}
+{"id": "ht-0232", "source": "ocr:70d6490156d3", "speaker": "other", "text": "月底就提", "ts_hint": "10月8日20：57", "lang": "zh", "count": 1}
+{"id": "ht-0233", "source": "ocr:70d6490156d3", "speaker": "self", "text": "爽了爽了", "ts_hint": "10月8日20：57", "lang": "zh", "count": 1}
+{"id": "ht-0234", "source": "ocr:70d6490156d3", "speaker": "other", "text": "忍者听了都忍不了", "ts_hint": "10月8日20：57", "lang": "zh", "count": 1}
+{"id": "ht-0235", "source": "ocr:70d6490156d3", "speaker": "self", "text": "种包", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0236", "source": "ocr:70d6490156d3", "speaker": "self", "text": "或者说下雨天那种", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0237", "source": "ocr:70d6490156d3", "speaker": "other", "text": "没有，都是不动的", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0238", "source": "ocr:70d6490156d3", "speaker": "other", "text": "史一样", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0239", "source": "ocr:70d6490156d3", "speaker": "self", "text": "有没有那种很烂的包，就是看都看不清那种", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0240", "source": "ocr:70d6490156d3", "speaker": "other", "text": "还有一些车是锁框的，只有验收才能改", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0241", "source": "ocr:70d6490156d3", "speaker": "other", "text": "1800还得改那些破车", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0242", "source": "ocr:70d6490156d3", "speaker": "other", "text": "匀b来的", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0243", "source": "ocr:70d6490156d3", "speaker": "self", "text": "你不是转验收了吗？还在标注", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0244", "source": "ocr:70d6490156d3", "speaker": "other", "text": "车多就有", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0245", "source": "ocr:70d6490156d3", "speaker": "other", "text": "就是看都看不清那种", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0246", "source": "ocr:70d6490156d3", "speaker": "other", "text": "验收了", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0247", "source": "ocr:70d6490156d3", "speaker": "self", "text": "没招了，为了写那个破论文搞了个新算法，可以将那些雨天大雾，看不清的那种图片反转成可以看到车的轮廓，将车标出来的那种图片，但是现在没有数据验证", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0248", "source": "ocr:70d6490156d3", "speaker": "self", "text": "想叫你如果有那种看都看不清的包的话，可以发给我", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0249", "source": "ocr:70d6490156d3", "speaker": "self", "text": "我做一下数据验证，然后写到论文里面", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0250", "source": "ocr:70d6490156d3", "speaker": "other", "text": "没有那些了", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0251", "source": "ocr:70d6490156d3", "speaker": "other", "text": "都是不动清晰的", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0252", "source": "ocr:70d6490156d3", "speaker": "self", "text": "现在就差这么一点数据", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0253", "source": "ocr:70d6490156d3", "speaker": "self", "text": "可惜了", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0254", "source": "ocr:70d6490156d3", "speaker": "other", "text": "太难了", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0255", "source": "ocr:70d6490156d3", "speaker": "self", "text": "yesv里面当时是有截过屏的吧我们", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0256", "source": "ocr:70d6490156d3", "speaker": "self", "text": "你看一下，能不能找到之前的历史记录，把那些垃圾包的截屏发给我", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0257", "source": "ocr:70d6490156d3", "speaker": "other", "text": "就图片吗", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0258", "source": "ocr:70d6490156d3", "speaker": "self", "text": "麻烦你了，到时候来广州请你吃大餐", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0259", "source": "ocr:70d6490156d3", "speaker": "other", "text": "图片就行？", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0260", "source": "ocr:70d6490156d3", "speaker": "self", "text": "对啊，那种垃圾包的截图行", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0261", "source": "ocr:70d6490156d3", "speaker": "self", "text": "我做数据验证，不挑图片的", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0262", "source": "ocr:70d6490156d3", "speaker": "other", "text": "不对", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0263", "source": "ocr:70d6490156d3", "speaker": "other", "text": "你飞书能登吗", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0264", "source": "ocr:70d6490156d3", "speaker": "other", "text": "咱们以前是飞书聊天的，嗥", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0265", "source": "ocr:70d6490156d3", "speaker": "self", "text": "飞书可以呀，账号一直在", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0266", "source": "ocr:70d6490156d3", "speaker": "self", "text": "我去，我差点都忘记了", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0267", "source": "ocr:70d6490156d3", "speaker": "self", "text": "我找一下飞书看有没有", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0268", "source": "ocr:70d6490156d3", "speaker": "other", "text": "长城都不登那破yesv", "ts_hint": "现在还有没有那种晚上大雾那", "lang": "zh", "count": 1}
+{"id": "ht-0269", "source": "ocr:70d6490156d3", "speaker": "self", "text": "啥也没有，真的服了", "ts_hint": "10月8日21：四", "lang": "zh", "count": 1}
+{"id": "ht-0270", "source": "ocr:70d6490156d3", "speaker": "self", "text": "找了一圈下来，全是抽象的", "ts_hint": "10月8日21：四", "lang": "zh", "count": 1}
+{"id": "ht-0271", "source": "ocr:70d6490156d3", "speaker": "other", "text": "那应该没有了", "ts_hint": "10月8日21：四", "lang": "zh", "count": 1}
+{"id": "ht-0272", "source": "ocr:70d6490156d3", "speaker": "other", "text": "飞猪那群设置了", "ts_hint": "10月8日21：四", "lang": "zh", "count": 1}
+{"id": "ht-0273", "source": "ocr:70d6490156d3", "speaker": "other", "text": "不让看以前消息", "ts_hint": "10月8日21：四", "lang": "zh", "count": 1}
+{"id": "ht-0274", "source": "ocr:70d6490156d3", "speaker": "self", "text": "牛福", "ts_hint": "10月8日21：四", "lang": "zh", "count": 2}
+{"id": "ht-0275", "source": "ocr:70d6490156d3", "speaker": "self", "text": "群里面全是那种好包，有烂", "ts_hint": "10月8日201 ]", "lang": "zh", "count": 1}
+{"id": "ht-0276", "source": "ocr:70d6490156d3", "speaker": "other", "text": "找不到", "ts_hint": "丨10月8日21：15 1", "lang": "zh", "count": 1}
+{"id": "ht-0277", "source": "ocr:70d6490156d3", "speaker": "other", "text": "等我做到了在截图给你吧", "ts_hint": "丨10月8日21：15 1", "lang": "zh", "count": 1}
+{"id": "ht-0278", "source": "ocr:70d6490156d3", "speaker": "self", "text": "找不到算了我自己拿摄像头去采集吧", "ts_hint": "丨10月8日21：15 1", "lang": "zh", "count": 1}
+{"id": "ht-0279", "source": "ocr:70d6490156d3", "speaker": "self", "text": "你做到了就发给我", "ts_hint": "丨10月8日21：15 1", "lang": "zh", "count": 1}
+{"id": "ht-0280", "source": "ocr:70d6490156d3", "speaker": "other", "text": "大概要什么样的", "ts_hint": "丨10月8日21：15 1", "lang": "zh", "count": 1}
+{"id": "ht-0281", "source": "ocr:70d6490156d3", "speaker": "self", "text": "超级模糊的，有大雾，或者说", "ts_hint": "丨10月8日21：15 1", "lang": "zh", "count": 1}
+{"id": "ht-0282", "source": "ocr:70d6490156d3", "speaker": "self", "text": "的那种包", "ts_hint": "雨天晚上那种超级模糊看不清", "lang": "zh", "count": 1}
+{"id": "ht-0283", "source": "ocr:70d6490156d3", "speaker": "other", "text": "就一辆车一张图那种吗", "ts_hint": "雨天晚上那种超级模糊看不清", "lang": "zh", "count": 1}
+{"id": "ht-0284", "source": "ocr:70d6490156d3", "speaker": "self", "text": "不是一辆车一张图就是2D很模糊很模糊那种", "ts_hint": "雨天晚上那种超级模糊看不清", "lang": "zh", "count": 1}
+{"id": "ht-0285", "source": "ocr:70d6490156d3", "speaker": "self", "text": "你之前干验收不是做过吗？说、=那种烂包看都看不清", "ts_hint": "雨天晚上那种超级模糊看不清", "lang": "zh", "count": 1}
+{"id": "ht-0286", "source": "ocr:70d6490156d3", "speaker": "other", "text": "这个", "ts_hint": "雨天晚上那种超级模糊看不清", "lang": "zh", "count": 2}
+{"id": "ht-0287", "source": "ocr:70d6490156d3", "speaker": "self", "text": "这种可以这种可以", "ts_hint": "雨天晚上那种超级模糊看不清", "lang": "zh", "count": 1}
+{"id": "ht-0288", "source": "ocr:70d6490156d3", "speaker": "self", "text": "车道线的也行", "ts_hint": "雨天晚上那种超级模糊看不清", "lang": "zh", "count": 1}
+{"id": "ht-0289", "source": "ocr:70d6490156d3", "speaker": "self", "text": "反正我就找2d图而已", "ts_hint": "雨天晚上那种超级模糊看不清", "lang": "zh", "count": 1}
+{"id": "ht-0290", "source": "ocr:722a26a51f64", "speaker": "other", "text": "那我等一下", "ts_hint": "", "lang": "zh", "count": 2}
+{"id": "ht-0291", "source": "ocr:722a26a51f64", "speaker": "other", "text": "等一下再点", "ts_hint": "", "lang": "zh", "count": 2}
+{"id": "ht-0292", "source": "ocr:722a26a51f64", "speaker": "self", "text": "你点的时候叫我一下", "ts_hint": "", "lang": "zh", "count": 2}
+{"id": "ht-0293", "source": "ocr:722a26a51f64", "speaker": "self", "text": "我直接下单", "ts_hint": "", "lang": "zh", "count": 2}
+{"id": "ht-0294", "source": "ocr:722a26a51f64", "speaker": "other", "text": "自提也要78", "ts_hint": "", "lang": "zh", "count": 2}
+{"id": "ht-0295", "source": "ocr:722a26a51f64", "speaker": "self", "text": "涨价了", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0296", "source": "ocr:722a26a51f64", "speaker": "other", "text": "6点半下单", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0297", "source": "ocr:722a26a51f64", "speaker": "other", "text": "算了[", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0298", "source": "ocr:722a26a51f64", "speaker": "other", "text": "7点多吧", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0299", "source": "ocr:722a26a51f64", "speaker": "other", "text": "等一下凉了", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0300", "source": "ocr:722a26a51f64", "speaker": "self", "text": "你不是螺粉接龙了吗", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0301", "source": "ocr:722a26a51f64", "speaker": "self", "text": "不吃吗？", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0302", "source": "ocr:722a26a51f64", "speaker": "other", "text": "不次", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0303", "source": "ocr:722a26a51f64", "speaker": "other", "text": "明天考试怕肚子不舒服·一", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0304", "source": "ocr:722a26a51f64", "speaker": "self", "text": "不吃给我吃算了", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0305", "source": "ocr:722a26a51f64", "speaker": "other", "text": "等下没地方蹲厕所", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0306", "source": "ocr:722a26a51f64", "speaker": "self", "text": "没招了", "ts_hint": "", "lang": "zh", "count": 3}
+{"id": "ht-0307", "source": "ocr:722a26a51f64", "speaker": "other", "text": "那你去吃", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0308", "source": "ocr:722a26a51f64", "speaker": "self", "text": "到时我把付款截图发你", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0309", "source": "ocr:722a26a51f64", "speaker": "other", "text": "模拟啊", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0310", "source": "ocr:722a26a51f64", "speaker": "other", "text": "明天5点半就要出发了", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0311", "source": "ocr:722a26a51f64", "speaker": "self", "text": "那你明天考科三科四吗", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0312", "source": "ocr:722a26a51f64", "speaker": "other", "text": "考科三", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0313", "source": "ocr:722a26a51f64", "speaker": "other", "text": "过了就科四", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0314", "source": "ocr:722a26a51f64", "speaker": "self", "text": "一天考完是吧", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0315", "source": "ocr:722a26a51f64", "speaker": "other", "text": "有点怕科三不过", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0316", "source": "ocr:722a26a51f64", "speaker": "self", "text": "没事，放平心态就好，注意细节都没问题的", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0317", "source": "ocr:722a26a51f64", "speaker": "self", "text": "科三考的就是细节", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0318", "source": "ocr:722a26a51f64", "speaker": "self", "text": "考完过完五一过后就去看车", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0319", "source": "ocr:722a26a51f64", "speaker": "other", "text": "4 27日18：56", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0320", "source": "ocr:722a26a51f64", "speaker": "self", "text": "我才螺蜘粉啊", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0321", "source": "ocr:722a26a51f64", "speaker": "other", "text": "哦哦", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0322", "source": "ocr:722a26a51f64", "speaker": "other", "text": "忘记了", "ts_hint": "你今天只是去练车而已吗？", "lang": "zh", "count": 1}
+{"id": "ht-0323", "source": "ocr:722a26a51f64", "speaker": "other", "text": "又是38", "ts_hint": "4月27日19：01", "lang": "zh", "count": 1}
+{"id": "ht-0324", "source": "ocr:722a26a51f64", "speaker": "other", "text": "上次也是38", "ts_hint": "4月27日19：01", "lang": "zh", "count": 1}
+{"id": "ht-0325", "source": "ocr:722a26a51f64", "speaker": "other", "text": "4月27E 19：12", "ts_hint": "4月27日19：01", "lang": "zh", "count": 1}
+{"id": "ht-0326", "source": "ocr:722a26a51f64", "speaker": "other", "text": "切鸡", "ts_hint": "今天中午吃了一份30块钱的白", "lang": "zh", "count": 1}
+{"id": "ht-0327", "source": "ocr:722a26a51f64", "speaker": "other", "text": "亏死我了", "ts_hint": "今天中午吃了一份30块钱的白", "lang": "zh", "count": 1}
+{"id": "ht-0328", "source": "ocr:722a26a51f64", "speaker": "other", "text": "只有三四个鸡肉，其他全是青", "ts_hint": "今天中午吃了一份30块钱的白", "lang": "zh", "count": 1}
+{"id": "ht-0329", "source": "ocr:722a26a51f64", "speaker": "self", "text": "老板报销", "ts_hint": "4月27日19：49", "lang": "zh", "count": 1}
+{"id": "ht-0330", "source": "ocr:722a26a51f64", "speaker": "other", "text": "接龙不喊我", "ts_hint": "4月27日21：57乛", "lang": "zh", "count": 1}
+{"id": "ht-0331", "source": "ocr:722a26a51f64", "speaker": "other", "text": "4烏27日2r58", "ts_hint": "4月27日21：57乛", "lang": "zh", "count": 1}
+{"id": "ht-0332", "source": "ocr:722a26a51f64", "speaker": "self", "text": "打游难忘记了", "ts_hint": "4月27日21：57乛", "lang": "zh", "count": 1}
+{"id": "ht-0333", "source": "ocr:722a26a51f64", "speaker": "self", "text": "和我说同一天", "ts_hint": "4月28日16：32 ·", "lang": "zh", "count": 1}
+{"id": "ht-0334", "source": "ocr:722a26a51f64", "speaker": "self", "text": "会调日子", "ts_hint": "4月28日16：32 ·", "lang": "zh", "count": 1}
+{"id": "ht-0335", "source": "ocr:722a26a51f64", "speaker": "other", "text": "螺粉", "ts_hint": "4月28日22：59 1", "lang": "zh", "count": 1}
+{"id": "ht-0336", "source": "ocr:722a26a51f64", "speaker": "self", "text": "明天不吃了", "ts_hint": "4月28日22：59 1", "lang": "zh", "count": 1}
+{"id": "ht-0337", "source": "ocr:722a26a51f64", "speaker": "self", "text": "你吃吧", "ts_hint": "4月28日22：59 1", "lang": "zh", "count": 1}
+{"id": "ht-0338", "source": "ocr:722a26a51f64", "speaker": "self", "text": "有点吃腻了这几天", "ts_hint": "4月28日22：59 1", "lang": "zh", "count": 1}
+{"id": "ht-0339", "source": "ocr:722a26a51f64", "speaker": "other", "text": "那我吃", "ts_hint": "4月28日22：59 1", "lang": "zh", "count": 1}
+{"id": "ht-0340", "source": "ocr:722a26a51f64", "speaker": "self", "text": "大餐", "ts_hint": "明天晚上你朋友I带我们去吃", "lang": "zh", "count": 1}
+{"id": "ht-0341", "source": "ocr:722a26a51f64", "speaker": "self", "text": "你去不去", "ts_hint": "明天晚上你朋友I带我们去吃", "lang": "zh", "count": 1}
+{"id": "ht-0342", "source": "ocr:722a26a51f64", "speaker": "other", "text": "不去", "ts_hint": "明天晚上你朋友I带我们去吃", "lang": "zh", "count": 1}
+{"id": "ht-0343", "source": "ocr:722a26a51f64", "speaker": "self", "text": "你应该不去的吧我都感觉你不", "ts_hint": "明天晚上你朋友I带我们去吃", "lang": "zh", "count": 1}
+{"id": "ht-0344", "source": "ocr:722a26a51f64", "speaker": "self", "text": "我就知道你不会去所以我就没问你", "ts_hint": "明天晚上你朋友I带我们去吃", "lang": "zh", "count": 1}
+{"id": "ht-0345", "source": "ocr:722a26a51f64", "speaker": "other", "text": "这两天大出血0互巪“", "ts_hint": "明天晚上你朋友I带我们去吃", "lang": "zh", "count": 1}
+{"id": "ht-0346", "source": "ocr:722a26a51f64", "speaker": "other", "text": "去吃个免费螺蛳粉回回血", "ts_hint": "明天晚上你朋友I带我们去吃", "lang": "zh", "count": 1}
+{"id": "ht-0347", "source": "ocr:722a26a51f64", "speaker": "self", "text": "无所谓啊，吃个饭而已", "ts_hint": "明天晚上你朋友I带我们去吃", "lang": "zh", "count": 1}
+{"id": "ht-0348", "source": "ocr:722a26a51f64", "speaker": "other", "text": "再补两挝", "ts_hint": "1月28日23：06", "lang": "zh", "count": 1}
+{"id": "ht-0349", "source": "ocr:722a26a51f64", "speaker": "self", "text": "好了没", "ts_hint": "4月29日08：04", "lang": "zh", "count": 1}
+{"id": "ht-0350", "source": "ocr:722a26a51f64", "speaker": "other", "text": "可以了币0一", "ts_hint": "4月29日08：04", "lang": "zh", "count": 1}
+{"id": "ht-0351", "source": "ocr:722a26a51f64", "speaker": "self", "text": "人？", "ts_hint": "1 4月29日12：24", "lang": "zh", "count": 1}
+{"id": "ht-0352", "source": "ocr:722a26a51f64", "speaker": "other", "text": "可以了吗？于亇？", "ts_hint": "1 4月29日12：24", "lang": "zh", "count": 1}
+{"id": "ht-0353", "source": "ocr:820475a19056", "speaker": "other", "text": "古铲6", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0354", "source": "ocr:820475a19056", "speaker": "self", "text": "还有两站", "ts_hint": "1月5日上午09：5", "lang": "zh", "count": 1}
+{"id": "ht-0355", "source": "ocr:820475a19056", "speaker": "other", "text": "到哪了", "ts_hint": "1月5日上午09：4", "lang": "zh", "count": 1}
+{"id": "ht-0356", "source": "ocr:820475a19056", "speaker": "self", "text": "刚刚下地铁", "ts_hint": "1月5日上午09：4", "lang": "zh", "count": 1}
+{"id": "ht-0357", "source": "ocr:820475a19056", "speaker": "self", "text": "还有5分钟到", "ts_hint": "1月5日上午09：4", "lang": "zh", "count": 1}
+{"id": "ht-0358", "source": "ocr:820475a19056", "speaker": "self", "text": "到了到了", "ts_hint": "1月5日上午09：48", "lang": "zh", "count": 1}
+{"id": "ht-0359", "source": "ocr:820475a19056", "speaker": "self", "text": "我都不知道找了个什么鬼地方，找了条烂路走", "ts_hint": "1月5日上午09：48", "lang": "zh", "count": 1}
+{"id": "ht-0360", "source": "ocr:820475a19056", "speaker": "self", "text": "放学没", "ts_hint": "中午12：59", "lang": "zh", "count": 1}
+{"id": "ht-0361", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "元旦有啥安排", "ts_hint": "2025年12月23日19：17", "lang": "zh", "count": 1}
+{"id": "ht-0362", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "我们打算出来打球", "ts_hint": "2025年12月23日19：17", "lang": "zh", "count": 1}
+{"id": "ht-0363", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "在宿舍吃水饺", "ts_hint": "2025年12月23日19：17", "lang": "zh", "count": 1}
+{"id": "ht-0364", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "你们放假了？", "ts_hint": "2025年12月23日19：17", "lang": "zh", "count": 1}
+{"id": "ht-0365", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "元旦在宿舍吃水饺", "ts_hint": "2025年12月23日19：17", "lang": "zh", "count": 1}
+{"id": "ht-0366", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "还没", "ts_hint": "2025年12月23日19：17", "lang": "zh", "count": 1}
+{"id": "ht-0367", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "只是打算咯", "ts_hint": "2025年12月23日19：17", "lang": "zh", "count": 1}
+{"id": "ht-0368", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "我还在湛江呢", "ts_hint": "2025年12月23日19：17", "lang": "zh", "count": 1}
+{"id": "ht-0369", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "什么时候放假", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0370", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "8号考完", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0371", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "元旦不回来了？", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0372", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "没钱了", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0373", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "就400块", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0374", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "湛江跨年是吧", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0375", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "没招啊", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0376", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "兄弟有点窘迫啊", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0377", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "穷鬼一个", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0378", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "不会吧，朋友E少爷沦落到这样子？", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0379", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "少爷在哪？", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0380", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "快穷到吃泡面了", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0381", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "你一个月生活费多少？", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0382", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "下学期得要1200了", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0383", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "真顶不住", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0384", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "那的确要省点了", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0385", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "不然水鱼号都搭不起了", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0386", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "没有妹妹帮你分担压力吗？", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0387", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "没有，但好像有人喜欢我来着", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0388", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "不清楚", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 2}
+{"id": "ht-0389", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "不是兄弟", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0390", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "随缘就好", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0391", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "雀食", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0392", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "你8号回来是吧", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0393", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "你们寒假放多久", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0394", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "然后要去上班", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0395", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "飞-、[昵称]：你们寒假放多久", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0396", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "还没通知", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0397", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "别打工了，打工好累的", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0398", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "没招啊，不打没钱", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0399", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "你回了一条消息1", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0400", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "什么时候再去湛江玩下", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0401", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "我上班要10号吧，还是有时间下", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0402", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "式· 0；出来打球的", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0403", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "行，主要是我前几个月脱臼了虽然说好了，但是还在回复中", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0404", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "没事就好", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0405", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "你呀，小心点", "ts_hint": "2025年12月23日19：19 〕", "lang": "zh", "count": 1}
+{"id": "ht-0406", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "弓珏又乌汝", "ts_hint": "2025年12月23日19：30。", "lang": "zh", "count": 1}
+{"id": "ht-0407", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "我那是意外", "ts_hint": "2025年12月23日19：30。", "lang": "zh", "count": 1}
+{"id": "ht-0408", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "给你换个壁纸", "ts_hint": "2025年12月23日19：30。", "lang": "zh", "count": 1}
+{"id": "ht-0409", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "何意味", "ts_hint": "2025年12月23日19：38", "lang": "zh", "count": 1}
+{"id": "ht-0410", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "想太多了", "ts_hint": "2025年12月23日19：38", "lang": "zh", "count": 1}
+{"id": "ht-0411", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "没喔这个好看", "ts_hint": "2025年12月23日19：38", "lang": "zh", "count": 1}
+{"id": "ht-0412", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "我用的就是这壁纸", "ts_hint": "2025年12月23日19：38", "lang": "zh", "count": 1}
+{"id": "ht-0413", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "我的", "ts_hint": "2025年12月23日19：38", "lang": "zh", "count": 1}
+{"id": "ht-0414", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "觉得好看就发给你啊", "ts_hint": "2025年12月23日19：38", "lang": "zh", "count": 1}
+{"id": "ht-0415", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "我比较喜欢哈机密", "ts_hint": "2025年12月23日19：38", "lang": "zh", "count": 1}
+{"id": "ht-0416", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "我在B站也经常刷到这个", "ts_hint": "2025年12月23日19：38", "lang": "zh", "count": 1}
+{"id": "ht-0417", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "挺好看", "ts_hint": "2025年12月23日19：38", "lang": "zh", "count": 1}
+{"id": "ht-0418", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "好看的，鬼灭", "ts_hint": "2025年12月23日19：38", "lang": "zh", "count": 1}
+{"id": "ht-0419", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "干嘛猫的v [ og （过年篇）", "ts_hint": "2月21日13：38", "lang": "zh", "count": 1}
+{"id": "ht-0420", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "四哔理哔哩", "ts_hint": "2月21日13：38", "lang": "zh", "count": 1}
+{"id": "ht-0421", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "好看喵", "ts_hint": "2月21日13：38", "lang": "zh", "count": 1}
+{"id": "ht-0422", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "你做的？", "ts_hint": "2月21日14 ℃ 0 ]", "lang": "zh", "count": 1}
+{"id": "ht-0423", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "不是，B站刷到的", "ts_hint": "2月21日14 ℃ 0 ]", "lang": "zh", "count": 1}
+{"id": "ht-0424", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "有意思", "ts_hint": "2月21日14 ℃ 0 ]", "lang": "zh", "count": 1}
+{"id": "ht-0425", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "早知道就问你一下你家地址在", "ts_hint": "2月21日14 ℃ 0 ]", "lang": "zh", "count": 1}
+{"id": "ht-0426", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "我不在家", "ts_hint": "哪了，今天和昨天都在增城", "lang": "zh", "count": 1}
+{"id": "ht-0427", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "现在在天河上班", "ts_hint": "哪了，今天和昨天都在增城", "lang": "zh", "count": 1}
+{"id": "ht-0428", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "那你什么时候开学", "ts_hint": "哪了，今天和昨天都在增城", "lang": "zh", "count": 1}
+{"id": "ht-0429", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "9号开始上课", "ts_hint": "我3月7号回校", "lang": "zh", "count": 2}
+{"id": "ht-0430", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "爽死你咯", "ts_hint": "我3月7号回校", "lang": "zh", "count": 2}
+{"id": "ht-0431", "source": "ocr:83d1a2c5a07f", "speaker": "other", "text": "在此话怎讲", "ts_hint": "我3月7号回校", "lang": "zh", "count": 1}
+{"id": "ht-0432", "source": "ocr:83d1a2c5a07f", "speaker": "self", "text": "天河上班，那你每天是不是都", "ts_hint": "我3月7号回校", "lang": "zh", "count": 2}
+{"id": "ht-0433", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "讠兑话", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0434", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "江遇", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0435", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "给我", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0436", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "玩玩", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0437", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "你明天来汕头就给你玩", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0438", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "我明天去汕头玩", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0439", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "上班啊", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0440", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "你朋友K现在的身家，还能买6", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0441", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "了再买只给我", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0442", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "一天做200帧occ就买给你", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0443", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "18 9日12：2明", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0444", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "幸亏我车道线的", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0445", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "龙弄0一", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0446", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "沦落到吃泡面", "ts_hint": "丨8月9日12：20 i", "lang": "zh", "count": 1}
+{"id": "ht-0447", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "去汕头哪里玩", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0448", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "汕头有什么好玩的", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0449", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "不知道啊", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0450", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "你找许琪强", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0451", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "他离汕头很近", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0452", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "去潮州玩玩", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0453", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "广济桥", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0454", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "我回去也要找他玩玩", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0455", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "没去过潮州呢", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0456", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "那边氛围挺好的", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0457", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "汕头有什么好玩的，赶紧介绍#", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0458", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "汕头小公园周边", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0459", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "大南加油站东南（新华路）", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0460", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "阳区新华路", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0461", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "你朋友K现在在这里住", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0462", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "你们为什么去那边", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0463", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "去市区啊", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0464", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "酒店啊", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0465", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "那边我不知道", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0466", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "在这边", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0467", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "明天再去市区", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0468", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "没招，他们酒店没订到市区那", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0469", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "这个你得问校群了", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0470", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "明晚也在汕头", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0471", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "林晓群", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0472", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "他是那边人", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0473", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "那边没啥好玩的", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0474", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "如果在汕头市区你们吃完可以去东海岸玩玩", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0475", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "明天去东海岸好吧", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0476", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "个一那边我没去过", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0477", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "你现在这边", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0478", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "你怎么不来", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0479", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "我能去就好了", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0480", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "抓紧跑路", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0481", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "这地方开个半小时就到我高中", "ts_hint": "8月9日12：33", "lang": "zh", "count": 1}
+{"id": "ht-0482", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "别去达濠", "ts_hint": "8月11日11：52 0。", "lang": "zh", "count": 1}
+{"id": "ht-0483", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "最近很乱", "ts_hint": "8月11日11：52 0。", "lang": "zh", "count": 1}
+{"id": "ht-0484", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "汕头达濠别去玩", "ts_hint": "8月11日11：52 0。", "lang": "zh", "count": 1}
+{"id": "ht-0485", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "我家那边的", "ts_hint": "8月11日11：53 j", "lang": "zh", "count": 1}
+{"id": "ht-0486", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "哈基米牛肉饭", "ts_hint": "8月11日11：53 j", "lang": "zh", "count": 1}
+{"id": "ht-0487", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "广东省汕头市龙区春泽庄中", "ts_hint": "8月11日11：53 j", "lang": "zh", "count": 1}
+{"id": "ht-0488", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "先不要去今年不知道怎么乱了", "ts_hint": "8月11日11：53 j", "lang": "zh", "count": 1}
+{"id": "ht-0489", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "我现在在这边", "ts_hint": "8月11日11：53 j", "lang": "zh", "count": 1}
+{"id": "ht-0490", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "你小心点吧", "ts_hint": "8月11日11：53 j", "lang": "zh", "count": 1}
+{"id": "ht-0491", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "你家在哪里", "ts_hint": "8月11日11：53 j", "lang": "zh", "count": 1}
+{"id": "ht-0492", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "达濠啊", "ts_hint": "8月11日11：53 j", "lang": "zh", "count": 1}
+{"id": "ht-0493", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "还有吸莓", "ts_hint": "前天抓吸毒被砍伤一个警察", "lang": "zh", "count": 1}
+{"id": "ht-0494", "source": "ocr:92ae8635e7aa", "speaker": "other", "text": "不知道怎么乱了", "ts_hint": "前天抓吸毒被砍伤一个警察", "lang": "zh", "count": 1}
+{"id": "ht-0495", "source": "ocr:92ae8635e7aa", "speaker": "self", "text": "我只能说牛逼", "ts_hint": "前天抓吸毒被砍伤一个警察", "lang": "zh", "count": 1}
+{"id": "ht-0496", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "东騭物I点外卖领国补0交易恨", "ts_hint": "2025年12月19日11：38 ]", "lang": "zh", "count": 1}
+{"id": "ht-0497", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "小湘木桶饭", "ts_hint": "2025年12月19日11：38 ]", "lang": "zh", "count": 1}
+{"id": "ht-0498", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "粼舒窗", "ts_hint": "2025年12月19日11：38 ]", "lang": "zh", "count": 1}
+{"id": "ht-0499", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "进店逛逛", "ts_hint": "2025年12月19日11：38 ]", "lang": "zh", "count": 1}
+{"id": "ht-0500", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "正小程", "ts_hint": "2025年12月19日11：38 ]", "lang": "zh", "count": 1}
+{"id": "ht-0501", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "多少钱？", "ts_hint": "2025年12月19日11：38 ]", "lang": "zh", "count": 1}
+{"id": "ht-0502", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "天天吃泡面吃腻了", "ts_hint": "1 25年12月19日11：38 1", "lang": "zh", "count": 1}
+{"id": "ht-0503", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "下次试试咯'", "ts_hint": "1 25年12月19日11：38 1", "lang": "zh", "count": 1}
+{"id": "ht-0504", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "你人呢", "ts_hint": "2025年12月24日18：13", "lang": "zh", "count": 2}
+{"id": "ht-0505", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "楼梯间这边", "ts_hint": "2025年12月24日18：13", "lang": "zh", "count": 1}
+{"id": "ht-0506", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "出来玩手机", "ts_hint": "2025年12月24日18：13", "lang": "zh", "count": 1}
+{"id": "ht-0507", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "我说我包被偷了", "ts_hint": "2025年12月24日18：13", "lang": "zh", "count": 1}
+{"id": "ht-0508", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "爽死你", "ts_hint": "2月8日16：03", "lang": "zh", "count": 1}
+{"id": "ht-0509", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "最少的包64框", "ts_hint": "2月8日16：03", "lang": "zh", "count": 1}
+{"id": "ht-0510", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "2 8日18：05 ]", "ts_hint": "2月8日16：03", "lang": "zh", "count": 1}
+{"id": "ht-0511", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "这下真爽死了", "ts_hint": "2月8日16：03", "lang": "zh", "count": 1}
+{"id": "ht-0512", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "滴滴出行|打车犄行公交．", "ts_hint": "刂2月11日巧：38", "lang": "zh", "count": 1}
+{"id": "ht-0513", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "急！帮我点一占最高领12元打车券·", "ts_hint": "刂2月11日巧：38", "lang": "zh", "count": 1}
+{"id": "ht-0514", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "出门就用滴滴", "ts_hint": "刂2月11日巧：38", "lang": "zh", "count": 1}
+{"id": "ht-0515", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "点一点车", "ts_hint": "刂2月11日巧：38", "lang": "zh", "count": 1}
+{"id": "ht-0516", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "点我", "ts_hint": "刂2月11日巧：38", "lang": "zh", "count": 1}
+{"id": "ht-0517", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "你们宿舍是不是来了个人", "ts_hint": "2月25日21：12", "lang": "zh", "count": 1}
+{"id": "ht-0518", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "不是", "ts_hint": "2月25日2t16", "lang": "zh", "count": 1}
+{"id": "ht-0519", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "是408的", "ts_hint": "2月25日2t16", "lang": "zh", "count": 1}
+{"id": "ht-0520", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "408的怎么会过来你那里", "ts_hint": "2月25日2t16", "lang": "zh", "count": 1}
+{"id": "ht-0521", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "他宿舍没人回来", "ts_hint": "2月25日2t16", "lang": "zh", "count": 1}
+{"id": "ht-0522", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "他开不了门", "ts_hint": "2月25日2t16", "lang": "zh", "count": 1}
+{"id": "ht-0523", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "就来我这坐一下", "ts_hint": "2月25日2t16", "lang": "zh", "count": 1}
+{"id": "ht-0524", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "怪不得", "ts_hint": "2月25日21：22 」", "lang": "zh", "count": 1}
+{"id": "ht-0525", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "没招了", "ts_hint": "2月25日21：22 」", "lang": "zh", "count": 1}
+{"id": "ht-0526", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "干嘛", "ts_hint": "3月22日12：34、丿氤", "lang": "zh", "count": 1}
+{"id": "ht-0527", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "你劳来了", "ts_hint": "3月22日12：34、丿氤", "lang": "zh", "count": 1}
+{"id": "ht-0528", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "喊你们呢", "ts_hint": "3月22日12：34、丿氤", "lang": "zh", "count": 1}
+{"id": "ht-0529", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "蜜雪冰城", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0530", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "雪王币秒杀70万张免单券，快来参与吧！", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0531", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "70万张井免单券", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0532", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "立即查", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0533", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "3月25E 14：1", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0534", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "3m0 ]攻坚”", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0535", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "一般热", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0536", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "我也差不多出汗了", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0537", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "没招了，刚刚在外面", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0538", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "都要热死了", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0539", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "办公室都28度了", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0540", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "这么多人", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0541", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "正常", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0542", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "29度了", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0543", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "有些公司没过35都不开空调", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0544", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "如果坨坨天天上班开空调，我天天加班", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0545", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "尢这样瞪你．", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0546", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "想得好", "ts_hint": "5月22日14 ℃ 3", "lang": "zh", "count": 1}
+{"id": "ht-0547", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "回宿舍拿感冒药", "ts_hint": "5月28日巧：18", "lang": "zh", "count": 1}
+{"id": "ht-0548", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "没招了你och明天上班", "ts_hint": "3月28日22 ℃ 9", "lang": "zh", "count": 1}
+{"id": "ht-0549", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "我去", "ts_hint": "3月28日22 ℃ 9", "lang": "zh", "count": 1}
+{"id": "ht-0550", "source": "ocr:942dcb3f7265", "speaker": "other", "text": "凭什么", "ts_hint": "3月28日22 ℃ 9", "lang": "zh", "count": 1}
+{"id": "ht-0551", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "他请到假了", "ts_hint": "3月28日22 ℃ 9", "lang": "zh", "count": 1}
+{"id": "ht-0552", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "我下周再问下拦截吧", "ts_hint": "3月28日22 ℃ 9", "lang": "zh", "count": 1}
+{"id": "ht-0553", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "我还想吧他软件删掉，换上那个没参数的版本呢", "ts_hint": "3月28日22 ℃ 9", "lang": "zh", "count": 1}
+{"id": "ht-0554", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "让他用不了", "ts_hint": "3月28日22 ℃ 9", "lang": "zh", "count": 1}
+{"id": "ht-0555", "source": "ocr:942dcb3f7265", "speaker": "self", "text": "明天oc h会问你要那个动框软件，待会我会发个烂的给你", "ts_hint": "我明天中午去搞", "lang": "zh", "count": 1}
+{"id": "ht-0556", "source": "ocr:99840b617744", "speaker": "other", "text": "明天才有空", "ts_hint": "昨天下午4：24", "lang": "zh", "count": 1}
+{"id": "ht-0557", "source": "ocr:aa816337b1cd", "speaker": "self", "text": "好像是这个", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0558", "source": "ocr:aa816337b1cd", "speaker": "self", "text": "今晚请你喝水", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0559", "source": "ocr:aa816337b1cd", "speaker": "other", "text": "8到9", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0560", "source": "ocr:aa816337b1cd", "speaker": "self", "text": "定了吗", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0561", "source": "ocr:aa816337b1cd", "speaker": "self", "text": "是不是这个号码", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0562", "source": "ocr:ab404036972a", "speaker": "other", "text": "宝安机场下", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0563", "source": "ocr:ab404036972a", "speaker": "self", "text": "对呀，他也没来过深圳，他说他很期待来深圳", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0564", "source": "ocr:ab404036972a", "speaker": "other", "text": "牛逼牛逼", "ts_hint": "", "lang": "zh", "count": 2}
+{"id": "ht-0565", "source": "ocr:ab404036972a", "speaker": "self", "text": "他自自己推特上说的", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0566", "source": "ocr:ab404036972a", "speaker": "self", "text": "你自己上外网去看真的笑死我", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0567", "source": "ocr:ab404036972a", "speaker": "other", "text": "有来就狙他", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0568", "source": "ocr:ab404036972a", "speaker": "self", "text": "你来深圳我来给你当观察手", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0569", "source": "ocr:ab404036972a", "speaker": "other", "text": "好好好", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0570", "source": "ocr:ab404036972a", "speaker": "other", "text": "等会狙完世界就毁灭了", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0571", "source": "ocr:ab404036972a", "speaker": "other", "text": "你买股票吗", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0572", "source": "ocr:ab404036972a", "speaker": "other", "text": "玩吗", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0573", "source": "ocr:ab404036972a", "speaker": "self", "text": "什么股票", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0574", "source": "ocr:ab404036972a", "speaker": "self", "text": "股大跌", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0575", "source": "ocr:ab404036972a", "speaker": "other", "text": "处炒股", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0576", "source": "ocr:ab404036972a", "speaker": "other", "text": "我以为你有玩．", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0577", "source": "ocr:ab404036972a", "speaker": "other", "text": "可以学学", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0578", "source": "ocr:ab404036972a", "speaker": "other", "text": "10月巧日2引27", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0579", "source": "ocr:ab404036972a", "speaker": "self", "text": "你可以去买尊界V800的股票", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0580", "source": "ocr:ab404036972a", "speaker": "self", "text": "可以赚23块钱", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0581", "source": "ocr:ab404036972a", "speaker": "other", "text": "你这么关注", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0582", "source": "ocr:ab404036972a", "speaker": "other", "text": "你真没玩吗．", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0583", "source": "ocr:ab404036972a", "speaker": "self", "text": "肯定啊遥遥领先", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0584", "source": "ocr:ab404036972a", "speaker": "self", "text": "不说这么多了等一下头像变成玄武头像了", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0585", "source": "ocr:ab404036972a", "speaker": "self", "text": "采集数据去了", "ts_hint": "10月16日1引35", "lang": "zh", "count": 1}
+{"id": "ht-0586", "source": "ocr:ab404036972a", "speaker": "other", "text": "拍的啥照片跟[公司]一样？", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0587", "source": "ocr:ab404036972a", "speaker": "other", "text": "1臼云一片去悠悠", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0588", "source": "ocr:ab404036972a", "speaker": "other", "text": "2d图吗", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0589", "source": "ocr:ab404036972a", "speaker": "self", "text": "对啊-", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0590", "source": "ocr:ab404036972a", "speaker": "self", "text": "做算法验证", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0591", "source": "ocr:ab404036972a", "speaker": "other", "text": "噢噢我以为3d的", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0592", "source": "ocr:ab404036972a", "speaker": "other", "text": "可以啊搞毕设吗", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0593", "source": "ocr:ab404036972a", "speaker": "self", "text": "没激光雷达搞不了3d", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0594", "source": "ocr:ab404036972a", "speaker": "self", "text": "差不多吧", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0595", "source": "ocr:ab404036972a", "speaker": "other", "text": "这个要合法上路才可以吧", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0596", "source": "ocr:ab404036972a", "speaker": "self", "text": "算法验证成功了就搞多路输人准备做小车了", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0597", "source": "ocr:ab404036972a", "speaker": "other", "text": "性炸了一", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0598", "source": "ocr:ab404036972a", "speaker": "self", "text": "不用，你讲明目的就行", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0599", "source": "ocr:ab404036972a", "speaker": "other", "text": "你准备开家驼驼分公司啊", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0600", "source": "ocr:ab404036972a", "speaker": "self", "text": "一般没人问你的", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0601", "source": "ocr:ab404036972a", "speaker": "other", "text": "伊那就行别等下犯法了．", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0602", "source": "ocr:ab404036972a", "speaker": "self", "text": "我到时候报你名字", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0603", "source": "ocr:ab404036972a", "speaker": "other", "text": "身份证给你复印一张吧", "ts_hint": "10月16日25：0的", "lang": "zh", "count": 1}
+{"id": "ht-0604", "source": "ocr:ab404036972a", "speaker": "self", "text": "跑通了", "ts_hint": "10月17日01：19 1", "lang": "zh", "count": 1}
+{"id": "ht-0605", "source": "ocr:ab404036972a", "speaker": "self", "text": "恤科比", "ts_hint": "10月17日01：19 1", "lang": "zh", "count": 1}
+{"id": "ht-0606", "source": "ocr:ab404036972a", "speaker": "other", "text": "这么模糊", "ts_hint": "10月17日08 ℃ 6", "lang": "zh", "count": 1}
+{"id": "ht-0607", "source": "ocr:ab404036972a", "speaker": "other", "text": "显卡在燃烧", "ts_hint": "10月17日08 ℃ 6", "lang": "zh", "count": 1}
+{"id": "ht-0608", "source": "ocr:ab404036972a", "speaker": "self", "text": "模型不行，要重新训练", "ts_hint": "10月17日08：09 1", "lang": "zh", "count": 1}
+{"id": "ht-0609", "source": "ocr:ab404036972a", "speaker": "self", "text": "在地铁", "ts_hint": "10月17日08：09 1", "lang": "zh", "count": 1}
+{"id": "ht-0610", "source": "ocr:ab404036972a", "speaker": "other", "text": "。？上学啊卩", "ts_hint": "10月17日08：09 1", "lang": "zh", "count": 1}
+{"id": "ht-0611", "source": "ocr:ab404036972a", "speaker": "other", "text": "一哟西", "ts_hint": "10月17日08：09 1", "lang": "zh", "count": 1}
+{"id": "ht-0612", "source": "ocr:ab404036972a", "speaker": "other", "text": "可以可以", "ts_hint": "10月17日08：09 1", "lang": "zh", "count": 1}
+{"id": "ht-0613", "source": "ocr:ab404036972a", "speaker": "other", "text": "来[公司]大把模型", "ts_hint": "10月17日08：11", "lang": "zh", "count": 1}
+{"id": "ht-0614", "source": "ocr:ab404036972a", "speaker": "self", "text": "下周几提盅职", "ts_hint": "10月17日08：11", "lang": "zh", "count": 1}
+{"id": "ht-0615", "source": "ocr:ab404036972a", "speaker": "other", "text": "扩都差不多的", "ts_hint": "星期一或者星期二吧", "lang": "zh", "count": 1}
+{"id": "ht-0616", "source": "ocr:ab404036972a", "speaker": "self", "text": "孓0周未都要上班，跑路了才发现", "ts_hint": "星期一或者星期二吧", "lang": "zh", "count": 1}
+{"id": "ht-0617", "source": "ocr:ab404036972a", "speaker": "self", "text": "原来上班这么折磨", "ts_hint": "星期一或者星期二吧", "lang": "zh", "count": 1}
+{"id": "ht-0618", "source": "ocr:ab404036972a", "speaker": "other", "text": "肯定啊上学好", "ts_hint": "星期一或者星期二吧", "lang": "zh", "count": 1}
+{"id": "ht-0619", "source": "ocr:ab404036972a", "speaker": "self", "text": "天天跟丧尸围城一样", "ts_hint": "10月17日08：20 ]", "lang": "zh", "count": 1}
+{"id": "ht-0620", "source": "ocr:ab404036972a", "speaker": "other", "text": "上班上班", "ts_hint": "10月17日08：20 ]", "lang": "zh", "count": 1}
+{"id": "ht-0621", "source": "ocr:ab404036972a", "speaker": "other", "text": "都是上班的", "ts_hint": "10月17日08：20 ]", "lang": "zh", "count": 1}
+{"id": "ht-0622", "source": "ocr:ab404036972a", "speaker": "other", "text": "不如坐公交人少点", "ts_hint": "10月17日08：20 ]", "lang": "zh", "count": 1}
+{"id": "ht-0623", "source": "ocr:ab404036972a", "speaker": "other", "text": "上班咯", "ts_hint": "丨10月17日08：30一", "lang": "zh", "count": 1}
+{"id": "ht-0624", "source": "ocr:b967e163880e", "speaker": "other", "text": "通过了啊", "ts_hint": "", "lang": "zh", "count": 2}
+{"id": "ht-0625", "source": "ocr:b967e163880e", "speaker": "other", "text": "秒通过", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0626", "source": "ocr:b967e163880e", "speaker": "self", "text": "我也通过了", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0627", "source": "ocr:b967e163880e", "speaker": "self", "text": "可能刚刚他才忙完", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0628", "source": "ocr:b967e163880e", "speaker": "other", "text": "好吃吗？", "ts_hint": "4月21日22：34", "lang": "zh", "count": 1}
+{"id": "ht-0629", "source": "ocr:b967e163880e", "speaker": "self", "text": "来的第一天就吃了，吃到现在我还觉得味道真的挺可以的", "ts_hint": "4月21日22：34", "lang": "zh", "count": 1}
+{"id": "ht-0630", "source": "ocr:b967e163880e", "speaker": "self", "text": "而且他那个料是可以自己加的", "ts_hint": "4月21日22：34", "lang": "zh", "count": 1}
+{"id": "ht-0631", "source": "ocr:b967e163880e", "speaker": "self", "text": "你们先走吧", "ts_hint": "4月22日08：03", "lang": "zh", "count": 1}
+{"id": "ht-0632", "source": "ocr:b967e163880e", "speaker": "self", "text": "闹钟没把我吵醒，把我上面的搞醒了", "ts_hint": "4月22日08：03", "lang": "zh", "count": 1}
+{"id": "ht-0633", "source": "ocr:b967e163880e", "speaker": "other", "text": "起床了？", "ts_hint": "4月23日07 ． 59", "lang": "zh", "count": 1}
+{"id": "ht-0634", "source": "ocr:b967e163880e", "speaker": "self", "text": "穿鞋", "ts_hint": "4月23日07 ． 59", "lang": "zh", "count": 1}
+{"id": "ht-0635", "source": "ocr:b967e163880e", "speaker": "self", "text": "准备走了", "ts_hint": "4月23日07 ． 59", "lang": "zh", "count": 1}
+{"id": "ht-0636", "source": "ocr:b967e163880e", "speaker": "other", "text": "下楼", "ts_hint": "4月23日07 ． 59", "lang": "zh", "count": 1}
+{"id": "ht-0637", "source": "ocr:b967e163880e", "speaker": "other", "text": "我在一楼了", "ts_hint": "4月23日07 ． 59", "lang": "zh", "count": 1}
+{"id": "ht-0638", "source": "ocr:b967e163880e", "speaker": "self", "text": "你打车了吗", "ts_hint": "4月23日07 ． 59", "lang": "zh", "count": 1}
+{"id": "ht-0639", "source": "ocr:b967e163880e", "speaker": "other", "text": "还没有", "ts_hint": "4月23日07 ． 59", "lang": "zh", "count": 1}
+{"id": "ht-0640", "source": "ocr:b967e163880e", "speaker": "other", "text": "你人呢", "ts_hint": "4月23日07 ． 59", "lang": "zh", "count": 1}
+{"id": "ht-0641", "source": "ocr:b967e163880e", "speaker": "self", "text": "打了", "ts_hint": "4月23日07 ． 59", "lang": "zh", "count": 1}
+{"id": "ht-0642", "source": "ocr:b967e163880e", "speaker": "self", "text": "要等三分钟", "ts_hint": "4月23日07 ． 59", "lang": "zh", "count": 1}
+{"id": "ht-0643", "source": "ocr:b967e163880e", "speaker": "self", "text": "已取消^", "ts_hint": "14月25日21：47。", "lang": "zh", "count": 1}
+{"id": "ht-0644", "source": "ocr:b967e163880e", "speaker": "other", "text": "起来了？", "ts_hint": "14月25日21：47。", "lang": "zh", "count": 1}
+{"id": "ht-0645", "source": "ocr:b967e163880e", "speaker": "other", "text": "可以了没？", "ts_hint": "4月25日08：05 ]", "lang": "zh", "count": 1}
+{"id": "ht-0646", "source": "ocr:b967e163880e", "speaker": "self", "text": "采了", "ts_hint": "4月25日08：05 ]", "lang": "zh", "count": 1}
+{"id": "ht-0647", "source": "ocr:b967e163880e", "speaker": "other", "text": "手机银行城市服务缤纷优惠，惠聚广东", "ts_hint": "4月25日08：14", "lang": "zh", "count": 1}
+{"id": "ht-0648", "source": "ocr:b967e163880e", "speaker": "other", "text": "中国行手机行", "ts_hint": "4月25日08：14", "lang": "zh", "count": 1}
+{"id": "ht-0649", "source": "ocr:b967e163880e", "speaker": "other", "text": "刂4月25E 18：45", "ts_hint": "4月25日12：08", "lang": "zh", "count": 1}
+{"id": "ht-0650", "source": "ocr:b967e163880e", "speaker": "other", "text": "起来了吗？", "ts_hint": "4月27日08：04下", "lang": "zh", "count": 1}
+{"id": "ht-0651", "source": "ocr:b967e163880e", "speaker": "self", "text": "好了", "ts_hint": "4月27日08：04下", "lang": "zh", "count": 2}
+{"id": "ht-0652", "source": "ocr:b967e163880e", "speaker": "self", "text": "牛逼啊", "ts_hint": "4月27日10：11", "lang": "zh", "count": 1}
+{"id": "ht-0653", "source": "ocr:b967e163880e", "speaker": "self", "text": "要加到1900了", "ts_hint": "4月27日10：11", "lang": "zh", "count": 1}
+{"id": "ht-0654", "source": "ocr:b967e163880e", "speaker": "self", "text": "他说这种可以保持1800的话下周就1900了", "ts_hint": "4月27日10：11", "lang": "zh", "count": 1}
+{"id": "ht-0655", "source": "ocr:b967e163880e", "speaker": "self", "text": "吃屎吧", "ts_hint": "4月27日10：11", "lang": "zh", "count": 1}
+{"id": "ht-0656", "source": "ocr:b967e163880e", "speaker": "self", "text": "我tm真想给他一巴掌", "ts_hint": "4月27日10：11", "lang": "zh", "count": 1}
+{"id": "ht-0657", "source": "ocr:b967e163880e", "speaker": "other", "text": "真给脸了", "ts_hint": "4月27日10：11", "lang": "zh", "count": 1}
+{"id": "ht-0658", "source": "ocr:b967e163880e", "speaker": "self", "text": "他这么搞我真想跑了", "ts_hint": "4月27日10：14", "lang": "zh", "count": 1}
+{"id": "ht-0659", "source": "ocr:b967e163880e", "speaker": "self", "text": "估计要加到2", "ts_hint": "4月27日10：14", "lang": "zh", "count": 1}
+{"id": "ht-0660", "source": "ocr:b967e163880e", "speaker": "other", "text": "一直加一直加", "ts_hint": "4月27日10：14", "lang": "zh", "count": 1}
+{"id": "ht-0661", "source": "ocr:b967e163880e", "speaker": "other", "text": "那就不给他保持了", "ts_hint": "4月27日10：2", "lang": "zh", "count": 1}
+{"id": "ht-0662", "source": "ocr:b967e163880e", "speaker": "other", "text": "气00的话下周就1900了", "ts_hint": "4月27日10：2", "lang": "zh", "count": 1}
+{"id": "ht-0663", "source": "ocr:b967e163880e", "speaker": "self", "text": "我真受不了了", "ts_hint": "4月27日10：2", "lang": "zh", "count": 1}
+{"id": "ht-0664", "source": "ocr:b967e163880e", "speaker": "self", "text": "不想打字了", "ts_hint": "4月27日10：2", "lang": "zh", "count": 1}
+{"id": "ht-0665", "source": "ocr:b967e163880e", "speaker": "self", "text": "我截图给你", "ts_hint": "4月27日10：2", "lang": "zh", "count": 1}
+{"id": "ht-0666", "source": "ocr:b967e163880e", "speaker": "other", "text": "4 27日1025 |", "ts_hint": "4月27日10：2", "lang": "zh", "count": 1}
+{"id": "ht-0667", "source": "ocr:b967e163880e", "speaker": "other", "text": "直接和那个人事说一下", "ts_hint": "4月27日10：2", "lang": "zh", "count": 1}
+{"id": "ht-0668", "source": "ocr:b967e163880e", "speaker": "other", "text": "你们", "ts_hint": "4月27日10：2", "lang": "zh", "count": 1}
+{"id": "ht-0669", "source": "ocr:b967e163880e", "speaker": "other", "text": "他不回我", "ts_hint": "4月27日10：2", "lang": "zh", "count": 1}
+{"id": "ht-0670", "source": "ocr:b967e163880e", "speaker": "other", "text": "帮我", "ts_hint": "4月27日11：05", "lang": "zh", "count": 1}
+{"id": "ht-0671", "source": "ocr:b967e163880e", "speaker": "other", "text": "滴出行|打车行公交且．", "ts_hint": "4月27日11：05", "lang": "zh", "count": 1}
+{"id": "ht-0672", "source": "ocr:b967e163880e", "speaker": "other", "text": "急！帮我点一点，最高领10元打车券·", "ts_hint": "4月27日11：05", "lang": "zh", "count": 1}
+{"id": "ht-0673", "source": "ocr:b967e163880e", "speaker": "other", "text": "10元无冂减券", "ts_hint": "4月27日11：05", "lang": "zh", "count": 1}
+{"id": "ht-0674", "source": "ocr:b967e163880e", "speaker": "other", "text": "收下", "ts_hint": "4月27日11：05", "lang": "zh", "count": 1}
+{"id": "ht-0675", "source": "ocr:b967e163880e", "speaker": "other", "text": "怎么了", "ts_hint": "4月27日12：25", "lang": "zh", "count": 1}
+{"id": "ht-0676", "source": "ocr:b967e163880e", "speaker": "self", "text": "你说牛逼我就回666啊", "ts_hint": "4月27日12：25", "lang": "zh", "count": 1}
+{"id": "ht-0677", "source": "ocr:b967e163880e", "speaker": "self", "text": "你考完没", "ts_hint": "4月27日12：25", "lang": "zh", "count": 1}
+{"id": "ht-0678", "source": "ocr:b967e163880e", "speaker": "other", "text": "明天才考", "ts_hint": "4月27日12：25", "lang": "zh", "count": 1}
+{"id": "ht-0679", "source": "ocr:b967e163880e", "speaker": "self", "text": "今晚你吃什么", "ts_hint": "4月27日17：53", "lang": "zh", "count": 1}
+{"id": "ht-0680", "source": "ocr:b967e163880e", "speaker": "other", "text": "吃自提", "ts_hint": "4月27日18：11", "lang": "zh", "count": 1}
+{"id": "ht-0681", "source": "ocr:b967e163880e", "speaker": "self", "text": "你什么时候拿", "ts_hint": "4月27日18：11", "lang": "zh", "count": 1}
+{"id": "ht-0682", "source": "ocr:b967e163880e", "speaker": "self", "text": "帮我拿", "ts_hint": "4月27日18：11", "lang": "zh", "count": 1}
+{"id": "ht-0683", "source": "ocr:b967e163880e", "speaker": "other", "text": "应该现在把", "ts_hint": "4月27日18：11", "lang": "zh", "count": 1}
+{"id": "ht-0684", "source": "ocr:c94332f62e25", "speaker": "other", "text": "没了", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0685", "source": "ocr:c94332f62e25", "speaker": "self", "text": "我去验证一下，看看得不得。得的话就没事，不得的话，就只能自己再去采集照片了", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0686", "source": "ocr:c94332f62e25", "speaker": "other", "text": "你网上查查", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0687", "source": "ocr:c94332f62e25", "speaker": "other", "text": "或者豆包制作", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0688", "source": "ocr:c94332f62e25", "speaker": "other", "text": "你11月底有空？", "ts_hint": "10月8日21：28", "lang": "zh", "count": 1}
+{"id": "ht-0689", "source": "ocr:c94332f62e25", "speaker": "other", "text": "到时候11月底去广州，差不多离职时候情假去玩", "ts_hint": "10月8日21：28", "lang": "zh", "count": 1}
+{"id": "ht-0690", "source": "ocr:c94332f62e25", "speaker": "self", "text": "你叫我出来我就有空啊我上学在广州上而已", "ts_hint": "10月8日21：28", "lang": "zh", "count": 1}
+{"id": "ht-0691", "source": "ocr:c94332f62e25", "speaker": "other", "text": "行", "ts_hint": "10月8日21：28", "lang": "zh", "count": 3}
+{"id": "ht-0692", "source": "ocr:c94332f62e25", "speaker": "other", "text": "到时候舍长也去吧", "ts_hint": "10月8日21：28", "lang": "zh", "count": 1}
+{"id": "ht-0693", "source": "ocr:c94332f62e25", "speaker": "other", "text": "去长隆他就来", "ts_hint": "10月8日21：28", "lang": "zh", "count": 1}
+{"id": "ht-0694", "source": "ocr:c94332f62e25", "speaker": "self", "text": "11月底抽一两天出来肯定是可", "ts_hint": "10月8日21：28", "lang": "zh", "count": 1}
+{"id": "ht-0695", "source": "ocr:c94332f62e25", "speaker": "self", "text": "出来，我肯定不行", "ts_hint": "以的，但是你叫我抽一个星期", "lang": "zh", "count": 1}
+{"id": "ht-0696", "source": "ocr:c94332f62e25", "speaker": "other", "text": "天最多了", "ts_hint": "以的，但是你叫我抽一个星期", "lang": "zh", "count": 1}
+{"id": "ht-0697", "source": "ocr:c94332f62e25", "speaker": "self", "text": "到时候就看什么时候喽，最好", "ts_hint": "以的，但是你叫我抽一个星期", "lang": "zh", "count": 1}
+{"id": "ht-0698", "source": "ocr:c94332f62e25", "speaker": "self", "text": "三五都没空", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0699", "source": "ocr:c94332f62e25", "speaker": "self", "text": "长隆，我也可以啊，你想去珠海还是广州那个", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0700", "source": "ocr:c94332f62e25", "speaker": "other", "text": "我都可以", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0701", "source": "ocr:c94332f62e25", "speaker": "self", "text": "现在135要去上专升本的课24要帮别人做项目，也是比较忙的", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0702", "source": "ocr:c94332f62e25", "speaker": "self", "text": "周末有些时候要去学校那边考", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0703", "source": "ocr:c94332f62e25", "speaker": "self", "text": "不能潇洒起来了", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0704", "source": "ocr:c94332f62e25", "speaker": "other", "text": "没串啊，有空来聚嘛", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0705", "source": "ocr:c94332f62e25", "speaker": "other", "text": "到时候不知道他们怎么说呢", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0706", "source": "ocr:c94332f62e25", "speaker": "other", "text": "等会没空又得明年", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0707", "source": "ocr:c94332f62e25", "speaker": "other", "text": "难说喔", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0708", "source": "ocr:c94332f62e25", "speaker": "self", "text": "今年肯定有空的，明年就真没空了。明年卜7都要学习，不然考不上大学了", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0709", "source": "ocr:c94332f62e25", "speaker": "other", "text": "一样，我征兵不到也继续工作", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0710", "source": "ocr:c94332f62e25", "speaker": "other", "text": "加油这件半很重要", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0711", "source": "ocr:c94332f62e25", "speaker": "self", "text": "没事啊没事啊，等你跑路再说", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0712", "source": "ocr:c94332f62e25", "speaker": "self", "text": "你不会是跑路后第一天就来广州吧", "ts_hint": "就星期二啊，星期四还有周末", "lang": "zh", "count": 1}
+{"id": "ht-0713", "source": "ocr:c94332f62e25", "speaker": "self", "text": "州也不迟", "ts_hint": "在家待个一两个星期，再来广", "lang": "zh", "count": 1}
+{"id": "ht-0714", "source": "ocr:c94332f62e25", "speaker": "other", "text": "也行", "ts_hint": "1！10月8日21：44", "lang": "zh", "count": 1}
+{"id": "ht-0715", "source": "ocr:c94332f62e25", "speaker": "other", "text": "可能离职前去吧离职后没时间", "ts_hint": "1！10月8日21：44", "lang": "zh", "count": 1}
+{"id": "ht-0716", "source": "ocr:c94332f62e25", "speaker": "self", "text": "你离职后干嘛", "ts_hint": "1！10月8日21：44", "lang": "zh", "count": 1}
+{"id": "ht-0717", "source": "ocr:c94332f62e25", "speaker": "self", "text": "你不是先出去玩一个月吗", "ts_hint": "1！10月8日21：44", "lang": "zh", "count": 1}
+{"id": "ht-0718", "source": "ocr:c94332f62e25", "speaker": "other", "text": "我要去深圳", "ts_hint": "1！10月8日21：44", "lang": "zh", "count": 1}
+{"id": "ht-0719", "source": "ocr:c94332f62e25", "speaker": "other", "text": "看看需不需要手术吧", "ts_hint": "1！10月8日21：44", "lang": "zh", "count": 1}
+{"id": "ht-0720", "source": "ocr:c94332f62e25", "speaker": "other", "text": "然后就回家考车证", "ts_hint": "1！10月8日21：44", "lang": "zh", "count": 1}
+{"id": "ht-0721", "source": "ocr:c94332f62e25", "speaker": "self", "text": "看你咯，你叫我出发我就出发", "ts_hint": "1！10月8日21：44", "lang": "zh", "count": 1}
+{"id": "ht-0722", "source": "ocr:c94332f62e25", "speaker": "other", "text": "好赶啊", "ts_hint": "1！10月8日21：44", "lang": "zh", "count": 1}
+{"id": "ht-0723", "source": "ocr:c94332f62e25", "speaker": "other", "text": "到时候广州我可能去不了", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0724", "source": "ocr:c94332f62e25", "speaker": "other", "text": "要去深圳检查", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0725", "source": "ocr:c94332f62e25", "speaker": "other", "text": "一堆事情", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0726", "source": "ocr:c94332f62e25", "speaker": "self", "text": "没事啊等你有空了再来广州", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0727", "source": "ocr:c94332f62e25", "speaker": "other", "text": "到时候看看", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0728", "source": "ocr:c94332f62e25", "speaker": "self", "text": "你明天不用上班吗", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0729", "source": "ocr:c94332f62e25", "speaker": "self", "text": "兰姐会这么好心让你们放假", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0730", "source": "ocr:c94332f62e25", "speaker": "other", "text": "不用", "ts_hint": "10月11日0034", "lang": "zh", "count": 2}
+{"id": "ht-0731", "source": "ocr:c94332f62e25", "speaker": "other", "text": "本来就放假的", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0732", "source": "ocr:c94332f62e25", "speaker": "self", "text": "你们国庆放几天的", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0733", "source": "ocr:c94332f62e25", "speaker": "other", "text": "7天", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0734", "source": "ocr:c94332f62e25", "speaker": "self", "text": "拦截开智了", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0735", "source": "ocr:c94332f62e25", "speaker": "other", "text": "是没人了", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0736", "source": "ocr:c94332f62e25", "speaker": "other", "text": "要是有人框框叫你干", "ts_hint": "10月11日0034", "lang": "zh", "count": 1}
+{"id": "ht-0737", "source": "ocr:c94332f62e25", "speaker": "other", "text": "她气得肿起来了", "ts_hint": "我今天摸鱼被飞猪看见了", "lang": "zh", "count": 1}
+{"id": "ht-0738", "source": "ocr:c94332f62e25", "speaker": "other", "text": "冖卜但是没说什么，'", "ts_hint": "我今天摸鱼被飞猪看见了", "lang": "zh", "count": 1}
+{"id": "ht-0739", "source": "ocr:c94332f62e25", "speaker": "self", "text": "怕什么大不了提前一两周走咯", "ts_hint": "我今天摸鱼被飞猪看见了", "lang": "zh", "count": 1}
+{"id": "ht-0740", "source": "ocr:c94332f62e25", "speaker": "self", "text": "早去做检查早放心好吧", "ts_hint": "我今天摸鱼被飞猪看见了", "lang": "zh", "count": 1}
+{"id": "ht-0741", "source": "ocr:c94332f62e25", "speaker": "other", "text": "不用手术最好", "ts_hint": "我今天摸鱼被飞猪看见了", "lang": "zh", "count": 1}
+{"id": "ht-0742", "source": "ocr:c94332f62e25", "speaker": "self", "text": "没事的看医生怎么说咯", "ts_hint": "我今天摸鱼被飞猪看见了", "lang": "zh", "count": 1}
+{"id": "ht-0743", "source": "ocr:c94332f62e25", "speaker": "other", "text": "是的", "ts_hint": "10月11日00：44-今i", "lang": "zh", "count": 1}
+{"id": "ht-0744", "source": "ocr:c94332f62e25", "speaker": "self", "text": "我当时初中的时候整个头直接撞足球哐上了，然后整个头都流血了，那个足球那个框离眼睛就只有2毫米，缝了六七针当时去体检的时候他都说没事", "ts_hint": "10月11日00：44-今i", "lang": "zh", "count": 1}
+{"id": "ht-0745", "source": "ocr:c94332f62e25", "speaker": "other", "text": "了这么严重", "ts_hint": "10月11日00：44-今i", "lang": "zh", "count": 1}
+{"id": "ht-0746", "source": "ocr:c94332f62e25", "speaker": "other", "text": "我是想不需要手术最好，能参", "ts_hint": "10月11日00：44-今i", "lang": "zh", "count": 1}
+{"id": "ht-0747", "source": "ocr:c94332f62e25", "speaker": "other", "text": "你还不睡啊", "ts_hint": "10月11日00：44-今i", "lang": "zh", "count": 1}
+{"id": "ht-0748", "source": "ocr:c94332f62e25", "speaker": "other", "text": "这台不得几w了", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 1}
+{"id": "ht-0749", "source": "ocr:c94332f62e25", "speaker": "self", "text": "这些加起来才5000来块钱不是很贵", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 1}
+{"id": "ht-0750", "source": "ocr:c94332f62e25", "speaker": "self", "text": "我从初中就开始攒了攒了老久", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 1}
+{"id": "ht-0751", "source": "ocr:c94332f62e25", "speaker": "other", "text": "可以啊", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 3}
+{"id": "ht-0752", "source": "ocr:c94332f62e25", "speaker": "other", "text": "你用手机拍张", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 1}
+{"id": "ht-0753", "source": "ocr:c94332f62e25", "speaker": "other", "text": "能不能拍到", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 1}
+{"id": "ht-0754", "source": "ocr:c94332f62e25", "speaker": "self", "text": "我等一下发几张好看的给你", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 1}
+{"id": "ht-0755", "source": "ocr:c94332f62e25", "speaker": "self", "text": "你不会这么早睡吧", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 1}
+{"id": "ht-0756", "source": "ocr:c94332f62e25", "speaker": "other", "text": "不会啊", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 1}
+{"id": "ht-0757", "source": "ocr:c94332f62e25", "speaker": "self", "text": "哪有人放假12点钟睡的", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 1}
+{"id": "ht-0758", "source": "ocr:c94332f62e25", "speaker": "other", "text": "有点困", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 1}
+{"id": "ht-0759", "source": "ocr:c94332f62e25", "speaker": "other", "text": "一了不过看星星可以晚点", "ts_hint": "今天天气好出来拍星星", "lang": "zh", "count": 1}
+{"id": "ht-0760", "source": "ocr:c94332f62e25", "speaker": "self", "text": "点钟了", "ts_hint": "今天还没拍，今天拍要等到1", "lang": "zh", "count": 2}
+{"id": "ht-0761", "source": "ocr:c94332f62e25", "speaker": "self", "text": "如果你还没睡的话，我晚点发", "ts_hint": "今天还没拍，今天拍要等到1", "lang": "zh", "count": 1}
+{"id": "ht-0762", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "不是凤翔", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0763", "source": "ocr:cd2ee3b71f90", "speaker": "self", "text": "发个定位看", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0764", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "凤翎羽毛球馆广东省佛山市顺德区伦教街道顺德水果", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0765", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "瓴克中心热力车'山簽沃）皇汽贸（广透） 0桕鸿车行邦邦车行二手车科仕特塑机", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0766", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "广东津后勐冒理华利饮料批发部服务有限公司", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0767", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "车辆管理所", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0768", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "小朋水果责兴果业忠记水果批发部", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0769", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "TESLA斯垃德斯喧中心） 0水果店", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0770", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "鱼公'", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0771", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "腾讯地图", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0772", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "10块场费，球费aa,九点到15点", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0773", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "9点到12点", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0774", "source": "ocr:cd2ee3b71f90", "speaker": "self", "text": "好", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0775", "source": "ocr:cd2ee3b71f90", "speaker": "self", "text": "那我9点左右应该能到", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0776", "source": "ocr:cd2ee3b71f90", "speaker": "other", "text": "大概20块", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0777", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "如果你还没睡的话，我晚点发给你吧", "ts_hint": "今天还没拍，今天拍要等到1", "lang": "zh", "count": 1}
+{"id": "ht-0778", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "能不能拍空间站", "ts_hint": "今天还没拍，今天拍要等到1", "lang": "zh", "count": 1}
+{"id": "ht-0779", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "肯定可以啊，不过我拍得比较少，因为它过境时间比较短", "ts_hint": "今天还没拍，今天拍要等到1", "lang": "zh", "count": 1}
+{"id": "ht-0780", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "牛，牛", "ts_hint": "今天还没拍，今天拍要等到1", "lang": "zh", "count": 1}
+{"id": "ht-0781", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "10月11E 14：02犭切；0 ．", "ts_hint": "今天还没拍，今天拍要等到1", "lang": "zh", "count": 1}
+{"id": "ht-0782", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "现在毕设是可以写了，但是没办法提交是吧？", "ts_hint": "今天还没拍，今天拍要等到1", "lang": "zh", "count": 1}
+{"id": "ht-0783", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "对啊", "ts_hint": "10月11日15：12", "lang": "zh", "count": 1}
+{"id": "ht-0784", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "昨晚拍到啥", "ts_hint": "10月11日15：12", "lang": "zh", "count": 1}
+{"id": "ht-0785", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "单张", "ts_hint": "10月11日15：12", "lang": "zh", "count": 1}
+{"id": "ht-0786", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "一张10分钟", "ts_hint": "10月11日15：12", "lang": "zh", "count": 1}
+{"id": "ht-0787", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "拍了22张", "ts_hint": "10月11日15：12", "lang": "zh", "count": 1}
+{"id": "ht-0788", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "有动态的吗", "ts_hint": "10月11日15：12", "lang": "zh", "count": 1}
+{"id": "ht-0789", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "没搞", "ts_hint": "10月11日1s19", "lang": "zh", "count": 1}
+{"id": "ht-0790", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "刚酲呢", "ts_hint": "10月11日1s19", "lang": "zh", "count": 1}
+{"id": "ht-0791", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "噢噢", "ts_hint": "10月11日1s19", "lang": "zh", "count": 1}
+{"id": "ht-0792", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "10月巧a 2引12", "ts_hint": "110月11日21：19卧在。", "lang": "zh", "count": 1}
+{"id": "ht-0793", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "怎么样科比", "ts_hint": "110月11日21：19卧在。", "lang": "zh", "count": 1}
+{"id": "ht-0794", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "古元不交社保一个月5k", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0795", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "他转正了吧", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0796", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "他不是毕业了吗·", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0797", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "应该是，但是不要社保", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0798", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "她今年不才去学校领毕业证吗", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0799", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "牛服我只能说", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0800", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "对呀他7月份去的", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0801", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "6月底啊不是7月份", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0802", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "我一年都干不到她三个月的钱", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0803", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "他好像和魏娜燕是老乡来的", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0804", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "他们都是江西的", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0805", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "越想越气", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0806", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "修下水道还要8", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0807", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "你们还修什么？下水道又堵了", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0808", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "堵了", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0809", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "说8月份开始什么福利都没有", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0810", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "所以要钱", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0811", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "对吼我都忘记", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0812", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "水电没补贴打车没报销", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0813", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "还好啦你们还有1个月就跑路", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0814", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "还有12天提离职好吧", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0815", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "先跑跑了有空再来广州", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0816", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "实在来不了广州我就得去深圳", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0817", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "我来深圳也才15块钱", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0818", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "时间太紧了，做手术什么的还得学车", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0819", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "抽一两天出来没问题好吧", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0820", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "你可以边做手术边学车", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0821", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "做完手术出院就可以立刻考科", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0822", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "这样可以省半个月", "ts_hint": "我今天发现了个秘密", "lang": "zh", "count": 1}
+{"id": "ht-0823", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "我回家考的", "ts_hint": "丨10月13日23：19", "lang": "zh", "count": 1}
+{"id": "ht-0824", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "但是我弄完这些就找工作或者参军", "ts_hint": "丨10月13日23：19", "lang": "zh", "count": 1}
+{"id": "ht-0825", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "找工作就去佛山找你好吧．", "ts_hint": "丨10月13日23：19", "lang": "zh", "count": 1}
+{"id": "ht-0826", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "手术先", "ts_hint": "这星期先去检查看看需不需要", "lang": "zh", "count": 1}
+{"id": "ht-0827", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "刂不需要最好", "ts_hint": "这星期先去检查看看需不需要", "lang": "zh", "count": 1}
+{"id": "ht-0828", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "他说我不去就不去广州了", "ts_hint": "这星期先去检查看看需不需要", "lang": "zh", "count": 1}
+{"id": "ht-0829", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "就算你要去深圳做检查，也可", "ts_hint": "这星期先去检查看看需不需要", "lang": "zh", "count": 1}
+{"id": "ht-0830", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "好玩的", "ts_hint": "以晚上出来吃饭，深圳也挺多", "lang": "zh", "count": 1}
+{"id": "ht-0831", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "11月中旬特朗普来深圳", "ts_hint": "以晚上出来吃饭，深圳也挺多", "lang": "zh", "count": 1}
+{"id": "ht-0832", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "到时候我也要去深圳见特朗普", "ts_hint": "查，也可以晚上出来吃饭，深圳也挺多", "lang": "zh", "count": 1}
+{"id": "ht-0833", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "可以到时候离职了", "ts_hint": "查，也可以晚上出来吃饭，深圳也挺多", "lang": "zh", "count": 1}
+{"id": "ht-0834", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "你应该赶不上他23号来的", "ts_hint": "查，也可以晚上出来吃饭，深圳也挺多", "lang": "zh", "count": 1}
+{"id": "ht-0835", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "好像只待2天就回去了", "ts_hint": "查，也可以晚上出来吃饭，深圳也挺多", "lang": "zh", "count": 1}
+{"id": "ht-0836", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "我已经跟他约好了去深圳湾看", "ts_hint": "查，也可以晚上出来吃饭，深圳也挺多", "lang": "zh", "count": 1}
+{"id": "ht-0837", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "到时候你看见他来视频", "ts_hint": "查，也可以晚上出来吃饭，深圳也挺多", "lang": "zh", "count": 1}
+{"id": "ht-0838", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "我远程狙击他", "ts_hint": "查，也可以晚上出来吃饭，深圳也挺多", "lang": "zh", "count": 1}
+{"id": "ht-0839", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "真的服了短，就是因为持朗普来，整个深圳现在变禁飞区了", "ts_hint": "查，也可以晚上出来吃饭，深圳也挺多", "lang": "zh", "count": 1}
+{"id": "ht-0840", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "从9月份开始变禁飞区一直到", "ts_hint": "查，也可以晚上出来吃饭，深圳也挺多", "lang": "zh", "count": 1}
+{"id": "ht-0841", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "去宝安区吗", "ts_hint": "11月29号", "lang": "zh", "count": 1}
+{"id": "ht-0842", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "本来整个深圳都可以飞的，不然我就拿飞机憧他了", "ts_hint": "11月29号", "lang": "zh", "count": 1}
+{"id": "ht-0843", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "宝安跟福田", "ts_hint": "11月29号", "lang": "zh", "count": 1}
+{"id": "ht-0844", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "就在深圳湾那边", "ts_hint": "11月29号", "lang": "zh", "count": 1}
+{"id": "ht-0845", "source": "ocr:cf7ee91f0494", "speaker": "self", "text": "我还知道他酒店住哪里", "ts_hint": "11月29号", "lang": "zh", "count": 1}
+{"id": "ht-0846", "source": "ocr:cf7ee91f0494", "speaker": "other", "text": "福田那边就市中心吧", "ts_hint": "11月29号", "lang": "zh", "count": 1}
+{"id": "ht-0847", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "此话怎讲", "ts_hint": "我3月7号回校", "lang": "zh", "count": 1}
+{"id": "ht-0848", "source": "ocr:ecf0a785ead5", "speaker": "self", "text": "要坐地铁回增城", "ts_hint": "我3月7号回校", "lang": "zh", "count": 1}
+{"id": "ht-0849", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "不是阿", "ts_hint": "我3月7号回校", "lang": "zh", "count": 1}
+{"id": "ht-0850", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "我住宿舍", "ts_hint": "我3月7号回校", "lang": "zh", "count": 1}
+{"id": "ht-0851", "source": "ocr:ecf0a785ead5", "speaker": "self", "text": "我初八就要去上班了", "ts_hint": "我3月7号回校", "lang": "zh", "count": 1}
+{"id": "ht-0852", "source": "ocr:ecf0a785ead5", "speaker": "self", "text": "牛逼0 ±", "ts_hint": "我3月7号回校", "lang": "zh", "count": 1}
+{"id": "ht-0853", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "殳休息没没招", "ts_hint": "我3月7号回校", "lang": "zh", "count": 1}
+{"id": "ht-0854", "source": "ocr:ecf0a785ead5", "speaker": "self", "text": "那你干到啥时候", "ts_hint": "2月21日", "lang": "zh", "count": 1}
+{"id": "ht-0855", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "5号", "ts_hint": "2月21日", "lang": "zh", "count": 1}
+{"id": "ht-0856", "source": "ocr:ecf0a785ead5", "speaker": "self", "text": "时薪应该很高的吧，过年干", "ts_hint": "2月21日", "lang": "zh", "count": 1}
+{"id": "ht-0857", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "走我爸的关系进的", "ts_hint": "2月21日", "lang": "zh", "count": 1}
+{"id": "ht-0858", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "一个月", "ts_hint": "2月21日", "lang": "zh", "count": 1}
+{"id": "ht-0859", "source": "ocr:ecf0a785ead5", "speaker": "self", "text": "那很爽了，开学就要叫少爷了", "ts_hint": "2月21日", "lang": "zh", "count": 1}
+{"id": "ht-0860", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "卩嘻嘻", "ts_hint": "2月21日", "lang": "zh", "count": 1}
+{"id": "ht-0861", "source": "ocr:ecf0a785ead5", "speaker": "self", "text": "拿去沟女都爽死", "ts_hint": "1 2月21日14：12", "lang": "zh", "count": 1}
+{"id": "ht-0862", "source": "ocr:ecf0a785ead5", "speaker": "self", "text": "我现在上班那里也才4000多一个月", "ts_hint": "1 2月21日14：12", "lang": "zh", "count": 1}
+{"id": "ht-0863", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "有这时间还不如打游戏", "ts_hint": "1 2月21日14：12", "lang": "zh", "count": 1}
+{"id": "ht-0864", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "椒女", "ts_hint": "1 2月21日14：12", "lang": "zh", "count": 1}
+{"id": "ht-0865", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "干嘛猫的v [ og （上班有点焦虑，得哄哄自己）", "ts_hint": "3月2日21：07 「、／戊", "lang": "zh", "count": 1}
+{"id": "ht-0866", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "哔哩哔哩", "ts_hint": "3月2日21：07 「、／戊", "lang": "zh", "count": 1}
+{"id": "ht-0867", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "黌原创完", "ts_hint": "10月8日11：41 ]", "lang": "zh", "count": 1}
+{"id": "ht-0868", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "可爱笨蛋老萌妹是首相？！狠恨攻酪其他国家的高冷前辈吧！", "ts_hint": "10月8日11：41 ]", "lang": "zh", "count": 1}
+{"id": "ht-0869", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "我的高币早苗、§上了日首相．", "ts_hint": "10月8日11：41 ]", "lang": "zh", "count": 1}
+{"id": "ht-0870", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "因很間单一一．安倍三被到杀后，E民頁要一条断话的．借釣小殉气于是她惟上了台。", "ts_hint": "10月8日11：41 ]", "lang": "zh", "count": 1}
+{"id": "ht-0871", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "闷的是，地是个笨，全油卡沉7会，外交会引用《的巨人》见到俄罗斯e统昔京的第一句是．前辈你的好", "ts_hint": "10月8日11：41 ]", "lang": "zh", "count": 1}
+{"id": "ht-0872", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "而我． №唯一的器哥，迫从程跸转罪首相佐0 ．天的工修吧地从窝里出是`帮地身正．五地闾脶后切劃罪以及，出昴吧那旬不说出口的谜回肛子里。", "ts_hint": "10月8日11：41 ]", "lang": "zh", "count": 1}
+{"id": "ht-0873", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "冶忑爰剧与兄寻孬线的扭ÉE堂，就此开罘。", "ts_hint": "10月8日11：41 ]", "lang": "zh", "count": 1}
+{"id": "ht-0874", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "恚舌#貞主冠#田事#总市曱苗#蔫0 #唱臼#少女", "ts_hint": "10月8日11：41 ]", "lang": "zh", "count": 1}
+{"id": "ht-0875", "source": "ocr:ecf0a785ead5", "speaker": "other", "text": "活2026年6 7E中卧28147字1小时10分种", "ts_hint": "10月8日11：41 ]", "lang": "zh", "count": 1}
+{"id": "ht-0876", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "替补人员666", "ts_hint": "4月8日14：47", "lang": "zh", "count": 1}
+{"id": "ht-0877", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "直接填无行不行的", "ts_hint": "4月8日14：47", "lang": "zh", "count": 1}
+{"id": "ht-0878", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "不行", "ts_hint": "4月8日14：47", "lang": "zh", "count": 1}
+{"id": "ht-0879", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "不过", "ts_hint": "4月8日14：47", "lang": "zh", "count": 1}
+{"id": "ht-0880", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "你和他商量了就行", "ts_hint": "4月8日14：47", "lang": "zh", "count": 1}
+{"id": "ht-0881", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "可以提交", "ts_hint": "4月8日14：47", "lang": "zh", "count": 1}
+{"id": "ht-0882", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "你把朋友G填上去", "ts_hint": "4月8日14：47", "lang": "zh", "count": 1}
+{"id": "ht-0883", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "不知道通不通过", "ts_hint": "4月8日14：47", "lang": "zh", "count": 1}
+{"id": "ht-0884", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "下次就这样写", "ts_hint": "4月8日14：47", "lang": "zh", "count": 1}
+{"id": "ht-0885", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "商量好了就行了咯", "ts_hint": "4月8日14：47", "lang": "zh", "count": 1}
+{"id": "ht-0886", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "有截图问题不大的", "ts_hint": "4月8日14：47", "lang": "zh", "count": 1}
+{"id": "ht-0887", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "考过没", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0888", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "能不能带我去兜风", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0889", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "挂了", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0890", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "我去了1", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0891", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "几号线啊", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0892", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "他问我准备好了没有？我说准备好了，然后他就把我身份证适；放下来了我就去绕车了，要回来又就说我没有绕车", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0893", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "第一次绕车", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0894", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "他扣我一百", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0895", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "第二次起步我没打灯", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0896", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "3号", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0897", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "666，不是把身份证给他之后", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0898", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "就去绕车吗，怎么不算啊", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0899", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "。好了，然后他就把我身份证放下来了我", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0900", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "nb，那没招、·", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0901", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "我还是看到他对比完把我身份证放好了", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0902", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "1他之后就去绕车吗，怎么不", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0903", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "我才去的", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0904", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "结果说我未绕车一周", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0905", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "我还按两三秒", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0906", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "然后灯光过了后", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0907", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "系统喊我起步", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0908", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "我靠我都忘记要打灯了", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0909", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "就扣完了", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0910", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "还在那里等了那么久紗'", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0911", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "浪费我时间", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0912", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "nb，那第如果你下一次考的话还要交200多是吧", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0913", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "驾校给", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0914", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "我之前考科目三的时候也是没打灯直接扣完的", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0915", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "专门挑细节来扣的", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0916", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "没招[", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0917", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "这个不是细节吧", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0918", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "我去了", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0919", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "估计是系统问题", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0920", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "真的是我去了", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0921", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "你都按了，不能不算你吧", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0922", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "就是不算", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0923", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "那没招了", "ts_hint": "1 4月9日16：53", "lang": "zh", "count": 1}
+{"id": "ht-0924", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "完完全全是按这个视频这样的听到他说了请开始上车准备也看到安全员把身份证放下去", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0925", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "我才开始去绕车的，回来就等待监管回应了", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0926", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "真没招了", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0927", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "后面就在想怎么挂的，结果第二次起步都忘记打灯了", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0928", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "你上车有没有系安全带啊，你系安全带之后再开始回默认你没系安全带开车的喔", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0929", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "我们广州那边", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0930", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "是这样的", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0931", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "肯定啊", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0932", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "我是说绕车那个", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0933", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "绕车", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0934", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "还不能上车的", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0935", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "这个视频就是模拟拍的", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0936", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "我是在车外给的身份证", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0937", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "验证完之后就绕车了产的", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0938", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "就挂了", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0939", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "你们不用上车给吗", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0940", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "我们是上车给了之后要开一次门才算的喔", "ts_hint": "4月9日19：2", "lang": "zh", "count": 1}
+{"id": "ht-0941", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "明天来我这搭车？", "ts_hint": "4月19日20：35", "lang": "zh", "count": 1}
+{"id": "ht-0942", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "你们几点走", "ts_hint": "4月19日20：35", "lang": "zh", "count": 1}
+{"id": "ht-0943", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "8点吧", "ts_hint": "4月19日20：35", "lang": "zh", "count": 1}
+{"id": "ht-0944", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "起来了没？", "ts_hint": "4月19日20：35", "lang": "zh", "count": 1}
+{"id": "ht-0945", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "刚起", "ts_hint": "4月19日20：35", "lang": "zh", "count": 1}
+{"id": "ht-0946", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "刷牙", "ts_hint": "4月19日20：35", "lang": "zh", "count": 1}
+{"id": "ht-0947", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "泊云一片去悠悠·邀诘", "ts_hint": "4月21日22：16", "lang": "zh", "count": 1}
+{"id": "ht-0948", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "柳州地螺粉3群\"", "ts_hint": "4月21日22：16", "lang": "zh", "count": 1}
+{"id": "ht-0949", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "北纬21。你直接进", "ts_hint": "4月21日22：16", "lang": "zh", "count": 1}
+{"id": "ht-0950", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "进了", "ts_hint": "4月21日22：27 |", "lang": "zh", "count": 1}
+{"id": "ht-0951", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "明天去", "ts_hint": "4月21日22：27 |", "lang": "zh", "count": 1}
+{"id": "ht-0952", "source": "ocr:ee7edbb04366", "speaker": "other", "text": "是不是没名额了", "ts_hint": "4月21日22：27 |", "lang": "zh", "count": 1}
+{"id": "ht-0953", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "你要加老板微信他才能返钱给", "ts_hint": "4月21日22：27 |", "lang": "zh", "count": 1}
+{"id": "ht-0954", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "你先加老板微信老板明天可能很忙", "ts_hint": "4月21日22：27 |", "lang": "zh", "count": 1}
+{"id": "ht-0955", "source": "ocr:ee7edbb04366", "speaker": "self", "text": "我现在还没通过", "ts_hint": "4月21日22：27 |", "lang": "zh", "count": 1}
+{"id": "ht-0956", "source": "ocr:part00", "speaker": "other", "text": "我想紫砂", "ts_hint": "昨天中午12：2", "lang": "zh", "count": 1}
+{"id": "ht-0957", "source": "ocr:part00", "speaker": "self", "text": "咋了呀", "ts_hint": "昨天中午12：弘", "lang": "zh", "count": 1}
+{"id": "ht-0958", "source": "ocr:part00", "speaker": "other", "text": "我出门忘记带耳机了", "ts_hint": "一昨天中午12：4", "lang": "zh", "count": 1}
+{"id": "ht-0959", "source": "ocr:part00", "speaker": "other", "text": "然后围着高铁站找买耳机的店", "ts_hint": "一昨天中午12：4", "lang": "zh", "count": 1}
+{"id": "ht-0960", "source": "ocr:part00", "speaker": "other", "text": "但是都在外面", "ts_hint": "一昨天中午12：4", "lang": "zh", "count": 1}
+{"id": "ht-0961", "source": "ocr:part00", "speaker": "other", "text": "然后刚刚找纸巾发现在包里", "ts_hint": "一昨天中午12：4", "lang": "zh", "count": 1}
+{"id": "ht-0962", "source": "ocr:part01", "speaker": "self", "text": "不过找到了就好", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0963", "source": "ocr:part01", "speaker": "self", "text": "在家里太无聊了，去看下熊出没电", "ts_hint": "昨天下午1：58", "lang": "zh", "count": 1}
+{"id": "ht-0964", "source": "ocr:part01", "speaker": "self", "text": "真的服了，3D电影没带3D眼镜", "ts_hint": "昨天下午1：58", "lang": "zh", "count": 1}
+{"id": "ht-0965", "source": "ocr:part01", "speaker": "self", "text": "播到一半，电影出问题了", "ts_hint": "昨天下午2：19", "lang": "zh", "count": 1}
+{"id": "ht-0966", "source": "ocr:part02", "speaker": "other", "text": "到了", "ts_hint": "昨天下午5：42", "lang": "zh", "count": 1}
+{"id": "ht-0967", "source": "ocr:part02", "speaker": "other", "text": "但是还要做两个小时的车", "ts_hint": "昨天下午5：42", "lang": "zh", "count": 1}
+{"id": "ht-0968", "source": "ocr:part02", "speaker": "other", "text": "我要吐了", "ts_hint": "昨天下午5：42", "lang": "zh", "count": 1}
+{"id": "ht-0969", "source": "ocr:part02", "speaker": "self", "text": "但是要气死了", "ts_hint": "昨天下午4：09", "lang": "zh", "count": 1}
+{"id": "ht-0970", "source": "ocr:part02", "speaker": "self", "text": "旁边那两个女的真的是气死我了", "ts_hint": "昨天下午4：09", "lang": "zh", "count": 1}
+{"id": "ht-0971", "source": "ocr:part02", "speaker": "self", "text": "电影看了多久，他就叫了多久", "ts_hint": "昨天下午4：09", "lang": "zh", "count": 1}
+{"id": "ht-0972", "source": "ocr:part02", "speaker": "self", "text": "叫，而且还是零零后", "ts_hint": "昨天下午4：09", "lang": "zh", "count": 1}
+{"id": "ht-0973", "source": "ocr:part02", "speaker": "self", "text": "我真的很想骂她，但是我奶奶在旁", "ts_hint": "昨天下午4：09", "lang": "zh", "count": 1}
+{"id": "ht-0974", "source": "ocr:part03", "speaker": "self", "text": "诶", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0975", "source": "ocr:part03", "speaker": "self", "text": "真的挺好看的，嗯", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0976", "source": "ocr:part03", "speaker": "other", "text": "你可以提醒她", "ts_hint": "胡昨天下午4：48", "lang": "zh", "count": 1}
+{"id": "ht-0977", "source": "ocr:part03", "speaker": "other", "text": "骂就别了", "ts_hint": "胡昨天下午4：48", "lang": "zh", "count": 1}
+{"id": "ht-0978", "source": "ocr:part03", "speaker": "other", "text": "待会别人脾气一上来就难搞", "ts_hint": "胡昨天下午4：48", "lang": "zh", "count": 1}
+{"id": "ht-0979", "source": "ocr:part03", "speaker": "self", "text": "我不会轻易骂别人的，后来我换了个位置就好点了", "ts_hint": "胡昨天下午4：48", "lang": "zh", "count": 1}
+{"id": "ht-0980", "source": "ocr:part03", "speaker": "self", "text": "有星星看吗？", "ts_hint": "昨天晚上11：45", "lang": "zh", "count": 1}
+{"id": "ht-0981", "source": "ocr:part03", "speaker": "other", "text": "不知道", "ts_hint": "昨天晚上11：49", "lang": "zh", "count": 1}
+{"id": "ht-0982", "source": "ocr:part04", "speaker": "self", "text": "好好好，吃上了是吧", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0983", "source": "ocr:part04", "speaker": "self", "text": "我还要再烧一串炮竹", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0984", "source": "ocr:part04", "speaker": "self", "text": "跟下邻居的风", "ts_hint": "昨天晚上11：53", "lang": "zh", "count": 1}
+{"id": "ht-0985", "source": "ocr:part04", "speaker": "other", "text": "我弟也买了一堆鞭炮", "ts_hint": "昨天晚上11：53", "lang": "zh", "count": 1}
+{"id": "ht-0986", "source": "ocr:part04", "speaker": "other", "text": "上年买的他都没烧完", "ts_hint": "昨天晚上11：53", "lang": "zh", "count": 1}
+{"id": "ht-0987", "source": "ocr:part05", "speaker": "self", "text": "我爸叫我一天放一串，放到开学说啥拜祖先，诶，他们去旅游了我也不知道什么时候搞，看邻居搞了我也跟着搞哈哈哈", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0988", "source": "ocr:part05", "speaker": "self", "text": "我也是啊", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0989", "source": "ocr:part05", "speaker": "other", "text": "你大过年就一个人吗", "ts_hint": "凌晨12：52", "lang": "zh", "count": 1}
+{"id": "ht-0990", "source": "ocr:part05", "speaker": "self", "text": "不是早说了吗？", "ts_hint": "凌晨12：48", "lang": "zh", "count": 1}
+{"id": "ht-0991", "source": "ocr:part05", "speaker": "self", "text": "我父母大年28就去旅游了，要等到大年初七才回来", "ts_hint": "凌晨12：48", "lang": "zh", "count": 1}
+{"id": "ht-0992", "source": "ocr:part05", "speaker": "self", "text": "家里真的就我一个人", "ts_hint": "凌晨12：48", "lang": "zh", "count": 1}
+{"id": "ht-0993", "source": "ocr:part05", "speaker": "other", "text": "sorry", "ts_hint": "凌晨2：14", "lang": "zh", "count": 1}
+{"id": "ht-0994", "source": "ocr:part05", "speaker": "other", "text": "我有病", "ts_hint": "凌晨2：14", "lang": "zh", "count": 1}
+{"id": "ht-0995", "source": "ocr:part06", "speaker": "other", "text": "问些莫名其妙的", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0996", "source": "ocr:part06", "speaker": "other", "text": "睡了", "ts_hint": "", "lang": "zh", "count": 1}
+{"id": "ht-0997", "source": "contacts_db", "speaker": "self", "text": "在吗？", "ts_hint": "1792780409.7160094", "lang": "zh", "count": 1}
+{"id": "ht-0998", "source": "contacts_db", "speaker": "self", "text": "你好", "ts_hint": "1792780492.852468", "lang": "zh", "count": 3}
+{"id": "ht-0999", "source": "contacts_db", "speaker": "self", "text": "你是谁", "ts_hint": "1792780550.906927", "lang": "zh", "count": 2}
+{"id": "ht-1000", "source": "contacts_db", "speaker": "self", "text": "我叫[昵称]", "ts_hint": "1792797436.484462", "lang": "zh", "count": 1}
+{"id": "ht-1001", "source": "contacts_db", "speaker": "self", "text": "我喜欢打羽毛球", "ts_hint": "1792797481.1626086", "lang": "zh", "count": 1}
+{"id": "ht-1002", "source": "contacts_db", "speaker": "self", "text": "帮我记住今天要好好学习", "ts_hint": "1792797494.898508", "lang": "zh", "count": 1}
+{"id": "ht-1003", "source": "contacts_db", "speaker": "self", "text": "行", "ts_hint": "1792797898.2347958", "lang": "zh", "count": 1}
+{"id": "ht-1004", "source": "contacts_db", "speaker": "self", "text": "你现在在哪里", "ts_hint": "1792797915.3894846", "lang": "zh", "count": 1}
+{"id": "ht-1005", "source": "contacts_db", "speaker": "self", "text": "这个怎么样", "ts_hint": "1792797973.6587718", "lang": "zh", "count": 1}
+{"id": "ht-1006", "source": "contacts_db", "speaker": "self", "text": "你还是有挺多问题的，加油", "ts_hint": "1792798215.0115128", "lang": "zh", "count": 1}
+{"id": "ht-1007", "source": "contacts_db", "speaker": "self", "text": "还没，9 点开始", "ts_hint": "1792798360.0929925", "lang": "zh", "count": 1}
+{"id": "ht-1008", "source": "contacts_db", "speaker": "self", "text": "现在要多说话才行，要积累数据", "ts_hint": "1792800714.9183612", "lang": "zh", "count": 1}
+{"id": "ht-1009", "source": "contacts_db", "speaker": "self", "text": "嗯", "ts_hint": "1792801812.9393423", "lang": "zh", "count": 1}
+{"id": "ht-1010", "source": "contacts_db", "speaker": "self", "text": "我给你搞了下，你现在能看懂表情包了吧", "ts_hint": "1792801892.6404445", "lang": "zh", "count": 1}
+{"id": "ht-1011", "source": "contacts_db", "speaker": "self", "text": "看得到吗？", "ts_hint": "1792801947.1406164", "lang": "zh", "count": 1}
+{"id": "ht-1012", "source": "contacts_db", "speaker": "self", "text": "刚买了一杯咖啡", "ts_hint": "1792802023.9881866", "lang": "zh", "count": 1}
+{"id": "ht-1013", "source": "contacts_db", "speaker": "self", "text": "囊看到吗？", "ts_hint": "1792802635.0163648", "lang": "zh", "count": 1}
+{"id": "ht-1014", "source": "contacts_db", "speaker": "self", "text": "你能识别到了？", "ts_hint": "1792805808.2077932", "lang": "zh", "count": 1}
+{"id": "ht-1015", "source": "contacts_db", "speaker": "self", "text": "什么玩意", "ts_hint": "1792805876.9926407", "lang": "zh", "count": 1}
+{"id": "ht-1016", "source": "contacts_db", "speaker": "self", "text": "帮你修了一下，你看看", "ts_hint": "1792807093.8475828", "lang": "zh", "count": 1}
+{"id": "ht-1017", "source": "contacts_db", "speaker": "self", "text": "有什么上下文关联呢？[疑问]", "ts_hint": "1792807502.415915", "lang": "zh", "count": 1}
+{"id": "ht-1018", "source": "contacts_db", "speaker": "self", "text": "看不懂英语吗？", "ts_hint": "1792812106.706098", "lang": "zh", "count": 1}
+{"id": "ht-1019", "source": "contacts_db", "speaker": "self", "text": "对不起我没看到[捂脸]", "ts_hint": "1792812153.7942882", "lang": "zh", "count": 1}
+{"id": "ht-1020", "source": "contacts_db", "speaker": "self", "text": "快下课了", "ts_hint": "1792812310.8661678", "lang": "zh", "count": 1}

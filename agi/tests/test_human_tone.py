@@ -61,9 +61,17 @@ def test_corpus_fields_and_values():
 
 
 def test_all_outputs_have_no_privacy_leak():
-    """三个产出（corpus/profile/fewshot）都不能出现真实称呼/OCR 乱码/号码。"""
+    """三个产出（corpus/profile/fewshot）都不能出现真实称呼/OCR 乱码/号码。
+
+    注意：profile 里的截图文件名是 16+ 位 hash，可能偶然包含 11 位数字（假阳性），
+    扫描手机号前先把 hash 文件名抹掉，只扫真正对外内容。
+    """
+    import re as _re
+    hash_name = _re.compile(r"[0-9a-f]{8,}\.(?:jpg|jpeg|png)")
     for path in (CORPUS, PROFILE, FEWSHOT):
         text = path.read_text(encoding="utf-8")
+        if path == PROFILE:
+            text = hash_name.sub("<hash>.jpg", text)
         for name in ht.REAL_NAME_BLOCKLIST:
             assert name not in text, f"{path.name} 真实称呼泄漏: {name}"
         for token in ht.OCR_GARBAGE_TOKENS:
@@ -144,7 +152,7 @@ def test_fewshot_examples():
     payload = read_fewshot()
     rows = {row["id"]: row for row in read_corpus()}
     examples = payload["examples"]
-    assert payload["count"] == len(examples) == 20
+    assert payload["count"] == len(examples) == 30
     for item in examples:
         assert set(item) == {"id", "text", "source", "length", "ending"}
         assert item["id"] in rows

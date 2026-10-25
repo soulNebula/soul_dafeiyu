@@ -58,8 +58,9 @@ def check_send(*, now: float, hour: int, recent_60s: int, today_count: int,
                hourly_count: int = 0) -> dict[str, Any]:
     if bool(cfg.get("stop")):
         return {"ok": False, "reason": "stop_switch"}
+    # P0-25：夜间静默只约束「主动消息」；用户自己来找必须回（reactive 不受静默限制）
     quiet = cfg.get("quiet_hours") or []
-    if isinstance(quiet, (list, tuple)) and len(quiet) == 2:
+    if (not reactive) and isinstance(quiet, (list, tuple)) and len(quiet) == 2:
         try:
             if in_quiet_hours(hour, int(quiet[0]), int(quiet[1])):
                 return {"ok": False, "reason": "quiet_hours"}

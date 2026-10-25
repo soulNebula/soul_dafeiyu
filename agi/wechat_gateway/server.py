@@ -632,13 +632,16 @@ class Gateway:
         now = time.time()
         # P0-22：夜间静默硬保护（发送前最后一道；quiet_hours=[] 会回退默认 [23,8]，
         # 只有显式 proactive_override_quiet=true 且 24h 内才能放行）
+        # P0-25：静默只约束主动消息——用户自己发消息过来（reactive / force 手动发送）必须回，
+        # 否则凌晨聊天会被静默闸全部吞掉（2026-10-26 真机事故）。
         override_active, _just = self._quiet_override_active(now)
-        if self._quiet_blocked(now):
+        quiet_blocks = (not reactive) and (not force)
+        if quiet_blocks and self._quiet_blocked(now):
             self._record("send_blocked", {"friend": contact, "reason": "quiet_hours"})
             return {"ok": False, "status": "blocked", "error": "quiet_hours"}
         policy_cfg = self.cfg
-        if override_active:
-            # 覆盖期内把 policy 的静默临时置空，避免 policy.check_send 先一步拦掉
+        if override_active or reactive or force:
+            # 覆盖期/被动回复/手动发送：把 policy 的静默临时置空（静默只拦主动）
             policy_cfg = dict(self.cfg)
             policy_cfg["quiet_hours"] = [0, 0]
         day = time.strftime("%Y-%m-%d", time.localtime(now))

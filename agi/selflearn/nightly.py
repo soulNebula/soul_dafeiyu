@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import ingest, memory, personality, profile, summary, weak_validation
+from . import ingest, memory, metrics as memory_metrics, personality, profile, summary, weak_validation
 
 
 def run(path: Path | str, client=None, *, force: bool = False) -> dict[str, Any]:
@@ -61,6 +61,13 @@ def run(path: Path | str, client=None, *, force: bool = False) -> dict[str, Any]
         steps["monthly_gist"] = summary.maintenance_monthly(path, client)
     except Exception as exc:  # noqa: BLE001
         steps["monthly_gist"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    # P1-g：每日记忆指标快照 + 三条异常阈值检测（同日重跑幂等覆盖）
+    try:
+        steps["memory_metrics"] = memory_metrics.snapshot_and_check(path, now=started)
+    except Exception as exc:  # noqa: BLE001
+        steps["memory_metrics"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    out["memory_warnings"] = list(
+        (steps.get("memory_metrics") or {}).get("warnings") or [])
     out["steps"] = steps
     out["ok"] = all(not (isinstance(v, dict) and v.get("error")) for v in steps.values())
     out["finished_at"] = time.time()

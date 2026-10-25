@@ -548,6 +548,10 @@ def retrieve_tiered(path: Path | str = DB_PATH, query: str = "",
         con.commit()
     finally:
         con.close()
+    # P1-g：检索计数放内存缓冲，每 20 次或 nightly 才批量落盘——
+    # 纯读/无命中的轮次不再为了指标额外写库（每轮对话的开销保持接近 0）。
+    hit = any(int(item.get("overlap") or 0) > 0 for item in items)
+    _buffer_retrieval(path, items=len(items), hit=hit, dropped=dropped)
     return {"items": items, "tiers": tiers, "dropped": dropped}
 
 
@@ -869,5 +873,267 @@ def export_archive(path: Path | str = DB_PATH, out_path: Path | str = "") -> dic
                 "role": str(row["role"]), "content": str(row["text"]),
                 "archived_at": float(row["archived_at"]),
             }, ensure_ascii=False) + "\n")
+    try:  # P1-g：记录最近一次冷备导出（只写 state，不动数据）
+        con = db.connect(path)
+        try:
+            now = time.time()
+            _state_set(con, "mem_archive_exported_at", now, now)
+            _state_set(con, "mem_archive_export_rows", len(rows), now)
+            con.commit()
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True, "rows": len(rows), "out": str(target)}
+
+
+# --------------------------------------------------------------------------- #
+# P1-g：记忆指标（让"记忆是否在退化"可观测）
+# --------------------------------------------------------------------------- #
+def _state_get(con, key: str) -> float | None:
+    try:
+        row = con.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
+    except Exception:  # noqa: BLE001
+        return None
+    if row is None:
+        return None
+    try:
+        return float(row["value"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _state_set(con, key: str, value: Any, now: float) -> None:
+    con.execute("INSERT OR REPLACE INTO state(key,value,updated_at) VALUES(?,?,?)",
+                (str(key), str(value), float(now)))
+
+
+def _state_add(con, key: str, delta: float, now: float) -> None:
+    current = _state_get(con, key)
+    _state_set(con, key, float((current or 0.0) + float(delta)), now)
+
+
+#: P1-g 检索计数缓冲：纯读/无命中路径不写盘，每 20 次或 nightly 批量落盘。
+_RETRIEVAL_FLUSH_EVERY = 20
+_RETRIEVAL_PENDING: dict[str, Any] = {
+    "path": "", "calls": 0, "hits": 0, "items": 0, "dropped": 0,
+}
+
+
+def _pending_for(path: Path | str) -> dict[str, int]:
+    buf = _RETRIEVAL_PENDING
+    if buf.get("path") and str(buf["path"]) != str(path):
+        return {"calls": 0, "hits": 0, "items": 0, "dropped": 0}
+    return {"calls": int(buf["calls"]), "hits": int(buf["hits"]),
+            "items": int(buf["items"]), "dropped": int(buf["dropped"])}
+
+
+def _buffer_retrieval(path: Path | str, *, items: int, hit: bool,
+                      dropped: int = 0) -> None:
+    buf = _RETRIEVAL_PENDING
+    target = str(path)
+    if buf.get("path") and buf["path"] != target:
+        flush_retrieval_counters(buf["path"])   # 多库切换：先落旧库
+        buf = _RETRIEVAL_PENDING
+    buf["path"] = target
+    buf["calls"] = int(buf["calls"]) + 1
+    buf["hits"] = int(buf["hits"]) + (1 if hit else 0)
+    buf["items"] = int(buf["items"]) + max(0, int(items))
+    buf["dropped"] = int(buf["dropped"]) + max(0, int(dropped))
+    if int(buf["calls"]) >= _RETRIEVAL_FLUSH_EVERY:
+        flush_retrieval_counters(target)
+
+
+def flush_retrieval_counters(path: Path | str | None = None) -> dict:
+    """把内存里的检索计数批量写进 state（nightly / 每 20 次调用触发）。
+
+    这样每轮对话不因为指标多写一次库；代价是崩溃时最多丢 19 次计数。
+    """
+    buf = _RETRIEVAL_PENDING
+    target = str(path or buf.get("path") or "")
+    flushed = {"calls": int(buf["calls"]), "hits": int(buf["hits"]),
+               "items": int(buf["items"]), "dropped": int(buf["dropped"])}
+    if not target or not flushed["calls"]:
+        return {"ok": True, "flushed": {"calls": 0}}
+    try:
+        con = db.connect(target)
+        try:
+            now = time.time()
+            _state_add(con, "mem_retrieval_calls", flushed["calls"], now)
+            _state_add(con, "mem_retrieval_hits", flushed["hits"], now)
+            _state_add(con, "mem_retrieval_items", flushed["items"], now)
+            _state_add(con, "mem_retrieval_dropped_stale", flushed["dropped"], now)
+            con.commit()
+        finally:
+            con.close()
+    except Exception as exc:  # noqa: BLE001 - 指标失败不影响主链
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                "flushed": {"calls": 0}}
+    for key in ("calls", "hits", "items", "dropped"):
+        buf[key] = 0
+    return {"ok": True, "flushed": flushed}
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[mid])
+    return (float(ordered[mid - 1]) + float(ordered[mid])) / 2.0
+
+
+def _count_by(rows: list[dict], key: str) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for row in rows:
+        name = str(row.get(key) or "unknown")
+        out[name] = out.get(name, 0) + 1
+    return out
+
+
+def metrics(path: Path | str = DB_PATH, now: float | None = None) -> dict:
+    """记忆层可观测指标（JSON 可序列化；读不出来的字段给 None，不抛错）。
+
+    覆盖：messages 分层/归档、memories 状态/kind/时间层/重要性/合并、claims、
+    summaries（月 gist）、检索调用与命中、最近一次 context 预算、归档导出。
+    """
+    now = time.time() if now is None else float(now)
+    result: dict[str, Any] = {
+        "ok": True, "now": now,
+        "messages": {}, "memories": {}, "claims": {"total": None},
+        "summaries": {"total": None, "monthly": None, "latest_month": None},
+        "retrieval": {"calls": 0, "hits": 0, "items": 0, "avg_items": None,
+                      "hit_rate": None, "dropped_stale": 0},
+        "context": {"tokens": None, "dropped": None, "at": None},
+        "archive": {"total": None, "exported_at": None, "last_export_rows": None},
+    }
+    con = db.connect(path)
+    try:
+        # messages
+        try:
+            total = int(con.execute("SELECT count(*) FROM messages").fetchone()[0])
+            archived = int(con.execute(
+                "SELECT count(*) FROM messages WHERE archived_at IS NOT NULL").fetchone()[0])
+            row = con.execute(
+                "SELECT min(ts) AS oldest FROM messages WHERE archived_at IS NULL").fetchone()
+            oldest_ts = float(row["oldest"] or 0.0) if row is not None else 0.0
+            row = con.execute("SELECT max(ts) AS newest FROM messages").fetchone()
+            newest_ts = float(row["newest"] or 0.0) if row is not None else 0.0
+            result["messages"] = {
+                "total": total, "archived": archived, "active": total - archived,
+                "oldest_active_days": round(max(0.0, (now - oldest_ts) / 86400.0), 1)
+                if (total - archived) and oldest_ts else None,
+                "newest_days": round(max(0.0, (now - newest_ts) / 86400.0), 1)
+                if total and newest_ts else None,
+            }
+        except Exception:  # noqa: BLE001
+            pass
+        # memories
+        try:
+            mem_rows = [dict(r) for r in con.execute("SELECT * FROM user_memories").fetchall()]
+            by_status = _count_by(mem_rows, "status")
+            by_kind = _count_by(mem_rows, "kind")
+            active_rows = [r for r in mem_rows if str(r.get("status")) == "active"]
+            tiers = {"hot": 0, "warm": 0, "cold": 0}
+            importances: list[float] = []
+            merged_30d = 0
+            for row in active_rows:
+                tiers[tier_of(row.get("created_at"), now)] += 1
+                try:
+                    importances.append(float(row.get("importance")))
+                except (TypeError, ValueError):
+                    importances.append(DEFAULT_IMPORTANCE)
+                try:
+                    history = json.loads(row.get("evidence_history") or "[]")
+                except (TypeError, ValueError):
+                    history = []
+                if isinstance(history, list) and len(history) > 1:
+                    ref = row.get("last_accessed") or row.get("created_at") or now
+                    try:
+                        if now - float(ref) <= 30 * 86400.0:
+                            merged_30d += 1
+                    except (TypeError, ValueError):
+                        pass
+            total_mem = len(mem_rows)
+            result["memories"] = {
+                "total": total_mem,
+                "by_status": by_status,
+                "by_kind": by_kind,
+                "by_tier": tiers,
+                "avg_importance": round(sum(importances) / len(importances), 3)
+                if importances else None,
+                "median_importance": round(_median(importances), 3)
+                if importances else None,
+                "dormant_rate": round(by_status.get("dormant", 0) / total_mem, 3)
+                if total_mem else 0.0,
+                "merged_within_30d": merged_30d,
+            }
+        except Exception:  # noqa: BLE001
+            pass
+        # claims
+        try:
+            result["claims"] = {"total": int(
+                con.execute("SELECT count(*) FROM claims").fetchone()[0])}
+        except Exception:  # noqa: BLE001
+            pass
+        # summaries
+        try:
+            total_sum = int(con.execute("SELECT count(*) FROM summaries").fetchone()[0])
+            monthly = int(con.execute(
+                "SELECT count(*) FROM summaries WHERE kind='monthly'").fetchone()[0])
+            row = con.execute(
+                "SELECT max(year_month) AS ym FROM summaries WHERE kind='monthly'").fetchone()
+            latest_month = str(row["ym"] or "") if row is not None else ""
+            result["summaries"] = {"total": total_sum, "monthly": monthly,
+                                   "latest_month": latest_month or None}
+        except Exception:  # noqa: BLE001
+            pass
+        # retrieval state counters（含尚未落盘的内存缓冲）
+        try:
+            pending = _pending_for(path)
+            calls = int(_state_get(con, "mem_retrieval_calls") or 0) + pending["calls"]
+            hits = int(_state_get(con, "mem_retrieval_hits") or 0) + pending["hits"]
+            items = int(_state_get(con, "mem_retrieval_items") or 0) + pending["items"]
+            dropped_stale = int(_state_get(con, "mem_retrieval_dropped_stale") or 0) \
+                + pending["dropped"]
+            result["retrieval"] = {
+                "calls": calls, "hits": hits, "items": items,
+                "avg_items": round(items / calls, 2) if calls else None,
+                "hit_rate": round(hits / calls, 3) if calls else None,
+                "dropped_stale": dropped_stale,
+                "pending": pending["calls"],
+            }
+        except Exception:  # noqa: BLE001
+            pass
+        # last context budget event
+        try:
+            row = con.execute(
+                "SELECT ts, meta_json FROM raw_events WHERE source='context_budget' "
+                "ORDER BY ts DESC, id DESC LIMIT 1").fetchone()
+            if row is not None:
+                try:
+                    payload = json.loads(row["meta_json"] or "{}")
+                except (TypeError, ValueError):
+                    payload = {}
+                result["context"] = {
+                    "tokens": payload.get("tokens"),
+                    "dropped": payload.get("dropped"),
+                    "at": float(row["ts"]),
+                }
+        except Exception:  # noqa: BLE001
+            pass
+        # archive export
+        try:
+            result["archive"] = {
+                "total": int(con.execute(
+                    "SELECT count(*) FROM messages WHERE archived_at IS NOT NULL").fetchone()[0]),
+                "exported_at": _state_get(con, "mem_archive_exported_at"),
+                "last_export_rows": _state_get(con, "mem_archive_export_rows"),
+            }
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        con.close()
+    return result
 

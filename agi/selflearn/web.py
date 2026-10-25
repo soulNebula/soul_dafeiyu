@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from . import acceptance, autonomy, db, errors, learn_flow, learn_loop, memory, personality, proactive, report, scheduler, skills, skilltree, state, trust
 from .chat import SelfLearnAgent
@@ -100,6 +102,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    @staticmethod
+    def _host_ok(host: str) -> bool:
+        """只允许回环 Host（服务本身已 bind 127.0.0.1；这层防 DNS rebinding）。"""
+        name = str(host or "").strip().rsplit(":", 1)[0].strip("[]").lower()
+        return name in ("127.0.0.1", "localhost", "::1") or name.startswith("127.")
+
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/favicon.ico":
@@ -144,6 +152,19 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 con.close()
             self._json(200, rows[::-1]); return
+        if path == "/api/memory/stats":
+            # P1-g：只读记忆指标（仅本机回环 Host；不回传真实昵称/消息内容）
+            if not self._host_ok(self.headers.get("Host") or ""):
+                self._json(403, {"ok": False, "error": "host not allowed"}); return
+            try:
+                query = parse_qs(urlsplit(self.path).query)
+            except Exception:  # noqa: BLE001
+                query = {}
+            alias = str((query.get("contact") or ["default"])[0] or "default")
+            alias = re.sub(r"[^\w\u4e00-\u9fff\-]", "", alias)[:40] or "default"
+            data = memory.metrics(DB_PATH)
+            data["contact_alias"] = alias
+            self._json(200, data); return
         if path == "/api/pairwise/stats":
             self._json(200, skills.pair_stats(DB_PATH)); return
         self._json(404, {"ok": False, "error": "not found"})

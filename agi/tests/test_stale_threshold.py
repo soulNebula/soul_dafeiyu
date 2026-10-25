@@ -10,8 +10,15 @@
 - ``proactive_schedule`` 是内部调度事件，**不刷新** ``last_event_ts``
   （只有 inbound/outbound/send/queue 等真实活动才算）
 - 30 分钟节流不变
+
+P0-24（2026-10-26 真机噪音）：``proactive_enabled=false`` + 夜间静默时，
+哨兵仍每 30 分钟报一条 gateway_stale（idle 已 14040s）——主动关闭后本来就
+"预期不发送"，报死区是纯噪音。本文件同时锁住三种抑制条件
+（disabled / stopped / quiet）与"真实死区照旧告警"。
 """
 from __future__ import annotations
+
+import time
 
 import pytest
 
@@ -20,15 +27,17 @@ from agi.wechat_gateway.server import Gateway
 CONTACT = "好友A"
 
 
-def _gw(tmp_path, **overrides) -> Gateway:
+def _gw(tmp_path, *, stop_path=None, **overrides) -> Gateway:
     cfg = {
         "enabled": True, "port": 801, "dry_run": True,
         "allowed_contacts": [CONTACT], "send_mode": "auto",
+        # P0-24：默认把主动消息开着 = "真实死区"场景；抑制相关测试显式覆盖
+        "proactive_enabled": True,
         "drafts_path": str(tmp_path / "drafts.jsonl"),
         "log_path": str(tmp_path / "gateway.log"),
     }
     cfg.update(overrides)
-    return Gateway(cfg)
+    return Gateway(cfg, stop_path=stop_path)
 
 
 def _stale_events(g) -> list[dict]:
@@ -125,3 +134,135 @@ def test_schedule_event_does_not_mask_dead_zone(tmp_path):
     g._record("proactive_schedule", {"next_delay_s": 7200.0, "source": "random"})
     assert g.last_event_ts == 1000.0
     assert g._check_stale(now=now) is True
+
+
+# --------------------------------------------------------------------------- #
+# P0-24：三种"预期不发送"状态不报 gateway_stale；真实死区照旧
+# --------------------------------------------------------------------------- #
+def _idle_since(g, now: float, idle_s: float = 10800.0) -> None:
+    """把"最后一次真实活动"摆到 now - idle_s（3h > 阈值 8640）。"""
+    g.last_event_ts = now - idle_s
+
+
+# ① proactive_enabled=false -------------------------------------------------- #
+def test_proactive_disabled_suppresses_stale_and_status(tmp_path):
+    g = _gw(tmp_path, proactive_enabled=False)
+    now = 1000.0 + 10800.0
+    _idle_since(g, now)
+
+    assert g._check_stale(now=now) is False          # 不报
+    assert _stale_events(g) == []
+    assert g.status()["stale_suppressed"] is True
+    assert g.status()["stale_suppressed_reason"] == "disabled"
+
+    # 重新开启主动消息（同一 cfg 对象，等价于热加载后的最新配置）→ 恢复判定
+    g.cfg["proactive_enabled"] = True
+    assert g.status()["stale_suppressed"] is False
+    assert g.status()["stale_suppressed_reason"] is None
+    assert g._check_stale(now=now) is True
+    assert len(_stale_events(g)) == 1
+
+
+def test_suppression_does_not_consume_throttle_window(tmp_path):
+    """抑制期间不占用 30 分钟节流窗口：恢复后立刻能报。"""
+    g = _gw(tmp_path, proactive_enabled=False)
+    now = 1000.0 + 10800.0
+    _idle_since(g, now)
+    assert g._check_stale(now=now) is False
+    assert float(getattr(g, "_last_stale_ts", 0.0) or 0.0) == 0.0
+    g.cfg["proactive_enabled"] = True
+    assert g._check_stale(now=now) is True
+
+
+# ② STOP 文件存在 ------------------------------------------------------------ #
+def test_stop_file_suppresses_stale_then_resumes(tmp_path):
+    stop = tmp_path / "STOP"
+    g = _gw(tmp_path, stop_path=stop)
+    now = 1000.0 + 10800.0
+    _idle_since(g, now)
+
+    stop.write_text("stopped\n", encoding="utf-8")
+    assert g._check_stale(now=now) is False
+    assert _stale_events(g) == []
+    assert g.status()["stale_suppressed"] is True
+    assert g.status()["stale_suppressed_reason"] == "stopped"
+
+    stop.unlink()
+    assert g.status()["stale_suppressed"] is False
+    assert g._check_stale(now=now) is True
+    assert len(_stale_events(g)) == 1
+
+
+# ③ 夜间静默 ---------------------------------------------------------------- #
+def test_quiet_hours_suppresses_stale_and_status(tmp_path):
+    # [0,24] = 全天静默：与测试运行的具体时刻无关，断言稳定
+    g = _gw(tmp_path, quiet_hours=[0, 24])
+    now = 1000.0 + 10800.0
+    _idle_since(g, now)
+
+    assert g._check_stale(now=now) is False
+    assert _stale_events(g) == []
+    assert g.status()["stale_suppressed"] is True
+    assert g.status()["stale_suppressed_reason"] == "quiet"
+
+    # 静默结束（[0,0] = 历史语义"不静默"）→ 恢复真实死区告警
+    g.cfg["quiet_hours"] = [0, 0]
+    assert g.status()["stale_suppressed"] is False
+    assert g._check_stale(now=now) is True
+    assert len(_stale_events(g)) == 1
+
+
+def test_night_quiet_hours_real_clock_window(tmp_path):
+    """真实 [23,8] 跨零点区间：23:30 抑制、12:00 恢复（用固定时间戳，不依赖当前时刻）。"""
+    g = _gw(tmp_path, quiet_hours=[23, 8])
+    night = time.mktime((2026, 10, 25, 23, 30, 0, 0, 0, -1))
+    day = time.mktime((2026, 10, 25, 12, 0, 0, 0, 0, -1))
+
+    _idle_since(g, night)
+    assert g.stale_suppression(now=night) == "quiet"
+    assert g._check_stale(now=night) is False
+
+    _idle_since(g, day)
+    assert g.stale_suppression(now=day) == ""
+    assert g._check_stale(now=day) is True
+
+
+def test_quiet_override_keeps_stale_alert(tmp_path):
+    """24h override 放行 = 预期仍可发送 → 不该被夜间静默误抑制。"""
+    g = _gw(tmp_path, quiet_hours=[0, 24], proactive_override_quiet=True)
+    now = 1000.0 + 10800.0
+    _idle_since(g, now)
+
+    assert g.stale_suppression() == ""       # override 生效 → 不抑制
+    assert g._check_stale(now=now) is True
+
+
+# 真实故障不受影响 ----------------------------------------------------------- #
+def test_real_dead_zone_still_reported(tmp_path):
+    """enabled=true、非静默、无 STOP、超阈值 → 必须报，且 /status 显示未抑制。"""
+    g = _gw(tmp_path)                        # proactive 开、无 quiet_hours、无 STOP
+    now = 1000.0 + 10800.0
+    _idle_since(g, now)
+
+    assert g.stale_suppression(now=now) == ""
+    assert g._check_stale(now=now) is True
+    stale = _stale_events(g)
+    assert len(stale) == 1 and stale[0]["idle_s"] == 10800.0
+    assert g.status()["stale_suppressed"] is False
+    assert g.status()["stale_suppressed_reason"] is None
+
+
+# 优先级：disabled → stopped → quiet（/status 只展示一个原因） --------------- #
+def test_suppression_reason_precedence(tmp_path):
+    stop = tmp_path / "STOP"
+    stop.write_text("stopped\n", encoding="utf-8")
+    g = _gw(tmp_path, stop_path=stop, proactive_enabled=False, quiet_hours=[0, 24])
+
+    assert g.stale_suppression() == "disabled"
+    g.cfg["proactive_enabled"] = True
+    assert g.stale_suppression() == "stopped"
+    stop.unlink()
+    assert g.stale_suppression() == "quiet"
+    g.cfg["quiet_hours"] = [0, 0]
+    assert g.stale_suppression() == ""
+

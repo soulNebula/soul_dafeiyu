@@ -58,6 +58,12 @@ STALE_IGNORED_KINDS = frozenset({"gateway_stale", "proactive_schedule"})
 STOP_LOG_INTERVAL_S = 600.0        # proactive_stopped 每 10 分钟最多 1 条
 QUIET_OVERRIDE_S = 86400.0         # proactive_override_quiet 24h 后自动失效
 
+# P0-24：死区哨兵只在"应该有事发生"时才有意义。下面三种状态都是
+# **预期不发送**（本来就不会有活动），此时报 gateway_stale 是纯噪音：
+STALE_SUPPRESS_DISABLED = "disabled"   # proactive_enabled=false
+STALE_SUPPRESS_STOPPED = "stopped"     # STOP 紧急停止文件存在
+STALE_SUPPRESS_QUIET = "quiet"         # 夜间静默时段（且无 24h override）
+
 
 def _log(entry: dict, path: Path | None = None) -> None:
     target = Path(path) if path else LOG_PATH
@@ -181,14 +187,88 @@ class Gateway:
             slack = STALE_SLACK
         return max(base, interval_max * max(0.0, slack), STALE_MIN_S)
 
+    def _quiet_active(self, now: float) -> bool:
+        """P0-24：**只读**判断当前是否夜间静默（供观察用，不写事件/不改状态）。
+
+        与 :meth:`_quiet_blocked` 的判定保持一致（含 ``quiet_hours=[]`` 回退默认、
+        24h ``proactive_override_quiet`` 放行/过期语义），但 /status 与死区哨兵
+        每 0.2s 都可能调用它，**不能**像发送路径那样记 ``quiet_override`` 事件或
+        推进 override 窗口（否则会刷新 ``last_event_ts``、把真实死区掩盖掉）。
+        """
+        raw = self.cfg.get("quiet_hours")
+        if raw is None:
+            return False                     # 未配置：不做静默硬保护（旧 cfg 兼容）
+        if isinstance(raw, (list, tuple)) and len(raw) == 2:
+            try:
+                start, end = int(raw[0]), int(raw[1])
+            except (TypeError, ValueError):
+                start = end = 0
+            if start == end:
+                return False                 # [0,0] / 相等 = 历史语义"不静默"
+            quiet = [start, end]
+        else:
+            # 非法值（含 []）→ 与发送路径一致：回退默认 [23,8]
+            quiet = list(cfg.DEFAULTS.get("quiet_hours") or [23, 8])
+        try:
+            start, end = int(quiet[0]), int(quiet[1])
+        except (TypeError, ValueError):
+            return False
+        if not policy.in_quiet_hours(time.localtime(now).tm_hour, start, end):
+            return False
+        if bool(self.cfg.get("proactive_override_quiet")):
+            started = self._override_started_ts
+            if started is None:
+                return False                 # override 请求了 = 视为放行（窗口未起算）
+            try:
+                if now - float(started) < QUIET_OVERRIDE_S:
+                    return False             # 24h 内放行
+            except (TypeError, ValueError):
+                pass
+        return True
+
+    def stale_suppression(self, now: float | None = None) -> str:
+        """P0-24：当前是否处于「预期不发送」状态。
+
+        返回抑制原因（``disabled`` / ``stopped`` / ``quiet``），空串表示哨兵正常工作。
+        这三种状态下本来就不会有活动，报 ``gateway_stale`` 是纯噪音，会淹没真实死区。
+
+        判断读的是 ``self.cfg``（与 proactive 循环热加载更新的是同一个对象），
+        所以 ``proactive_enabled`` / ``quiet_hours`` / ``proactive_override_quiet``
+        变化后下一轮检查立即生效。优先级：disabled → stopped → quiet。
+        **只读**：不写日志事件、不推进 override 窗口（观测不能反过来制造"活动"）。
+        """
+        now = time.time() if now is None else float(now)
+        # ① 主动消息关闭：没有"应该发生的事"，也就没有死区
+        if not bool(self.cfg.get("proactive_enabled")):
+            return STALE_SUPPRESS_DISABLED
+        # ② STOP 文件：紧急停止，预期不发送
+        try:
+            if self.stop_present():
+                return STALE_SUPPRESS_STOPPED
+        except Exception:  # noqa: BLE001 - 探测失败不能反过来打断哨兵
+            pass
+        # ③ 夜间静默（含 24h override 放行语义）：发送被硬拦，同样预期无活动
+        try:
+            if self._quiet_active(now):
+                return STALE_SUPPRESS_QUIET
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
+
     def _check_stale(self, now: float | None = None) -> bool:
         """P0-2 死区哨兵：超过动态阈值没有真实活动就写 gateway_stale。
 
         复用 `_work` 现有事件循环（0.2s 转一圈），不新起线程；同一告警 30 分钟内
         最多写一次，避免自己刷屏。阈值见 :meth:`stale_threshold`（P0-16：必须
         覆盖 proactive 最长 2h 的随机间隔，否则正常长等待会误报）。
+
+        P0-24：``proactive_enabled=false`` / STOP 文件 / 夜间静默这三种
+        「预期不发送」状态直接不判定（不写 gateway_stale、不占用 30 分钟节流窗口），
+        状态恢复后按真实空闲时长立刻重新判定；真实死区照旧告警。
         """
         now = time.time() if now is None else float(now)
+        if self.stale_suppression(now):
+            return False
         alert_s = self.stale_threshold()
         last_event = float(getattr(self, "last_event_ts", 0.0) or 0.0)
         if not last_event or now - last_event <= alert_s:
@@ -711,6 +791,11 @@ class Gateway:
         except Exception:  # noqa: BLE001
             inner_status = {"mode": "off", "last_latency_ms": None,
                             "fallbacks_24h": 0}
+        # P0-24：死区哨兵抑制状态（预期不发送时不报 gateway_stale）
+        try:
+            stale_reason = self.stale_suppression()
+        except Exception:  # noqa: BLE001 - 观测字段失败不影响 /status
+            stale_reason = ""
         return {
             "ok": True,
             "service": "wechat_gateway",
@@ -750,6 +835,10 @@ class Gateway:
                               "max": self.cfg.get("proactive_probability_max")},
                           "last": self.last_proactive},
             "inner": inner_status,
+            # P0-24：stale_suppressed=true 表示当前处于「预期不发送」状态，
+            # 哨兵主动静默；reason ∈ {disabled, stopped, quiet} 或 null。
+            "stale_suppressed": bool(stale_reason),
+            "stale_suppressed_reason": stale_reason or None,
             "backend": state,
             "receiver": self.receiver.status() if self.receiver else None,
             "recent": list(self.recent)[-20:],

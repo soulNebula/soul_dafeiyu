@@ -250,6 +250,8 @@ def _gw(tmp_path, **overrides) -> Gateway:
         "log_path": str(tmp_path / "gateway.log"),
         # P0-16：阈值 = max(800, 60×1.2, 3600) = 3600，测试用固定下限便于算时间
         "proactive_interval_max_s": 60,
+        # P0-24：哨兵在 proactive 关闭/STOP/夜间静默时抑制，这里按"真实死区"配置
+        "proactive_enabled": True,
     }
     cfg.update(overrides)
     return Gateway(cfg)

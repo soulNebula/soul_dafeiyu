@@ -159,16 +159,25 @@ _ADDR_RE = re.compile(r"0x[0-9a-fA-F]+")
 _WS_RE = re.compile(r"\s+")
 #: 不算"发送失败"的状态（被闸门拦截不是故障；draft 要另有 send_failed 才算，见下）
 _NON_FAILURE_STATUS = ("draft", "blocked")
+#: 真正"送达对方"的状态（P0-7：必须 ok=True 且 status 属于此集合）。
+#: 注意 ``clipboard`` 不在这里——剪贴板兜底只是把内容复制到剪贴板等人工粘贴，
+#: **内容已保留但没送达**，既不能计 ``out.sent``，也不能重置熔断。
+_DELIVERED_STATUS = frozenset({"sent", "ok"})
+#: 内容已保留、未送达的人工协助类兜底状态（单列统计，不进 sent/失败）
+_UNDELIVERED_COVERED_STATUS = frozenset({"clipboard"})
 #
-# 失败率统计口径（P0-6，2026-10-25 与 P0-4 对齐）：
+# 失败率统计口径（P0-6/P0-7，2026-10-25 与 P0-4 对齐）：
 #   - status == "failed"  → 失败；
 #   - status == "draft"   → **只有 send_failed=True 才算失败**（P0-4 把真实
 #     发送失败落成草稿并打这个标记；内容不丢、不重复发）；
 #   - status == "draft" 且无 send_failed → confirm 模式的人工草稿，非故障；
 #   - status == "blocked" → 内容/静音/限流闸门拦截，非故障；
+#   - status == "clipboard"（ok=True）→ 内容已进剪贴板等人工粘贴：**未送达**，
+#     不计 sent、不重置熔断、单列 ``out.clipboard``（P0-7）；
 #   - 其余未知 status / 非 dict → 保守视为失败。
-# 所以"真正失败"的证据是 send_failed 字段（draft 只是落盘形态）；熔断一律按
-# error_key（P0-4 已写入，缺省回退 normalize_error 前 60 字）计数，不按完整 error 文本。
+# 所以「失败率 = failed + draft(send_failed) + clipboard」，其中 sent 只统计
+# ``is_delivered()``；真正失败证据是 send_failed 字段（draft 只是落盘形态）；
+# 熔断一律按 error_key（P0-4 已写入，缺省回退 normalize_error 前 60 字）计数。
 
 
 def _cfg_float(gateway, key: str, default: float) -> float:
@@ -267,6 +276,28 @@ def is_send_failure(status: Any) -> bool:
         # P0-4：真失败被落成草稿并打 send_failed=True；旧 confirm 草稿没有该键
         return bool(status.get("send_failed"))
     return state not in _NON_FAILURE_STATUS
+
+
+def send_status(status: Any) -> str:
+    """取发送结果的 status 字符串（小写归一）；非 dict 返回空串。"""
+    if not isinstance(status, dict):
+        return ""
+    return str(status.get("status") or "").strip().lower()
+
+
+def is_delivered(status: Any) -> bool:
+    """是否**真正送达对方**（P0-7：ok=True 且 status ∈ {sent, ok}）。
+
+    draft / clipboard / planned / failed 都不算送达。
+    """
+    return (isinstance(status, dict) and status.get("ok") is True
+            and send_status(status) in _DELIVERED_STATUS)
+
+
+def is_clipboard(status: Any) -> bool:
+    """是否剪贴板兜底（内容已复制、等人手动粘贴，**未送达**）。"""
+    return (isinstance(status, dict) and status.get("ok") is True
+            and send_status(status) in _UNDELIVERED_COVERED_STATUS)
 
 
 def _breaker_state(gateway) -> dict:
@@ -377,7 +408,8 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             pass
         return {"ok": True, "ran": False, "reason": "breaker_open",
                 "contacts": len(contact_list), "sent": 0, "drafts": 0, "deduped": 0,
-                "skipped": [], "breaker": breaker_snapshot(gateway, now)}
+                "clipboard": 0, "skipped": [],
+                "breaker": breaker_snapshot(gateway, now)}
     if open_until and open_until <= now:
         # 冷却结束：记 close 并清零（下一轮恢复发送）
         try:
@@ -394,7 +426,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     client = client if client is not None else default_client()
     out: dict[str, Any] = {"ok": True, "ran": True, "contacts": len(contact_list),
                            "sent": 0, "drafts": 0, "deduped": 0,
-                           "breaker_open": False, "skipped": []}
+                           "clipboard": 0, "breaker_open": False, "skipped": []}
     idle_gap = float(gateway.cfg.get("proactive_idle_s") or 0)
     for contact in contact_list:
         probability = _probability(gateway)
@@ -491,15 +523,29 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 "send_failed": bool(status.get("send_failed")),
                 "error_key": str(status.get("error_key") or "")[:120],
                 "stage": str(status.get("stage") or "")[:40],
+                # P0-7：clipboard（未送达）也带 warning，统计时单列
+                "warning": str(status.get("warning") or "")[:120],
                 "error": str(status.get("error") or "")[:120]})
             try:
                 record_event(db_path, contact, text, status.get("status") or "unknown",
                              now, kind=kind)
             except Exception:  # noqa: BLE001
                 pass
+            # P0-7：clipboard 兜底 = 内容进剪贴板、没送达：不计 sent、不重置熔断，单列统计。
+            if is_clipboard(status):
+                out["clipboard"] += 1
+                try:
+                    gateway._record("proactive_clipboard", {
+                        "friend": contact, "text": text[:120], "kind": kind,
+                        "status": status.get("status"),
+                        "method": str(status.get("method") or "")[:40],
+                        "verified": bool(status.get("verified", False)),
+                        "warning": str(status.get("warning") or "")[:200]})
+                except Exception:  # noqa: BLE001
+                    pass
             # P0-6 顺序很重要：draft+send_failed 先按「失败」处理（参与熔断），
             # 再顺便记一次 drafts（内容已落草稿）；否则永远进不了熔断分支。
-            if is_send_failure(status):
+            elif is_send_failure(status):
                 if status.get("status") == "draft":
                     out["drafts"] += 1  # 真失败落草稿：内容保住但仍算失败
                 if _note_send_failure(gateway, status, now=now,
@@ -507,10 +553,10 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                                       cooldown_s=breaker_cooldown):
                     out["breaker_open"] = True
                     break  # 熔断后本轮不再发剩余气泡/联系人
-            elif status.get("ok") and status.get("status") != "draft":
+            elif is_delivered(status):
                 out["sent"] += 1
                 sent_any = True
-                _note_send_success(gateway)  # 成功一次即清零
+                _note_send_success(gateway)  # 只有真正送达才清零
             elif status.get("status") == "draft":
                 out["drafts"] += 1  # confirm 人工草稿（非故障，不影响熔断）
         if sent_any and turn_id:
@@ -520,7 +566,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             break
     outcome = {"ts": now, "contacts": out["contacts"],
                "sent": out["sent"], "drafts": out["drafts"],
-               "deduped": out["deduped"],
+               "deduped": out["deduped"], "clipboard": out["clipboard"],
                "breaker": breaker_snapshot(gateway, now),
                "skipped": len(out["skipped"])}
     try:
@@ -530,7 +576,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     # 兼容旧返回语义：整轮所有联系人都被概率闸门跳过 → ran=False/reason=probability_skip
     probability_skips = [s for s in out["skipped"] if s.get("reason") == "probability"]
     if (probability_skips and out["skipped"] and not out["sent"] and not out["drafts"]
-            and not out["deduped"]
+            and not out["deduped"] and not out["clipboard"]
             and all(s.get("reason") == "probability" for s in out["skipped"])):
         last_skip = probability_skips[-1]
         out.update({"ran": False, "reason": "probability_skip",

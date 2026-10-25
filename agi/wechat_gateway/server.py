@@ -472,6 +472,8 @@ class Gateway:
             fallback["error_key"] = error_key or self._normalize_error_key(error)
             return fallback
         if fallback and fallback.get("ok") and fallback.get("status") == "clipboard":
+            # P0-7：clipboard 原样透传给调用方（ok=True 但**未送达**，等人手动粘贴）。
+            # 这里只归档草稿，绝不能改写成 sent/draft —— 主动链据此不计 sent、不重置熔断。
             self._archive_failed_draft(
                 contact, text,
                 "fallback_clipboard: " + str(fallback.get("warning") or ""),

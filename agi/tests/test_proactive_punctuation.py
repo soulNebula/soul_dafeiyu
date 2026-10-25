@@ -276,3 +276,119 @@ def test_p013_lead_regression_cases():
     # 偏保守的两例：不切（宁可漏标点也不切坏）
     for text in ("别熬夜你早点睡", "忙完了你给我发个消息"):
         assert proactive.find_runon(text) is None, text
+
+
+# --------------------------------------------------------------------------- #
+# P0-18：感受/副词短语前缺标点（第三档 run-on）
+# --------------------------------------------------------------------------- #
+def test_p018_feeling_phrase_runon_fixed():
+    first = ("这会儿，接着刚才说的，这会儿在整理之前存的一批笔记，"
+             "翻到几条自己写歪的想法，有点想笑心里有点感慨。")
+    out = proactive.polish_outbound(first)
+    assert "有点想笑。心里有点感慨。" in out, out
+    assert "这会儿在整理" in out
+    second = ("说个事，刚才说的那批笔记里有一条我自己的旧结论，"
+              "现在看觉得有点意思，也在想当时怎么会那么写心里有点感慨。")
+    out2 = proactive.polish_outbound(second)
+    assert "那么写。心里有点感慨。" in out2, out2
+
+
+def test_p018_feeling_phrase_no_false_split():
+    keep = {
+        "我心里有点难受": "。",
+        "你觉得自己行吗": "？",
+        "他觉得这不对": "。",
+        "我跟心里想的差不多": "。",
+        "现在看": "。",
+        "最近在整理以前写的东西，翻着翻着有点感慨。": "",
+    }
+    for text, tail in keep.items():
+        assert proactive.find_runon(text) is None, text
+        if tail:
+            assert proactive.polish_outbound(text) == text + tail, text
+        else:
+            assert proactive.polish_outbound(text) == text, text
+
+
+def test_p018_feeling_phrase_runon_idempotent():
+    raw = ("说个事，刚才说的那批笔记里有一条我自己的旧结论，"
+           "现在看觉得有点意思，也在想当时怎么会那么写心里有点感慨。")
+    fixed = proactive.polish_outbound(raw)
+    assert proactive.polish_outbound(fixed) == fixed
+
+
+def test_p018_time_progression_runon_fixed():
+    raw = ("心里还挂着那条旧结论，越想越觉得自己当时胆子挺大"
+           "现在让我重写一遍，大概写不出那股劲儿了。")
+    out = proactive.polish_outbound(raw)
+    assert "胆子挺大。现在让我重写一遍" in out, out
+
+
+def test_p018_time_progression_no_false_split():
+    cases = {
+        "我现在有点累": "。",
+        "后来我才明白": "。",
+        "越想越觉得不对": "。",
+        "他后来跟我说": "。",
+        "这时候": "。",
+    }
+    for text, tail in cases.items():
+        assert proactive.find_runon(text) is None, text
+        assert proactive.polish_outbound(text) == text + tail, text
+
+
+# --------------------------------------------------------------------------- #
+# P0-19：≥4 字档精度（前段末字必须像句末；名词结尾不许断）
+# --------------------------------------------------------------------------- #
+FALSE_SPLITS = (
+    "这个方案现在看还是太冒险。",
+    "这周事情有点多，感觉脑子不够用。",
+    "刚才那个想法其实挺有意思。",
+    "和朋友聊到半夜，现在脑子有点沉。",
+)
+
+
+def test_p019_noun_ending_false_splits_fixed():
+    for text in FALSE_SPLITS:
+        assert proactive.find_runon(text) is None, text
+        assert proactive.polish_outbound(text) == text, text
+
+
+def test_p019_real_corpus_11_no_false_split():
+    cases = {
+        "我心里有点难受": "。",
+        "你觉得自己行吗": "？",
+        "他觉得这不对": "。",
+        "我现在有点累": "。",
+        "后来我才明白": "。",
+        "越想越觉得不对": "。",
+        "他后来跟我说了这件事": "。",
+        "最近在整理以前写的东西，翻着翻着有点感慨": "。",
+        "刚看完那本书，越想越觉得作者写得细": "。",
+        "其实我不太确定要不要去": "。",
+        "看了半天资料，突然发现方向搞错了": "。",
+    }
+    for text, tail in cases.items():
+        assert proactive.find_runon(text) is None, text
+        assert proactive.polish_outbound(text) == text + tail, text
+
+
+def test_p019_three_real_sentences_still_fixed():
+    first = ("这会儿，接着刚才说的，这会儿在整理之前存的一批笔记，"
+             "翻到几条自己写歪的想法，有点想笑心里有点感慨。")
+    assert "有点想笑。心里有点感慨。" in proactive.polish_outbound(first)
+    second = ("说个事，刚才说的那批笔记里有一条我自己的旧结论，"
+              "现在看觉得有点意思，也在想当时怎么会那么写心里有点感慨。")
+    assert "那么写。心里有点感慨。" in proactive.polish_outbound(second)
+    third = ("心里还挂着那条旧结论，越想越觉得自己当时胆子挺大"
+             "现在让我重写一遍，大概写不出那股劲儿了。")
+    assert "胆子挺大。现在让我重写一遍" in proactive.polish_outbound(third)
+
+
+def test_p019_polish_idempotent_and_english():
+    for text in FALSE_SPLITS:
+        assert proactive.polish_outbound(proactive.polish_outbound(text)) == text
+    mixed = "我用iPhone 15 Pro拍了张照片现在看还是不太满意"
+    out = proactive.polish_outbound(mixed)
+    assert "iPhone 15 Pro" in out
+    assert proactive.find_runon(out) is None

@@ -15,6 +15,7 @@ A「睡得有点晚脑袋发沉」→ B「煮了小米粥胃里暖乎乎」—�
 from __future__ import annotations
 
 import json
+import re
 import time
 
 from agi.selflearn import db, proactive, trust
@@ -99,7 +100,8 @@ def test_continuity_ok_rules():
     prev = "在整理资料，越整理越乱。"
     # continuation：共享实词 / 指代都算连贯
     assert proactive.continuity_ok("资料越堆越多，我有点烦。", "continuation", [prev])
-    assert proactive.continuity_ok("接着刚才说的，越整理越乱。", "continuation", [prev])
+    assert not proactive.continuity_ok("接着刚才说的，越整理越乱。", "continuation", [prev])
+    assert proactive.continuity_ok("那个资料越整理越乱。", "continuation", [prev])
     assert not proactive.continuity_ok("在听一张新专辑，有点走神。", "continuation", [prev])
     # new_topic：必须转折 + 与上条 Jaccard <0.2
     assert proactive.continuity_ok("对了，在看一部老电影，节奏很慢。", "new_topic", [prev])
@@ -236,3 +238,142 @@ def test_multi_bubble_second_bubble_continues_first(tmp_path, monkeypatch):
     else:
         # 不连贯时允许合并成一条，但不能丢内容
         assert "整理" in bubbles[0]
+
+
+# --------------------------------------------------------------------------- #
+# P0-18：双开头 / 假承接
+# --------------------------------------------------------------------------- #
+def test_prepend_continuity_never_duplicates_opener_prefix():
+    for mode in ("time", "feeling", "thought", "digital"):
+        prefix = proactive._OPENER_PREFIXES[mode][0].rstrip("，, ")
+        text = prefix + "在整理笔记，越整理越乱。"
+        out = proactive._prepend_continuity(text, "对了，", mode)
+        assert out.count(prefix) == 1, (mode, out)
+        assert out.count("对了") == 1, (mode, out)
+        # 不允许「前缀 + 标记 + 同前缀」
+        pattern = re.escape(prefix) + r"[，,]?" + re.escape("对了，")
+        assert pattern not in out, out
+
+
+def test_twenty_ticks_no_duplicate_opener_prefix(tmp_path, monkeypatch):
+    _force_kind(monkeypatch, "care")
+    _no_quadrant_cap(monkeypatch)
+    path = _seed(tmp_path, prev_text="在整理资料，越整理越乱。")
+    client = FakeClient("这会儿在整理之前存的一批笔记，翻到几条想法，有点想笑。")
+    keys = [proactive._strip_prefix_edges(prefix)
+            for prefixes in proactive._OPENER_PREFIXES.values() for prefix in prefixes]
+    messages = []
+    for index in range(20):
+        row = _tick(path, now=T0 + index * 180, client=client)
+        if not row.get("available"):
+            continue
+        message = row["message"]
+        messages.append(message)
+        for key in keys:
+            if not key:
+                continue
+            pattern = (re.escape(key) + r"[，,]?(?:对了，|说起来，|换个话题，|"
+                       r"顺带说个事，|另外，).{0,8}?" + re.escape(key))
+            assert not re.search(pattern, message), (key, message)
+    assert messages
+
+
+def test_false_continuation_never_claims_just_said(tmp_path, monkeypatch):
+    """上一条是「熨衬衫」、这条「整理笔记」→ 不能凭空说「接着刚才说的」。"""
+    _force_kind(monkeypatch, "care")
+    _no_quadrant_cap(monkeypatch)
+    path = _seed(tmp_path, prev_text="刚把明天穿的衬衫熨了，有点累。")
+    client = FakeClient("action: continuation" + chr(10) + "在整理笔记，越整理越乱。")
+    row = _tick(path, client=client)
+    assert row["available"] is True
+    text = row["message"]
+    assert "刚才说的" not in text, text           # 不得凭空承接
+    assert proactive.has_transition(text), text    # 应改判 new_topic + 转折词
+    assert row["action"] == "new_topic", row.get("action")
+    assert proactive.continuity_ok(text, "new_topic", ["刚把明天穿的衬衫熨了，有点累。"])
+
+
+def test_real_continuation_is_accepted(tmp_path, monkeypatch):
+    _force_kind(monkeypatch, "care")
+    _no_quadrant_cap(monkeypatch)
+    path = _seed(tmp_path, prev_text="在整理资料，越整理越乱。")
+    # 真实共享主题词 → continuity_ok 放行，不许被改写成假转折
+    client = FakeClient("action: continuation" + chr(10) + "资料越整理越乱，有点烦。")
+    row = _tick(path, client=client)
+    assert row["available"] is True
+    assert row["action"] == "continuation"
+    assert proactive._shares_content(row["message"], "在整理资料，越整理越乱。")
+    assert "资料" in row["message"]
+
+
+# --------------------------------------------------------------------------- #
+# P0-20：禁止元话语（接着刚才说的/刚才说的…），承接靠内容
+# --------------------------------------------------------------------------- #
+REAL_META_INPUTS = (
+    "这会儿，接着刚才说的，这会儿在整理之前存的一批笔记，翻到几条自己写歪的想法，有点想笑心里有点感慨。",
+    "说个事，刚才说的那批笔记里有一条我自己的旧结论，现在看觉得有点意思，也在想当时怎么会那么写心里有点感慨。",
+    "跟你聊个观察，接着刚才说的，今天把收藏夹里的文章重新分了类，心里踏实了一点。",
+    "突然想到，接着刚才说的，我最近在想，情绪好像也有惯性。",
+)
+
+
+def test_real_meta_inputs_are_cleaned():
+    for raw in REAL_META_INPUTS:
+        out = proactive.polish_outbound(raw)
+        for phrase in proactive.METADISCOURSE_PHRASES:
+            assert phrase not in out, (raw, out, phrase)
+        for word in ("接着", "刚才", "前面"):
+            assert word not in out, (raw, out, word)
+
+
+def test_strip_metadiscourse_is_idempotent_and_keeps_content():
+    raw = "说个事，刚才说的那批笔记里有一条旧结论，心里有点感慨。"
+    fixed = proactive.strip_metadiscourse(raw)
+    assert "刚才说的" not in fixed
+    assert "那批笔记" in fixed
+    assert proactive.strip_metadiscourse(fixed) == fixed
+    # 「刚才那场雨」是内容描述，不是元话语，不能删
+    content = "刚才那场雨下得挺大，路上全是水。"
+    assert proactive.polish_outbound(content) == content
+
+
+def test_twenty_ticks_zero_metadiscourse(tmp_path, monkeypatch):
+    _force_kind(monkeypatch, "care")
+    _no_quadrant_cap(monkeypatch)
+    path = _seed(tmp_path, prev_text="在整理资料，越整理越乱。")
+    client = FakeClient("接着刚才说的，那批笔记越整理越乱，有点烦。")
+    messages = []
+    for index in range(20):
+        row = _tick(path, now=T0 + index * 180, client=client)
+        if row.get("available"):
+            messages.append(row["message"])
+    assert len(messages) == 20
+    hits = 0
+    for message in messages:
+        if any(phrase in message for phrase in proactive.METADISCOURSE_PHRASES):
+            hits += 1
+    assert hits == 0
+
+
+def test_true_continuation_has_no_marker(tmp_path, monkeypatch):
+    _force_kind(monkeypatch, "care")
+    _no_quadrant_cap(monkeypatch)
+    path = _seed(tmp_path, prev_text="那条旧结论我越想越觉得有意思。")
+    client = FakeClient("action: continuation" + chr(10) + "心里还挂着那条旧结论，越想越觉得自己当时胆子挺大。")
+    row = _tick(path, client=client)
+    assert row["available"] is True
+    assert row["action"] == "continuation"
+    assert "那条旧结论" in row["message"]
+    assert "接着" not in row["message"] and "刚才" not in row["message"]
+
+
+def test_broken_continuation_switches_to_natural_transition(tmp_path, monkeypatch):
+    _force_kind(monkeypatch, "care")
+    _no_quadrant_cap(monkeypatch)
+    path = _seed(tmp_path, prev_text="刚把明天穿的衬衫熨了，有点累。")
+    client = FakeClient("action: continuation" + chr(10) + "在整理笔记，越整理越乱。")
+    row = _tick(path, client=client)
+    assert row["available"] is True
+    assert row["action"] == "new_topic"
+    assert proactive.has_transition(row["message"]), row["message"]
+    assert not proactive.contains_metadiscourse(row["message"]), row["message"]

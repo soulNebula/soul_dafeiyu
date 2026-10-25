@@ -103,9 +103,13 @@ RUNON_MIN_CJK = 6
 RUNON_TENDENCY_MIN_CJK = 5
 RUNON_PRONOUNS = "你您我"
 RUNON_BOUNDARIES = ("剪了剪", "了", "着", "过", "完", "好")
-#: 「句末倾向」字：状态/语气收尾，看到它更像一句话说完（真机「有点凉」「有点累」）
-_RUNON_END_TENDENCY = set(
-    "了着过完好凉暖累困饿饱忙闲冷热疼酸痛渴烦闷爽脏湿干香臭甜苦咸")
+#: 「句末倾向」字集：P0-13 的 5 字档与 P0-19 的第三档**共用同一份**，避免漂移。
+#: P0-13 原来只收状态/语气收尾；P0-19 扩充了可收句的形容词/动词（大/多/笑/写/想/看…）。
+SENTENCE_END_CHARS = set(
+    "了着过完好凉暖累困饿饱忙闲冷热疼酸痛渴烦闷爽脏湿干香臭甜苦咸"
+    "多大久笑哭慌沉亮对错行成写想说看听快慢早晚满空")
+#: 兼容旧名（同一份集合，不要新增第二份）
+_RUNON_END_TENDENCY = SENTENCE_END_CHARS
 #: 全局标点/分句约束（拼进每个 kind 的 prompt）
 RUNON_CONSTRAINTS = (
     "标点/分句约束：\n"
@@ -127,6 +131,18 @@ _RUNON_TAIL_PHRASES = (
     "一句", "一遍", "一次", "半天", "好久", "一个", "两个", "几个",
     "一", "两", "三", "几", "半", "个", "些", "点",
 )
+
+#: P0-18 第三档：感受/副词短语前缺标点（「…那么写心里有点感慨」）
+RUNON_FEELING_WORDS = (
+    "心里", "感觉", "觉得", "其实", "有点", "突然", "想着", "回想",
+    "现在看", "现在", "越想越", "越想", "这时候", "后来",
+    "估计", "大概", "似乎",
+)
+#: 该词前连续汉字至少这么长才切（真机「有点想笑心里」前段=4 字，故取 4）
+RUNON_FEELING_MIN_FRONT = 4
+#: 前一个字是代词/介词/常见动词时是同一句话，不能切
+_RUNON_FEELING_BLOCK_PREV = set(
+    "你您我他她它" + _RUNON_OBJECT_PREPOSITIONS + "得着看想说道感有")
 
 # --------------------------------------------------------------------------- #
 # P0-14：反「营销号」句式 + 轻度人格化边界
@@ -162,7 +178,7 @@ PHYSICAL_FORBIDDEN_WORDS = (
 _FEELING_MARKERS = (
     "我觉得", "我在想", "在想", "有点", "感觉", "心里", "挺", "好像",
     "希望", "担心", "开心", "难过", "感慨", "舒服", "累", "笑", "琢磨",
-    "走神", "出神", "想了想", "想聊", "想起", "记起", "突然想到", "在整理", "在看", "在听",
+    "走神", "出神", "想了想", "想着", "惦记", "想聊", "想起", "记起", "突然想到", "在整理", "在看", "在听",
 )
 #: 缺感受时的确定性前缀
 _FEELING_PREFIXES = ("我有点想聊聊，", "说不上为什么，我觉得", "心里有点感慨，")
@@ -665,6 +681,45 @@ def choose_candidate(candidates: list[dict], path: Path | str = DB_PATH,
     return max(ordered, key=lambda c: float(c.get("score") or 0.0))
 
 
+def _find_runon_feeling(value: str) -> int | None:
+    """第三档：感受/副词短语（心里/觉得/有点…）前缺标点时的切分点。"""
+    best: int | None = None
+    for word in RUNON_FEELING_WORDS:
+        start = 0
+        while True:
+            index = value.find(word, start)
+            if index < 0:
+                break
+            start = index + 1
+            if index == 0:
+                continue
+            count = 0
+            cursor = index - 1
+            while cursor >= 0 and _CJK_CHAR_RE.match(value[cursor]):
+                count += 1
+                cursor -= 1
+            if count < RUNON_FEELING_MIN_FRONT:
+                continue
+            if value[index - 1] in _RUNON_FEELING_BLOCK_PREV:
+                continue
+            # P0-19：前段末字必须「像句末」（动词/形容词/语气收尾）；
+            # 名词/量词/代词结尾（案/情/法/子/事/话…）说明还是半句话 → 不切。
+            if value[index - 1] not in SENTENCE_END_CHARS:
+                continue
+            if word == "有点":
+                run = value[index - count:index]
+                if run[-1:] in set("情事话子案法种点"):
+                    continue
+                if re.search(r"(这|那)[一二两三四五六七八九十几]?$", run):
+                    continue
+            rest = value[index + len(word):]
+            if not rest.strip(" 。！？!?...\n\t"):
+                continue  # 词后面没内容（句尾），不切
+            if best is None or index < best:
+                best = index
+    return best
+
+
 def find_runon(text: Any) -> int | None:
     """定位 run-on 粘连句的切分点（在代词前插入句号的位置）。
 
@@ -685,6 +740,7 @@ def find_runon(text: Any) -> int | None:
     value = str(text or "")
     if not value:
         return None
+    pronoun_split: int | None = None
     for index, char in enumerate(value):
         if char not in RUNON_PRONOUNS:
             continue
@@ -731,9 +787,14 @@ def find_runon(text: Any) -> int | None:
                 boundary_end = token_end
         # 边界必须在片段末尾（后面没有补语/量词）才在边界后切；否则切在代词前
         if boundary_end is not None and boundary_end == len(run):
-            return run_start + boundary_end
-        return run_start + count
-    return None
+            pronoun_split = run_start + boundary_end
+        else:
+            pronoun_split = run_start + count
+        break
+    feeling_split = _find_runon_feeling(value)
+    if pronoun_split is not None and (feeling_split is None or pronoun_split <= feeling_split):
+        return pronoun_split
+    return feeling_split
 
 
 def _insert_runon_periods(text: Any) -> str:
@@ -769,6 +830,10 @@ def polish_outbound(text: Any) -> str:
     纯函数：不读文件、不依赖时间/随机。
     """
     value = _WS_RE.sub(" ", str(text or "")).strip()
+    if not value:
+        return ""
+    # P0-20：发送前兜底删除元话语（「接着刚才说的/刚才说的/前面提到…」）
+    value = strip_metadiscourse(value).strip()
     if not value:
         return ""
     if value[-1] not in END_PUNCT:
@@ -885,7 +950,11 @@ def vary_opener(text: Any, target_mode: str,
         return value
     prefixes = _OPENER_PREFIXES.get(mode) or _OPENER_PREFIXES["direct"]
     prefix = prefixes[len(value) % len(prefixes)]
-    if value.startswith("刚刚"):
+    # P0-18 A：正文已带任何开头模式前缀时先摘掉，避免重复前缀
+    matched = _match_existing_prefix(value)
+    if matched:
+        value = value[len(matched):].lstrip("，,；;、 ")
+    elif value.startswith("刚刚"):
         value = value[2:]
     elif value.startswith("刚"):
         value = value[1:]
@@ -991,10 +1060,16 @@ def _style_postprocess(text: Any, kind: str, opener_mode: str,
 # --------------------------------------------------------------------------- #
 # P0-17：相邻主动消息的逻辑/情绪连续性
 # --------------------------------------------------------------------------- #
-#: new_topic 必须带的转折标记
-CONTINUITY_TRANSITIONS = ("对了", "说起来", "换个话题", "顺带说", "另外")
-#: continuation 可以用指代承接
-CONTINUITY_REFS = ("刚才说的", "刚才", "那个", "这事", "前面", "上条", "接着")
+#: new_topic 只允许这些自然口语转折（去掉「回到刚才/接着聊」这类元话语）
+CONTINUITY_TRANSITIONS = ("对了", "说起来", "换个话题", "顺带说个事", "另外")
+#: 指代承接（不许出现“刚才/前面/接着”这类元话语）
+CONTINUITY_REFS = ("那个", "那件", "这事", "这件", "那事", "那条", "那批",
+                   "那次", "这个", "这些", "那些")
+#: P0-20：全量禁用的“元话语”（客服/播报腔），发送前必须剥离
+METADISCOURSE_PHRASES = (
+    "接着刚才说的", "回到刚才", "刚才提到", "前面提到的", "前面提到",
+    "前面说的", "我刚说", "刚说到", "接着聊", "刚才说的", "刚才说",
+)
 #: 功能字：算“实词重叠”时排除含这些字的 2-gram
 _CONTINUITY_STOP_CHARS = set(
     "的了着过是我你他她它们在就都很太又这那一不没也还和与及把被让给对从到为以于而之其或但然后呢吗吧啊嘛哦")
@@ -1030,6 +1105,36 @@ def has_continuation_reference(text: Any) -> bool:
     return any(ref in value for ref in CONTINUITY_REFS)
 
 
+def contains_metadiscourse(text: Any) -> bool:
+    """P0-20：文本是否含「接着刚才说的/刚才说的/前面提到」这类元话语。"""
+    value = str(text or "")
+    return any(phrase in value for phrase in METADISCOURSE_PHRASES)
+
+
+def _collapse_duplicate_prefix(value: str) -> str:
+    """剥离元话语后可能留下「这会儿，这会儿…」→ 合并成一个开头前缀。"""
+    for prefix in _all_opener_prefixes():
+        key = _strip_prefix_edges(prefix)
+        if not key:
+            continue
+        value = re.sub(r"(" + re.escape(key) + r")[，,]?\s*\1", r"\1", value)
+    return value
+
+
+def strip_metadiscourse(text: Any) -> str:
+    """删除元话语短语（连同多余逗号），不做同义替换；纯函数、幂等。"""
+    value = str(text or "")
+    if not value:
+        return value
+    for phrase in sorted(METADISCOURSE_PHRASES, key=len, reverse=True):
+        value = value.replace(phrase, "")
+    value = re.sub(r"[，,、；;]{2,}", "，", value)
+    value = re.sub(r"[，,、；;]\s*([。！？!?])", r"\1", value)
+    value = re.sub(r"([。！？!?])\s*[，,、；;]+", r"\1", value)
+    value = re.sub(r"^[，,、；;。\s]+", "", value).strip()
+    return _collapse_duplicate_prefix(value)
+
+
 def parse_action(text: Any) -> tuple[str, str]:
     """解析 LLM 输出的 ``action: continuation|new_topic``，返回 (action, 正文)。"""
     value = str(text or "").strip()
@@ -1056,7 +1161,7 @@ def infer_action(text: Any, previous: Any = "") -> str:
 
 
 def continuity_ok(text: Any, action: str, recent_sent: list[str] | None) -> bool:
-    """连续性校验：continuation 要有承接；new_topic 要有转折且与上条明显不同。"""
+    """连续性校验：不许元话语；continuation 靠内容/指代；new_topic 有转折且明显不同。"""
     history = [str(item or "").strip() for item in list(recent_sent or [])
                if str(item or "").strip()]
     if not history:
@@ -1064,6 +1169,8 @@ def continuity_ok(text: Any, action: str, recent_sent: list[str] | None) -> bool
     previous = history[0]
     value = str(text or "").strip()
     if not value:
+        return False
+    if contains_metadiscourse(value):
         return False
     if action == "new_topic":
         return has_transition(value) and topic_overlap(value, previous) < 0.2
@@ -1127,21 +1234,58 @@ def _continuity_context(recent_own: list[dict], user_recent: list[str],
     return "\n".join(lines)
 
 
+def _strip_prefix_edges(value: Any) -> str:
+    return re.sub(r"^[，,。；;、\s:：]+|[，,。；;、\s:：]+$", "", str(value or ""))
+
+
+def _all_opener_prefixes() -> tuple[str, ...]:
+    prefixes: list[str] = []
+    for items in _OPENER_PREFIXES.values():
+        prefixes.extend(items)
+    return tuple(prefixes)
+
+
+def _match_existing_prefix(value: str) -> str:
+    """正文开头是否已带某个开头模式前缀（忽略前缀末尾标点）。"""
+    for prefix in _all_opener_prefixes():
+        key = _strip_prefix_edges(prefix)
+        if key and value.startswith(key):
+            return key
+    return ""
+
+
 def _prepend_continuity(text: str, marker: str, opener_mode: str) -> str:
-    """在正文前加承接/转折标记；同时带目标开头模式前缀，避免破坏 P0-14 开头约束。"""
+    """在正文前加承接/转折标记；最多一层开头前缀 + 一层标记，已带前缀/标记不重复。"""
     value = str(text or "").strip()
+    if not value:
+        return value
+    # 已有同一标记 / 同类指代或转折：不再叠加（避免「prefix+标记+prefix」冗余）
+    if marker in value:
+        return value
+    if marker.startswith("接着") and has_continuation_reference(value):
+        return value
+    if not marker.startswith("接着") and has_transition(value):
+        return value
+    matched = _match_existing_prefix(value)
+    if matched:
+        rest = value[len(matched):].lstrip("，,；;、 ")
+        return matched + "，" + marker + rest
     prefixes = _OPENER_PREFIXES.get(opener_mode) or _OPENER_PREFIXES["direct"]
     prefix = prefixes[len(value) % len(prefixes)]
-    if value.startswith(prefix):
-        return prefix + marker + value[len(prefix):].lstrip("，, ")
     return prefix + marker + value
+
+
+def _pick_transition(text: Any) -> str:
+    options = ("对了，", "说起来，", "换个话题，", "顺带说个事，", "另外，")
+    value = str(text or "")
+    return options[len(value) % len(options)]
 
 
 def _continuity_postprocess(text: Any, action: str, recent_sent: list[str] | None,
                             previous_polarity: str, mood: float,
                             kind: str, opener_mode: str) -> tuple[str, str]:
-    """连续性确定性收口：情绪软化 / continuation 加承接模板 / new_topic 加转折词。"""
-    value = str(text or "").strip()
+    """确定性收口：剥元话语 / 内容承接不加标记 / 真断裂改「对了，」/ 兜底。"""
+    value = strip_metadiscourse(str(text or "").strip())
     if not value:
         value = _safe_fallback(kind)
     history = [str(item or "").strip() for item in list(recent_sent or [])
@@ -1152,22 +1296,35 @@ def _continuity_postprocess(text: Any, action: str, recent_sent: list[str] | Non
     if not history:
         return value, action
     previous = history[0]
+
     if action == "new_topic":
-        if not has_transition(value):
-            value = _prepend_continuity(value, "对了，", opener_mode)
+        # 内容其实相近 → 不需要转折词，直接当承接发（内容自身已承接）
         if topic_overlap(value, previous) >= 0.2:
-            # 说成新话题但内容太像 → 改成延续，更自然
-            action = "continuation"
-            value = _prepend_continuity(value, "接着刚才说的，", opener_mode)
-        return value, action
-    # continuation
-    if not continuity_ok(value, "continuation", history):
-        value = _prepend_continuity(value, "接着刚才说的，", opener_mode)
-    return value, "continuation"
+            return value, "continuation"
+        if not has_transition(value):
+            value = _pick_transition(value) + value
+        if continuity_ok(value, "new_topic", history):
+            return value, "new_topic"
+        return _safe_fallback(kind), "new_topic"
+
+    # continuation：先验证内容是否真承接
+    if continuity_ok(value, "continuation", history):
+        return value, "continuation"
+    if topic_overlap(value, previous) >= 0.2:
+        # 内容相近但不命中实词/指代规则 → 直接发，不加任何标记（加标记反而假）
+        return value, "continuation"
+    # 真断裂：不加承接头，改 new_topic + 一个自然转折词
+    if not has_transition(value):
+        value = _pick_transition(value) + value
+    if continuity_ok(value, "new_topic", history):
+        return value, "new_topic"
+    return _safe_fallback(kind), "new_topic"
 
 
 def _continuity_problem(text: Any, action: str, recent_sent: list[str] | None,
                         previous_polarity: str, mood: float) -> bool:
+    if contains_metadiscourse(text):
+        return True
     if emotion_conflict(text, previous_polarity, mood):
         return True
     return not continuity_ok(text, action, recent_sent)
@@ -1220,16 +1377,18 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
     if continuity_ctx:
         prompt += (
             "\n叙事连续性（强制二选一，正文前单独一行输出 action）：\n"
-            "- action: continuation → 承接你上一条说的事/情绪（用「刚才说的/那个/这事」"
-            "或复用同一个主题词）；\n"
-            "- action: new_topic → 换话题，正文必须以「对了/说起来/换个话题/顺带说」开头；\n"
+            "- action: continuation → 承接上一条说的事：复用上一条里出现过的具体词"
+            "（名词/事件词，如「那批笔记」「旧结论」）或「那个/这事」指代；"
+            "**绝对不要出现「刚才/前面/接着」这类元话语**；\n"
+            "- action: new_topic → 换话题，正文必须以「对了/说起来/换个话题/顺带说个事/另外」"
+            "开头；\n"
             "- 情绪要连贯：不要从上一句的低落/疲累突然变成特别开心。\n"
             + continuity_ctx
         )
     if continuity_fix:
-        prompt += ("\n【重生成】上一条和你之前说的话断开了：这次必须明确承接上一条，"
-                   "用「接着刚才说的/那个/这事」或复用同一个主题词；"
-                   "或改用 new_topic 并以转折词开头。")
+        prompt += ("\n【重生成】上一条和你之前说的话断开了：这次要么用上一条里的具体词"
+                   "或「那个/这事」承接（不要写「刚才/前面/接着」），"
+                   "要么改用 new_topic 并以「对了」等自然转折词开头。")
     if continuity_hint:
         prompt += "\n" + str(continuity_hint)
     anchor = str(candidate.get("anchor") or "").strip()
@@ -1493,6 +1652,20 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     if _continuity_problem(text, action, continuity_history, previous_polarity, mood):
         text, action = _continuity_postprocess(
             text, action, continuity_history, previous_polarity, mood, kind, opener_mode)
+    # P0-20：发送前最后一道元话语兜底（删完不成立 → 改走「对了，」/兜底）
+    stripped = strip_metadiscourse(text)
+    if stripped != text:
+        if len(stripped) < 6 or stripped.startswith(("，", ",")):
+            if len(stripped) >= 2:
+                stripped = _pick_transition(stripped) + stripped.lstrip("，,")
+                action = "new_topic"
+            else:
+                stripped = _safe_fallback(kind)
+                action = "new_topic"
+        text = stripped
+    # P0-20 收口加了「对了，」可能让开头模式与上一条相同 → 只补开头前缀收口（不碰内容）
+    if opener_problem(text, opener_mode, recent_proactive):
+        text = vary_opener(text, opener_mode, recent_proactive)
     text = _insert_runon_periods(text)
     if not grounding_ok(text, anchors):
         text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]

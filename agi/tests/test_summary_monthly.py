@@ -216,18 +216,22 @@ def test_context_includes_recent_month_gists_within_limit(tmp_path):
     con.execute("INSERT INTO summaries(id,content,evidence_json,turns_count,created_at,"
                 "kind,year_month,source) VALUES(?,?,?,?,?,?,?,?)",
                 ("SUM-stage", stage, "{}", 3, 1000.0, "stage", "", "llm"))
-    for i, month in enumerate(("2026-06", "2026-07", "2026-08")):
+    for i, (month, marker) in enumerate((("2026-06", "MARK-C"),
+                                         ("2026-07", "MARK-B"),
+                                         ("2026-08", "MARK-A"))):
         con.execute("INSERT INTO summaries(id,content,evidence_json,turns_count,created_at,"
                     "kind,year_month,source) VALUES(?,?,?,?,?,?,?,?)",
-                    (f"SUM-m-{month}", f"{month}要点" + "内容" * 60, "{}", 5,
+                    (f"SUM-m-{month}", f"{month}要点{marker}" + "内容" * 60, "{}", 5,
                      2000.0 + i, "monthly", month, "rule"))
     con.commit()
     con.close()
 
     text = summary.context(path, max_chars=900, include_months=2)
     assert text.startswith("阶段摘要")          # 最新摘要优先
-    assert "2026-08要点" in text and "2026-07要点" in text
-    assert "2026-06要点" not in text            # 只取最近 2 份
+    assert "MARK-A" in text and "MARK-B" in text
+    assert "MARK-C" not in text                # 只取最近 2 份
+    assert "2026" not in text                  # P1-e：绝对日期不得进 prompt
+    assert text.count("更早以前要点") == 2      # 月 gist 标题被统一模糊
     assert len(text) <= 900
     # latest() 不会被月度 gist 顶掉
     assert summary.latest(path)["id"] == "SUM-stage"

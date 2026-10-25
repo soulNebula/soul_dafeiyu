@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..inner import inject as inner_inject
-from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, tool_reply, trust
+from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, timefuzz, tool_reply, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -596,7 +596,9 @@ class SelfLearnAgent:
             "\n\n用户刚刚说：\n" + text +
             "\n\n直接回复。不要提“记忆库/策略/系统/画像/检索”，不要假装真人。"
         )
-        return context.fit(prompt)
+        # P1-e：最终兜底——注入 LLM 的 prompt 不允许出现绝对日期/精确天数
+        # （各渲染层已走 timefuzz，这里是防漏网的最后一道；无日期时逐字节不变）
+        return context.fit(timefuzz.strip_absolute(prompt))
 
     @staticmethod
     def _fallback(text: str) -> str:

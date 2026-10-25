@@ -18,7 +18,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from . import db, memory
+from . import db, memory, timefuzz
 from .config import DB_PATH
 from .llm import parse_json
 
@@ -82,7 +82,8 @@ def context(path: Path | str = DB_PATH, max_chars: int = 900,
         block = "\n\n更早以前的要点：\n" + "\n\n".join(
             str(m["content"] or "") for m in months)
         parts.append(block)
-    text = "".join(parts)
+    # P1-e：注入 prompt 前统一时间模糊（DB 里的月 gist 标题仍是绝对月份，只在这里 strip）
+    text = timefuzz.strip_absolute("".join(parts))
     return text[:max(0, int(max_chars))]
 
 

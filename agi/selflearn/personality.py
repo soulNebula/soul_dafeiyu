@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import db, skills
+from . import db, skills, timefuzz
 from .config import DB_PATH
 
 
@@ -20,7 +20,9 @@ def context(path: Path | str = DB_PATH, limit_chars: int = 1400) -> str:
         ).fetchall()
     finally:
         con.close()
-    return "\n".join(f"{r['key']}：{r['value']}" for r in rows)[:max(0, int(limit_chars))]
+    text = "\n".join(f"{r['key']}：{r['value']}" for r in rows)
+    # P1-e：注入 prompt 前统一时间模糊（人格值里可能出现绝对日期）
+    return timefuzz.strip_absolute(text)[:max(0, int(limit_chars))]
 
 
 def list_persona(path: Path | str = DB_PATH) -> list[dict]:

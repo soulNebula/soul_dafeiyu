@@ -11,8 +11,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import db
+from . import db, timefuzz
 from .config import DB_PATH
+
+#: 兼容旧调用方（P1-b 常量仍从 timefuzz 取唯一真源）
+WARM_LABEL = timefuzz.WARM_LABEL
+COLD_LABEL = timefuzz.COLD_LABEL
 
 KINDS = ("fact", "preference", "event", "plan", "value", "insight")
 
@@ -551,8 +555,7 @@ def render_memories(items: list[dict] | None, now: float | None = None) -> list[
     """把检索到的记忆渲染成 prompt 行；**只做模糊时间前缀，绝不输出日期/天数**。
 
     - hot：不加时间前缀（和 P1-a 之前的格式逐字节一致）
-    - warm：``[前阵子]``
-    - cold：``[更早以前]``
+    - warm/cold：前缀统一由 :func:`timefuzz.relative` 提供（P1-e 唯一真源）
     """
     now = time.time() if now is None else float(now)
     lines: list[str] = []
@@ -560,10 +563,15 @@ def render_memories(items: list[dict] | None, now: float | None = None) -> list[
         tier = str(mem.get("tier") or "")
         if tier not in ("hot", "warm", "cold"):
             tier = tier_of(mem.get("created_at"), now)
-        prefix = "" if tier == "hot" else ("[前阵子] " if tier == "warm" else "[更早以前] ")
+        if tier == "hot":
+            prefix = ""
+        else:
+            label = timefuzz.relative(mem.get("created_at"), now)
+            prefix = f"[{label}] " if label else ""
         lines.append(
             f"- {prefix}[{mem.get('scope', 'user')}/{mem.get('kind', 'fact')}] "
-            f"{mem.get('content', '')}（依据：{mem.get('evidence', '')}）")
+            f"{timefuzz.strip_absolute(mem.get('content', ''))}"
+            f"（依据：{timefuzz.strip_absolute(mem.get('evidence', ''))}）")
     return lines
 
 

@@ -147,10 +147,10 @@ def test_retrieval_context_prefixes_earlier(tmp_path):
         {"source_type": "message", "source_id": "M-old-0", "text": "老消息0：以前喜欢咖啡"},
     ])
     memory.archive_cold(path, now=now, days=90)
-    text = retrieval.context(path, "还记得以前的咖啡吗", k=5)
+    text = retrieval.context(path, "还记得以前的咖啡吗", k=5, now=now)
     assert "[更早以前]" in text
     # 默认 query 不含翻旧账线索 → 归档内容不出现
-    assert "老消息0" not in retrieval.context(path, "咖啡", k=5)
+    assert "老消息0" not in retrieval.context(path, "咖啡", k=5, now=now)
 
 
 # --------------------------------------------------------------------------- #

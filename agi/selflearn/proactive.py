@@ -90,6 +90,23 @@ GROUNDING_CONSTRAINTS = (
     "你说过要…、你放在我这的…；\n"
     "- 禁止杜撰具体的私人物品、共同住所、共同行程。"
 )
+
+# --------------------------------------------------------------------------- #
+# P0-10：修 run-on 粘连句（真机「…剪了剪你这两天…」缺标点）
+# --------------------------------------------------------------------------- #
+#: run-on 判定：汉字连续 ≥N 字且无标点、结尾紧接「你/您/我」→ 在动词边界后切句
+RUNON_MIN_CJK = 12
+RUNON_PRONOUNS = "你您我"
+RUNON_BOUNDARIES = ("剪了剪", "了", "着", "过", "完", "好")
+#: 全局标点/分句约束（拼进每个 kind 的 prompt）
+RUNON_CONSTRAINTS = (
+    "标点/分句约束：\n"
+    "- 一条消息只表达一件事，最多两句；句与句之间必须有标点（句号/问号）；\n"
+    "- 不要一条消息连着说两件事，不要把两层意思粘在一起。"
+)
+_CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
+#: 「跟/对/给…你」里的代词是宾语，不是两层意思，不能在这里切句
+_RUNON_OBJECT_PREPOSITIONS = "跟对给和让把被替帮同与朝向"
 #: 全局负向约束（拼进每个 kind 的 prompt；光靠轮换挡不住「安静」主题）
 TOPIC_CONSTRAINTS = (
     "硬约束（违反会被重写，必须遵守）：\n"
@@ -517,14 +534,90 @@ def choose_candidate(candidates: list[dict], path: Path | str = DB_PATH,
     return max(ordered, key=lambda c: float(c.get("score") or 0.0))
 
 
+def find_runon(text: Any) -> int | None:
+    """定位 run-on 粘连句的切分点（在代词前插入句号的位置）。
+
+    规则（P0-10，真机实证「…剪了剪你这两天…」）：
+    - 找一段**连续 ≥RUNON_MIN_CJK 个汉字且中间无标点**、且紧跟着
+      「你/您/我」的片段；
+    - 切分点 = 该片段内最后一个动词边界（了/着/过/完/好，或「剪了剪」这类
+      动词重叠）之后；若边界不在片段末尾（后面还有补语/量词），切在片段末尾、
+      代词之前，避免把「整理了一遍」切成「整理了。一遍」；
+    - 没有动词边界时兜底切在片段末尾（代词之前）。
+
+    返回插入「。」的绝对位置（int），没检测到返回 None。纯函数。
+    """
+    value = str(text or "")
+    if not value:
+        return None
+    for index, char in enumerate(value):
+        if char not in RUNON_PRONOUNS:
+            continue
+        count = 0
+        cursor = index - 1
+        while cursor >= 0 and _CJK_CHAR_RE.match(value[cursor]):
+            count += 1
+            cursor -= 1
+        if count < RUNON_MIN_CJK:
+            continue
+        run_start = index - count
+        run = value[run_start:index]
+        # 防误伤：代词是介词/动词宾语（…跟你、…对你）→ 这是同一句话，不是两层意思
+        if run and run[-1] in _RUNON_OBJECT_PREPOSITIONS:
+            continue
+        # 防误伤：代词后面必须还有一小段像样的分句（≥3 个汉字），
+        # 否则「…都告诉了你」这种单句会被错误切开。
+        tail = 0
+        for char in value[index + 1:]:
+            if not _CJK_CHAR_RE.match(char):
+                break
+            tail += 1
+        if tail < 3:
+            continue
+        boundary_end = None
+        for token in RUNON_BOUNDARIES:
+            pos = run.rfind(token)
+            if pos < 0:
+                continue
+            token_end = pos + len(token)
+            if boundary_end is None or token_end > boundary_end:
+                boundary_end = token_end
+        # 边界必须在片段末尾（后面没有补语/量词）才在边界后切；否则切在代词前
+        if boundary_end is not None and boundary_end == len(run):
+            return run_start + boundary_end
+        return run_start + count
+    return None
+
+
+def _insert_runon_periods(text: Any) -> str:
+    """确定性修复 run-on：在 find_runon 定位处插入「。」，只加标点、不丢内容。"""
+    value = str(text or "")
+    offset = 0
+    guard = 0
+    while guard < 8:  # 防御：超长/异常文本也不会死循环
+        pos = find_runon(value[offset:])
+        if pos is None:
+            break
+        split_at = offset + pos
+        if split_at <= offset:  # pragma: no cover - 防御
+            break
+        value = value[:split_at] + "。" + value[split_at:]
+        offset = split_at + 1
+        guard += 1
+    return value
+
+
 def polish_outbound(text: Any) -> str:
-    """出站文本质检（发送前）：去首尾空白、合并连续空白、补句末标点、超长按标点切分。
+    """出站文本质检（发送前）：去首尾空白、合并连续空白、补句末标点、修 run-on、超长按标点切分。
 
     规则：
     - 句尾缺标点：以「吗/呢/么/嘛」结尾补问号，其余陈述补句号；
+    - run-on 粘连（连续 ≥12 汉字无标点、后接你/您/我）→ 在动词边界后确定性插入「。」，
+      只加标点、不丢内容；
     - 超过 ``LONG_TEXT_CHARS`` 且有多句时，按句末标点切分并用换行分隔（发送层逐段发），
       切分只加分隔符、不丢字；
-    - 已合规文本（无多余空白、已有句末标点、未超长）**逐字节不变**。
+    - 已合规文本（无多余空白、已有句末标点、无 run-on、未超长）**逐字节不变**；
+      修复幂等（对已修好的文本再调用不变）。
 
     纯函数：不读文件、不依赖时间/随机。
     """
@@ -533,6 +626,9 @@ def polish_outbound(text: Any) -> str:
         return ""
     if value[-1] not in END_PUNCT:
         value += "？" if value.endswith(_QUESTION_TAILS) else "。"
+    value = _insert_runon_periods(value)
+    if value[-1] not in END_PUNCT:  # 插入点只在句中最前，兜底防御
+        value += "。"
     if len(value) > LONG_TEXT_CHARS:
         parts = [part.strip() for part in _SENT_SPLIT_RE.split(value) if part.strip()]
         if len(parts) > 1:
@@ -554,14 +650,16 @@ def _mentions_anchor(text: str, anchor: str) -> bool:
 
 def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
                  dialog: str, *, force_statement: bool = False,
-                 regenerate: bool = False, own_only: bool = False) -> str:
-    """按 kind 选不同的生成指令 + 全局负向/反编造约束（禁元话题/禁泛问/问句配额）。"""
+                 regenerate: bool = False, own_only: bool = False,
+                 fix_runon: bool = False) -> str:
+    """按 kind 选不同的生成指令 + 全局约束（禁元话题/反编造/标点分句/问句配额）。"""
     instruction = KIND_INSTRUCTION.get(kind) or KIND_INSTRUCTION["care"]
     prompt = (
         f"你现在心情 {mood:.2f}，分享欲 {share_drive:.2f}。你想主动给对方发条微信。"
         + instruction
         + TOPIC_CONSTRAINTS
         + GROUNDING_CONSTRAINTS
+        + RUNON_CONSTRAINTS
         + "只输出你要说的话，1-2 句，口语；不要客服腔、不报能力、不列清单。"
     )
     anchor = str(candidate.get("anchor") or "").strip()
@@ -579,6 +677,9 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
     if own_only:
         prompt += ("\n【重生成】不要提对方做过/说过的事，也不要提你们共同的经历；"
                    "只说你自己的事（你的经历/想法/刚观察到的小事）。")
+    if fix_runon:
+        prompt += ("\n【重生成】上一句把两层意思粘在一起了（中间没有标点）："
+                   "把两层意思用句号分开，重写这一条，不要丢内容。")
     prompt += "如果实在没话说，输出 SKIP。最近对话：" + dialog
     return prompt
 
@@ -731,6 +832,18 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
                                       force_statement=force_statement)
         if not grounding_ok(text, anchors):
             text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
+    # P0-10 run-on：无标点粘连句（连续 ≥12 汉字后接你/您/我）→ 重生成 1 次
+    # （prompt：两层意思用句号分开）→ 仍粘连 → 确定性插入「。」（不丢内容、不换兜底句）。
+    if find_runon(text) is not None:
+        split_prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
+                                    force_statement=force_statement, fix_runon=True)
+        split_text, split_answered = _ask_llm(client, split_prompt)
+        if split_answered and split_text and not split_text.upper().startswith("SKIP"):
+            split_candidate = _normalize_content(split_text, kind, best,
+                                                 force_statement=force_statement)
+            if grounding_ok(split_candidate, anchors):
+                text = split_candidate
+        text = _insert_runon_periods(text)
     # P0-8 主题去重：与最近 10 条已发主动消息 2-gram Jaccard ≥0.35 →
     # 同 kind 重生成 1 次（prompt 要求换话题）；仍超标 → 换低重叠兜底句。
     if recent_proactive and max_topic_overlap(text, recent_proactive) >= TOPIC_SIMILARITY_MAX:
@@ -742,6 +855,8 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
                                       force_statement=force_statement)
         if max_topic_overlap(text, recent_proactive) >= TOPIC_SIMILARITY_MAX:
             text = _low_overlap_fallback(kind, best, recent_proactive)
+    # P0-10 最终兜底：主题去重重生成/兜底后仍可能粘连 → 确定性插句号（幂等）
+    text = _insert_runon_periods(text)
     # P0-9 最后一道：主题兜底句也不能编造共同经历
     if not grounding_ok(text, anchors):
         text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]

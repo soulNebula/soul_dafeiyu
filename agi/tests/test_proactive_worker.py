@@ -140,7 +140,10 @@ def test_mark_response_sentiment(tmp_path):
 
 
 # ---------------------------------------------------------------- 动态间隔
+# P0-12（2026-10-25）：间隔已改为 60–7200 秒**均匀随机**，不再让 LLM 决定。
 class _SchedClient:
+    """旧 LLM 调度 client 替身；P0-12 后 next_interval 不应再调用它。"""
+
     def __init__(self, text="120"):
         self.text = text
         self.calls = 0
@@ -153,24 +156,34 @@ class _SchedClient:
         return {"ok": True, "text": self.text}
 
 
-def test_next_interval_follows_llm_and_jitters():
-    g = FakeGateway(proactive_interval_min_s=30, proactive_interval_max_s=300)
+def test_next_interval_is_uniform_random_not_llm(monkeypatch):
+    calls: list[tuple] = []
+    monkeypatch.setattr(proactive_worker.random, "uniform",
+                        lambda lo, hi: calls.append((lo, hi)) or 1234.5)
+    g = FakeGateway(proactive_interval_min_s=30, proactive_interval_max_s=3000)
     client = _SchedClient("120")
     delay = proactive_worker.next_interval(g, client=client)
-    assert client.calls == 1
-    assert 102 <= delay <= 138  # 120 × 0.85~1.15
+    assert calls == [(30.0, 3000.0)]      # 纯随机，参数就是配置的 lo/hi
+    assert delay == 1234.5                # 区间内直接透传（只保留一位小数）
+    assert client.calls == 0              # 不再为调度花一次 LLM 调用
 
 
-def test_next_interval_clamps_to_max():
+def test_next_interval_stays_in_configured_bounds():
     g = FakeGateway(proactive_interval_min_s=30, proactive_interval_max_s=300)
-    assert proactive_worker.next_interval(g, client=_SchedClient("9999")) <= 300
-    assert proactive_worker.next_interval(g, client=_SchedClient("1")) >= 30
+    for _ in range(25):
+        delay = proactive_worker.next_interval(g, client=_SchedClient("9999"))
+        assert 30 <= delay <= 300, delay
 
 
-def test_next_interval_random_without_client():
-    g = FakeGateway(proactive_interval_min_s=30, proactive_interval_max_s=300)
-    for _ in range(5):
-        assert 30 <= proactive_worker.next_interval(g, client=None) <= 300
+def test_next_interval_missing_config_falls_back_to_60_7200(monkeypatch):
+    calls: list[tuple] = []
+    monkeypatch.setattr(proactive_worker.random, "uniform",
+                        lambda lo, hi: calls.append((lo, hi)) or 3600.0)
+    g = FakeGateway()
+    g.cfg.pop("proactive_interval_min_s", None)
+    g.cfg.pop("proactive_interval_max_s", None)
+    assert proactive_worker.next_interval(g, client=None) == 3600.0
+    assert calls == [(60.0, 7200.0)]
 
 
 def test_trial_end_disables_proactive(monkeypatch):

@@ -186,7 +186,7 @@ class Gateway:
             self._record("queue_full", {"friend": msg.get("friend")})
 
     def _proactive_loop(self) -> None:
-        """M5：常驻主动调度（LLM 自己决定下次间隔，60–7200s = 1–120 分钟；带抖动）。"""
+        """M5：常驻主动调度（间隔 60–7200s 均匀随机 = 1–120 分钟，P0-12）。"""
         while not self.stop_event.is_set() and self.cfg.get("proactive_enabled"):
             outcome = {}
             try:
@@ -206,7 +206,8 @@ class Gateway:
                 self.last_proactive["next_delay_s"] = delay
             except Exception:  # noqa: BLE001
                 pass
-            self._record("proactive_schedule", {"next_delay_s": delay})
+            # P0-12：source=random 便于真机窗口按日志验收调度分布（不再是 LLM 决定）
+            self._record("proactive_schedule", {"next_delay_s": delay, "source": "random"})
             self.stop_event.wait(delay)
 
     def _proactive_cycle(self) -> dict:

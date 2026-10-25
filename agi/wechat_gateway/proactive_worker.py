@@ -587,18 +587,24 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     return out
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _bounds(gateway) -> tuple[float, float]:
-    """检查间隔上下界（秒）。默认 60–7200 秒（1–120 分钟）。"""
-    try:
-        lo = float(gateway.cfg.get("proactive_interval_min_s") or 60)
-    except (TypeError, ValueError):
+    """检查间隔上下界（秒）。默认 60–7200 秒（1–120 分钟）；非法值兜底。"""
+    lo = _float_or_none(gateway.cfg.get("proactive_interval_min_s"))
+    hi = _float_or_none(gateway.cfg.get("proactive_interval_max_s"))
+    if lo is None or lo <= 0:
         lo = 60.0
-    try:
-        hi = float(gateway.cfg.get("proactive_interval_max_s") or 7200)
-    except (TypeError, ValueError):
+    if hi is None or hi <= 0:
         hi = 7200.0
     lo = max(10.0, lo)
-    hi = max(lo, hi)
+    if hi < lo:  # 非法区间（如 min>max）→ 上界兜底回 7200 量级
+        hi = max(7200.0, lo)
     return lo, hi
 
 
@@ -643,30 +649,20 @@ def _probability(gateway) -> float:
 
 def next_interval(gateway, *, client=None, last_outcome=None,
                   now=None) -> float:
-    """下一次轮询间隔：**LLM 自己定**（默认 60–7200 秒 = 1–120 分钟），
-    失败/不可用时随机；最终再乘一个 0.85–1.15 的抖动，避免机械节奏。"""
+    """下一次轮询间隔：**60–7200 秒均匀随机**（2026-10-25 用户拍板）。
+
+    P0-12 教训（2026-10-25 真机 2 小时窗口）：旧实现让 **LLM 自己决定**间隔
+    （prompt 要求输出 60–7200 的整数），LLM 倾向给几百秒 → 实测 13 次调度
+    min/mean/max = 257.7 / **577.6** / 1689.6 秒，发送率 2.05 条/小时（目标 0.6）。
+    用户要的是「1–120 分钟**均匀随机**」，不是模型决定，因此这里改为
+    ``random.uniform(lo, hi)`` 纯随机，同时省掉每轮一次 DeepSeek 调用。
+
+    ``client`` / ``last_outcome`` / ``now`` 仅保留旧调用方签名兼容，已不参与计算。
+    ``lo/hi`` 来自 ``_bounds()``（配置非法时兜底 60/7200）。
+    """
     lo, hi = _bounds(gateway)
-    client = client if client is not None else default_client()
-    idea = 0
     try:
-        if client is not None and getattr(client, "available", lambda: False)():
-            prompt = (
-                "你是微信聊天里的普通人。刚结束一次主动查看，现在决定多久后再看一次消息。"
-                f"只输出一个 {int(lo)} 到 {int(hi)} 的整数（单位：秒）。"
-                "刚说过话就等久一点，心情活跃就看勤一点。"
-                f"上一次结果：{str(last_outcome or {})[:160]}"
-            )
-            r = client.chat(
-                [{"role": "system", "content": "只输出一个整数，不要解释。"},
-                 {"role": "user", "content": prompt}],
-                purpose="proactive_schedule", max_tokens=8, temperature=1.0)
-            match = re.search(r"\d+", str((r or {}).get("text") or ""))
-            if match:
-                idea = int(match.group(0))
-    except Exception:  # noqa: BLE001
-        idea = 0
-    if idea <= 0:
-        idea = random.randint(int(lo), int(hi))
-    idea = int(max(lo, min(hi, idea)))
-    delay = idea * random.uniform(0.85, 1.15)
+        delay = random.uniform(float(lo), float(hi))
+    except (TypeError, ValueError):  # 极端防御：random 被替换成异常实现时
+        delay = random.uniform(60.0, 7200.0)
     return round(max(lo, min(hi, delay)), 1)

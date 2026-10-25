@@ -341,3 +341,12 @@ E:\agent\venv312\Scripts\python.exe agi/eval_data/tone_eval.py --adapter E:\agen
 
 D（DeepSeek + fewshot 直生）失败：原意 5.9%、幻觉 58.8%——大模型自由发挥会丢/造内容。
 小模型改写 v3：1.5B 比 0.5B 好（原意 52.9%→70.6%、回退 23.5%→11.8%），但仍不达四项门槛；建议暂停“小模型改写”路线，除非后续加内容保真训练目标。
+
+## 最终结论（定稿，2026-10-26）
+
+- **上线方案采纳 C**：线上人格生成原文 → C 安全口语层 → 直接发；不训练新 adapter、不用 GPU。
+- C 五项全过（17 条 held-out）：原意 100%、关键信息保留 100%、幻觉 0%、风格 pairwise 58.8%、回退 0%，含回退最终质量 100%。
+- **真实 17 条上，新生产模块 `agi/selflearn/voice_polish.py` 的 `polish_reply` 改动 0 条（changed=0，reasons 空，实体丢失 0）**——说明 AI 原文本身已经达标，C 在这批数据上实际是 passthrough/兜底安全层；风格分来自线上人格 prompt + P0-14/17/21/23，而不是后处理。
+- 小模型改写路线暂停：0.5B/1.5B 改写原意仅 52.9%/70.6%，幻觉 17.6%，加护栏后大量回退；结论是“不要用小模型做完整改写”。
+- 小模型回归内状态/情绪判断岗位（此前 0.686 验证）；W4 soul adapter 与 llama-server INNER_MODE 由后续任务处理。
+- 数据/密钥/明文库不进仓库；两个改写 adapter 留在 `E:/agent/output` 不移动。

@@ -1564,6 +1564,53 @@ def ensure_concrete_subject(text: Any, kind: str, sources: list[str] | None = No
     return _safe_fallback(kind)
 
 
+def apply_voice_polish(text: Any, kind: str, anchors: list[str] | None = None,
+                       max_chars: int = 40) -> tuple[str, dict]:
+    """P0-24：接入 voice_polish 安全层；改后复检，任一失败回退原文。
+
+    返回 (最终文本, {changed, reverted, reasons, failures})，供 tick 日志/测试使用。
+    """
+    original = str(text or "")
+    info = {"changed": False, "reverted": False, "reasons": [], "failures": []}
+    if not original.strip():
+        return original, info
+    try:
+        from . import voice_polish  # 延迟导入，避免循环依赖/文件未落地时崩
+    except Exception:  # noqa: BLE001
+        return original, info
+    try:
+        result = voice_polish.polish_reply(original, max_chars=max_chars)
+    except Exception:  # noqa: BLE001
+        return original, info
+    info["reasons"] = list(result.get("reasons") or [])
+    if not result.get("changed"):
+        return original, info
+    candidate = str(result.get("text") or "")
+    info["changed"] = candidate != original
+    failures: list[str] = []
+    # 实体/数字零丢失
+    protected = voice_polish.protected_tokens(original)
+    if any(token not in candidate for token in protected):
+        failures.append("protected_missing")
+    if find_physical_detail(candidate):
+        failures.append("physical")
+    if contains_metadiscourse(candidate):
+        failures.append("metadiscourse")
+    if not grounding_ok(candidate, list(anchors or [])):
+        failures.append("grounding")
+    if candidate.rstrip().endswith(("。", "！", "!")):
+        failures.append("trailing_period")
+    if len(candidate) > 25 and not ("「" in candidate or "」" in candidate):
+        failures.append("too_long")
+    if not candidate.strip():
+        failures.append("empty")
+    if failures:
+        info["reverted"] = True
+        info["failures"] = failures
+        return original, info
+    return candidate, info
+
+
 def _particle_spans(text: Any) -> list[tuple[int, int, str]]:
     """非重叠命中（「笑死我了」不会被同时算成「笑死」+「笑死我了」）。"""
     value = str(text or "")
@@ -1720,8 +1767,11 @@ def clean_chat_punctuation(value: Any) -> str:
     return text.strip()
 
 
-def clean_reaction_text(text: Any) -> str:
-    """纯情绪条保持短促：去掉 Shape 尾巴/多余前缀，只留一句情绪。"""
+def clean_reaction_text(text: Any, keep_transition: bool = False) -> str:
+    """纯情绪条保持短促：去掉 Shape 尾巴/多余前缀，只留一句情绪。
+
+    keep_transition=True（new_topic）时保留转折词，避免丢掉“对了/说起来”。
+    """
     value = str(text or "").strip()
     if has_concrete_subject(value):
         return value
@@ -1729,11 +1779,12 @@ def clean_reaction_text(text: Any) -> str:
         value = value.replace(tail, "")
     for _ in range(4):
         changed = False
-        for marker in CONTINUITY_TRANSITIONS:
-            prefix = marker + "，"
-            if value.startswith(prefix):
-                value = value[len(prefix):].strip()
-                changed = True
+        if not keep_transition:
+            for marker in CONTINUITY_TRANSITIONS:
+                prefix = marker + "，"
+                if value.startswith(prefix):
+                    value = value[len(prefix):].strip()
+                    changed = True
         matched = _match_existing_prefix(value)
         if matched:
             rest = value[len(matched):].lstrip("，,；;、 ").strip()
@@ -2354,13 +2405,19 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     text = ensure_opener_distinct(text, recent_proactive, opener_mode)
     text = dedupe_opener_prefixes(text)
     text = collapse_leading_prefixes(text)
-    text = clean_reaction_text(text)
+    text = clean_reaction_text(text, action == "new_topic")
     text = limit_voice_length(text, 200 if kind == "followup" else 25)
     if not has_concrete_subject(text):
         text = ensure_concrete_subject(text, kind, concrete_sources) if force_concrete else text
-    text = clean_reaction_text(text)
+    text = clean_reaction_text(text, action == "new_topic")
     text = ensure_opener_distinct(text, recent_proactive, opener_mode)
-    text = clean_reaction_text(text)
+    text = clean_reaction_text(text, action == "new_topic")
+    text = strip_trailing_period(text)
+    # P0-24：口语化安全层（在 polish 之后、grounding/物理/元话语复检之前）
+    text = polish_outbound(text)
+    text, voice_info = apply_voice_polish(text, kind, anchors)
+    if not grounding_ok(text, anchors):
+        text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
     text = strip_trailing_period(text)
     text = style_profile.tune_reply("", text)[:200]
     max_bubbles = 3 if share_drive >= 0.7 else (2 if share_drive >= 0.55 or mood >= 0.7 else 1)
@@ -2402,6 +2459,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     return {"ok": True, "available": True, "message": bubbles[0], "messages": bubbles,
             "message_id": ids[0], "turn_id": turn_id,
             "kind": best["kind"], "action": action, "score": best["score"],
+            "voice_polished": voice_info,
             "reason": best["reason"], "mood": mood, "sharing": share_drive,
             "initiative": {k: init_info.get(k) for k in
                             ("available", "score", "reason", "max_bubbles", "bubble_count",

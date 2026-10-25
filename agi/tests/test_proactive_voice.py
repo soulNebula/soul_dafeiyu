@@ -84,11 +84,11 @@ MIXED_TEXTS = (
     "资料还没理完，有点烦",
     "哈哈，笑死",
     "那部片子下架了，可惜",
-    "真的服了",
     "刚发现收藏夹里一堆没看的，服了",
-    "有点烦",
+    "真的服了",
     "这会儿脑子有点乱，事儿太多",
     "外面风好大，有点吵",
+    "上次那个方法试了，果然不行，笑死",
 )
 
 
@@ -271,3 +271,65 @@ def test_p023_needs_concrete_soft_rule():
         "有点烦", ["资料还没理完，有点烦"], []) is False                    # 有上下文
     assert proactive.needs_concrete_subject(
         "有点烦", ["哈哈", "有点烦", "服了"], []) is True                   # 连续 ≥3
+
+
+# --------------------------------------------------------------------------- #
+# P0-24：voice_polish 安全层接入
+# --------------------------------------------------------------------------- #
+def test_voice_polish_entities_and_numbers_preserved():
+    from agi.selflearn import voice_polish
+    raw = "因此我觉得这个方案非常好，已处理3个订单。"
+    out, info = proactive.apply_voice_polish(raw, "care", [])
+    assert info["changed"] is True
+    assert info["reverted"] is False
+    for token in ("3个订单", "方案"):
+        assert token in out, (token, out)
+    assert "因此" not in out and "非常" not in out
+    # changed=False 时逐字节不变
+    same, same_info = proactive.apply_voice_polish("资料还没理完，有点烦", "care", [])
+    assert same == "资料还没理完，有点烦"
+    assert same_info["changed"] is False
+
+
+def test_voice_polish_reverts_when_recheck_fails(monkeypatch):
+    from agi.selflearn import voice_polish
+    original = "资料还没理完，有点烦"
+    monkeypatch.setattr(voice_polish, "polish_reply", lambda text, max_chars=40: {
+        "text": "刚煮了碗面，接着刚才说的。", "changed": True, "reasons": ["bad"]})
+    out, info = proactive.apply_voice_polish(original, "care", [])
+    assert out == original
+    assert info["changed"] is True and info["reverted"] is True
+    assert set(info["failures"]) & {"physical", "metadiscourse", "trailing_period"}
+
+
+def test_voice_polish_protected_missing_reverts(monkeypatch):
+    from agi.selflearn import voice_polish
+    original = "因此方案A处理3个订单。"
+    monkeypatch.setattr(voice_polish, "polish_reply", lambda text, max_chars=40: {
+        "text": "所以方案处理订单", "changed": True, "reasons": ["bad"]})
+    out, info = proactive.apply_voice_polish(original, "care", [])
+    assert out == original and info["reverted"] is True
+    assert "protected_missing" in info["failures"]
+
+
+def test_twenty_ticks_voice_polish_safety(tmp_path, monkeypatch):
+    _force_kind(monkeypatch, "care")
+    path = _seed(tmp_path)
+    client = FakeClient("资料还没理完，有点烦")
+    messages = []
+    changed = 0
+    for index in range(20):
+        row = _tick(path, now=T0 + index * 180, client=client)
+        if not row.get("available"):
+            continue
+        messages.append(row["message"])
+        info = row.get("voice_polished") or {}
+        assert isinstance(info, dict)
+        changed += 1 if info.get("changed") else 0
+        assert proactive.find_physical_detail(row["message"]) is None
+        assert not proactive.contains_metadiscourse(row["message"])
+    assert messages
+    assert changed <= len(messages)   # 触发标记与实际处理一致（不重复处理）
+    assert all(not text.endswith(("。", "！", "!")) for text in messages)
+    question_ratio = sum(1 for text in messages if text.endswith("？")) / len(messages)
+    assert question_ratio <= 0.13

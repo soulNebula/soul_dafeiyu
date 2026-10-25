@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import time
@@ -31,6 +32,20 @@ EVIDENCE_SNIPPET_MAX = 120    # 每条证据片段最多 120 字
 DECAY_PER_DAY = 0.98          # 重要性每天衰减系数
 DORMANT_IMPORTANCE = 0.2      # 低于此值且长期未访问 → 休眠
 DORMANT_AFTER_DAYS = 180      # 180 天没被访问才休眠
+
+# --------------------------------------------------------------------------- #
+# P1-b：时间分层检索（hot ≤30d / warm 30–90d / cold >90d）
+# --------------------------------------------------------------------------- #
+TIER_HOT_DAYS = 30.0          # ≤30 天：记得细
+TIER_WARM_DAYS = 90.0         # 30–90 天：前阵子，只挑重要的
+#: 默认每层预算：最近 4 条 + 前阵子 2 条 + 更早以前 1 条（总 7）
+TIER_BUDGET = {"hot": 4, "warm": 2, "cold": 1}
+WARM_MIN_IMPORTANCE = 0.35    # warm 无查询命中时的最低重要性门槛
+COLD_STABLE_KINDS = frozenset({"value", "preference", "plan"})  # cold 只收稳定事实
+COLD_MIN_IMPORTANCE = 0.5     # cold 稳定事实的 importance 门槛
+#: 用户明确"翻旧账"的线索：cold 候选放开（仍限稳定事实）、hybrid 老片段豁免
+LOOKBACK_CUES = ("以前", "之前", "上次", "好久", "还记得", "记得",
+                 "从前", "那时候", "过去", "当初", "回忆")
 
 
 SENSITIVE_PATTERNS = (
@@ -419,52 +434,153 @@ def _shingles(text: str) -> set[str]:
     return {v[i:i + 2] for i in range(max(0, len(v) - 1))}
 
 
-def retrieve(path: Path | str = DB_PATH, query: str = "", k: int = 6) -> list[dict]:
-    """检索 active 记忆（休眠/失效不参与）。
+def _age_days(created_at: Any, now: float) -> float:
+    try:
+        created = float(created_at or now)
+    except (TypeError, ValueError):
+        created = now
+    return max(0.0, (now - created) / 86400.0)
 
-    P1-a 打分：``0.6*overlap_norm + 0.25*importance + 0.15*recency``，
-    recency = exp(-days/180)（days 距 last_accessed，没有则用 created_at）。
-    命中后更新 access_count / last_accessed。
+
+def tier_of(created_at: Any, now: float | None = None) -> str:
+    """按创建时间分时间层：``hot`` ≤30 天，``warm`` 30–90 天，``cold`` >90 天。"""
+    now = time.time() if now is None else float(now)
+    age = _age_days(created_at, now)
+    if age <= TIER_HOT_DAYS:
+        return "hot"
+    if age <= TIER_WARM_DAYS:
+        return "warm"
+    return "cold"
+
+
+def wants_lookback(query: Any) -> bool:
+    """用户这句话是否明确在"翻旧账"（以前/上次/还记得…）。"""
+    text = str(query or "")
+    return any(cue in text for cue in LOOKBACK_CUES)
+
+
+def _tier_budget(budget: Any) -> dict[str, int]:
+    result = dict(TIER_BUDGET)
+    if isinstance(budget, dict):
+        for key in result:
+            if key not in budget:
+                continue
+            try:
+                result[key] = max(0, int(budget[key]))
+            except (TypeError, ValueError):
+                pass
+    return result
+
+
+def retrieve_tiered(path: Path | str = DB_PATH, query: str = "",
+                    now: float | None = None,
+                    budget: dict | None = None) -> dict:
+    """时间分层检索：hot ≤30d / warm 30–90d / cold >90d。
+
+    - hot：全部 active 记忆参与，沿用 P1-a 打分（recency 半衰 180 天）
+    - warm：importance ≥0.35 或 query 命中才进候选（recency 半衰 90 天）
+    - cold：只收稳定事实（kind ∈ value/preference/plan 且 importance ≥0.5），
+      且必须 query 命中；用户明确问「以前/上次/还记得」时允许无命中也取
+    - 命中后更新 access_count/last_accessed；dormant/invalid/conflict 全排除
+    - 返回 ``{"items": [...], "tiers": {hot,warm,cold}, "dropped": n}``；
+      ``tiers`` 是**选中**条数，``dropped`` 是超预算被截断条数
     """
-    now = time.time()
+    now = time.time() if now is None else float(now)
+    budgets = _tier_budget(budget)
+    lookback = wants_lookback(query)
     con = db.connect(path)
     try:
         rows = [dict(r) for r in con.execute(
             "SELECT * FROM user_memories WHERE status='active' "
-            "ORDER BY created_at DESC LIMIT 200")]
+            "ORDER BY created_at DESC LIMIT 2000")]
         q = _shingles(query)
         q_len = max(1, len(q))
-        scored = []
+        candidates: dict[str, list[dict]] = {"hot": [], "warm": [], "cold": []}
         for row in rows:
-            overlap = len(q & _shingles(f"{row['content']} {row['evidence']}"))
-            if not overlap and q:
-                continue
+            age = _age_days(row.get("created_at"), now)
+            tier = ("hot" if age <= TIER_HOT_DAYS
+                    else "warm" if age <= TIER_WARM_DAYS else "cold")
+            overlap = len(q & _shingles(
+                f"{row.get('content') or ''} {row.get('evidence') or ''}"))
             try:
                 importance = max(0.0, min(1.0, float(row.get("importance") or 0.0)))
             except (TypeError, ValueError):
                 importance = DEFAULT_IMPORTANCE
-            try:
-                last = float(row.get("last_accessed") or 0.0)
-            except (TypeError, ValueError):
-                last = 0.0
-            ref = last or float(row.get("created_at") or now)
-            days = max(0.0, (now - ref) / 86400.0)
-            recency = 2.718281828459045 ** (-days / 180.0)
+            if tier == "warm":
+                if importance < WARM_MIN_IMPORTANCE and overlap <= 0:
+                    continue
+            elif tier == "cold":
+                if str(row.get("kind") or "") not in COLD_STABLE_KINDS:
+                    continue
+                if importance < COLD_MIN_IMPORTANCE:
+                    continue
+                if overlap <= 0 and not lookback:
+                    continue
+            half_life = 180.0 if tier == "hot" else 90.0
+            recency = math.exp(-age / half_life)
             score = (0.6 * (overlap / q_len if q else 0.0)
                      + 0.25 * importance + 0.15 * recency)
-            scored.append((score, row))
-        scored.sort(key=lambda x: (-x[0], -float(x[1].get("created_at") or 0.0)))
-        picked = [row for _, row in scored[:max(1, int(k))]]
-        for row in picked:
+            item = dict(row)
+            item.update({"tier": tier, "age_days": round(age, 2),
+                         "overlap": overlap, "score": round(score, 6)})
+            candidates[tier].append(item)
+        items: list[dict] = []
+        tiers: dict[str, int] = {}
+        dropped = 0
+        for tier in ("hot", "warm", "cold"):
+            pool = sorted(candidates[tier],
+                          key=lambda x: (-x["score"],
+                                         -float(x.get("created_at") or 0.0)))
+            take = budgets[tier]
+            items.extend(pool[:take])
+            tiers[tier] = len(pool[:take])
+            dropped += max(0, len(pool) - take)
+        for item in items:  # 命中即访问：更新 access 统计（P1-a）
             con.execute(
                 "UPDATE user_memories SET access_count=COALESCE(access_count,0)+1,"
-                "last_accessed=? WHERE id=?", (now, row["id"]))
-            row["access_count"] = int(row.get("access_count") or 0) + 1
-            row["last_accessed"] = now
+                "last_accessed=? WHERE id=?", (now, item["id"]))
+            item["access_count"] = int(item.get("access_count") or 0) + 1
+            item["last_accessed"] = now
         con.commit()
     finally:
         con.close()
-    return picked
+    return {"items": items, "tiers": tiers, "dropped": dropped}
+
+
+def render_memories(items: list[dict] | None, now: float | None = None) -> list[str]:
+    """把检索到的记忆渲染成 prompt 行；**只做模糊时间前缀，绝不输出日期/天数**。
+
+    - hot：不加时间前缀（和 P1-a 之前的格式逐字节一致）
+    - warm：``[前阵子]``
+    - cold：``[更早以前]``
+    """
+    now = time.time() if now is None else float(now)
+    lines: list[str] = []
+    for mem in items or []:
+        tier = str(mem.get("tier") or "")
+        if tier not in ("hot", "warm", "cold"):
+            tier = tier_of(mem.get("created_at"), now)
+        prefix = "" if tier == "hot" else ("[前阵子] " if tier == "warm" else "[更早以前] ")
+        lines.append(
+            f"- {prefix}[{mem.get('scope', 'user')}/{mem.get('kind', 'fact')}] "
+            f"{mem.get('content', '')}（依据：{mem.get('evidence', '')}）")
+    return lines
+
+
+def retrieve(path: Path | str = DB_PATH, query: str = "", k: int = 6) -> list[dict]:
+    """兼容旧签名：只取 hot 池（≤30 天），并保持"query 无重叠不返回"的旧语义。
+
+    新调用方请用 :func:`retrieve_tiered`（分层 + 预算 + 时间模糊渲染）。
+    """
+    result = retrieve_tiered(path, query,
+                             budget={"hot": max(1, int(k)), "warm": 0, "cold": 0})
+    items = result["items"]
+    if query:
+        q = _shingles(query)
+        if q:
+            items = [m for m in items
+                     if q & _shingles(f"{m.get('content') or ''} {m.get('evidence') or ''}")]
+    return items
 
 
 def decay(path: Path | str = DB_PATH, now: float | None = None, *,

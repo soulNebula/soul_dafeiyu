@@ -51,6 +51,66 @@ def _id(prefix: str, *parts) -> str:
 SHADOW_MODE = "shadow"
 
 
+def _days_since(value: Any, now: float) -> float | None:
+    try:
+        return max(0.0, (now - float(value)) / 86400.0)
+    except (TypeError, ValueError):
+        return None
+
+
+def filter_stale_hits(path: Path | str, hits: list[dict], query: str,
+                      now: float | None = None) -> tuple[list[dict], int]:
+    """P1-b：hybrid 检索结果里 >90 天的 memory/message 片段默认丢弃。
+
+    只有用户明确"翻旧账"（以前/之前/上次/好久/还记得…）时才保留；
+    丢弃数量返回给调用方计数（不改 retrieval.hybrid 本身）。
+    """
+    hits = list(hits or [])
+    if memory.wants_lookback(query):
+        return hits, 0
+    now = time.time() if now is None else float(now)
+    ids: dict[str, list[str]] = {"memory": [], "message": []}
+    for hit in hits:
+        source_type = str(hit.get("source_type") or "")
+        if source_type in ids:
+            source_id = str(hit.get("source_id") or "")
+            if source_id:
+                ids[source_type].append(source_id)
+    ages: dict[tuple[str, str], float] = {}
+    if ids["memory"] or ids["message"]:
+        con = db.connect(path)
+        try:
+            if ids["memory"]:
+                marks = ",".join("?" for _ in ids["memory"])
+                for row in con.execute(
+                        f"SELECT id, created_at FROM user_memories WHERE id IN ({marks})",
+                        ids["memory"]):
+                    age = _days_since(row["created_at"], now)
+                    if age is not None:
+                        ages[("memory", str(row["id"]))] = age
+            if ids["message"]:
+                marks = ",".join("?" for _ in ids["message"])
+                for row in con.execute(
+                        f"SELECT id, ts FROM messages WHERE id IN ({marks})",
+                        ids["message"]):
+                    age = _days_since(row["ts"], now)
+                    if age is not None:
+                        ages[("message", str(row["id"]))] = age
+        finally:
+            con.close()
+    kept: list[dict] = []
+    dropped = 0
+    for hit in hits:
+        key = (str(hit.get("source_type") or ""), str(hit.get("source_id") or ""))
+        age = ages.get(key)
+        if age is not None and age > memory.TIER_WARM_DAYS:
+            dropped += 1
+            continue
+        kept.append(hit)
+    return kept, dropped
+
+
+
 def _inner_state_snapshot(path: Path, st: dict, text: str) -> str:
     """W3-A：shadow 落库用的内状态快照（与 rule 渲染同源，便于离线复盘）。
 
@@ -278,9 +338,13 @@ class SelfLearnAgent:
             search.index_texts(self.path, docs)
         except Exception:  # noqa: BLE001
             pass
-        mems = memory.retrieve(self.path, text, k=6)
+        # P1-b：时间分层检索（hot≤30d/warm 30–90d/cold>90d，带预算与时间模糊）
+        mems = memory.retrieve_tiered(self.path, text)["items"]
+        hits: list[dict] = []
+        dropped_stale = 0
         try:
             hits = retrieval.hybrid(self.path, text, k=5)
+            hits, dropped_stale = filter_stale_hits(self.path, hits, text)
             retrieval_ctx = "\n".join(
                 f"- [{h.get('source_type')}] {str(h.get('text') or '')[:160]}"
                 for h in hits)
@@ -477,6 +541,7 @@ class SelfLearnAgent:
                 "summary": summary_info,
                 "new_memories": new_memories, "memory_ids": [m["id"] for m in mems],
                 "claims": claim_result, "retrieval_count": len(hits),
+                "retrieval_dropped_stale": dropped_stale,
                 "media": media_info, "profile": profile_info,
                 "persona": pctx, "variant": variant, "crisis": crisis,
                 "guard": guard_info, "attachment": attachment, "generation": gen_meta,
@@ -493,10 +558,9 @@ class SelfLearnAgent:
     def _prompt(text, mems, pctx, variant, recent, *, st=None, lessons="",
                 conflict_q="", sum_ctx="", retrieval_ctx="", profile_ctx="",
                 layer_ctx="", research_ctx="", inner_ctx="") -> str:
-        mem_lines = "\n".join(
-            f"- [{m.get('scope','user')}/{m['kind']}] {m['content']}（依据：{m['evidence']}）"
-            for m in mems
-        ) or "（暂无长期记忆）"
+        # P1-b：hot 不带时间前缀（与旧格式逐字节一致）；warm/cold 用"前阵子/更早以前"模糊，
+        # 绝不输出具体日期或天数。
+        mem_lines = "\n".join(memory.render_memories(mems)) or "（暂无长期记忆）"
         dialog = "\n".join(
             f"{'用户' if m['role'] == 'user' else '你'}：{m['text']}" for m in recent[-8:]
         ) or "（第一次对话）"

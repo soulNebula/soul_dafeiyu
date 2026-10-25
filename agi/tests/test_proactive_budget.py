@@ -71,4 +71,5 @@ def test_cooldown_zero_allows_immediate_repeat(tmp_path):
     assert r1["available"] is True
     r2 = proactive.tick(path, client=_SayClient("第二句"), cooldown=0,
                         respect_state=False, min_score=0)
-    assert r2["available"] is True and r2["message"] == "第二句"
+    # P0-14 风格层可能给消息加开头/感受前缀，但内容必须还是第二句
+    assert r2["available"] is True and "第二句" in r2["message"]

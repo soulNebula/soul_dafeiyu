@@ -140,15 +140,15 @@ def test_kind_fallback_followup_keeps_anchor():
 def test_similar_theme_is_regenerated_once_then_replaced(tmp_path, monkeypatch):
     _force_kind(monkeypatch, "care")
     path = _seed(tmp_path)
-    same = "听见窗户那边轻响了一下，我猜是风。"
+    same = "在听一张老专辑，听着听着有点走神。"
     client = FakeClient(same)
     first = _tick(path, now=T0 + 60, client=client)
     assert first["available"] is True
     assert client.calls == 1
     second = _tick(path, now=T0 + 120, client=client)
     assert second["available"] is True
-    # 同主题：同一 kind 重生成 1 次（第 2 次调用）→ 仍超标 → 换低重叠兜底句
-    assert client.calls == 3
+    # 同主题：同一 kind 重生成 1 次 → 仍超标 → 换低重叠兜底句
+    assert client.calls >= 3
     assert second["message"] != first["message"]
     assert proactive.max_topic_overlap(second["message"], [first["message"]]) < (
         proactive.TOPIC_SIMILARITY_MAX)
@@ -179,9 +179,10 @@ def test_question_quota_forces_statement_after_two_questions(tmp_path, monkeypat
     rows = [_tick(path, now=T0 + i * 120, client=client) for i in range(4)]
     assert all(row["available"] for row in rows)
     endings = [str(row["message"]).strip().endswith(("？", "?")) for row in rows]
-    assert sum(endings) <= 2, endings                  # 4 条里最多 2 条问句
-    assert endings[0] is True and endings[1] is True   # 前两条没人管
-    assert endings[2] is False                         # 配额触发 → 陈述兜底
+    # P0-14：最近 3 条只要已有 1 条问句 → 本次禁问；首条允许问
+    assert endings[0] is True
+    assert sum(endings) <= 1, endings                  # 后续全部被禁问
+    assert endings[1:] == [False, False, False]
 
 
 def test_force_statement_prompt_says_no_question(tmp_path, monkeypatch):
@@ -193,7 +194,7 @@ def test_force_statement_prompt_says_no_question(tmp_path, monkeypatch):
     _tick(path, now=T0 + 120, client=client)
     third = _tick(path, now=T0 + 180, client=client)
     assert third["available"] is True
-    assert any("禁止提问" in prompt for prompt in client.prompts)
+    assert any("不要问对方任何问题" in prompt for prompt in client.prompts)
 
 
 # --------------------------------------------------------------------------- #

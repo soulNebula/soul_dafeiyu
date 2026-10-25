@@ -179,7 +179,7 @@ def test_followup_keeps_llm_text_when_anchor_present(tmp_path, monkeypatch):
     client = FakeClient("你说的爬山那事后来咋样了")
     row = proactive.tick(path, client=client, now=now, cooldown=0,
                          min_score=0, respect_state=False)
-    assert row["message"] == "你说的爬山那事后来咋样了"
+    assert "你说的爬山那事后来咋样了" in row["message"]
 
 
 def test_silence_ack_at_most_once_per_seven_days(tmp_path):

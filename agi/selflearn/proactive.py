@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import re
 import time
 from pathlib import Path
@@ -126,6 +127,80 @@ _RUNON_TAIL_PHRASES = (
     "一句", "一遍", "一次", "半天", "好久", "一个", "两个", "几个",
     "一", "两", "三", "几", "半", "个", "些", "点",
 )
+
+# --------------------------------------------------------------------------- #
+# P0-14：反「营销号」句式 + 轻度人格化边界
+# --------------------------------------------------------------------------- #
+#: 人格边界：允许数字生活/感受/观点/真实记忆；禁止物理起居/身体/天气/位置/出行
+PERSONA_CONSTRAINTS = (
+    "人格边界（轻度人格化，必须遵守）：\n"
+    "- 只写「数字生活」：在读/在听/在整理资料/在学新东西/在想事情；"
+    "可以写情绪倾向、对话题的看法、记忆里真实存在的事、观察到的现象；\n"
+    "- 禁止物理身体与起居细节：做饭/吃饭/刷鞋/洗澡/睡觉体感/测血压/天气冷热/"
+    "身体疼/地理位置/出行；\n"
+    "- 不许用「刚+物理动作」当开头模板；\n"
+    "- 每条必须带你自己的感受或想法（我在想/我觉得/有点…），不要写成流水账；\n"
+    "- 允许短句；句式要有变化，不要连续几条都用同一种结构。"
+)
+#: 物理起居/身体/天气/位置/出行禁词（命中 → 换数字生活兜底句）
+PHYSICAL_FORBIDDEN_WORDS = (
+    "做饭", "煮", "炒", "蒸", "炖", "烤", "烧水", "洗碗", "刷碗", "刷鞋",
+    "洗衣", "洗衣服", "洗澡", "洗漱", "洗脸", "刷牙", "洗手", "洗了",
+    "吃饭", "吃了", "吃点", "喝完", "喝水", "喝点", "喝酒",
+    "冰箱", "便当", "外卖", "买菜", "切菜", "切丝", "粥", "碗", "锅",
+    "筷子", "厨房", "菜单", "超市", "菜市场", "饭",
+    "睡觉", "睡了", "睡着", "起床", "躺下", "躺了", "被子", "枕头", "床",
+    "卫生间", "厕所", "血压", "体检", "吃药", "医院", "药店",
+    "出汗", "生病", "感冒", "发烧", "咳嗽", "伤口", "疼", "痛",
+    "天气", "降温", "升温", "好冷", "好热", "冷得", "热得", "下雨", "下雪",
+    "刮风", "晒太阳", "淋雨",
+    "楼下", "窗外", "窗户", "窗台", "阳台", "小区", "绿萝", "花盆", "鞋",
+    "衣服", "袜子", "书架", "抽屉", "柜子", "快递", "地铁", "公交",
+    "打车", "开车", "出门", "路上", "逛街", "散步", "跑步", "爬山",
+)
+#: 自我感受/想法标记（每条消息至少要有一个）
+_FEELING_MARKERS = (
+    "我觉得", "我在想", "在想", "有点", "感觉", "心里", "挺", "好像",
+    "希望", "担心", "开心", "难过", "感慨", "舒服", "累", "笑", "琢磨",
+    "走神", "想聊", "想起", "记起", "突然想到", "在整理", "在看", "在听",
+)
+#: 缺感受时的确定性前缀
+_FEELING_PREFIXES = ("我有点想聊聊，", "说不上为什么，我觉得", "心里有点感慨，")
+
+#: 开头模式池（P0-14）：时间/感受/想法/数字生活/直接陈述/对话式/回忆
+OPENER_MODES = ("time", "feeling", "thought", "digital", "direct", "chat", "memory")
+_OPENER_INSTRUCTIONS = {
+    "time": "开头用时间感（这会儿/下午/最近），直接陈述，不要用「刚」开头。",
+    "feeling": "开头先说你此刻的感受（有点累/挺开心/心里有点闷），不要用「刚」开头。",
+    "thought": "开头用「突然想到/我最近在想」这类想法，不要用「刚」开头。",
+    "digital": "开头写你的数字生活（在听/在看/在整理资料/在学东西），不要用「刚」开头。",
+    "direct": "开头直接陈述一件事/一个观察，不要用「刚」开头。",
+    "chat": "开头用对话式短句（说个事/跟你说），不要用「刚」开头。",
+    "memory": "开头用「想起/记得」领起一件你自己的事，不要用「刚」开头。",
+}
+_OPENER_PREFIXES = {
+    "time": ("这会儿，", "最近，", "今天，"),
+    "feeling": ("我有点想聊聊，", "说不上为什么，我觉得"),
+    "thought": ("突然想到，", "我最近在想，"),
+    "digital": ("在整理东西的时候，", "在听歌的时候，"),
+    "direct": ("跟你聊个观察，",),
+    "chat": ("说个事，", "跟你说，"),
+    "memory": ("想起一件事，", "记起一个片段，"),
+}
+_OPENER_TIME_RE = re.compile(
+    r"^(这会儿|现在|今天|昨天|最近|这几天|下午|晚上|早上|刚才)")
+_OPENER_FEELING_RE = re.compile(
+    r"^(有点|挺|感觉|心里|好像|说不上|我有点|我觉得)")
+_OPENER_THOUGHT_RE = re.compile(r"^(突然想到|在想|我最近在想|琢磨|说起来)")
+_OPENER_DIGITAL_RE = re.compile(r"^(在听|在看|在读|在整理|在学|在写|在翻|在查|最近在)")
+_OPENER_CHAT_RE = re.compile(r"^(说个|跟你说|问个|讲个|聊个)")
+_OPENER_MEMORY_RE = re.compile(r"^(想起|记起|记得|翻到)")
+_QUOTED_RE = re.compile(r"「[^」]*」|“[^”]*”|\"[^\"]*\"")
+
+#: 问句概率（P0-14）：base 0.25；energy/mood 高 → 最多 0.45，低 → 0.15
+QUESTION_PROB_BASE = 0.25
+QUESTION_PROB_MIN = 0.15
+QUESTION_PROB_MAX = 0.45
 #: 全局负向约束（拼进每个 kind 的 prompt；光靠轮换挡不住「安静」主题）
 TOPIC_CONSTRAINTS = (
     "硬约束（违反会被重写，必须遵守）：\n"
@@ -152,23 +227,23 @@ KIND_INSTRUCTION = {
 }
 
 #: 每类意图的兜底句（LLM 不可用/跳过/跑题时使用；彼此不同，不允许多类共用）
-#: 已审查：不含禁词、不评论沉默、主题各异（followup 的锚点由调用方注入）
+#: P0-14：只写数字生活/感受，禁止物理起居细节；followup/share 的真实锚点用「」引用
 _KIND_FALLBACK = {
-    "care": "这两天降温，出门记得加件外套。",
-    "share": "刚想到你之前说的{topic}，我今天也碰上一件类似的小事。",
+    "care": "最近在整理以前写的东西，翻着翻着有点感慨。",
+    "share": "刚想到你之前说的「{topic}」，忽然有点想接着聊聊。",
     "followup": "上次你说「{anchor}」，我这两天还一直想着这事。",
-    "light": "刚看到楼下猫在追自己的尾巴，笑死。",
-    "silence_ack": "今天路过一家老店，闻到刚出炉的面包味，买了两个。",
+    "light": "今天看到一个挺离谱的段子，笑了好一会儿。",
+    "silence_ack": "在整理收藏夹，看到一篇以前存下的文章，忽然想聊聊。",
 }
 
-#: 后处理兜底用的**只讲自己的事/中性事实**安全句（P0-9：绝不编造共同经历；
-#: 不含禁词、彼此不同）
+#: 后处理兜底用的**数字生活/自我感受**安全句（P0-14：无物理细节、
+#: 不含禁词、不编造共同经历、彼此不同）
 _SAFE_FALLBACK = {
-    "care": "这两天降温，我出门差点被风吹回去。",
-    "share": "刚泡了杯手冲，酸得我皱了下眉，下次想换个豆子。",
-    "followup": "刚把书架上那本旧书翻出来，纸页有点发黄了。",
-    "light": "刚看到楼下猫在追自己的尾巴，笑死。",
-    "silence_ack": "今天路过一家老店，闻到刚出炉的面包味，买了两个。",
+    "care": "最近在整理以前写的东西，翻着翻着有点感慨。",
+    "share": "在听一张老专辑，听着听着有点走神，觉得挺舒服。",
+    "followup": "想起以前整理过的一份资料，有几处还想再看看。",
+    "light": "今天看到一个挺离谱的段子，笑了好一会儿。",
+    "silence_ack": "在整理收藏夹，看到一篇以前存下的文章，忽然想聊聊。",
 }
 
 #: followup 的主题去重变体：都保留锚点，避免「换话题」把具体内容换没了
@@ -708,6 +783,211 @@ def polish_outbound(text: Any) -> str:
     return value
 
 
+# --------------------------------------------------------------------------- #
+# P0-14：人格边界 / 开头多样 / 问句概率 / 自我感受（纯函数，便于测试）
+# --------------------------------------------------------------------------- #
+def question_probability(mood: float, energy: float) -> float:
+    """问句概率：energy/mood 高 → 最多 0.45，低 → 0.15，中段线性（base≈0.25）。"""
+    try:
+        score = (float(mood) + float(energy)) / 2
+    except (TypeError, ValueError):
+        score = 0.55
+    score = max(0.0, min(1.0, score))
+    if score <= 0.35:
+        return QUESTION_PROB_MIN
+    if score >= 0.65:
+        return QUESTION_PROB_MAX
+    span = QUESTION_PROB_MAX - QUESTION_PROB_MIN
+    return round(QUESTION_PROB_MIN + span * (score - 0.35) / 0.30, 3)
+
+
+def should_ask_question(mood: float, energy: float,
+                        recent_texts: list[str] | None = None) -> bool:
+    """本次是否允许提问：最近 3 条已有任一问句 → 禁问；否则按 q_prob 掷骰。
+
+    首条（没有任何主动历史）允许提问，避免随机把开场白全变成陈述。
+    """
+    last = [str(item or "") for item in list(recent_texts or [])[:QUESTION_WINDOW]
+            if str(item or "").strip()]
+    if not last:
+        return True
+    if any(_ends_question(item) for item in last):
+        return False
+    return random.random() < question_probability(mood, energy)
+
+
+def classify_opener(text: Any) -> str:
+    """判断一条消息的开头模式（just 是历史坏习惯，不进模式池）。"""
+    value = str(text or "").strip()
+    if not value:
+        return "direct"
+    if value.startswith("刚"):
+        return "just"
+    if _OPENER_TIME_RE.match(value):
+        return "time"
+    if _OPENER_FEELING_RE.match(value):
+        return "feeling"
+    if _OPENER_THOUGHT_RE.match(value):
+        return "thought"
+    if _OPENER_DIGITAL_RE.match(value):
+        return "digital"
+    if _OPENER_CHAT_RE.match(value):
+        return "chat"
+    if _OPENER_MEMORY_RE.match(value):
+        return "memory"
+    return "direct"
+
+
+def choose_opener_mode(recent_texts: list[str] | None = None) -> str:
+    """从模式池里挑本次开头：不用上一条同模式、优先用得最少的（确定性轮转）。"""
+    history = [classify_opener(item) for item in list(recent_texts or [])
+               if str(item or "").strip()]
+    last = history[0] if history else ""
+    counts = {mode: 0 for mode in OPENER_MODES}
+    for mode in history:
+        if mode in counts:
+            counts[mode] += 1
+    pool = [mode for mode in OPENER_MODES if mode != last] or list(OPENER_MODES)
+    least = min(counts[mode] for mode in pool)
+    candidates = [mode for mode in pool if counts[mode] == least]
+    return random.choice(candidates)
+
+
+def opener_problem(text: Any, target_mode: str,
+                   recent_texts: list[str] | None = None) -> bool:
+    """开头是否违规：以「刚」开头（超过 20% 配额/不是目标模式）、或与上一条同模式。"""
+    value = str(text or "").strip()
+    if not value:
+        return False
+    actual = classify_opener(value)
+    history = [classify_opener(item) for item in list(recent_texts or [])
+               if str(item or "").strip()]
+    last = history[0] if history else ""
+    if actual == "just":
+        if target_mode != "just":
+            return True
+        just_count = sum(1 for mode in history if mode == "just")
+        if (just_count + 1) / (len(history) + 1) > 0.20:
+            return True
+    if actual == last and target_mode != last:
+        return True
+    return False
+
+
+def vary_opener(text: Any, target_mode: str,
+                recent_texts: list[str] | None = None) -> str:
+    """确定性换开头：去掉「刚」前缀 + 换成目标模式前缀（不改内容）；已合规则原样。"""
+    value = str(text or "").strip()
+    if not value:
+        return value
+    mode = target_mode if target_mode in OPENER_MODES else "direct"
+    if not opener_problem(value, mode, list(recent_texts or [])):
+        return value
+    prefixes = _OPENER_PREFIXES.get(mode) or _OPENER_PREFIXES["direct"]
+    prefix = prefixes[len(value) % len(prefixes)]
+    if value.startswith("刚刚"):
+        value = value[2:]
+    elif value.startswith("刚"):
+        value = value[1:]
+    value = value.lstrip("，,；; ")
+    if not value:
+        return prefix.rstrip("，") + "。"
+    return prefix + value
+
+
+def has_self_feeling(text: Any) -> bool:
+    """消息里有没有自我感受/想法（P0-14：禁止纯流水账）。"""
+    value = str(text or "")
+    return any(marker in value for marker in _FEELING_MARKERS)
+
+
+def find_physical_detail(text: Any) -> str | None:
+    """检测物理起居/身体/天气/位置/出行细节；引用对方/记忆（「」内或断言之后）的除外。"""
+    value = str(text or "")
+    if not value:
+        return None
+    stripped = _QUOTED_RE.sub("", value)
+    claim_hints = SHARED_CLAIM_PATTERNS + ("你说的", "你之前说", "你上次说", "你说要")
+    for sentence in re.split(r"[。！？!?；;\n]+", stripped):
+        if not sentence:
+            continue
+        claim_pos = None
+        for pattern in claim_hints:
+            pos = sentence.find(pattern)
+            if pos >= 0 and (claim_pos is None or pos < claim_pos):
+                claim_pos = pos
+        for word in PHYSICAL_FORBIDDEN_WORDS:
+            index = sentence.find(word)
+            if index < 0:
+                continue
+            if claim_pos is not None and claim_pos < index:
+                continue  # 引用对方/记忆里的内容，不是自己的物理细节
+            return word
+    return None
+
+
+def _clause_count(text: Any) -> int:
+    """粗略分句数（按句末标点切），用于判断连续几条是否同一句式。"""
+    parts = [part.strip() for part in re.split(r"[。！？!?]+", str(text or ""))]
+    return len([part for part in parts if part]) or 1
+
+
+def _shape_problem(text: Any, recent_texts: list[str] | None = None) -> bool:
+    """连续 3 条分句数相同 → 本次要换结构（P0-14 句式波动）。"""
+    counts = [_clause_count(item) for item in list(recent_texts or [])[:3]]
+    return len(counts) == 3 and counts[0] == counts[1] == counts[2] == _clause_count(text)
+
+
+def _vary_structure(text: Any) -> str:
+    """换结构：多句 → 收成短句；单句 → 补一小句情绪尾（变成两句）。"""
+    value = str(text or "").strip()
+    parts = [part.strip() for part in re.split(r"[。！？!?]+", value) if part.strip()]
+    if len(parts) > 1:
+        return parts[0] + "。"
+    if not value:
+        return value
+    return value.rstrip("。！？!?") + "。心里有点感慨。"
+
+
+def _style_problem(text: Any, opener_mode: str, recent_texts: list[str] | None,
+                   allow_question: bool) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if not allow_question and _ends_question(value):
+        return True
+    if find_physical_detail(value):
+        return True
+    if not has_self_feeling(value):
+        return True
+    if _shape_problem(value, recent_texts):
+        return True
+    return opener_problem(value, opener_mode, recent_texts)
+
+
+def _style_postprocess(text: Any, kind: str, opener_mode: str,
+                       recent_texts: list[str] | None,
+                       allow_question: bool) -> str:
+    """风格违规的确定性收口：禁问→陈述兜底、物理→数字生活兜底、缺感受→补前缀、开头→换前缀、同句式→换结构。"""
+    value = str(text or "").strip()
+    if not value:
+        value = _safe_fallback(kind)
+    if not allow_question and _ends_question(value):
+        value = _safe_fallback(kind)
+    if find_physical_detail(value):
+        value = _safe_fallback(kind)
+    if not has_self_feeling(value):
+        prefixes = _FEELING_PREFIXES
+        value = prefixes[len(value) % len(prefixes)] + value
+    if opener_problem(value, opener_mode, recent_texts):
+        value = vary_opener(value, opener_mode, recent_texts)
+    if _shape_problem(value, recent_texts):
+        value = _vary_structure(value)
+    if find_physical_detail(value):  # 兜底句里的 topic 插值也可能带物理词
+        value = _SAFE_FALLBACK.get(str(kind or ""), _SAFE_FALLBACK["care"])
+    return value
+
+
 def _mentions_anchor(text: str, anchor: str) -> bool:
     """LLM 文本有没有真的引用到锚点（整句或至少一个 2 字片段）。"""
     value = str(text or "")
@@ -723,8 +1003,9 @@ def _mentions_anchor(text: str, anchor: str) -> bool:
 def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
                  dialog: str, *, force_statement: bool = False,
                  regenerate: bool = False, own_only: bool = False,
-                 fix_runon: bool = False) -> str:
-    """按 kind 选不同的生成指令 + 全局约束（禁元话题/反编造/标点分句/问句配额）。"""
+                 fix_runon: bool = False, opener_mode: str = "",
+                 style_fix: bool = False) -> str:
+    """按 kind 选生成指令 + 全局约束（禁元话题/反编造/标点/人格边界/开头/问句）。"""
     instruction = KIND_INSTRUCTION.get(kind) or KIND_INSTRUCTION["care"]
     prompt = (
         f"你现在心情 {mood:.2f}，分享欲 {share_drive:.2f}。你想主动给对方发条微信。"
@@ -732,8 +1013,11 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
         + TOPIC_CONSTRAINTS
         + GROUNDING_CONSTRAINTS
         + RUNON_CONSTRAINTS
+        + PERSONA_CONSTRAINTS
         + "只输出你要说的话，1-2 句，口语；不要客服腔、不报能力、不列清单。"
     )
+    if opener_mode in _OPENER_INSTRUCTIONS:
+        prompt += "\n开头模式：" + _OPENER_INSTRUCTIONS[opener_mode]
     anchor = str(candidate.get("anchor") or "").strip()
     topic = str(candidate.get("topic") or "").strip()
     if kind == "followup" and anchor:
@@ -742,7 +1026,7 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
     elif kind == "share" and topic:
         prompt += f"可以从对方之前说过的「{topic}」自然引到你自己的想法。"
     if force_statement:
-        prompt += "\n这次只写陈述句或分享句，禁止提问、禁止出现问号。"
+        prompt += "\n这次只表达自己，不要问对方任何问题，不要出现问号。"
     if regenerate:
         prompt += ("\n【重生成】上一次生成的内容和最近发过的消息主题太像了，"
                    "换一个完全不同的具体话题重说一句。")
@@ -752,6 +1036,10 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
     if fix_runon:
         prompt += ("\n【重生成】上一句把两层意思粘在一起了（中间没有标点）："
                    "把两层意思用句号分开，重写这一条，不要丢内容。")
+    if style_fix:
+        prompt += ("\n【重生成】只写数字生活/自己的感受，不要写任何物理起居、身体、"
+                   "天气、位置、出行细节；开头按指定模式、不要用「刚」开头；"
+                   "必须带你自己的感受或想法；句子可短可长，换一种结构。")
     prompt += "如果实在没话说，输出 SKIP。最近对话：" + dialog
     return prompt
 
@@ -830,6 +1118,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     own = state.load(path)["self"]
     mood = float(own.get("mood", 0.55))
     share_drive = float(own.get("sharing", 0.45))
+    energy = float(own.get("energy", 0.6))
     if respect_state and (mood < 0.32 or share_drive < 0.30):
         return {"ok": True, "available": False, "reason": "现在不太想说话"}
     last = _last_interaction(path)
@@ -883,11 +1172,13 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     anchors = _grounding_anchors(path, best)
     # P0-8：问句配额（最近 3 条里 ≥2 条问号结尾 → 本次强制陈述句）
     recent_proactive = _recent_proactive_texts(path, TOPIC_WINDOW)
-    recent_questions = sum(1 for old in recent_proactive[:QUESTION_WINDOW]
-                           if _ends_question(old))
-    force_statement = recent_questions >= QUESTION_FORCE_AT
+    # P0-14：问句概率化（最近 3 条已有任一问句 → 禁问；否则按 energy/mood 掷骰）
+    allow_question = should_ask_question(mood, energy, recent_proactive)
+    force_statement = not allow_question
+    opener_mode = choose_opener_mode(recent_proactive)
     prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
-                          force_statement=force_statement)
+                          force_statement=force_statement,
+                          opener_mode=opener_mode)
     text, llm_answered = _ask_llm(client, prompt)
     if llm_answered and (not text or text.upper().startswith("SKIP")):
         # 明确让 LLM 自己决定"这次不说话"：它说 SKIP 就不发，不再用模板兜底
@@ -930,6 +1221,23 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     # P0-10 最终兜底：主题去重重生成/兜底后仍可能粘连 → 确定性插句号（幂等）
     text = _insert_runon_periods(text)
     # P0-9 最后一道：主题兜底句也不能编造共同经历
+    if not grounding_ok(text, anchors):
+        text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
+    # P0-14 人格边界/开头多样/自我感受/禁问：违规先重生成 1 次，再做确定性收口
+    if _style_problem(text, opener_mode, recent_proactive, allow_question):
+        style_prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
+                                    force_statement=force_statement,
+                                    opener_mode=opener_mode, style_fix=True)
+        style_text, style_answered = _ask_llm(client, style_prompt)
+        if style_answered and style_text and not style_text.upper().startswith("SKIP"):
+            style_candidate = _normalize_content(style_text, kind, best,
+                                                 force_statement=force_statement)
+            if grounding_ok(style_candidate, anchors):
+                text = style_candidate
+        if _style_problem(text, opener_mode, recent_proactive, allow_question):
+            text = _style_postprocess(text, kind, opener_mode,
+                                      recent_proactive, allow_question)
+    text = _insert_runon_periods(text)
     if not grounding_ok(text, anchors):
         text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
     text = style_profile.tune_reply("", text)[:200]

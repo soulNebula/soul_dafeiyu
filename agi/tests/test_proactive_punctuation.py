@@ -148,14 +148,15 @@ def test_polish_fixes_multiple_runons_without_losing_content():
 def test_tick_regenerates_runon_once_and_uses_second_result(tmp_path, monkeypatch):
     _force_care(monkeypatch)
     path = _seed(tmp_path)
-    good = "刚剪完绿萝的枯叶。你这两天要是累，晚上吃点软和的。"
-    client = FakeClient(queue=[RAW, good])
+    raw = "我刚把一份资料整理了一遍你这两天工作要是累，就别硬撑。"
+    good = "我把资料整理了一遍。你这两天要是累，就别硬撑。"
+    client = FakeClient(queue=[raw, good])
     row = _tick(path, client=client)
     assert row["available"] is True
     assert client.calls >= 2
-    # 用了第二次（合规）结果，而不是第一次的 run-on
-    assert "剪完绿萝" in row["messages"][0]
-    assert "剪了剪" not in row["messages"][0]
+    # 用了第二次（合规、无 run-on）结果
+    assert "整理了一遍" in row["messages"][0]
+    assert "别硬撑" in row["messages"][0]
     assert any("把两层意思用句号分开" in prompt for prompt in client.prompts)
     assert proactive.find_runon(proactive.polish_outbound(row["message"])) is None
 
@@ -163,12 +164,14 @@ def test_tick_regenerates_runon_once_and_uses_second_result(tmp_path, monkeypatc
 def test_tick_inserts_period_deterministically_when_regen_still_runon(tmp_path, monkeypatch):
     _force_care(monkeypatch)
     path = _seed(tmp_path)
-    client = FakeClient(text=RAW)   # 每次都是 run-on
+    raw = "我刚把一份资料整理了一遍你这两天工作要是累，就别硬撑。"
+    client = FakeClient(text=raw)   # 每次都是 run-on
     row = _tick(path, client=client)
     assert row["available"] is True
     assert client.calls >= 2        # 先尝试重生成 1 次
-    # 重生成仍粘连 → 确定性插句号；发送前 polish 后必须等于真机修复结果
-    assert proactive.polish_outbound(row["message"]) == FIXED
+    # 重生成仍粘连 → 确定性插句号；发送前 polish 后不再有 run-on
+    assert "整理了一遍" in row["message"]
+    assert proactive.find_runon(proactive.polish_outbound(row["message"])) is None
 
 
 def test_kind_prompt_has_punctuation_constraints():

@@ -50,6 +50,37 @@ _STAGE_RANK = {"陌生": 0, "疏远": 0, "初识": 1, "熟悉": 2, "亲近": 3, 
 _WS_RE = re.compile(r"\s+")
 _SENT_SPLIT_RE = re.compile(r"(?<=[。！？!?])")
 _CLAUSE_SPLIT_RE = re.compile(r"[，。！？!?；;,.、\s]+")
+# 主题相似度用：去掉空白/标点，只留中英文数字（避免标点把 2-gram 稀释）
+_SIM_CLEAN_RE = re.compile(r"[^\w\u4e00-\u9fff]+")
+
+# --------------------------------------------------------------------------- #
+# P0-8：反「安静」内容塌缩（禁元话题 / 主题去重 / 问句配额 / 后处理兜底）
+# --------------------------------------------------------------------------- #
+#: 正文禁词（真机日志里高频的「元话题」；命中即重写，保证线上绝不出现）
+BANNED_TOPIC_WORDS = (
+    "安静", "没动静", "没消息", "好久没聊", "忙吗", "在忙吗", "在干嘛",
+    "冒个泡", "打扰了", "没人理我",
+    # 同义改写 / 真机样例变体：一起拦，避免换个说法又冒出来
+    "好久没", "没声音", "声音都没有", "一点声音", "冷清", "没人回",
+)
+#: 主题去重：最近 N 条已发主动消息、字符 2-gram Jaccard 上限
+TOPIC_WINDOW = 10
+TOPIC_SIMILARITY_MAX = 0.35
+#: 问句配额：最近 N 条里 ≥M 条以问号结尾 → 本次强制陈述/分享句
+QUESTION_WINDOW = 3
+QUESTION_FORCE_AT = 2
+#: 全局负向约束（拼进每个 kind 的 prompt；光靠轮换挡不住「安静」主题）
+TOPIC_CONSTRAINTS = (
+    "硬约束（违反会被重写，必须遵守）：\n"
+    "- 正文禁止出现这些词及其同义改写：安静、没动静、没消息、好久没聊、"
+    "忙吗/在忙吗、在干嘛、冒个泡、打扰了、没人理我；\n"
+    "- 不要评论对方不回、不说话、冷清，不要把「沉默/没动静」当话题，沉默是正常的；\n"
+    "- 不要写「窗外/声音/犯困/发呆/冷清」这类和对方沉默、无聊相关的环境感受；\n"
+    "- 必须说具体内容：一件刚发生的小事 / 一个具体问题 / 一段记忆里的具体细节；"
+    "禁止「最近怎么样」式泛问；\n"
+    "- 不复述、不概括最近已发过的内容，换一个具体话题；\n"
+    "- 最多一个问句，以陈述为主，像微信里随手发的一句话。"
+)
 
 #: 每类意图的生成约束（同一 LLM 调用里按 kind 选指令，禁止多类共用）
 KIND_INSTRUCTION = {
@@ -64,13 +95,30 @@ KIND_INSTRUCTION = {
 }
 
 #: 每类意图的兜底句（LLM 不可用/跳过/跑题时使用；彼此不同，不允许多类共用）
+#: 已审查：不含禁词、不评论沉默、主题各异（followup 的锚点由调用方注入）
 _KIND_FALLBACK = {
-    "care": "这两天忙不忙？不用急着回，我就是问一句。",
-    "share": "刚想到你之前说的{topic}，突然想接着聊聊这个。",
-    "followup": "上次你说「{anchor}」，后来怎么样了？",
-    "light": "说个轻松的：最近有没有什么离谱事，让我也乐一乐？",
-    "silence_ack": "好久没说话了，冒个泡。你最近还好吗？",
+    "care": "这两天降温，出门记得加件外套。",
+    "share": "刚想到你之前说的{topic}，我今天也碰上一件类似的小事。",
+    "followup": "上次你说「{anchor}」，我这两天还一直想着这事。",
+    "light": "刚看到楼下猫在追自己的尾巴，笑死。",
+    "silence_ack": "今天路过一家老店，闻到刚出炉的面包味，想起你喜欢这个。",
 }
+
+#: 后处理兜底用的**无锚点/无话题**安全句（不含禁词、不评论沉默；彼此不同）
+_SAFE_FALLBACK = {
+    "care": _KIND_FALLBACK["care"],
+    "share": "刚泡了杯手冲，酸得我皱了下眉，下次想换个豆子。",
+    "followup": "上次聊到的那件事，我这两天还一直惦记着。",
+    "light": _KIND_FALLBACK["light"],
+    "silence_ack": _KIND_FALLBACK["silence_ack"],
+}
+
+#: followup 的主题去重变体：都保留锚点，避免「换话题」把具体内容换没了
+_ANCHOR_VARIANTS = (
+    "上次你说「{anchor}」，我这两天还一直想着这事。",
+    "你之前提过「{anchor}」，我今天突然又想起这茬。",
+    "关于「{anchor}」，我后来还琢磨了一下。",
+)
 
 
 def kind_fallback(kind: str, *, anchor: str = "", topic: str = "") -> str:
@@ -78,6 +126,99 @@ def kind_fallback(kind: str, *, anchor: str = "", topic: str = "") -> str:
     template = _KIND_FALLBACK.get(str(kind or ""), _KIND_FALLBACK["care"])
     return template.format(anchor=str(anchor or "").strip(),
                            topic=str(topic or "").strip())
+
+
+def _safe_fallback(kind: str, *, anchor: str = "", topic: str = "") -> str:
+    """带锚点/话题的兜底句再过一遍禁词；锚点/话题本身脏就退到无锚点安全句。"""
+    name = str(kind or "")
+    text = kind_fallback(name, anchor=anchor, topic=topic)
+    # 空锚点/空话题会拼出「上次你说「」」这种破句，直接退到静态安全句
+    if (name == "followup" and not str(anchor or "").strip()) or \
+            (name == "share" and not str(topic or "").strip()):
+        return _SAFE_FALLBACK.get(name, _SAFE_FALLBACK["care"])
+    if _has_banned_topic(text):
+        return _SAFE_FALLBACK.get(name, _SAFE_FALLBACK["care"])
+    return text
+
+
+def _has_banned_topic(text: Any) -> bool:
+    """正文是否命中「安静/没动静/忙吗…」禁词。"""
+    value = str(text or "")
+    return any(word in value for word in BANNED_TOPIC_WORDS)
+
+
+def _ends_question(text: Any) -> bool:
+    return str(text or "").strip().endswith(("？", "?"))
+
+
+def _bigrams(text: Any) -> set[str]:
+    value = _SIM_CLEAN_RE.sub("", str(text or "")).replace("_", "")
+    if len(value) < 2:
+        return set()
+    return {value[index:index + 2] for index in range(len(value) - 1)}
+
+
+def topic_overlap(first: Any, second: Any) -> float:
+    """两段文本的字符 2-gram Jaccard（0~1）。"""
+    left, right = _bigrams(first), _bigrams(second)
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def max_topic_overlap(text: Any, history: list[str]) -> float:
+    return max((topic_overlap(text, old) for old in list(history or [])), default=0.0)
+
+
+def _recent_proactive_texts(path: Path | str, limit: int = TOPIC_WINDOW) -> list[str]:
+    """最近 N 条**已发**主动消息正文（新→旧）。
+
+    优先读 worker 写的 ``proactive_events``（status='sent'，真正出站过）；
+    表还不存在/没记录时退回 ``proactive`` 表（tick 自己生成的历史），
+    这样纯 tick 场景（单测、网页预览）也有去重依据。
+    """
+    con = db.connect(path)
+    try:
+        try:
+            rows = con.execute(
+                "SELECT text FROM proactive_events WHERE status='sent' "
+                "ORDER BY ts DESC LIMIT ?", (int(limit),)).fetchall()
+        except Exception:  # noqa: BLE001 - 旧库没有 proactive_events 表
+            rows = []
+        if not rows:
+            rows = con.execute(
+                "SELECT text FROM proactive WHERE status!='rejected' "
+                "ORDER BY created_at DESC LIMIT ?", (int(limit),)).fetchall()
+    finally:
+        con.close()
+    return [str(row["text"] or "") for row in rows if str(row["text"] or "").strip()]
+
+
+def sanitize_topic(text: Any, kind: str = "care") -> str:
+    """后处理兜底：命中禁词就换成该 kind 的安全兜底句（发送前最后一道闸）。
+
+    保证线上绝不出现「安静/没动静/忙吗/冒个泡…」这类元话题；空文本同样兜底。
+    """
+    value = str(text or "").strip()
+    if value and not _has_banned_topic(value):
+        return value
+    name = str(kind or "").strip()
+    return _SAFE_FALLBACK.get(name) or _SAFE_FALLBACK["care"]
+
+
+def _low_overlap_fallback(kind: str, candidate: dict,
+                          recent: list[str]) -> str:
+    """主题仍超标时：从兜底句里挑与历史重叠最低的（followup 保留锚点）。"""
+    anchor = str(candidate.get("anchor") or "").strip()
+    topic = str(candidate.get("topic") or "").strip()
+    if kind == "followup" and anchor:
+        pool = [variant.format(anchor=anchor) for variant in _ANCHOR_VARIANTS]
+    else:
+        pool = [_safe_fallback(other, anchor=anchor, topic=topic) for other in KINDS]
+        pool.append(_safe_fallback(kind, anchor=anchor, topic=topic))
+    unique = list(dict.fromkeys(pool))
+    safe = [text for text in unique if not _has_banned_topic(text)] or unique
+    return min(safe, key=lambda text: max_topic_overlap(text, recent))
 
 
 
@@ -142,6 +283,8 @@ def _followup_anchor(path: Path | str, now: float, limit: int = 40) -> str:
         for clause in _CLAUSE_SPLIT_RE.split(text):
             clause = clause.strip()
             if len(clause) >= 2 and clause not in _STOP_CLAUSES and not clause.isdigit():
+                if _has_banned_topic(clause):  # 锚点本身不能带「安静」类禁词
+                    continue
                 return clause[:20]
     return ""
 
@@ -205,7 +348,7 @@ def build_candidates(path: Path | str = DB_PATH, now: float | None = None) -> li
     # care：低活跃 / 上次情绪偏负
     if idle_h >= CARE_MIN_IDLE_H or emotion == "negative":
         candidates.append({
-            "kind": "care", "text": kind_fallback("care"),
+            "kind": "care", "text": _safe_fallback("care"),
             "reason": f"已 {idle_h:.1f} 小时没互动" if idle_h >= CARE_MIN_IDLE_H
                       else "上次情绪偏负",
             "base": 0.55,
@@ -214,7 +357,7 @@ def build_candidates(path: Path | str = DB_PATH, now: float | None = None) -> li
     if topic or trust_value >= 0.55:
         candidates.append({
             "kind": "share",
-            "text": kind_fallback("share", topic=topic or "最近的事"),
+            "text": _safe_fallback("share", topic=topic or "最近的事"),
             "reason": "记忆里有可接回的话题" if topic else "信任足够，适合分享自己的念头",
             "base": 0.50, "topic": topic,
         })
@@ -222,26 +365,26 @@ def build_candidates(path: Path | str = DB_PATH, now: float | None = None) -> li
     anchor = _followup_anchor(path, now)
     if anchor and idle_h >= FOLLOWUP_MIN_IDLE_H:
         candidates.append({
-            "kind": "followup", "text": kind_fallback("followup", anchor=anchor),
+            "kind": "followup", "text": _safe_fallback("followup", anchor=anchor),
             "reason": f"上次聊到「{anchor}」", "base": 0.52, "anchor": anchor,
         })
     # light：仅白天且关系 ≥ 熟悉
     if LIGHT_HOURS[0] <= hour < LIGHT_HOURS[1] and _STAGE_RANK.get(stage, 0) >= 2:
         candidates.append({
-            "kind": "light", "text": kind_fallback("light"),
+            "kind": "light", "text": _safe_fallback("light"),
             "reason": "白天且关系够近，适合轻松接梗", "base": 0.45,
         })
     # silence_ack：久未联系 + 至少 7 天没发过
     last_ack = _last_kind_ts(path, "silence_ack")
     if idle_h >= SILENCE_MIN_IDLE_H and (not last_ack or now - last_ack >= SILENCE_ACK_GAP_S):
         candidates.append({
-            "kind": "silence_ack", "text": kind_fallback("silence_ack"),
+            "kind": "silence_ack", "text": _safe_fallback("silence_ack"),
             "reason": f"已 {idle_h:.1f} 小时没联系", "base": 0.40,
         })
     if not candidates:
         # 关系还远/刚从沉默里出来：先轻轻问一句，别硬分享
         candidates.append({
-            "kind": "care", "text": kind_fallback("care"),
+            "kind": "care", "text": _safe_fallback("care"),
             "reason": "没有特别理由，只是想轻轻问一句", "base": 0.35,
         })
     for candidate in candidates:
@@ -325,12 +468,14 @@ def _mentions_anchor(text: str, anchor: str) -> bool:
 
 
 def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
-                 dialog: str) -> str:
-    """按 kind 选不同的生成指令（同一 LLM 调用里只玩一种意图）。"""
+                 dialog: str, *, force_statement: bool = False,
+                 regenerate: bool = False) -> str:
+    """按 kind 选不同的生成指令 + 全局负向约束（禁元话题/禁泛问/问句配额）。"""
     instruction = KIND_INSTRUCTION.get(kind) or KIND_INSTRUCTION["care"]
     prompt = (
-        f"你现在心情 {mood:.2f}，分享欲 {share_drive:.2f}。用户安静了，你想主动说点什么。"
+        f"你现在心情 {mood:.2f}，分享欲 {share_drive:.2f}。你想主动给对方发条微信。"
         + instruction
+        + TOPIC_CONSTRAINTS
         + "只输出你要说的话，1-2 句，口语；不要客服腔、不报能力、不列清单。"
     )
     anchor = str(candidate.get("anchor") or "").strip()
@@ -339,8 +484,44 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
         prompt += f"必须提到这个具体内容：「{anchor}」，不要换成泛泛的近况。"
     elif kind == "share" and topic:
         prompt += f"可以从对方之前说过的「{topic}」自然引到你自己的想法。"
+    if force_statement:
+        prompt += "\n这次只写陈述句或分享句，禁止提问、禁止出现问号。"
+    if regenerate:
+        prompt += ("\n【重生成】上一次生成的内容和最近发过的消息主题太像了，"
+                   "换一个完全不同的具体话题重说一句。")
     prompt += "如果实在没话说，输出 SKIP。最近对话：" + dialog
     return prompt
+
+
+def _ask_llm(client, prompt: str) -> tuple[str, bool]:
+    """调一次主动生成；返回 (text, 是否拿到可用回复)。异常/不可用都安全降级。"""
+    if client is None or not getattr(client, "available", lambda: False)():
+        return "", False
+    try:
+        result = client.chat(
+            [{"role": "system", "content": "你说话像普通人，短句。"},
+             {"role": "user", "content": prompt}],
+            purpose="selflearn_proactive", max_tokens=150, temperature=0.8)
+    except Exception:  # noqa: BLE001 - 生成失败走模板兜底，不影响主链
+        return "", False
+    if not isinstance(result, dict) or not result.get("ok"):
+        return "", False
+    return str(result.get("text") or "").strip(), True
+
+
+def _normalize_content(text: str, kind: str, candidate: dict, *,
+                       force_statement: bool = False) -> str:
+    """生成文本的硬约束后处理：空/问句配额/followup 锚点，全部走安全兜底。"""
+    anchor = str(candidate.get("anchor") or "").strip()
+    topic = str(candidate.get("topic") or "").strip()
+    value = str(text or "").strip()
+    if not value:
+        return _safe_fallback(kind, anchor=anchor, topic=topic)
+    if force_statement and _ends_question(value):
+        return _safe_fallback(kind, anchor=anchor, topic=topic)
+    if kind == "followup" and anchor and not _mentions_anchor(value, anchor):
+        return _safe_fallback("followup", anchor=anchor)
+    return value
 
 
 
@@ -436,26 +617,29 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     kind = str(best.get("kind") or "care")
     recent = memory.recent_messages(path, limit=8)
     dialog = " | ".join(f"{m['role']}:{m['text']}" for m in recent[-6:])
-    prompt = _kind_prompt(kind, best, mood, share_drive, dialog)
-    text = ""
-    llm_answered = False
-    if client is not None and getattr(client, "available", lambda: False)():
-        r = client.chat([{"role": "system", "content": "你说话像普通人，短句。"},
-                         {"role": "user", "content": prompt}],
-                        purpose="selflearn_proactive", max_tokens=150, temperature=0.8)
-        if r.get("ok"):
-            llm_answered = True
-            text = str(r.get("text") or "").strip()
+    # P0-8：问句配额（最近 3 条里 ≥2 条问号结尾 → 本次强制陈述句）
+    recent_proactive = _recent_proactive_texts(path, TOPIC_WINDOW)
+    recent_questions = sum(1 for old in recent_proactive[:QUESTION_WINDOW]
+                           if _ends_question(old))
+    force_statement = recent_questions >= QUESTION_FORCE_AT
+    prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
+                          force_statement=force_statement)
+    text, llm_answered = _ask_llm(client, prompt)
     if llm_answered and (not text or text.upper().startswith("SKIP")):
         # 明确让 LLM 自己决定"这次不说话"：它说 SKIP 就不发，不再用模板兜底
         return {"ok": True, "available": False, "reason": "llm_skip"}
-    if not text:
-        text = str(best.get("text") or kind_fallback(kind))
-    # followup 硬约束：必须引用最近对话里的具体内容，跑题就回退到带锚点的兜底句
-    if kind == "followup":
-        anchor = str(best.get("anchor") or "").strip()
-        if anchor and not _mentions_anchor(text, anchor):
-            text = kind_fallback("followup", anchor=anchor)
+    text = _normalize_content(text, kind, best, force_statement=force_statement)
+    # P0-8 主题去重：与最近 10 条已发主动消息 2-gram Jaccard ≥0.35 →
+    # 同 kind 重生成 1 次（prompt 要求换话题）；仍超标 → 换低重叠兜底句。
+    if recent_proactive and max_topic_overlap(text, recent_proactive) >= TOPIC_SIMILARITY_MAX:
+        retry_prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
+                                    force_statement=force_statement, regenerate=True)
+        retry_text, retry_answered = _ask_llm(client, retry_prompt)
+        if retry_answered and retry_text and not retry_text.upper().startswith("SKIP"):
+            text = _normalize_content(retry_text, kind, best,
+                                      force_statement=force_statement)
+        if max_topic_overlap(text, recent_proactive) >= TOPIC_SIMILARITY_MAX:
+            text = _low_overlap_fallback(kind, best, recent_proactive)
     text = style_profile.tune_reply("", text)[:200]
     max_bubbles = 3 if share_drive >= 0.7 else (2 if share_drive >= 0.55 or mood >= 0.7 else 1)
     if int(init_info.get("max_bubbles") or 0) > 0:

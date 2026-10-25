@@ -128,10 +128,13 @@ def test_twenty_ticks_cover_four_kinds_and_never_exceed_half(tmp_path):
     counts = proactive._kind_counts(path)
     assert sum(counts.values()) == 20
     assert max(counts.values()) / sum(counts.values()) <= 0.5, counts
-    # 每个 kind 的 prompt 带上自己的指令（不是同一句通用模板）
-    prompts = dict(zip(kinds, client.prompts))
-    for kind, prompt in prompts.items():
-        assert proactive.KIND_INSTRUCTION[kind] in prompt, kind
+    # 每个 kind 的 prompt 带上自己的指令（不是同一句通用模板）；
+    # P0-8 主题去重会追加一次重生成调用，prompt 数可能 > tick 数，这里按指令反查。
+    prompt_kinds = {
+        kind for kind in ("care", "share", "followup", "light")
+        if any(proactive.KIND_INSTRUCTION[kind] in prompt for prompt in client.prompts)
+    }
+    assert {"care", "share", "followup", "light"} <= prompt_kinds, prompt_kinds
 
 
 def test_light_never_at_night_in_ticks(tmp_path):

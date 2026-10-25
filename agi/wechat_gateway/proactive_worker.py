@@ -486,6 +486,8 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             polished = selflearn_proactive.polish_outbound(raw)
             if not polished:
                 continue
+            # P0-8 发送前最后一道内容闸：命中「安静/没动静/忙吗…」禁词 → 换该 kind 兜底句
+            polished = selflearn_proactive.sanitize_topic(polished, kind)
             if "\n" in polished:  # 超长多句：逐段发送，避免一整段粘连
                 outbound.extend(part.strip() for part in polished.split("\n")
                                 if part.strip())

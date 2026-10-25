@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Soul Console · 本地调试</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">S</div>
+      <div>
+        <div class="name">Soul Console</div>
+        <div class="sub">本地调试 · 127.0.0.1:802</div>
+      </div>
+    </div>
+    <div class="nav-group">监控</div>
+    <div class="nav-item" data-page="overview"><span class="ico">◧</span>总览</div>
+    <div class="nav-item" data-page="feed"><span class="ico">☰</span>对话流</div>
+    <div class="nav-item" data-page="inner"><span class="ico">◈</span>内状态</div>
+    <div class="nav-group">记忆</div>
+    <div class="nav-item" data-page="memory"><span class="ico">▤</span>记忆</div>
+    <div class="nav-item" data-page="prompts"><span class="ico">✎</span>提示词</div>
+    <div class="nav-group">系统</div>
+    <div class="nav-item" data-page="models"><span class="ico">▣</span>模型</div>
+    <div class="nav-item" data-page="settings"><span class="ico">⚙</span>设置</div>
+    <div class="sidebar-footer">
+      数据全部来自本机文件 / 网关只读代理。<br>写操作需要 admin token。
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="header">
+      <h1 id="page-title">总览</h1>
+      <div class="pills" id="status-pills"></div>
+      <div class="spacer"></div>
+      <div class="refresh-bar">
+        <span id="last-refresh">尚未刷新</span>
+        <button class="btn small" id="btn-refresh">刷新</button>
+      </div>
+      <input type="password" id="token-input" placeholder="admin token" style="width:180px" autocomplete="off">
+    </header>
+    <main class="content" id="app">
+      <div class="empty">加载中…</div>
+    </main>
+  </div>
+</div>
+
+<div class="modal-mask" id="modal-mask">
+  <div class="modal">
+    <div class="head">
+      <h3 id="modal-title">详情</h3>
+      <button class="btn small" id="modal-close">关闭</button>
+    </div>
+    <div class="body"><pre class="json" id="modal-body"></pre></div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

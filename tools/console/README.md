@@ -41,7 +41,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | 对话流 | `agi/data/wechat/gateway.log`（JSONL 事件，只读 tail，3s 自动刷新） |
 | 内状态 | 联系人库 `inner_states`（只读 URI 连接；mode/injected/state_json/block/延迟/fallback） |
 | 记忆 | `agi/selflearn/memory.metrics()` + `user_memories` 最近 50 条 + `/api/tone`（AI 语气 vs `agi/eval_data/human_tone/profile.md` 真人基线） |
-| 提示词 | `agi/data/prompts.json`（内置 `chat_system` 预览；编辑后保存，下一条消息生效；P4-b 的 prompt_store 接入后由后端接管） |
+| 提示词 | `agi/selflearn/prompt_store`（11 个内置键的 defaults/overrides/effective；降级时直读 `agi/data/prompts.json`）。左列选键 → 右侧大文本框编辑 → 保存/恢复默认/全部恢复默认 |
 | 模型 | `agi/selflearn/model_registry`（list/health/start/stop；`soul-05b` 可启停，`qwen15` reserved 拒绝；含 inner mode 开关，写回网关 config 热加载） |
 | 设置 | `/api/config`（主动开关/概率/间隔/静默时段）+ STOP/恢复 |
 
@@ -59,7 +59,8 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | `/api/proactive/resume` | `{}` | 删除 STOP（恢复） |
 | `/api/config` | `{"updates": {...}}` | 白名单：`proactive_enabled`、`quiet_hours`、`proactive_interval_min_s/max_s`、`proactive_probability_min/max`、`inner_mode`、`inner_shadow_only`、`inner_mode_scope`、`inner_schema`；保存即返回新配置（网关热加载，无需重启） |
 | `/api/models/start` `/api/models/stop` | `{"name":"soul-05b"}` | 只允许 `soul-05b`；qwen15 reserved / 未知模型拒绝 |
-| `/api/prompts` | `{"prompts":{key:text}}` | 合并写入 `prompts.json`；key 限 `[a-zA-Z0-9_.-]{1,64}`、单值 ≤20000 字 |
+| `/api/prompts` | `{"prompts":{key:text}}` | 优先 `prompt_store.set_many`（11 键白名单、单条 ≤4000 字、原子写）；import 失败降级直写 `prompts.json` |
+| `/api/prompts/reset` | `{"keys":[...]}` 或 `{"all":true}` | 恢复默认（`prompt_store.delete/delete_all`，降级时删 JSON 键/文件） |
 
 ## 界面结构（AstrBot 风格深色）
 
@@ -82,6 +83,32 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
   warning `#faad14`、error `#ff4d4f`、text `#e8eaed`、border `#333`、气泡 `#2d2e30`。
 - 侧边栏 240px + 顶部 header 56px + 圆角 10px 卡片；JSON 用等宽字体。
 - 所有页面右上角显示「刷新于 HH:MM:SS」；接口失败显示红色原因而不是空白。
+
+## 提示词页 v2（P4-d）
+
+- 左列 **11 个内置键**（中文标签 + key + `默认`/`已覆盖` 徽标），右列大文本框编辑当前 `effective` 值；
+  顶部提示：单条 ≤4000 字、删 `agi/data/prompts.json` 即全部回滚、改完先去「对话流」观察效果。
+- 底部按钮：`保存`（`POST /api/prompts`）、`恢复默认`（回滚当前键）、`全部恢复默认`。
+- 有覆盖时显示「覆盖前默认值对比」折叠区；保存/回滚后徽标自动刷新，toast 提示
+  「已保存，下一条消息 / 下一次 tick 生效」。
+- 后端优先 `from agi.selflearn import prompt_store`（P4-b：校验/原子写/mtime 热加载）；
+  import 失败自动降级为直接读写 JSON（页面显示降级提示，不崩）。
+
+| 键 | 含义 |
+| --- | --- |
+| `proactive.persona_constraints` | 人格化边界（数字生活/禁物理起居） |
+| `proactive.kind.care` | care 关心 |
+| `proactive.kind.share` | share 分享 |
+| `proactive.kind.light` | light 轻松 |
+| `proactive.kind.followup` | followup 接话 |
+| `proactive.kind.silence_ack` | silence_ack 久未联系 |
+| `proactive.anti_fabrication` | 不编造共同经历 |
+| `proactive.punctuation` | 标点/分句约束 |
+| `proactive.continuity` | 连续性约束 |
+| `proactive.voice_fewshot` | 真实语气 few-shot |
+| `chat.system` | 被动对话 SYSTEM |
+
+恢复方式：单个键点「恢复默认」；全部点「全部恢复默认」（等价删 `agi/data/prompts.json`）。改完建议在「对话流」看下一条输出。
 
 ## 恢复出厂设置（P4-c）
 
@@ -123,6 +150,6 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 
 - 对话流只读 `gateway.log` 尾部，不会触发任何生成/发送；日志轮转/超大文件按块 tail。
 - 记忆指标读取会走 `memory.metrics()`（与 P1-g 同口径）；该函数内部用 `db.connect()`，首次可能在旧库做幂等 schema 迁移，之后只读。
-- 提示词编辑当前直接写 JSON 文件（P4-b 后端 `prompt_store` 落地后应改为调后端）。
+- 提示词编辑优先走 `prompt_store`；仅在 import 失败时降级直接写 JSON（无 11 键校验/默认值对比）。
 - STOP/配置改动是**立即生效**的（网关热加载）；前端只是改文件/配置，不重启网关。
 - 没有健康检查之外的自动操作；不会自动发消息、不会调用 LLM。

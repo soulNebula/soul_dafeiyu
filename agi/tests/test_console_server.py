@@ -150,6 +150,22 @@ def write_env(tmp_path, monkeypatch):
     return {"config": config, "tmp": tmp_path}
 
 
+@pytest.fixture
+def prompt_env(tmp_path, monkeypatch, write_env):
+    """把 prompt_store 的文件路径指到 tmp（测试绝不碰真实 agi/data/prompts.json）。"""
+    path = tmp_path / "prompts.json"
+    monkeypatch.setenv("PROMPTS_PATH", str(path))
+    try:
+        from agi.selflearn import prompt_store
+        monkeypatch.setattr(prompt_store, "PROMPTS_PATH", path)
+        monkeypatch.setattr(prompt_store, "_CACHE_MTIME", None)
+        monkeypatch.setattr(prompt_store, "_CACHE_PAYLOAD", None)
+    except Exception:  # noqa: BLE001 - 没有 prompt_store 时走降级测试
+        prompt_store = None
+    monkeypatch.setattr(console, "PROMPTS_PATH", path)
+    return {"path": path, "store": prompt_store}
+
+
 def test_stop_resume_and_audit(write_env):
     assert console.set_stop(True)["ok"] is True
     assert console.STOP_PATH.exists() and console.stop_active() is True
@@ -183,15 +199,68 @@ def test_apply_config_whitelist_and_validation(write_env):
     assert invalid["ok"] is False
 
 
-def test_save_prompts_merge_and_validation(write_env):
-    result = console.save_prompts({"proactive_style": "短句，不要句号"})
-    assert result["ok"] is True
-    saved = json.loads(write_env["tmp"].joinpath("prompts.json").read_text(encoding="utf-8"))
-    assert saved == {"version": 1, "prompts": {"proactive_style": "短句，不要句号"}}
-    console.save_prompts({"care": "问近况"})
-    merged = json.loads(write_env["tmp"].joinpath("prompts.json").read_text(encoding="utf-8"))
-    assert set(merged["prompts"]) == {"proactive_style", "care"}
-    assert console.save_prompts({"../bad": "x"})["ok"] is False
+def test_prompts_state_uses_prompt_store(prompt_env):
+    """GET 提示词：11 键 defaults 与 prompt_store.defaults() 一致，且只读不写盘。"""
+    state = console.prompts_state()
+    assert state["ok"] is True and state["degraded"] is False
+    store = prompt_env["store"]
+    expected_keys = list(store.KNOWN_KEYS)
+    assert len(state["defaults"]) == 11
+    assert set(state["defaults"]) == set(expected_keys)
+    assert state["defaults"] == store.defaults()
+    assert set(state["effective"]) == set(expected_keys)
+    assert state["overrides"] == {}
+    assert state["labels"]["chat.system"]["label"] == "被动对话 SYSTEM"
+    assert state["config"]["max_chars"] == 4000
+    assert not prompt_env["path"].exists()          # 只读不创建文件
+    assert len(state["config"]["keys"]) == 11
+
+
+def test_prompts_save_and_reset_via_store(prompt_env):
+    result = console.save_prompts({"proactive.kind.care": "新的 care 指令"})
+    assert result["ok"] is True and "proactive.kind.care" in result["changed_keys"]
+    assert result["overrides"]["proactive.kind.care"] == "新的 care 指令"
+    assert prompt_env["path"].exists()
+    audits = console.AUDIT_PATH.read_text(encoding="utf-8").splitlines()
+    assert any(json.loads(line)["action"] == "prompt_save" for line in audits)
+
+    reset = console.reset_prompts(keys=["proactive.kind.care"])
+    assert reset["ok"] is True and reset["overrides"] == {}
+    assert any(json.loads(line)["action"] == "prompt_reset"
+               for line in console.AUDIT_PATH.read_text(encoding="utf-8").splitlines())
+
+    console.save_prompts({"proactive.kind.share": "share 覆盖", "chat.system": "SYSTEM 覆盖"})
+    assert len(console.prompts_state()["overrides"]) == 2
+    all_reset = console.reset_prompts(all=True)
+    assert all_reset["ok"] is True and all_reset["overrides"] == {}
+    assert not prompt_env["path"].exists()          # delete_all 删除文件
+
+
+def test_prompts_unknown_key_rejected_by_store(prompt_env):
+    result = console.save_prompts({"not.a.key": "x"})
+    assert result["ok"] is False
+    assert console.prompts_state()["overrides"] == {}
+    assert console.reset_prompts(keys=["not.a.key"])["ok"] is False
+
+
+def test_prompts_degraded_fallback(write_env, monkeypatch):
+    """import 不到 prompt_store 时降级：直接读写 JSON，不崩。"""
+    monkeypatch.setattr(console, "_prompt_store", lambda: None)
+    state = console.prompts_state()
+    assert state["ok"] is True and state["degraded"] is True
+    assert state["defaults"] == {}
+    assert len(state["labels"]) == 11
+    saved = console.save_prompts({"care": "降级 care"})
+    assert saved["ok"] is True and saved["degraded"] is True
+    assert saved["overrides"] == {"care": "降级 care"}
+    assert json.loads(console.PROMPTS_PATH.read_text(encoding="utf-8"))["prompts"] == {
+        "care": "降级 care"}
+    reset = console.reset_prompts(keys=["care"])
+    assert reset["ok"] is True and reset["overrides"] == {}
+    console.save_prompts({"care": "a", "share": "b"})
+    all_reset = console.reset_prompts(all=True)
+    assert all_reset["ok"] is True and all_reset["overrides"] == {}
+    assert not console.PROMPTS_PATH.exists()
     assert console.save_prompts({})["ok"] is False
 
 
@@ -301,10 +370,17 @@ def test_http_config_and_prompts(write_env):
                          token="tok")
     assert status == 400 and data["ok"] is False
     status, data = _call("POST", "/api/prompts",
-                         {"prompts": {"care": "问近况"}}, token="tok")
+                         {"prompts": {"proactive.kind.care": "问近况"}}, token="tok")
     assert status == 200 and data["ok"] is True
+    assert data["overrides"]["proactive.kind.care"] == "问近况"
     status, data = _call("GET", "/api/prompts")
-    assert status == 200 and "care" in data["prompts"]
+    assert status == 200 and len(data["defaults"]) == 11
+    assert data["overrides"]["proactive.kind.care"] == "问近况"
+    status, data = _call("POST", "/api/prompts/reset",
+                         {"keys": ["proactive.kind.care"]}, token="tok")
+    assert status == 200 and data["ok"] is True and data["overrides"] == {}
+    status, data = _call("POST", "/api/prompts/reset", {"all": True}, token="tok")
+    assert status == 200 and data["ok"] is True
 
 
 def test_http_models_route_rejects_reserved(write_env, monkeypatch):

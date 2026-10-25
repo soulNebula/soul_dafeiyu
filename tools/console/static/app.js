@@ -13,6 +13,7 @@ const state = {
   feedAuto: true,
   refreshing: false,
   prompts: null,
+  promptKey: null,
   config: null,
   models: null,
   memory: null,
@@ -485,7 +486,7 @@ function renderToneCard(tone) {
     <p class="hint" style="margin-top:10px">基线来源：${esc(tone.baseline_note || '')}；真人数据见 eval_data/human_tone/profile.md。差距越大越值得调提示词。</p>`);
 }
 
-/* ---------------- 提示词 ---------------- */
+/* ---------------- 提示词（P4-d） ---------------- */
 async function renderPrompts() {
   $('#app').innerHTML = '<div class="empty">加载提示词…</div>';
   let data = null;
@@ -495,93 +496,153 @@ async function renderPrompts() {
     return;
   }
   state.prompts = data;
-  const builtin = data.builtin || {};
-  const prompts = data.prompts || {};
-  const keys = Object.keys(prompts);
-  $('#app').innerHTML = `
-    <div class="card">
-      <div class="row between">
-        <div class="hint">保存到 <code>${esc(data.path)}</code>（格式 {"version":1,"prompts":{key:text}}）</div>
-        <div class="hint">保存后：<b>下一条消息生效</b></div>
-      </div>
-    </div>
-    ${card('内置提示词（只读预览）', Object.entries(builtin).map(([key, text]) => `
-      <details style="margin-bottom:8px"><summary><b>${esc(key)}</b> <span class="hint">${esc(text.length)} 字</span></summary>
-      <pre class="json">${esc(text)}</pre></details>`).join('') || '<div class="empty">暂无内置预览</div>')}
-    ${card('自定义提示词（编辑 → 保存）', `
-      <div class="list">${keys.map((key) => `<div class="field">
-        <label class="row between"><span>${esc(key)}</span><span class="hint" data-count="${esc(key)}">${esc((prompts[key] || '').length)} 字</span></label>
-        <textarea rows="6" data-prompt-key="${esc(key)}">${esc(prompts[key])}</textarea></div>`).join('') ||
-        '<div class="empty">还没有自定义提示词；下面是新增入口。</div>'}
-      </div>
-      <div class="row" style="margin-top:12px">
-        <input type="text" id="new-prompt-key" placeholder="新 key（如 proactive_style）" style="max-width:260px">
-        <button class="btn" id="btn-add-prompt">添加</button>
-        <button class="btn primary" id="btn-save-prompts">保存全部</button>
-      </div>
-      <p class="hint">w2-inner 的 prompt_store 接入后由后端接管；当前直接读写 prompts.json。</p>`)}`;
-  $('#btn-add-prompt').onclick = () => {
-    const key = $('#new-prompt-key').value.trim();
-    if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(key)) { toast('key 只能字母数字._-（≤64）', 'err'); return; }
-    if (state.prompts.prompts[key] !== undefined) { toast('key 已存在', 'err'); return; }
-    state.prompts.prompts[key] = '';
-    renderPromptsFromState();
-  };
-  $('#btn-save-prompts').onclick = savePrompts;
-  $$('textarea[data-prompt-key]').forEach((area) => {
-    area.oninput = () => {
-      const counter = $(`[data-count="${CSS.escape(area.dataset.promptKey)}"]`);
-      if (counter) counter.textContent = area.value.length + ' 字';
-    };
-  });
+  const keys = promptKeys();
+  if (!state.promptKey || !keys.includes(state.promptKey)) state.promptKey = keys[0] || null;
+  renderPromptsPage();
 }
 
-function renderPromptsFromState() {
-  const wrap = $('#app');
-  const data = state.prompts || { prompts: {}, builtin: {}, path: '' };
-  const prompts = data.prompts || {};
-  const keys = Object.keys(prompts);
-  const builtinHtml = Object.entries(data.builtin || {}).map(([key, text]) => `
-    <details style="margin-bottom:8px"><summary><b>${esc(key)}</b> <span class="hint">${esc(text.length)} 字</span></summary>
-    <pre class="json">${esc(text)}</pre></details>`).join('') || '<div class="empty">暂无内置预览</div>';
-  wrap.innerHTML = `
-    <div class="card"><div class="row between">
-      <div class="hint">保存到 <code>${esc(data.path)}</code></div><div class="hint">保存后：<b>下一条消息生效</b></div></div></div>
-    ${card('内置提示词（只读预览）', builtinHtml)}
-    ${card('自定义提示词（编辑 → 保存）', `
-      <div class="list">${keys.map((key) => `<div class="field">
-        <label class="row between"><span>${esc(key)}</span><span class="hint" data-count="${esc(key)}">${esc(String(prompts[key] || '').length)} 字</span></label>
-        <textarea rows="6" data-prompt-key="${esc(key)}">${esc(prompts[key])}</textarea></div>`).join('')}
-      </div>
-      <div class="row" style="margin-top:12px">
-        <input type="text" id="new-prompt-key" placeholder="新 key" style="max-width:260px">
-        <button class="btn" id="btn-add-prompt">添加</button>
-        <button class="btn primary" id="btn-save-prompts">保存全部</button>
-      </div>`)}`;
-  $('#btn-add-prompt').onclick = () => {
-    const key = $('#new-prompt-key').value.trim();
-    if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(key)) { toast('key 非法', 'err'); return; }
-    state.prompts.prompts[key] = '';
-    renderPromptsFromState();
-  };
-  $('#btn-save-prompts').onclick = savePrompts;
-  $$('textarea[data-prompt-key]').forEach((area) => {
-    area.oninput = () => {
-      const counter = $(`[data-count="${CSS.escape(area.dataset.promptKey)}"]`);
-      if (counter) counter.textContent = area.value.length + ' 字';
-    };
-  });
+function promptKeys() {
+  return Object.keys((state.prompts && state.prompts.effective) || {});
 }
 
-async function savePrompts() {
-  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
-  const prompts = {};
-  $$('textarea[data-prompt-key]').forEach((area) => { prompts[area.dataset.promptKey] = area.value; });
+function promptOverrides() {
+  return (state.prompts && state.prompts.overrides) || {};
+}
+
+function isPromptOverridden(key) {
+  const overrides = promptOverrides();
+  return Object.prototype.hasOwnProperty.call(overrides, key)
+    && String(overrides[key] || '') !== '';
+}
+
+function promptDefault(key) {
+  return ((state.prompts || {}).defaults || {})[key] || '';
+}
+
+function promptEffective(key) {
+  const effective = (state.prompts || {}).effective || {};
+  return effective[key] !== undefined ? effective[key] : promptDefault(key);
+}
+
+function renderPromptsPage() {
+  const data = state.prompts || {};
+  const labels = data.labels || {};
+  const config = data.config || {};
+  const keys = promptKeys();
+  const selected = state.promptKey;
+  const degraded = !!data.degraded;
+  const overrideCount = keys.filter(isPromptOverridden).length;
+  const banner = `<div class="prompt-banner">
+      <span>单条 ≤ ${esc(config.max_chars || 4000)} 字 · 删除 <code>agi/data/prompts.json</code> 即全部回滚 · 改完建议先去「对话流」观察效果</span>
+      <span class="hint">${overrideCount} 个键已覆盖 / 共 ${keys.length} 个</span>
+    </div>` + (degraded
+      ? '<div class="prompt-banner warn">prompt_store 不可用：降级为直接读写 prompts.json（看不到代码默认值，也没有 11 键校验）</div>'
+      : '');
+  const left = keys.length ? keys.map((key) => {
+    const label = labels[key] || {};
+    const over = isPromptOverridden(key);
+    return `<div class="prompt-item ${key === selected ? 'active' : ''}" data-prompt-select="${esc(key)}">
+      <div class="row between"><span class="prompt-label">${esc(label.label || key)}</span>
+        ${over ? badge('已覆盖', 'orange') : badge('默认', '')}</div>
+      <div class="prompt-key mono">${esc(key)}</div>
+    </div>`;
+  }).join('') : '<div class="empty">没有可编辑的内置提示词</div>';
+
+  let right = '<div class="empty">选择左侧一个键开始编辑</div>';
+  if (selected) {
+    const label = labels[selected] || {};
+    const over = isPromptOverridden(selected);
+    const value = promptEffective(selected);
+    const def = promptDefault(selected);
+    right = `<div class="card prompt-editor">
+      <div class="card-head">
+        <div><b>${esc(label.label || selected)}</b> <span class="mono hint">${esc(selected)}</span>
+          ${over ? badge('已覆盖', 'orange') : badge('默认', '')}</div>
+        <div class="row">
+          <button class="btn" id="btn-prompt-reset" ${over ? '' : 'disabled'}>恢复默认</button>
+          <button class="btn primary" id="btn-prompt-save">保存</button>
+        </div>
+      </div>
+      <p class="hint">${esc(label.desc || '')}</p>
+      <textarea id="prompt-editor" class="mono prompt-textarea" spellcheck="false">${esc(value)}</textarea>
+      <div class="row between" style="margin-top:8px">
+        <span class="hint" id="prompt-count">${esc(String(value).length)} 字</span>
+        <span class="hint">${over ? '当前是覆盖值；点「恢复默认」回代码默认' : '当前是代码默认值'}</span>
+      </div>
+      ${over ? `<details class="prompt-default"><summary>覆盖前默认值对比</summary><pre class="json">${esc(def)}</pre></details>` : ''}
+    </div>`;
+  }
+
+  $('#app').innerHTML = `${banner}<div class="prompt-layout">
+      <div class="card prompt-list">
+        <div class="row between" style="margin-bottom:8px"><span class="hint">内置提示词（11 键）</span>
+          <button class="btn small danger" id="btn-prompt-reset-all" ${overrideCount ? '' : 'disabled'}>全部恢复默认</button></div>
+        ${left}
+      </div>
+      ${right}
+    </div>`;
+
+  $$('[data-prompt-select]').forEach((item) => {
+    item.onclick = () => { state.promptKey = item.dataset.promptSelect; renderPromptsPage(); };
+  });
+  const save = $('#btn-prompt-save');
+  if (save) save.onclick = savePromptKey;
+  const reset = $('#btn-prompt-reset');
+  if (reset) reset.onclick = () => resetPrompt(false);
+  const resetAll = $('#btn-prompt-reset-all');
+  if (resetAll) resetAll.onclick = () => resetPrompt(true);
+  const editor = $('#prompt-editor');
+  if (editor) {
+    editor.oninput = () => {
+      const counter = $('#prompt-count');
+      if (counter) counter.textContent = editor.value.length + ' 字';
+    };
+  }
+}
+
+async function refreshPromptsData() {
   try {
-    const result = await api('/api/prompts', { method: 'POST', body: { prompts } });
-    toast('提示词已保存：' + (result.note || '下一条消息生效'), 'ok');
-    state.prompts.prompts = result.prompts || prompts;
-    renderPromptsFromState();
+    state.prompts = await api('/api/prompts');
+    renderPromptsPage();
+    setLastRefresh();
+  } catch (e) { toast('刷新提示词失败：' + e.message, 'err'); }
+}
+
+async function savePromptKey() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const key = state.promptKey;
+  const editor = $('#prompt-editor');
+  if (!key || !editor) return;
+  const text = editor.value;
+  const limit = ((state.prompts.config || {}).max_chars) || 4000;
+  if (text.length > limit) {
+    toast('超过单条 ' + limit + ' 字上限，未保存', 'err');
+    return;
+  }
+  try {
+    const result = await api('/api/prompts', {
+      method: 'POST', body: { prompts: { [key]: text } },
+    });
+    const changed = (result.changed_keys || []).length;
+    toast(changed ? '已保存，下一条消息 / 下一次 tick 生效' : '内容未变化', 'ok');
+    await refreshPromptsData();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function resetPrompt(all) {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const key = state.promptKey;
+  if (!all) {
+    const label = ((state.prompts.labels || {})[key] || {}).label || key;
+    if (!confirm('把「' + label + '」恢复成代码默认？')) return;
+  } else if (!confirm('把 11 个内置提示词全部恢复默认（删除所有覆盖）？')) {
+    return;
+  }
+  try {
+    const body = all ? { all: true } : { keys: [key] };
+    await api('/api/prompts/reset', { method: 'POST', body });
+    toast('已恢复默认，下一条消息 / 下一次 tick 生效', 'ok');
+    await refreshPromptsData();
   } catch (e) { toast(e.message, 'err'); }
 }
 

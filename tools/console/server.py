@@ -626,50 +626,216 @@ def apply_config(updates: dict, *, client: str = "") -> dict:
     return view
 
 
+#: P4-d：11 个内置提示词键的中文标签与说明（与 agi/selflearn/PROMPTS.md 对齐）
+PROMPT_LABELS: dict[str, dict] = {
+    "proactive.persona_constraints": {
+        "label": "人格化边界",
+        "desc": "轻度人格化：只写数字生活/感受，禁止物理起居细节；影响每条主动 prompt"},
+    "proactive.kind.care": {
+        "label": "care 关心",
+        "desc": "主动消息 care 类型指令：关心近况，低活跃时使用"},
+    "proactive.kind.share": {
+        "label": "share 分享",
+        "desc": "主动消息 share 类型指令：分享自己的事/想法"},
+    "proactive.kind.light": {
+        "label": "light 轻松",
+        "desc": "主动消息 light 类型指令：轻松调侃/接梗"},
+    "proactive.kind.followup": {
+        "label": "followup 接话",
+        "desc": "主动消息 followup 类型指令：承接上次没聊完的话题"},
+    "proactive.kind.silence_ack": {
+        "label": "silence_ack 久未联系",
+        "desc": "久未联系后的轻打招呼（低频）"},
+    "proactive.anti_fabrication": {
+        "label": "不编造约束",
+        "desc": "P0-9：禁止编造共同经历，必须锚定真实记忆"},
+    "proactive.punctuation": {
+        "label": "标点/分句约束",
+        "desc": "P0-10/13：run-on 分句与句末标点规则"},
+    "proactive.continuity": {
+        "label": "连续性约束",
+        "desc": "P0-17：continuation / new_topic 的承接规则"},
+    "proactive.voice_fewshot": {
+        "label": "真实语气 few-shot",
+        "desc": "真实语气示例段（参考语气，不要照抄内容）"},
+    "chat.system": {
+        "label": "被动对话 SYSTEM",
+        "desc": "chat.send 的 system message：身份、语气与边界"},
+}
+
+
+def _prompt_store():
+    """尝试复用 P4-b 的 prompt_store（同一仓库/同一 Python）；不可用返回 None。"""
+    try:
+        from agi.selflearn import prompt_store
+        return prompt_store
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _prompt_labels(keys) -> dict[str, dict]:
+    return {str(key): PROMPT_LABELS.get(str(key), {"label": str(key), "desc": ""})
+            for key in keys}
+
+
 def prompts_state() -> dict:
+    """提示词状态：defaults / overrides / effective（优先 prompt_store，降级直读 JSON）。"""
+    store = _prompt_store()
+    if store is not None:
+        try:
+            snapshot = store.snapshot()
+            keys = list(getattr(store, "KNOWN_KEYS", ()) or snapshot.get("defaults", {}))
+            raw = read_json(Path(store.prompts_path()), {})
+            updated_at = raw.get("updated_at") if isinstance(raw, dict) else None
+            return {
+                "ok": True, "degraded": False,
+                "version": snapshot.get("version"),
+                "path": snapshot.get("path") or str(PROMPTS_PATH),
+                "updated_at": updated_at,
+                "defaults": snapshot.get("defaults") or {},
+                "overrides": snapshot.get("overrides") or {},
+                "effective": snapshot.get("effective") or {},
+                "labels": _prompt_labels(keys),
+                "config": {"max_chars": getattr(store, "MAX_CHARS_PER_ENTRY", 4000),
+                           "max_file_bytes": getattr(store, "MAX_FILE_BYTES", 65536),
+                           "keys": keys},
+                "note": "保存后下一条消息 / 下一次 proactive tick 生效（mtime 热加载，无需重启）",
+            }
+        except Exception:  # noqa: BLE001 - 降级
+            pass
     payload = read_json(PROMPTS_PATH, {})
     prompts_raw = payload.get("prompts") if isinstance(payload, dict) else {}
-    prompts = {str(k): str(v) for k, v in (prompts_raw or {}).items()
-               if isinstance(k, str)} if isinstance(prompts_raw, dict) else {}
-    builtin = {}
-    try:
-        from agi.selflearn.chat import SYSTEM
-        builtin["chat_system"] = SYSTEM
-    except Exception:  # noqa: BLE001
-        pass
-    return {"ok": True, "version": int(payload.get("version") or 1)
-            if isinstance(payload, dict) else 1,
-            "prompts": prompts, "builtin": builtin, "path": str(PROMPTS_PATH),
-            "note": "w2-inner 的 prompt_store 接入后由它接管；当前直接读写 prompts.json，"
-                    "保存后下一条消息生效"}
+    prompts = ({str(k): str(v) for k, v in prompts_raw.items() if isinstance(k, str)}
+               if isinstance(prompts_raw, dict) else {})
+    return {
+        "ok": True, "degraded": True,
+        "version": int(payload.get("version") or 1) if isinstance(payload, dict) else 1,
+        "path": str(PROMPTS_PATH),
+        "updated_at": payload.get("updated_at") if isinstance(payload, dict) else None,
+        "defaults": {}, "overrides": prompts, "effective": prompts,
+        "labels": _prompt_labels(PROMPT_LABELS.keys()),
+        "config": {"max_chars": 4000, "max_file_bytes": 65536,
+                   "keys": list(PROMPT_LABELS.keys())},
+        "note": "prompt_store 不可用：已降级为直接读写 prompts.json（看不到代码默认值）",
+    }
 
 
 _PROMPT_KEY = re.compile(r"^[a-zA-Z0-9_.-]{1,64}$")
+LEGACY_PROMPT_MAX_CHARS = 20000
 
 
 def save_prompts(prompts: dict, *, client: str = "") -> dict:
+    """保存覆盖：优先 prompt_store.set_many（校验/原子写/热加载）；不可用走旧 JSON 路径。"""
     if not isinstance(prompts, dict) or not prompts:
         return {"ok": False, "error": "prompts 必须是非空对象"}
+    store = _prompt_store()
+    if store is not None:
+        before = dict(store.overrides())
+        try:
+            payload = store.set_many({str(k): str(v or "") for k, v in prompts.items()})
+        except Exception as exc:  # noqa: BLE001 - 校验失败返回错误
+            audit("prompt_save", {"keys": sorted(prompts)}, ok=False,
+                  note=str(exc), client=client)
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        after = dict(payload.get("prompts") or {})
+        changed = sorted(key for key in set(before) | set(after)
+                         if before.get(key) != after.get(key))
+        audit("prompt_save", {"keys": sorted(prompts), "changed": changed},
+              ok=True, client=client)
+        try:
+            snapshot = store.snapshot()
+            effective = snapshot.get("effective") or {}
+        except Exception:  # noqa: BLE001
+            effective = after
+        return {"ok": True, "overrides": after, "effective": effective,
+                "changed_keys": changed,
+                "note": "已保存；下一条消息 / 下一次 proactive tick 生效"}
     cleaned: dict[str, str] = {}
     for key, value in prompts.items():
         if not isinstance(key, str) or not _PROMPT_KEY.match(key):
             return {"ok": False, "error": f"非法 key: {key!r}"}
         text = str(value or "")
-        if len(text) > 20000:
-            return {"ok": False, "error": f"{key} 超过 20000 字"}
+        if len(text) > LEGACY_PROMPT_MAX_CHARS:
+            return {"ok": False, "error": f"{key} 超过 {LEGACY_PROMPT_MAX_CHARS} 字"}
         cleaned[key] = text
     payload = read_json(PROMPTS_PATH, {})
     current = payload.get("prompts") if isinstance(payload, dict) else {}
     merged = dict(current) if isinstance(current, dict) else {}
-    merged.update(cleaned)
+    before = dict(merged)
+    for key, text in cleaned.items():
+        if text == "":
+            merged.pop(key, None)
+        else:
+            merged[key] = text
     try:
         write_json_atomic(PROMPTS_PATH, {"version": 1, "prompts": merged})
     except OSError as exc:
         audit("prompt_save", {"keys": sorted(cleaned)}, ok=False, note=str(exc),
               client=client)
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    audit("prompt_save", {"keys": sorted(cleaned)}, ok=True, client=client)
-    return {"ok": True, "prompts": merged, "note": "已保存；下一条消息生效"}
+    changed = sorted(key for key in set(before) | set(merged)
+                     if before.get(key) != merged.get(key))
+    audit("prompt_save", {"keys": sorted(cleaned), "changed": changed},
+          ok=True, client=client)
+    return {"ok": True, "overrides": merged, "effective": merged,
+            "changed_keys": changed, "degraded": True,
+            "note": "已保存（降级模式：直接写 prompts.json）；下一条消息生效"}
+
+
+def reset_prompts(keys: list[str] | None = None, *, all: bool = False,
+                  client: str = "") -> dict:
+    """恢复默认：指定键或全部（优先 prompt_store.delete/delete_all）。"""
+    store = _prompt_store()
+    requested = [str(key) for key in (keys or []) if str(key)]
+    if not all and not requested:
+        return {"ok": False, "error": "需要 keys 或 all=true"}
+    if store is not None:
+        before = dict(store.overrides())
+        try:
+            if all:
+                store.delete_all()
+            else:
+                unknown = [key for key in requested if key not in store.KNOWN_KEY_SET]
+                if unknown:
+                    return {"ok": False, "error": f"未知键: {','.join(unknown)}"}
+                store.set_many({key: "" for key in requested})
+        except Exception as exc:  # noqa: BLE001
+            audit("prompt_reset", {"keys": requested, "all": bool(all)}, ok=False,
+                  note=str(exc), client=client)
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        after = dict(store.overrides())
+        changed = sorted(before) if all else requested
+        try:
+            effective = store.snapshot().get("effective") or {}
+        except Exception:  # noqa: BLE001
+            effective = after
+        audit("prompt_reset", {"keys": requested, "all": bool(all),
+                              "changed": changed}, ok=True, client=client)
+        return {"ok": True, "overrides": after, "effective": effective,
+                "changed_keys": changed,
+                "note": "已恢复默认；下一条消息 / 下一次 proactive tick 生效"}
+    payload = read_json(PROMPTS_PATH, {})
+    current = payload.get("prompts") if isinstance(payload, dict) else {}
+    merged = dict(current) if isinstance(current, dict) else {}
+    before = dict(merged)
+    try:
+        if all:
+            Path(PROMPTS_PATH).unlink(missing_ok=True)
+            merged = {}
+        else:
+            for key in requested:
+                merged.pop(key, None)
+            write_json_atomic(PROMPTS_PATH, {"version": 1, "prompts": merged})
+    except OSError as exc:
+        audit("prompt_reset", {"keys": requested, "all": bool(all)}, ok=False,
+              note=str(exc), client=client)
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    changed = sorted(before) if all else requested
+    audit("prompt_reset", {"keys": requested, "all": bool(all), "changed": changed},
+          ok=True, client=client)
+    return {"ok": True, "overrides": merged, "effective": merged,
+            "changed_keys": changed, "degraded": True,
+            "note": "已恢复默认（降级模式）；下一条消息生效"}
 
 
 # --------------------------------------------------------------------------- #
@@ -1128,6 +1294,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/prompts":
                 result = save_prompts(body.get("prompts") or {}, client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/prompts/reset":
+                raw_keys = body.get("keys") or []
+                if isinstance(raw_keys, str):
+                    raw_keys = [raw_keys]
+                result = reset_prompts([str(k) for k in raw_keys] if isinstance(raw_keys, list) else [],
+                                       all=bool(body.get("all", False)), client=client)
                 self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/factory/reset":
                 result = factory_reset(str(body.get("confirm") or ""),

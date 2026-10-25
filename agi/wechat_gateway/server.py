@@ -46,6 +46,14 @@ ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = ROOT / "agi" / "data" / "wechat" / "gateway.log"
 WXAUTO_PYTHON = ROOT / "agi" / "data" / "wechat" / ".venv" / "Scripts" / "python.exe"
 
+# P0-16 死区哨兵阈值：主动调度间隔是 uniform(60, 7200)，最长一次正常等待 2h，
+# 固定 1800s 阈值会把它误报成"死区"。有效阈值 = max(配置值, 间隔上限×slack, 下限)。
+STALE_MIN_S = 3600.0        # 至少 1h，避免短间隔配置把阈值压回误报区
+STALE_SLACK = 1.2           # 间隔上限的余量：7200 × 1.2 = 8640s（2.4h）
+STALE_REPEAT_S = 1800.0     # 同一告警 30 分钟内最多写一次（防刷屏）
+#: 内部调度/心跳事件不是"真实活动"，不刷新 last_event_ts（避免调度喂饱哨兵）
+STALE_IGNORED_KINDS = frozenset({"gateway_stale", "proactive_schedule"})
+
 
 def _log(entry: dict, path: Path | None = None) -> None:
     target = Path(path) if path else LOG_PATH
@@ -138,34 +146,50 @@ class Gateway:
         entry = {"ts": time.time(), **data}
         # kind 以事件名为准，防止 payload 里的同名字段把它覆盖掉（P0-7.1 实测踩到）
         entry["kind"] = kind
-        if kind != "gateway_stale":
-            # 死区心跳自己不算"有活动"，否则哨兵会自我续命
+        if kind not in STALE_IGNORED_KINDS:
+            # 死区心跳/内部调度不算"有活动"：否则哨兵会自我续命或被调度喂饱
             self.last_event_ts = entry["ts"]
         with self.lock:
             self.recent.append(entry)
         _log(entry, self.log_path)
 
+    def stale_threshold(self) -> float:
+        """P0-16 动态死区阈值（秒）：max(配置值, 间隔上限×1.2, 3600)。"""
+        try:
+            base = float(self.cfg.get("gateway_stale_alert_s") or 1800.0)
+        except (TypeError, ValueError):
+            base = 1800.0
+        try:
+            interval_max = float(self.cfg.get("proactive_interval_max_s") or 7200.0)
+        except (TypeError, ValueError):
+            interval_max = 7200.0
+        try:
+            slack = float(self.cfg.get("gateway_stale_slack") or STALE_SLACK)
+        except (TypeError, ValueError):
+            slack = STALE_SLACK
+        return max(base, interval_max * max(0.0, slack), STALE_MIN_S)
+
     def _check_stale(self, now: float | None = None) -> bool:
-        """P0-2 死区哨兵：超过 gateway_stale_alert_s 没事件就写 gateway_stale。
+        """P0-2 死区哨兵：超过动态阈值没有真实活动就写 gateway_stale。
 
         复用 `_work` 现有事件循环（0.2s 转一圈），不新起线程；同一告警 30 分钟内
-        最多写一次，避免自己刷屏。
+        最多写一次，避免自己刷屏。阈值见 :meth:`stale_threshold`（P0-16：必须
+        覆盖 proactive 最长 2h 的随机间隔，否则正常长等待会误报）。
         """
         now = time.time() if now is None else float(now)
-        try:
-            alert_s = float(self.cfg.get("gateway_stale_alert_s") or 1800.0)
-        except (TypeError, ValueError):
-            alert_s = 1800.0
+        alert_s = self.stale_threshold()
         last_event = float(getattr(self, "last_event_ts", 0.0) or 0.0)
         if not last_event or now - last_event <= alert_s:
             return False
-        if now - float(getattr(self, "_last_stale_ts", 0.0) or 0.0) < 1800.0:
+        if now - float(getattr(self, "_last_stale_ts", 0.0) or 0.0) < STALE_REPEAT_S:
             return False
         self._last_stale_ts = now
         self._record("gateway_stale", {
             "last_event_ts": round(last_event, 1),
             "idle_s": round(now - last_event, 1),
-            "threshold_s": alert_s,
+            "threshold_s": round(alert_s, 1),
+            "base_s": round(float(self.cfg.get("gateway_stale_alert_s") or 1800.0), 1),
+            "interval_max_s": round(float(self.cfg.get("proactive_interval_max_s") or 7200.0), 1),
         })
         return True
 

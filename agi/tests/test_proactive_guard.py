@@ -248,6 +248,8 @@ def _gw(tmp_path, **overrides) -> Gateway:
         "send_mode": "auto",
         "drafts_path": str(tmp_path / "drafts.jsonl"),
         "log_path": str(tmp_path / "gateway.log"),
+        # P0-16：阈值 = max(800, 60×1.2, 3600) = 3600，测试用固定下限便于算时间
+        "proactive_interval_max_s": 60,
     }
     cfg.update(overrides)
     return Gateway(cfg)
@@ -255,27 +257,29 @@ def _gw(tmp_path, **overrides) -> Gateway:
 
 def test_gateway_stale_alert_written_once_per_30min(tmp_path):
     g = _gw(tmp_path)
+    threshold = g.stale_threshold()
+    assert threshold == 3600.0
     g.last_event_ts = 1000.0
-    assert g._check_stale(now=1000.0 + 1801) is True
+    assert g._check_stale(now=1000.0 + threshold + 1) is True
     stale = [e for e in g.recent if e["kind"] == "gateway_stale"]
     assert len(stale) == 1
     assert stale[0]["last_event_ts"] == 1000.0
-    assert stale[0]["idle_s"] == 1801.0
-    assert stale[0]["threshold_s"] == 1800.0
+    assert stale[0]["idle_s"] == threshold + 1
+    assert stale[0]["threshold_s"] == threshold
 
     # 同 30 分钟内不重复写
-    assert g._check_stale(now=1000.0 + 1801 + 600) is False
+    assert g._check_stale(now=1000.0 + threshold + 1 + 600) is False
     assert len([e for e in g.recent if e["kind"] == "gateway_stale"]) == 1
 
     # 距上次告警满 30 分钟才允许再写
-    assert g._check_stale(now=1000.0 + 1801 + 1801) is True
+    assert g._check_stale(now=1000.0 + threshold + 1802) is True
     assert len([e for e in g.recent if e["kind"] == "gateway_stale"]) == 2
 
 
 def test_gateway_stale_not_written_when_recent_event(tmp_path):
     g = _gw(tmp_path)
     now = 5000.0
-    g.last_event_ts = now - 100.0     # 100 秒前有活动 < 1800
+    g.last_event_ts = now - 100.0     # 100 秒前有活动 < 动态阈值
     assert g._check_stale(now=now) is False
     assert not [e for e in g.recent if e["kind"] == "gateway_stale"]
 

@@ -277,7 +277,7 @@ function kindCls(kind) {
   return '';
 }
 
-function renderFeed(items) {
+function feedList(items) {
   if (!items || !items.length) return '<div class="empty">还没有事件（先让网关收/发一条消息）</div>';
   const rows = [];
   for (const event of items) {
@@ -341,7 +341,7 @@ async function renderFeed(auto) {
         </div>
         <div class="refresh-bar">${feed ? (feed.items || []).length : 0} 条 · 文件 ${esc((feed && feed.source) || '')}</div>
       </div>
-      <div style="margin-top:12px">${renderFeed((feed && feed.items) || [])}</div>
+      <div style="margin-top:12px">${feedList((feed && feed.items) || [])}</div>
     </div>`;
   $('#app').innerHTML = html;
   const select = $('#feed-kind');

@@ -3494,15 +3494,30 @@ def _bili_nav(cookies: dict, *, force: bool = False) -> dict | None:
     return result
 
 
+def _bili_buvid3() -> str:
+    """补 buvid3：B站 finger/spi 接口返回 b_3（多数场景可空，但补上更稳）。"""
+    try:
+        payload = _bili_http_json("https://api.bilibili.com/x/frontend/finger/spi")
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(data, dict):
+            return str(data.get("b_3") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 def _bili_write_credential(cookies: dict) -> dict:
-    required = ("sessdata", "bili_jct", "buvid3", "dedeuserid")
+    # 2026 版 B站登录只保证下发 sessdata/bili_jct/DedeUserID；buvid3 可能没有
+    required = ("sessdata", "bili_jct", "dedeuserid")
     missing = [key for key in required if not cookies.get(key)]
     if missing:
         return {"ok": False, "error": "credential_incomplete",
                 "hint": f"缺少字段: {','.join(missing)}"}
+    if not cookies.get("buvid3"):
+        cookies["buvid3"] = _bili_buvid3()
     target = bili_credential_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = {key: str(cookies[key]) for key in required}
+    payload = {key: str(cookies.get(key) or "") for key in ("sessdata", "bili_jct", "buvid3", "dedeuserid")}
     tmp = target.with_name(target.name + ".tmp")
     try:
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

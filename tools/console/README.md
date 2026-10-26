@@ -45,6 +45,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | 记忆 | `agi/selflearn/memory.metrics()` + `user_memories` 最近 50 条 + `/api/tone`（AI 语气 vs `agi/eval_data/human_tone/profile.md` 真人基线） |
 | 提示词 | `agi/selflearn/prompt_store`（11 个内置键的 defaults/overrides/effective；降级时直读 `agi/data/prompts.json`）。左列选键 → 右侧大文本框编辑 → 保存/恢复默认/全部恢复默认 |
 | 模型配置 | 网关 `config.json` 的白名单键（llm_model/llm_temperature/llm_max_tokens/soul_server_url/soul_timeout_s/inner_schema）+ DeepSeek key 仅显示已配置/未配置 |
+| 统计 | `/api/stats?days=&contact=`：发送/成功率/丢弃/重生成/内状态/延迟/媒体；CSS 条形图、最近被拦表 |
 | 模型 | `agi/selflearn/model_registry`（list/health/start/stop；`soul-05b` 可启停，`qwen15` reserved 拒绝；含 inner mode 开关，写回网关 config 热加载） |
 | 数据管理 | `/api/data/*`：体量/备份/导出/导入（写操作 token+审计）；按记忆库/人格库分栏，含 legacy 旧库 |
 | 记忆编辑 | `/api/memory/*`：列表/搜索/claims/行内改重要性/标记/软删除/合并（token+审计） |
@@ -56,7 +57,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 只读（GET，Host 回环校验）：
 `/api/health` `/api/status` `/api/feed?limit=&kind=` `/api/inner?limit=` `/api/messages?limit=`
 `/api/memory` `/api/tone?limit=` `/api/models` `/api/config` `/api/prompts`
-`/api/model-config` `/api/chat-test/history?limit=` `/api/logs?source=&limit=&q=&kind=`
+`/api/model-config` `/api/chat-test/history?limit=` `/api/logs?source=&limit=&q=&kind=` `/api/stats?days=&contact=`
 `/api/data/info` `/api/data/export` `/api/data/export-memories` `/api/data/backup/download`
 `/api/memory/list` `/api/memory/claims`
 `/api/media/capabilities` `/api/media/library?limit=` `/api/media/assets?limit=&kind=` `/api/media/stats` `/api/media/wishes` `/api/media/acquisition` `/api/media/file?path=`
@@ -100,6 +101,17 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
   warning `#faad14`、error `#ff4d4f`、text `#e8eaed`、border `#333`、气泡 `#2d2e30`。
 - 侧边栏 240px + 顶部 header 56px + 圆角 10px 卡片；JSON 用等宽字体。
 - 所有页面右上角显示「刷新于 HH:MM:SS」；接口失败显示红色原因而不是空白。
+
+## 统计（P8-a）
+
+- `GET /api/stats?days=7&contact=<alias|stem>`（admin token）：扫描 gateway.log 尾部最近 ≤200k 行（懒加载，
+  不整文件读入内存）+ 只读记忆库（`*.memory.sqlite3`，兼容未迁移单库/legacy）：
+  发送量按天/按小时、成功率（sent/(sent+failed+blocked)）、拦截/丢弃/重生成原因分组、主动消息
+  schedule/skip/平均间隔、内状态 count/stance/mode/延迟 p50·p95·max、对话消息统计、媒体按类型成功/失败、
+  事件延迟 p50/p95、最近 20 条被拦/丢弃、`window` 与 `errors`（文件缺失时 ok:true + 空结构）
+- 前端「统计」页：1/7/30 天切换、联系人下拉；卡片（今日发送/成功率/丢弃率/平均间隔/内状态 P95）；
+  CSS 横向条形图（按天、24h、丢弃/被拦/重生成 Top5、内状态 stance）；最近被拦/丢弃表；空数据友好提示。
+  `contact` 默认跟随数据页的联系人配置（全部联系人 = 空）。
 
 ## 数据管理 / 记忆编辑（P7-c）
 

@@ -2657,6 +2657,325 @@ def memory_merge(contact: str = "", ids: list | None = None, *, client: str = ""
 
 
 # --------------------------------------------------------------------------- #
+# P8-a：统计（发送/阻塞/丢弃/重生成/内状态/延迟/媒体）
+# --------------------------------------------------------------------------- #
+STATS_MAX_LINES = 200_000
+
+
+def _percentile(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return round(ordered[0], 2)
+    position = (len(ordered) - 1) * q
+    low = int(position)
+    high = min(low + 1, len(ordered) - 1)
+    weight = position - low
+    return round(ordered[low] * (1 - weight) + ordered[high] * weight, 2)
+
+
+def _iter_tail_lines(path: Path | str, max_lines: int = STATS_MAX_LINES):
+    """从文件尾部懒加载最近 max_lines 行（不整文件读入内存，新→旧）。"""
+    target = Path(path)
+    if not target.is_file():
+        return
+    try:
+        total = target.stat().st_size
+    except OSError:
+        return
+    if max_lines <= 0 or total <= 0:
+        return
+    yielded = 0
+    try:
+        with target.open("rb") as handle:
+            position = total
+            buffer = b""
+            while position > 0 and yielded < max_lines:
+                step = min(READ_LIMIT_BYTES, position)
+                position -= step
+                handle.seek(position)
+                buffer = handle.read(step) + buffer
+                parts = buffer.split(b"\n")
+                if position > 0:
+                    buffer = parts[0]
+                    parts = parts[1:]
+                else:
+                    buffer = b""
+                for raw in reversed(parts):
+                    if yielded >= max_lines:
+                        return
+                    line = raw.decode("utf-8", "replace").strip()
+                    if line:
+                        yielded += 1
+                        yield line
+    except OSError:
+        return
+
+
+def _stats_contact_match(event: dict, contact: str) -> bool:
+    if not contact:
+        return True
+    needle = contact.casefold()
+    for key in ("friend", "contact", "chat_name"):
+        value = str(event.get(key) or "").casefold()
+        if needle and needle in value:
+            return True
+    return False
+
+
+def _stats_db_part(contact: str) -> tuple[Path | None, list[str]]:
+    errors: list[str] = []
+    if contact:
+        db_path = _contact_db_by_alias(contact)
+    else:
+        db_path = contact_db_path()
+    if db_path is None or not Path(db_path).is_file():
+        errors.append(f"contact_db_not_found:{contact or 'default'}")
+        return None, errors
+    return Path(db_path), errors
+
+
+def _stats_messages(path: Path | None) -> dict:
+    if path is None:
+        return {"total": 0, "mine": 0, "theirs": 0, "avg_len": None,
+                "median_len": None, "active_24h": 0}
+    try:
+        con = _ro_connect(path)
+        try:
+            columns = _columns(con, "messages")
+            if not columns:
+                return {"total": 0, "mine": 0, "theirs": 0, "avg_len": None,
+                        "median_len": None, "active_24h": 0}
+            total = int(con.execute("SELECT count(*) FROM messages").fetchone()[0])
+            mine = int(con.execute(
+                "SELECT count(*) FROM messages WHERE role='assistant'").fetchone()[0])
+            theirs = int(con.execute(
+                "SELECT count(*) FROM messages WHERE role='user'").fetchone()[0])
+            lengths = [len(str(row[0] or "")) for row in con.execute(
+                "SELECT text FROM messages").fetchall()]
+            active = int(con.execute(
+                "SELECT count(*) FROM messages WHERE ts >= ?",
+                (time.time() - 86400,)).fetchone()[0])
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return {"total": 0, "mine": 0, "theirs": 0, "avg_len": None,
+                "median_len": None, "active_24h": 0}
+    lengths = [item for item in lengths if item >= 0]
+    averaged = round(sum(lengths) / len(lengths), 1) if lengths else None
+    median = _percentile([float(item) for item in lengths], 0.5) if lengths else None
+    return {"total": total, "mine": mine, "theirs": theirs,
+            "avg_len": averaged, "median_len": median, "active_24h": active}
+
+
+def _stats_inner(path: Path | None) -> dict:
+    empty = {"count": 0, "by_stance": {}, "by_mode": {},
+             "latency": {"p50": None, "p95": None, "max": None}}
+    if path is None:
+        return empty
+    try:
+        con = _ro_connect(path)
+        try:
+            columns = _columns(con, "inner_states")
+            if not columns:
+                return empty
+            rows = con.execute(
+                "SELECT mode, state_json, latency_ms FROM inner_states").fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return empty
+    by_stance: dict[str, int] = {}
+    by_mode: dict[str, int] = {}
+    latencies: list[float] = []
+    for row in rows:
+        mode = str(row["mode"] or "unknown")
+        by_mode[mode] = by_mode.get(mode, 0) + 1
+        try:
+            state = json.loads(str(row["state_json"] or "{}"))
+        except ValueError:
+            state = None
+        if isinstance(state, dict):
+            stance = str(state.get("stance") or "").strip()
+            if stance:
+                by_stance[stance] = by_stance.get(stance, 0) + 1
+        try:
+            latency = float(row["latency_ms"])
+            if latency >= 0:
+                latencies.append(latency)
+        except (TypeError, ValueError):
+            continue
+    return {"count": len(rows), "by_stance": by_stance, "by_mode": by_mode,
+            "latency": {"p50": _percentile(latencies, 0.5),
+                        "p95": _percentile(latencies, 0.95),
+                        "max": round(max(latencies), 2) if latencies else None}}
+
+
+def _empty_stats_window(days: int) -> list[dict]:
+    from datetime import datetime, timedelta
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    return [{"date": (today - timedelta(days=offset)).strftime("%Y-%m-%d"),
+             "proactive": 0, "outbound": 0, "total": 0}
+            for offset in range(days - 1, -1, -1)]
+
+
+def stats_snapshot(days: int = 7, contact: str = "") -> dict:
+    try:
+        days = max(1, min(90, int(days)))
+    except (TypeError, ValueError):
+        days = 7
+    now = time.time()
+    since = now - days * 86400
+    window = {"days": days, "since": since, "until": now, "log_lines_scanned": 0}
+    errors: list[str] = []
+    sent_by_day = _empty_stats_window(days)
+    day_index = {row["date"]: row for row in sent_by_day}
+    by_hour = [0] * 24
+    counts = {"sent": 0, "failed": 0, "blocked": 0}
+    blocked: dict[str, int] = {}
+    discarded: dict[str, int] = {}
+    regen_reasons: dict[str, int] = {}
+    skipped: dict[str, int] = {}
+    proactive_schedule = 0
+    schedule_intervals: list[float] = []
+    media_by_type: dict[str, dict] = {}
+    event_latencies: list[float] = []
+    recent_blocked: list[dict] = []
+    scanned = 0
+
+    for line in _iter_tail_lines(GATEWAY_LOG, STATS_MAX_LINES):
+        scanned += 1
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_ts = event.get("ts")
+        try:
+            event_ts = float(event_ts)
+        except (TypeError, ValueError):
+            event_ts = None
+        if event_ts is not None and event_ts < since:
+            continue
+        if not _stats_contact_match(event, contact):
+            continue
+        kind = str(event.get("kind") or "")
+        if kind == "outbound" or kind == "proactive_send":
+            status = str(event.get("status") or "").lower()
+            sent = kind == "outbound" or status == "sent"
+            if sent:
+                if event_ts is not None:
+                    day_key = time.strftime("%Y-%m-%d", time.localtime(event_ts))
+                    row = day_index.get(day_key)
+                    if row is not None:
+                        if kind == "proactive_send":
+                            row["proactive"] += 1
+                        else:
+                            row["outbound"] += 1
+                        row["total"] += 1
+                    by_hour[int(time.strftime("%H", time.localtime(event_ts)))] += 1
+                counts["sent"] += 1
+            elif status in ("failed", "error", "blocked"):
+                counts["failed"] += 1
+            for key in ("latency_ms",):
+                try:
+                    value = float(event.get(key))
+                    if value >= 0:
+                        event_latencies.append(value)
+                except (TypeError, ValueError):
+                    pass
+            inner = event.get("inner")
+            if isinstance(inner, dict):
+                try:
+                    value = float(inner.get("latency_ms"))
+                    if value >= 0:
+                        event_latencies.append(value)
+                except (TypeError, ValueError):
+                    pass
+            if kind == "proactive_send":
+                check = event.get("text_media_check")
+                if isinstance(check, dict):
+                    for issue in check.get("regen_failed") or []:
+                        key = str(issue)[:80]
+                        regen_reasons[key] = regen_reasons.get(key, 0) + 1
+        elif kind == "send_blocked":
+            counts["blocked"] += 1
+            reason = str(event.get("reason") or "unknown")[:80]
+            blocked[reason] = blocked.get(reason, 0) + 1
+            text = str(event.get("text") or event.get("drag_text") or "")[:40]
+            recent_blocked.append({"ts": event_ts, "kind": "send_blocked",
+                                   "reason": reason, "text": text})
+        elif kind == "proactive_discarded":
+            reason = str(event.get("reason") or "unknown")[:80]
+            discarded[reason] = discarded.get(reason, 0) + 1
+            text = str(event.get("text") or "")[:40]
+            recent_blocked.append({"ts": event_ts, "kind": "proactive_discarded",
+                                   "reason": reason, "text": text})
+        elif kind == "proactive_skipped":
+            reason = str(event.get("reason") or "unknown")[:80]
+            skipped[reason] = skipped.get(reason, 0) + 1
+        elif kind == "proactive_schedule":
+            proactive_schedule += 1
+            try:
+                value = float(event.get("next_delay_s"))
+                if value >= 0:
+                    schedule_intervals.append(value)
+            except (TypeError, ValueError):
+                pass
+        elif kind in ("send_media", "media_send"):
+            media_type = str(event.get("type") or event.get("media_type") or "unknown")[:40]
+            entry = media_by_type.setdefault(media_type, {"sent": 0, "failed": 0})
+            status = str(event.get("status") or "").lower()
+            if status in ("sent", "ok", "success") or event.get("ok") is True:
+                entry["sent"] += 1
+            else:
+                entry["failed"] += 1
+
+    window["log_lines_scanned"] = scanned
+    if not Path(GATEWAY_LOG).is_file():
+        errors.append("gateway_log_missing")
+    success_denominator = counts["sent"] + counts["failed"] + counts["blocked"]
+    success_rate = (round(counts["sent"] / success_denominator, 4)
+                    if success_denominator else None)
+    discarded_total = sum(discarded.values())
+    semantic_total = counts["sent"] + discarded_total
+    discard_rate = (round(discarded_total / semantic_total, 4)
+                    if semantic_total else None)
+    avg_interval = (round(sum(schedule_intervals) / len(schedule_intervals), 2)
+                    if schedule_intervals else None)
+    db_path, db_errors = _stats_db_part(contact)
+    errors.extend(db_errors)
+    inner = _stats_inner(db_path)
+    messages = _stats_messages(db_path)
+    recent_blocked.sort(key=lambda row: row.get("ts") or 0, reverse=True)
+    return {
+        "ok": True,
+        "window": window,
+        "contact": contact,
+        "db": str(db_path) if db_path else None,
+        "sent_by_day": sent_by_day,
+        "by_hour": by_hour,
+        "counts": counts,
+        "success_rate": success_rate,
+        "discard_rate": discard_rate,
+        "blocked": blocked,
+        "discarded": discarded,
+        "regen_reasons": regen_reasons,
+        "proactive": {"schedule": proactive_schedule, "skipped": skipped,
+                      "sent": counts["sent"], "avg_interval_s": avg_interval},
+        "inner": inner,
+        "messages": messages,
+        "media": media_by_type,
+        "latency": {"p50": _percentile(event_latencies, 0.5),
+                    "p95": _percentile(event_latencies, 0.95)},
+        "recent_blocked": recent_blocked[:20],
+        "errors": errors,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
 def host_ok(host: str) -> bool:
@@ -2829,6 +3148,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(404, {"ok": False, "error": "file not in media dirs"}); return
                 content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
                 self._bytes(200, target.read_bytes(), content_type); return
+            if path == "/api/stats":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, stats_snapshot(
+                    self._limit(query, 7),
+                    str((query.get("contact") or [""])[0] or ""))); return
             if path == "/api/data/info":
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return

@@ -7,6 +7,7 @@ import io
 import json
 import sqlite3
 import sys
+import time
 import urllib.error
 import urllib.parse
 import zipfile
@@ -1296,3 +1297,107 @@ def test_data_split_memory_persona_layout(tmp_path, write_env, monkeypatch):
     assert set(result["imported"]) == {"xyz.memory.sqlite3", "xyz.persona.sqlite3"}
     assert (contacts / "xyz.memory.sqlite3").exists()
     assert (contacts / "xyz.persona.sqlite3").exists()
+
+
+# ============================================================ P8-a 统计
+def _stats_env(tmp_path, monkeypatch, write_env):
+    now = time.time()
+    events = [
+        {"ts": now - 3600, "kind": "outbound", "friend": "alice", "text": "回复", "status": "sent"},
+        {"ts": now - 2 * 86400, "kind": "outbound", "friend": "alice", "text": "前天", "status": "sent"},
+        {"ts": now - 1800, "kind": "proactive_send", "friend": "alice", "text": "在吗",
+         "status": "sent", "latency_ms": 100,
+         "inner": {"latency_ms": 200},
+         "text_media_check": {"regen_failed": ["too_long", "too_long", "emoji"]}},
+        {"ts": now - 3 * 3600, "kind": "proactive_send", "friend": "bob", "text": "失败",
+         "status": "failed"},
+        {"ts": now - 7200, "kind": "send_blocked", "friend": "alice",
+         "reason": "quiet_hours", "text": "被拦文本"},
+        {"ts": now - 7300, "kind": "send_blocked", "friend": "alice", "reason": "stop_file"},
+        {"ts": now - 7400, "kind": "proactive_discarded", "friend": "alice",
+         "reason": "banned_phrase", "text": "丢弃文本"},
+        {"ts": now - 7500, "kind": "proactive_skipped", "reason": "probability"},
+        {"ts": now - 7600, "kind": "proactive_schedule", "next_delay_s": 300},
+        {"ts": now - 7700, "kind": "proactive_schedule", "next_delay_s": 500},
+        {"ts": now - 7800, "kind": "send_media", "type": "sticker", "ok": True},
+        {"ts": now - 7900, "kind": "send_media", "type": "sticker", "status": "failed"},
+        {"ts": now - 8000, "kind": "send_media", "type": "image", "status": "sent"},
+        {"ts": now - 10 * 86400, "kind": "outbound", "friend": "alice", "status": "sent"},
+    ]
+    lines = [json.dumps(event, ensure_ascii=False) for event in events]
+    lines.insert(4, "broken json")
+    gateway_log = tmp_path / "gateway.log"
+    gateway_log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    db = _make_db(tmp_path / "stats.sqlite3")
+    monkeypatch.setattr(console, "GATEWAY_LOG", gateway_log)
+    monkeypatch.setattr(console, "DEFAULT_CONTACT_DB", db)
+    monkeypatch.setattr(console, "CONTACTS_DIR", tmp_path / "contacts")
+    return {"log": gateway_log, "db": db, "tmp": tmp_path}
+
+
+def test_stats_window_counts_and_rates(tmp_path, write_env, monkeypatch):
+    _stats_env(tmp_path, monkeypatch, write_env)
+    data = console.stats_snapshot(days=7)
+    assert data["ok"] is True
+    assert data["window"]["days"] == 7
+    assert data["window"]["log_lines_scanned"] == 15
+    assert len(data["sent_by_day"]) == 7
+    assert sum(row["total"] for row in data["sent_by_day"]) == 3
+    assert sum(data["by_hour"]) == 3
+    assert data["counts"] == {"sent": 3, "failed": 1, "blocked": 2}
+    assert data["success_rate"] == pytest.approx(0.5)
+    assert data["blocked"] == {"quiet_hours": 1, "stop_file": 1}
+    assert data["discarded"] == {"banned_phrase": 1}
+    assert data["proactive"]["skipped"] == {"probability": 1}
+    assert data["proactive"]["schedule"] == 2
+    assert data["proactive"]["avg_interval_s"] == pytest.approx(400.0)
+    assert data["regen_reasons"] == {"too_long": 2, "emoji": 1}
+    assert data["media"]["sticker"] == {"sent": 1, "failed": 1}
+    assert data["media"]["image"] == {"sent": 1, "failed": 0}
+    # 事件延迟 p50/p95（100 与 200 两条）
+    assert data["latency"]["p50"] == pytest.approx(150.0)
+    assert data["latency"]["p95"] == pytest.approx(195.0)
+    assert [row["kind"] for row in data["recent_blocked"]][:2] == [
+        "send_blocked", "send_blocked"]
+    assert data["recent_blocked"][0]["text"] == "被拦文本"
+
+
+def test_stats_inner_messages_and_db_errors(tmp_path, write_env, monkeypatch):
+    env = _stats_env(tmp_path, monkeypatch, write_env)
+    data = console.stats_snapshot(days=7)
+    inner = data["inner"]
+    assert inner["count"] == 2
+    assert inner["by_mode"] == {"model": 2}
+    assert inner["by_stance"] == {"平稳": 2}
+    assert inner["latency"]["p50"] == pytest.approx(120.5)
+    assert inner["latency"]["max"] == pytest.approx(120.5)
+    messages = data["messages"]
+    assert messages["total"] == 3
+    assert messages["mine"] == 2 and messages["theirs"] == 1
+    assert messages["active_24h"] == 3
+
+    monkeypatch.setattr(console, "GATEWAY_LOG", tmp_path / "missing.log")
+    monkeypatch.setattr(console, "DEFAULT_CONTACT_DB", tmp_path / "missing.sqlite3")
+    empty = console.stats_snapshot(days=7)
+    assert empty["ok"] is True
+    assert empty["sent_by_day"] and all(row["total"] == 0 for row in empty["sent_by_day"])
+    assert empty["inner"]["count"] == 0 and empty["messages"]["total"] == 0
+    assert empty["success_rate"] is None
+    assert "gateway_log_missing" in empty["errors"]
+    assert any(error.startswith("contact_db_not_found") for error in empty["errors"])
+
+
+def test_stats_days_filter_and_contact_filter(tmp_path, write_env, monkeypatch):
+    _stats_env(tmp_path, monkeypatch, write_env)
+    one_day = console.stats_snapshot(days=1)
+    assert sum(row["total"] for row in one_day["sent_by_day"]) == 2
+    assert one_day["counts"]["sent"] == 2
+
+    alice = console.stats_snapshot(days=7, contact="alice")
+    assert alice["counts"]["sent"] == 3          # alice：1 条 proactive + 2 条 outbound（含 2 天前，在 7 天窗口内）
+    bob = console.stats_snapshot(days=7, contact="bob")
+    assert bob["counts"]["sent"] == 0 and bob["counts"]["failed"] == 1
+    status, data = _call("GET", "/api/stats?days=7", token="tok")
+    assert status == 200 and data["ok"] is True
+    status, _ = _call("GET", "/api/stats?days=7")
+    assert status == 401

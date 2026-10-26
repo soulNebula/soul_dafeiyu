@@ -25,6 +25,7 @@ const state = {
   logsState: null,
   dataInfo: null,
   memoryEdit: null,
+  statsState: null,
   status: null,
   inner: null,
   tone: null,
@@ -41,6 +42,7 @@ const PAGES = {
   memory: '记忆',
   prompts: '提示词',
   models: '模型',
+  stats: '统计',
   providers: '模型配置',
   logs: '日志',
   settings: '设置',
@@ -1829,6 +1831,155 @@ async function loadMemoryEdit() {
   };
 }
 
+/* ---------------- 统计（P8-a Stats） ---------------- */
+function statsBarRows(entries, options) {
+  const opts = options || {};
+  const rows = (entries || []).filter((entry) => entry && entry.value !== undefined);
+  if (!rows.length) return '<div class="empty">暂无数据</div>';
+  const max = opts.max || Math.max(1, ...rows.map((entry) => Number(entry.value) || 0));
+  return '<div class="stats-bars">' + rows.map((entry) => {
+    const value = Number(entry.value) || 0;
+    const width = Math.max(2, Math.round(value / max * 100));
+    const label = esc(entry.label === undefined ? '' : entry.label);
+    const note = entry.note ? `<span class="hint">${esc(entry.note)}</span>` : '';
+    return `<div class="bar-row" title="${label}：${value}">
+      <span class="bar-label">${label}</span>
+      <span class="bar-track"><span class="bar-fill ${esc(entry.cls || '')}" style="width:${width}%"></span></span>
+      <span class="bar-value">${value}</span>${note}
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function statsCard(title, value, sub) {
+  return card(title, `<div class="big">${esc(value)}</div><div class="muted">${esc(sub || '')}</div>`);
+}
+
+async function renderStats() {
+  const prev = state.statsState || {};
+  state.statsState = { days: prev.days || 7, contact: prev.contact || '' };
+  await loadStats();
+}
+
+async function loadStats() {
+  $('#app').innerHTML = '<div class="empty">加载统计…</div>';
+  const settings = state.statsState || { days: 7, contact: '' };
+  if (!state.token) {
+    $('#app').innerHTML = card('统计', '<div class="error-text">统计页需要 admin token：请在右上角填写。</div>');
+    return;
+  }
+  let data = null, info = null;
+  try {
+    data = await api('/api/stats?days=' + settings.days
+      + '&contact=' + encodeURIComponent(settings.contact));
+  } catch (err) {
+    $('#app').innerHTML = card('统计', `<div class="error-text">${esc(err.message)}</div>`);
+    return;
+  }
+  try { info = await api('/api/data/info'); } catch (err) { info = null; }
+  const aliases = (info && info.aliases) || [];
+  const days = data.sent_by_day || [];
+  const today = days.length ? days[days.length - 1] : { total: 0, proactive: 0, outbound: 0 };
+  const inner = data.inner || {};
+  const latency = inner.latency || {};
+  const counts = data.counts || {};
+  const proactive = data.proactive || {};
+  const messages = data.messages || {};
+  const media = data.media || {};
+  const mediaEntries = Object.entries(media).map(([type, values]) => ({
+    label: type, value: (values.sent || 0) + (values.failed || 0),
+    note: '成功 ' + (values.sent || 0) + ' / 失败 ' + (values.failed || 0),
+  }));
+
+  const blockedEntries = Object.entries(data.blocked || {})
+    .map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 5);
+  const discardedEntries = Object.entries(data.discarded || {})
+    .map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 5);
+  const regenEntries = Object.entries(data.regen_reasons || {})
+    .map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 5);
+  const hourEntries = (data.by_hour || []).map((value, hour) => ({
+    label: String(hour).padStart(2, '0') + ':00', value,
+  }));
+  const dayEntries = days.map((row) => ({
+    label: String(row.date).slice(5),
+    value: row.total,
+    note: '主动 ' + (row.proactive || 0) + ' / 回复 ' + (row.outbound || 0),
+  }));
+  const stanceEntries = Object.entries(inner.by_stance || {})
+    .map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, 6);
+
+  const contactOptions = aliases.map((row) =>
+    `<option value="${esc(row.alias)}" ${settings.contact === row.alias ? 'selected' : ''}>${esc(row.alias)}${row.exists ? '' : '（无库）'}</option>`).join('');
+
+  const recentRows = (data.recent_blocked || []).length
+    ? data.recent_blocked.map((row) => `<tr>
+        <td>${row.ts ? fmtDateTime(row.ts) : '—'}</td>
+        <td>${badge(row.kind || '', row.kind === 'send_blocked' ? 'red' : 'orange')}</td>
+        <td>${esc(row.reason || '')}</td>
+        <td>${esc(String(row.text || '').slice(0, 40))}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="4" class="empty">窗口内没有被拦/丢弃的事件</td></tr>';
+
+  $('#app').innerHTML = `
+    <div class="card">
+      <div class="row between">
+        <div class="row">
+          <span class="hint">窗口</span>
+          ${[1, 7, 30].map((value) => `<button class="btn small ${settings.days === value ? 'primary' : ''}"
+            data-stats-days="${value}">${value} 天</button>`).join('')}
+          <span class="hint">联系人</span>
+          <select id="stats-contact"><option value="">全部联系人</option>${contactOptions}</select>
+        </div>
+        <span class="hint">扫描 ${num((data.window || {}).log_lines_scanned)} 行 · ${esc((data.window || {}).days || '')} 天窗口${(data.errors || []).length ? ' · ' + (data.errors || []).length + ' 个数据源缺失' : ''}</span>
+      </div>
+    </div>
+    <div class="grid cols-4">
+      ${statsCard('今日发送', num(today.total), '主动 ' + num(today.proactive) + ' / 回复 ' + num(today.outbound))}
+      ${statsCard('成功率', pct(data.success_rate), 'sent ' + num(counts.sent) + ' / failed ' + num(counts.failed) + ' / blocked ' + num(counts.blocked))}
+      ${statsCard('丢弃率', pct(data.discard_rate), 'discarded ' + num(Object.values(data.discarded || {}).reduce((a, b) => a + b, 0)))}
+      ${statsCard('平均主动间隔', proactive.avg_interval_s === null ? '—' : num(proactive.avg_interval_s) + 's', 'schedule ' + num(proactive.schedule) + ' 次')}
+      ${statsCard('内状态 P95', latency.p95 === null ? '—' : num(latency.p95) + 'ms', 'count ' + num(inner.count) + ' · P50 ' + (latency.p50 === null ? '—' : num(latency.p50) + 'ms'))}
+    </div>
+    <div class="grid cols-2">
+      ${card('近 ' + settings.days + ' 天发送量', statsBarRows(dayEntries))}
+      ${card('24 小时分布', statsBarRows(hourEntries))}
+      ${card('丢弃原因 Top5', statsBarRows(discardedEntries))}
+      ${card('被拦原因 Top5', statsBarRows(blockedEntries))}
+      ${card('重生成原因 Top5', statsBarRows(regenEntries))}
+      ${card('内状态分布（stance）', statsBarRows(stanceEntries) + `<p class="hint" style="margin-top:8px">mode：${esc(JSON.stringify(inner.by_mode || {}))}</p>`)}
+    </div>
+    <div class="grid cols-3">
+      ${card('对话', `<div class="kv">
+        <span class="k">总消息</span><span class="v">${num(messages.total)}</span>
+        <span class="k">我方/对方</span><span class="v">${num(messages.mine)} / ${num(messages.theirs)}</span>
+        <span class="k">平均/中位长度</span><span class="v">${num(messages.avg_len)} / ${num(messages.median_len)} 字</span>
+        <span class="k">最近 24h</span><span class="v">${num(messages.active_24h)} 条</span></div>`)}
+      ${card('主动消息', `<div class="kv">
+        <span class="k">实际发出</span><span class="v">${num(proactive.sent)}</span>
+        <span class="k">schedule</span><span class="v">${num(proactive.schedule)} 次</span>
+        <span class="k">跳过</span><span class="v">${esc(Object.entries(proactive.skipped || {}).map(([k, v]) => k + ':' + v).join(' · ') || '—')}</span></div>`)}
+      ${card('媒体', mediaEntries.length ? statsBarRows(mediaEntries) : '<div class="empty">窗口内没有媒体发送事件</div>')}
+    </div>
+    ${card('最近 20 条被拦 / 丢弃', `<div style="overflow:auto"><table><thead><tr><th>时间</th><th>类型</th><th>原因</th><th>文本</th></tr></thead><tbody>${recentRows}</tbody></table></div>`)}
+    ${card('延迟（事件里的 latency_ms / inner.latency_ms）', `<div class="kv">
+      <span class="k">P50</span><span class="v">${data.latency && data.latency.p50 !== null ? num(data.latency.p50) + ' ms' : '—'}</span>
+      <span class="k">P95</span><span class="v">${data.latency && data.latency.p95 !== null ? num(data.latency.p95) + ' ms' : '—'}</span>
+      <span class="k">内状态 P95</span><span class="v">${latency.p95 !== null ? num(latency.p95) + ' ms' : '—'}</span>
+      <span class="k">数据源</span><span class="v mono">${esc(data.db || '—')}</span></div>`)}`;
+
+  $$('[data-stats-days]').forEach((button) => {
+    button.onclick = () => {
+      state.statsState.days = Number(button.dataset.statsDays);
+      loadStats();
+    };
+  });
+  const contact = $('#stats-contact');
+  if (contact) contact.onchange = () => {
+    state.statsState.contact = contact.value;
+    loadStats();
+  };
+  setLastRefresh();
+}
+
 /* ---------------- 路由 ---------------- */
 const RENDERERS = {
   overview: renderOverview,
@@ -1841,6 +1992,7 @@ const RENDERERS = {
   knowledge: renderMemoryEdit,
   prompts: renderPrompts,
   models: renderModels,
+  stats: renderStats,
   providers: renderProviders,
   logs: renderLogs,
   settings: renderSettings,

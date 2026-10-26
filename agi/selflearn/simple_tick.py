@@ -22,6 +22,16 @@ WECHAT_CONFIG = ROOT / "agi" / "data" / "wechat" / "config.json"
 DEFAULT_WECHAT_CONFIG = WECHAT_CONFIG
 MAX_LEN = 80
 META_RE = re.compile(r"表情包|素材|清单|表情库|记忆|系统|提示词|prompt|数据库|指令|\[\[media")
+BRACKET_RE = re.compile(
+    r"^[（(【\[].{1,20}[）)】\]]"
+    r"|[（(][^）)]{2,30}[）)]"
+    r"|【.{1,20}】"
+    r"|\*.{1,20}\*"
+    r"|（?(?:他|她|它)?(?:放下|拿起|抬头|低头|笑|叹|顿|沉默|想了想)")
+SILENCE_RE = re.compile(
+    r"你(?:刚才|刚才怎么|怎么)?没(?:接话|回|理我)"
+    r"|是不是(?:不想|懒得)理|你(?:都)?不理|怎么不回|忙吗|在忙吗|冒个泡|"
+    r"好久没(?:动静|消息)")
 FRAGMENT_TRANSITIONS = ("换个话题", "聊点别的", "说个事")
 
 
@@ -82,6 +92,10 @@ def _violations(text: str, media: dict | None, anchors: list[str],
         reasons.append("duplicate_recent")
     if media_choice.STICKER_REFERENCE_RE.search(value) and not media_choice._has_sticker(media):
         reasons.append("sticker_ref_without_media")
+    if BRACKET_RE.search(value):
+        reasons.append("bracket_action")
+    if SILENCE_RE.search(value):
+        reasons.append("silence_comment")
     return reasons
 
 
@@ -90,6 +104,8 @@ def _simple_prompt(kind: str, dialog: str, media_ctx: str,
     from . import proactive
     prompt = (proactive.PERSONA_CONSTRAINTS + "\n" + proactive.GROUNDING_CONSTRAINTS +
               "\n像真人微信聊天：短句、口语、不加句号；只说一句，不写作文/独白。"
+              "\n一条消息只说一件事，尽量 30 字以内；不要括号动作/旁白；"
+              "不要问对方为什么不回。"
               "\n正文禁止出现：表情包/素材/清单/表情库/系统/指令/记忆库/记忆/[[media："
               "想发贴纸就单独输出 [[media:...]] 指令行，不要用文字描述。")
     if media_ctx:
@@ -118,8 +134,17 @@ def _ask_simple(client, prompt: str) -> tuple[str, bool]:
 
 
 def _light_polish(text: str) -> str:
-    """轻量安全层：只去尾部句号/空白，不调用 legacy 后处理。"""
-    return re.sub(r"[。.]+\s*$", "", str(text or "").strip()).strip()
+    """轻量标点安全层：句中句号→逗号、去尾部句号、连续标点归一；幂等。"""
+    value = str(text or "").strip()
+    if not value:
+        return value
+    value = re.sub(r"[，,]{2,}", "，", value)
+    value = re.sub(r"，。", "。", value)
+    value = re.sub(r"。+", "。", value)
+    value = re.sub(r"。+(?=.)", "，", value)
+    value = re.sub(r"[。.]+\s*$", "", value)
+    value = re.sub(r"[，,]{2,}", "，", value)
+    return value.strip("，, ").strip()
 
 
 def _parse_generated(raw: str):

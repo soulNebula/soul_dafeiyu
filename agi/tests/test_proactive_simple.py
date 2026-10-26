@@ -214,3 +214,67 @@ def test_worker_records_proactive_discarded(monkeypatch):
     gateway = FakeGateway()
     proactive_worker.run_cycle(gateway, client=object(), now=100.0)
     assert any(kind == "proactive_discarded" for kind, _ in gateway.records)
+
+
+def test_light_polish_idempotent():
+    assert simple_tick._light_polish("第一句。第二句。") == "第一句，第二句"
+    assert simple_tick._light_polish("连续，，标点。") == "连续，标点"
+    assert simple_tick._light_polish("甲。乙。丙。") == "甲，乙，丙"
+    for raw in ("第一句。第二句。", "连续，，标点。", "没有标点"):
+        once = simple_tick._light_polish(raw)
+        assert simple_tick._light_polish(once) == once
+
+
+def test_real_bracket_sentence_is_regenerated(tmp_path):
+    path = _seed(tmp_path)
+    raw = "（放下手里在看的资料）控制饮食确实不容易 饿的时候我就想 忍过这阵子身体会轻快些"
+    row = _tick(path, FakeClient(queue=[raw, "控制饮食确实不容易，忍过这阵子就好"]))
+    assert row["available"] is True
+    assert "bracket_action" in row["regen_reason"]
+    assert not simple_tick.BRACKET_RE.search(row["message"])
+
+
+def test_real_silence_comment_is_regenerated(tmp_path):
+    path = _seed(tmp_path)
+    raw = ("刚在整理几段笔记，忽然在想你刚才没接话，是不是觉得我说得太绕了。"
+           "不是抱怨，就是有点在意")
+    row = _tick(path, FakeClient(queue=[raw, "刚整理完笔记，有点在意刚才那两句"]))
+    assert row["available"] is True
+    assert "silence_comment" in row["regen_reason"]
+    assert not simple_tick.SILENCE_RE.search(row["message"])
+
+
+@pytest.mark.parametrize("bad", [
+    "（放下手里的资料）控制饮食不容易",
+    "【旁白】今天有点累",
+    "*笑* 今天有点累",
+    "他放下杯子，说今天有点累",
+    "（他抬头）今天有点累",
+])
+def test_bracket_forms_are_blocked(tmp_path, bad):
+    path = _seed(tmp_path)
+    row = _tick(path, FakeClient(queue=[bad, "今天有点累，想早点休息"]))
+    assert row["available"] is True
+    assert "bracket_action" in row["regen_reason"]
+
+
+@pytest.mark.parametrize("bad", [
+    "你刚才没接话",
+    "你都不理我",
+    "怎么不回",
+    "在忙吗",
+    "冒个泡",
+    "好久没消息",
+])
+def test_silence_forms_are_blocked(tmp_path, bad):
+    path = _seed(tmp_path)
+    row = _tick(path, FakeClient(queue=[bad, "今天有点累，想早点休息"]))
+    assert row["available"] is True
+    assert "silence_comment" in row["regen_reason"]
+
+
+def test_bracket_still_bad_after_regen_is_discarded(tmp_path):
+    path = _seed(tmp_path)
+    row = _tick(path, FakeClient(queue=["（笑）今天有点累", "【旁白】今天有点累"]))
+    assert row["available"] is False
+    assert "bracket_action" in row["discard_reason"]

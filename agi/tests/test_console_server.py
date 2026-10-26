@@ -1906,3 +1906,19 @@ def test_console_library_routes_and_static(tmp_path, write_env, monkeypatch):
     assert 'data-page="library"' in index
     assert "renderLibrary" in app_js and "openLibraryEdit" in app_js
     assert ".library-grid" in style and ".library-card" in style
+
+
+def test_every_nav_page_has_renderer():
+    """每个侧栏页面都必须在 RENDERERS 里注册，否则前端报
+    「RENDERERS[page] is not a function」导致整页空白（素材库页踩过）。"""
+    import re
+
+    static_dir = Path(console.__file__).parent / "static"
+    html = (static_dir / "index.html").read_text(encoding="utf-8")
+    js = (static_dir / "app.js").read_text(encoding="utf-8")
+    navs = set(re.findall(r'data-page="([^"]+)"', html))
+    match = re.search(r"const RENDERERS = \{(.*?)\};", js, re.S)
+    assert match, "app.js 里找不到 RENDERERS 表"
+    have = {key for key, _ in re.findall(r"(\w+):\s*(\w+)", match.group(1))}
+    missing = sorted(page for page in navs if page not in have)
+    assert not missing, f"这些页面没有注册渲染器：{missing}"

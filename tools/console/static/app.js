@@ -3185,6 +3185,7 @@ const RENDERERS = {
   chat: renderChatTest,
   inner: renderInner,
   media: renderMedia,
+  library: renderLibrary,
   memory: renderMemory,
   data: renderData,
   knowledge: renderMemoryEdit,

@@ -511,3 +511,89 @@ def test_text_media_consistency_media_off(tmp_path, monkeypatch):
     final = str(row.get("message") or "")
     assert "表情包" not in final and "那个好了" not in final
     assert row["text_media_check"]["final_issues"] == []
+
+
+def test_fallback_pool_diverse_and_recent(tmp_path):
+    from agi.selflearn import db
+    path = tmp_path / "fallback.sqlite3"
+    con = db.connect(path)
+    now = time.time()
+    for index, text in enumerate(proactive._SAFE_FALLBACK_POOL[:5]):
+        con.execute("INSERT INTO proactive(id,kind,text,reason,score,status,created_at) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    (f"P-{index}", "care", text, "test", 0.6, "spoken", now - index * 60))
+    con.commit()
+    con.close()
+    proactive._ACTIVE_DB_PATH = path
+    proactive._FALLBACK_CURSOR["value"] = 0
+    try:
+        outputs = [proactive._safe_fallback("care") for _ in range(4)]
+    finally:
+        proactive._ACTIVE_DB_PATH = None
+    assert len(proactive._SAFE_FALLBACK_POOL) >= 8
+    assert all(text in proactive._SAFE_FALLBACK_POOL for text in outputs)
+    assert not (set(outputs) & set(proactive._SAFE_FALLBACK_POOL[:5]))
+    assert len(set(outputs)) == 4
+
+
+def test_regen_failed_classified(monkeypatch, tmp_path):
+    from agi.selflearn import db
+    from agi.selflearn import media_choice as mc
+    monkeypatch.setenv("MEDIA_ENABLED", "1")
+    from agi.selflearn import trust
+    path = tmp_path / "regen.sqlite3"
+    con = db.connect(path)
+    con.execute("INSERT INTO messages(id,role,text,ts,proactive) VALUES(?,?,?,?,0)",
+                ("M-1", "user", "今天有点累", time.time() - 3600))
+    con.execute("INSERT OR REPLACE INTO state(key,value,updated_at) VALUES('autonomy',?,?)",
+                (json.dumps({"daily_budget": 0}), time.time()))
+    con.commit()
+    con.close()
+    trust.set_value(path, 0.6)
+    mc.reset_regen_failed()
+
+    monkeypatch.setattr(mc, "text_media_issues",
+                        lambda text, plan, **kw: ["meta_topic"])
+
+    class Client:
+        def available(self):
+            return True
+
+        def chat(self, messages, **kwargs):
+            return {"ok": True, "text": "翻到一堆旧表情包，有点想笑"}
+
+    row = _tick_once(path, Client(), time.time())
+    stats = mc.regen_failed_snapshot()
+    assert "regen:meta_topic" in stats, stats
+    assert row["text_media_check"]["regen_failed"] == ["meta_topic"]
+    mc.reset_regen_failed()
+
+
+def test_validation_script_dry_is_offline_and_repeatable():
+    from agi.selflearn import validate_p6c
+    payload = validate_p6c.run_validation(dry=True, repeats=1)
+    assert payload["stats"]["count"] == 4
+    assert all(row["available"] or row["reason"] for row in payload["results"])
+    assert all("text" in row for row in payload["results"])
+
+
+def test_fallback_avoids_seven_day_repeats(tmp_path):
+    from agi.selflearn import db
+    path = tmp_path / "fallback7.sqlite3"
+    con = db.connect(path)
+    now = time.time()
+    pool = proactive._SAFE_FALLBACK_POOL
+    for index, text in enumerate(pool[:-1]):
+        con.execute("INSERT INTO proactive(id,kind,text,reason,score,status,created_at) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    (f"P7-{index}", "care", text, "test", 0.6, "spoken",
+                     now - index * 60))
+    con.commit()
+    con.close()
+    proactive._ACTIVE_DB_PATH = path
+    proactive._FALLBACK_CURSOR["value"] = 0
+    try:
+        out = proactive._safe_fallback("care")
+    finally:
+        proactive._ACTIVE_DB_PATH = None
+    assert out == pool[-1], out

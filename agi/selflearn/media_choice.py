@@ -77,6 +77,7 @@ NEGATIVE_WORDS = ("烦", "累", "难受", "失望", "难过", "闷", "焦虑", "
 LAUGH_WORDS = ("哈哈哈", "哈哈", "笑死", "笑死我了", "hhh", "233")
 _TAGS_CACHE: dict[str, Any] = {"mtime": None, "tags": {}}
 _RECENT_MEDIA: dict[str, deque] = {}
+REGEN_FAILED_COUNTS: dict[str, int] = {}
 INDEXED: dict[str, Any] = {"done": False}
 
 
@@ -597,6 +598,22 @@ def record_media(path: Path | str | None, plan: dict | None) -> None:
 
 def recent_media(path: Path | str | None) -> list[bool]:
     return list(_RECENT_MEDIA.get(str(path or ""), []))
+
+
+def record_regen_failed(issues: list[str], reason: str = "still_invalid") -> dict:
+    """P6-c：重生成后仍命中的规则计数（按规则分类，不静默吞）。"""
+    for issue in list(issues or []):
+        key = f"{reason}:{issue}"
+        REGEN_FAILED_COUNTS[key] = int(REGEN_FAILED_COUNTS.get(key) or 0) + 1
+    return dict(REGEN_FAILED_COUNTS)
+
+
+def regen_failed_snapshot() -> dict:
+    return dict(REGEN_FAILED_COUNTS)
+
+
+def reset_regen_failed() -> None:
+    REGEN_FAILED_COUNTS.clear()
 
 
 def reset_history() -> None:

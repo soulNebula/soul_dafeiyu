@@ -265,6 +265,22 @@ _SAFE_FALLBACK = {
     "silence_ack": "翻到一篇文章，有点感慨",
 }
 
+#: P6-c：兜底池（≥8 句，避免每次落同一句）；按最近 5 条/7 天去重选择
+_SAFE_FALLBACK_POOL = (
+    "资料还没理完，有点烦",
+    "看到一个说法，挺有意思",
+    "刚整理完一批笔记，有点累",
+    "翻到以前存的一篇文章，有点感慨",
+    "今天效率一般，有点着急",
+    "收藏夹里还有一堆没看的，慢慢来",
+    "刚把一段代码跑通，挺有成就感",
+    "看到一个段子，笑死",
+    "那批资料终于归档了，轻松一点",
+    "刚才试着换了个方法，居然成了",
+)
+_FALLBACK_CURSOR = {"value": 0}
+_ACTIVE_DB_PATH: Path | str | None = None
+
 #: followup 的主题去重变体：都保留锚点，避免「换话题」把具体内容换没了
 _ANCHOR_VARIANTS = (
     "上次你说「{anchor}」，我这两天还一直想着这事。",
@@ -280,16 +296,58 @@ def kind_fallback(kind: str, *, anchor: str = "", topic: str = "") -> str:
                            topic=str(topic or "").strip())
 
 
+def _proactive_recent_texts(path: Path | str | None = None,
+                            limit: int = 5, since: float | None = None) -> list[str]:
+    """读最近 proactive 文本（用于兜底去重；失败返回空，不阻塞主链）。"""
+    target = _ACTIVE_DB_PATH if path is None else path
+    if target is None:
+        target = DB_PATH
+    con = None
+    try:
+        con = db.connect(target)
+        if since is None:
+            rows = con.execute("SELECT text FROM proactive ORDER BY created_at DESC LIMIT ?",
+                               (int(limit),)).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT text FROM proactive WHERE created_at >= ? ORDER BY created_at DESC",
+                (float(since),)).fetchall()
+        return [str(row[0] or "") for row in rows]
+    except Exception:  # noqa: BLE001
+        return []
+    finally:
+        if con is not None:
+            con.close()
+
+
+def _pick_safe_fallback() -> str:
+    """从 ≥8 句兜底池选：最近 5 条不重复、7 天内不重复，池空则放宽。"""
+    now = time.time()
+    recent = set(_proactive_recent_texts(limit=5))
+    used7 = set(_proactive_recent_texts(since=now - 7 * 86400))
+    candidates = [text for text in _SAFE_FALLBACK_POOL
+                  if text not in recent and text not in used7]
+    if not candidates:
+        candidates = [text for text in _SAFE_FALLBACK_POOL if text not in recent]
+    if not candidates:
+        candidates = list(_SAFE_FALLBACK_POOL)
+    cursor = int(_FALLBACK_CURSOR.get("value") or 0)
+    _FALLBACK_CURSOR["value"] = cursor + 1
+    return candidates[cursor % len(candidates)]
+
+
 def _safe_fallback(kind: str, *, anchor: str = "", topic: str = "") -> str:
-    """带锚点/话题的兜底句再过一遍禁词；锚点/话题本身脏就退到无锚点安全句。"""
+    """带锚点/话题的兜底句；静态兜底按最近 5 条/7 天去重，避免反复同一句。"""
     name = str(kind or "")
     text = kind_fallback(name, anchor=anchor, topic=topic)
-    # 空锚点/空话题会拼出「上次你说「」」这种破句，直接退到静态安全句
+    # care/light/silence_ack 的静态兜底走多样性池；有真实锚点/话题的 followup/share 保留模板
+    if name in ("care", "light", "silence_ack"):
+        return _pick_safe_fallback()
     if (name == "followup" and not str(anchor or "").strip()) or \
             (name == "share" and not str(topic or "").strip()):
-        return _SAFE_FALLBACK.get(name, _SAFE_FALLBACK["care"])
+        return _pick_safe_fallback()
     if _has_banned_topic(text):
-        return _SAFE_FALLBACK.get(name, _SAFE_FALLBACK["care"])
+        return _pick_safe_fallback()
     return text
 
 
@@ -2615,7 +2673,8 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     # P6-a：文本—媒体一致性 / 元话题 / 情绪极性；先重生成 1 次，再确定性删句
     coherence_context = dialog + "\n" + "\n".join(
         str(item.get("text") or "") for item in recent_own)
-    text_media_check = {"issues": [], "fixed": False, "final_issues": []}
+    text_media_check = {"issues": [], "fixed": False, "final_issues": [],
+                        "regen_failed": []}
     try:
         from . import media_choice as _media
         issues = _media.text_media_issues(text, media_plan, anchors=coherence_context)
@@ -2628,8 +2687,11 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
                                       inner_ctx=inner_ctx, media_ctx=media_ctx,
                                       text_fix=True)
             fix_text, fix_answered = _ask_llm(client, fix_prompt)
+            if not fix_answered:
+                _media.record_regen_failed(["llm_unavailable"], reason="regen")
             if fix_answered and fix_text and not fix_text.upper().startswith("SKIP"):
                 fix_clean, fix_directives = _media.parse_media_directive(fix_text)
+                _fix_choice, fix_clean = parse_voice_choice(fix_clean)
                 fix_candidate = _normalize_content(fix_clean, kind, best,
                                                    force_statement=force_statement)
                 if emotion_conflict(fix_candidate, previous_polarity, mood):
@@ -2649,7 +2711,12 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
                         recent_media=_media.recent_media(path),
                         allow_sticker=True, now=now)
                     text_media_check["fixed"] = True
-            if _media.text_media_issues(text, media_plan, anchors=coherence_context):
+            remaining = _media.text_media_issues(text, media_plan,
+                                                 anchors=coherence_context)
+            if remaining:
+                _media.record_regen_failed(remaining, reason="regen")
+                text_media_check["regen_failed"] = remaining
+            if remaining:
                 text = _media.sanitize_text_media(text, media_plan,
                                                   anchors=coherence_context)
                 if not text:
@@ -2659,6 +2726,10 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
             text, media_plan, anchors=coherence_context)
     except Exception:  # noqa: BLE001
         pass
+    # 清理模型可能残留的 choice 前缀（即使在重生成/拼接后仍出现）
+    text = re.sub(r"(?i)\b(?:choice|表达方式)\s*[:：]\s*"
+                  r"(?:share_with_anchor|reaction|[a-z_]*)\s*", "", text)
+    text = text.strip("，,；; ")
     if (media_plan and media_plan.get("bubbles")
             and media_plan["bubbles"][0].get("type") == "emoji_text"):
         text = str(media_plan["bubbles"][0].get("text") or text)

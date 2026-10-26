@@ -281,6 +281,7 @@ MEMORY_TABLES = frozenset({
     "raw_events", "sessions", "session_segments", "emoji_archive", "emoji_usage",
     "user_profile", "score_records", "weak_rechecks", "conflicts",
     "search_documents", "search_fts", "search_meta", "research_sources",
+    "bili_impressions",
 })
 PERSONA_TABLES = frozenset({
     "persona", "persona_candidates", "persona_layers", "persona_changelog",
@@ -340,6 +341,33 @@ def _split_schema(schema: str) -> tuple[str, str]:
 
 
 MEMORY_SCHEMA, PERSONA_SCHEMA = _split_schema(SCHEMA)
+MEMORY_SCHEMA += """
+CREATE TABLE IF NOT EXISTS bili_impressions(
+  id TEXT PRIMARY KEY,
+  bvid TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  owner TEXT NOT NULL DEFAULT '',
+  owner_mid TEXT NOT NULL DEFAULT '',
+  duration_s REAL NOT NULL DEFAULT 0,
+  cover_url TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  topics_json TEXT NOT NULL DEFAULT '[]',
+  emotion TEXT NOT NULL DEFAULT '',
+  value REAL NOT NULL DEFAULT 0,
+  why TEXT NOT NULL DEFAULT '',
+  my_take TEXT NOT NULL DEFAULT '',
+  share_line TEXT NOT NULL DEFAULT '',
+  subtitle_len INTEGER NOT NULL DEFAULT 0,
+  subtitle_missing INTEGER NOT NULL DEFAULT 0,
+  comments_json TEXT NOT NULL DEFAULT '[]',
+  danmaku_json TEXT NOT NULL DEFAULT '[]',
+  meta_json TEXT NOT NULL DEFAULT '{}',
+  created_at REAL NOT NULL,
+  shared INTEGER NOT NULL DEFAULT 0,
+  shared_at REAL
+);
+CREATE INDEX IF NOT EXISTS ix_bili_impressions_created ON bili_impressions(created_at);
+"""
 # 注意：FTS/search_documents 由 search/tool_reply 按需创建（memory 域），
 # 不放进核心 schema，避免 connect() 每次把 drop 掉的 FTS 表重建。
 

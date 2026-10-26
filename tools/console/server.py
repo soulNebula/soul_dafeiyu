@@ -3204,6 +3204,7 @@ def media_wish_fulfill(body: dict, *, client: str = "") -> dict:
 # P11：B站页（扫码登录 / 配置 / 状态 / 日报）
 # --------------------------------------------------------------------------- #
 BILI_QR_PNG = DATA_DIR / "selflearn" / "bili_login_qr.png"
+_BILI_LAST_KEY = {"key": ""}
 BILI_QR_TTL_S = 180
 BILI_HTTP_TIMEOUT = 8.0
 BILI_GENERATE_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
@@ -3430,6 +3431,7 @@ def bili_login_qr(*, client: str = "") -> dict:
         return {"ok": False, "error": "network",
                 "hint": f"二维码接口返回异常: {str(payload)[:200]}"}
     key = str(data["qrcode_key"])
+    _BILI_LAST_KEY["key"] = key
     try:
         _render_qr_png(str(data["url"]), Path(BILI_QR_PNG))
     except Exception as exc:  # noqa: BLE001
@@ -3819,10 +3821,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, bili_report(
                     str((query.get("date") or [""])[0] or ""))); return
             if path == "/api/bili/login/poll":
-                if not token_ok(self.headers):
-                    self._json(401, {"ok": False, "error": "admin token required"}); return
-                self._json(200, bili_login_poll(
-                    str((query.get("key") or [""])[0] or ""))); return
+                # 不强制 token：这是只读状态轮询（成功登录仍需用户真机扫码），
+                # 避免旧页面没有 token 时轮询 401、界面卡在"等待扫码"。
+                key = str((query.get("key") or [""])[0] or "") or _BILI_LAST_KEY.get("key") or ""
+                self._json(200, bili_login_poll(key)); return
             if path == "/api/stats":
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return

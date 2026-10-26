@@ -2281,7 +2281,8 @@ function biliLoginCard(status, login) {
       <button class="btn small" id="bili-relogin">重新登录</button></div>`
       : `<div class="row between">
         <div class="hint">手机 B站 → 我的 → 扫一扫。确认时选「记住我/长期」那张。</div>
-        <button class="btn primary" id="bili-qr-btn">${qr ? '刷新二维码' : '生成二维码'}</button></div>`}
+        <div class="row" style="gap:8px"><button class="btn primary" id="bili-qr-btn">${qr ? '刷新二维码' : '生成二维码'}</button>
+        <button class="btn small" id="bili-check">我已扫码，检查状态</button></div></div>`}
     <div id="bili-login-area" style="margin-top:10px">
       ${qr ? `<div class="bili-qr">
         <img src="${esc(qr.image)}" alt="B站登录二维码">
@@ -2361,6 +2362,8 @@ async function renderBili() {
 
   const qrBtn = $('#bili-qr-btn');
   if (qrBtn) qrBtn.onclick = startBiliQr;
+  const checkBtn = $('#bili-check');
+  if (checkBtn) checkBtn.onclick = checkBiliLogin;
   const relogin = $('#bili-relogin');
   if (relogin) relogin.onclick = () => { state.bili.qr = null; state.bili.loginState = ''; renderBili(); };
   const save = $('#bili-save');
@@ -2382,6 +2385,25 @@ async function startBiliQr() {
     renderBili();
     startBiliPoll();
   } catch (err) { toast(err.message, 'err'); }
+}
+
+async function checkBiliLogin() {
+  try {
+    const result = await api('/api/bili/login/poll');
+    const node = $('#bili-login-state');
+    if (result.status === 'ok') {
+      toast('B站登录成功' + (result.uname ? '：' + result.uname : ''), 'ok');
+      if (state.bili) state.bili.qr = null;
+      await renderBili();
+      return;
+    }
+    const text = result.status === 'scanned' ? '已扫码，请在手机上确认…'
+      : result.status === 'waiting' ? '还没扫到（或者二维码已换新，请扫页面上的这张）'
+      : result.status === 'expired' ? '二维码已过期，请点「刷新二维码」重新生成'
+      : (result.hint || result.error || '未知状态');
+    if (state.bili) state.bili.loginState = text;
+    if (node) node.textContent = text;
+  } catch (err) { toast('检查失败：' + (err && err.message ? err.message : err), 'err'); }
 }
 
 function startBiliPoll() {
@@ -2416,7 +2438,12 @@ function startBiliPoll() {
       }
       const node = $('#bili-login-state');
       if (node) node.textContent = state.bili.loginState;
-    } catch (err) { state.bili.loginState = err.message; }
+      const errNode = $('#bili-login-state');
+      if (errNode) errNode.textContent = state.bili.loginState;
+    } catch (err) {
+      state.bili.loginState = '轮询失败：' + (err && err.message ? err.message : err);
+      const node = $('#bili-login-state'); if (node) node.textContent = state.bili.loginState;
+    }
   }, 2000);
 }
 

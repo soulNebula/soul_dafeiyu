@@ -1,0 +1,65 @@
+{
+  "backends": {
+    "local": {
+      "kind": "openai",
+      "base_url": "http://127.0.0.1:8125/v1",
+      "model": "local-3b",
+      "timeout_s": 60
+    },
+    "api": {
+      "kind": "deepseek",
+      "model": "deepseek-flash",
+      "timeout_s": 30
+    },
+    "rule": {
+      "kind": "rule"
+    }
+  },
+  "purposes": {
+    "video_understanding": {
+      "backend": "api",
+      "must_api": true,
+      "note": "视频真理解必须 API"
+    },
+    "ingest_summary": {
+      "backend": "local",
+      "fallback": ["api"],
+      "max_tokens": 400
+    },
+    "comment_cluster": {
+      "backend": "local",
+      "fallback": ["api"]
+    },
+    "keyword_extract": {
+      "backend": "local",
+      "fallback": ["api"],
+      "max_tokens": 200
+    },
+    "relevance_score": {
+      "backend": "local",
+      "fallback": ["rule"]
+    },
+    "share_copy": {
+      "backend": "api",
+      "fallback": ["local"]
+    },
+    "chat_reply": {
+      "backend": "api"
+    },
+    "mood_judge": {
+      "backend": "api"
+    },
+    "persona_reflect": {
+      "backend": "api",
+      "fallback": ["local"]
+    },
+    "transcribe": {
+      "backend": "local_whisper"
+    }
+  },
+  "budget": {
+    "daily_api_tokens": 300000,
+    "on_exceed": "local"
+  },
+  "log_path": "agi/data/llm_usage.jsonl"
+}

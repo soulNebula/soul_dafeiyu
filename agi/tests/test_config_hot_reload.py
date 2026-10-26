@@ -228,14 +228,16 @@ def test_stop_resume_api_auth_and_idempotent(cfg_path, tmp_path):
 # --------------------------------------------------------------------------- #
 # 3. 夜间静默硬保护
 # --------------------------------------------------------------------------- #
-def test_quiet_hours_hard_blocks_even_with_empty_list(cfg_path, tmp_path):
+def test_quiet_hours_hard_blocks_even_with_empty_list(cfg_path, tmp_path, monkeypatch):
     gw = _gateway(tmp_path, cfg_path)
     gw.cfg["quiet_hours"] = []
     # 空列表 = 非法配置 → 回退默认 [23,8]，并记警告
     assert gw._quiet_hours_value() == [23, 8]
     assert _events(gw, "quiet_hours_invalid")
-    # 23:00 命中静默 → 硬拦
+    # 23:00 命中静默 → 硬拦（P6-b：把"现在"钉死到 23:00，避免白天跑测试时
+    # _send 内部 time.time() 取到非静默时段导致用例随墙钟漂移）
     night = time.mktime((2026, 10, 25, 23, 0, 0, 0, 0, -1))
+    monkeypatch.setattr("agi.wechat_gateway.server.time.time", lambda: night)
     assert gw._quiet_blocked(now=night) is True
     out = gw._send("好友A", "晚上好", proactive=True)
     assert out["status"] == "blocked"

@@ -51,7 +51,12 @@ WXAUTO_PYTHON = ROOT / "agi" / "data" / "wechat" / ".venv" / "Scripts" / "python
 STALE_MIN_S = 3600.0        # 至少 1h，避免短间隔配置把阈值压回误报区
 STALE_SLACK = 1.2           # 间隔上限的余量：7200 × 1.2 = 8640s（2.4h）
 STALE_REPEAT_S = 1800.0     # 同一告警 30 分钟内最多写一次（防刷屏）
+#: P6-b：静默结束后的宽限上限（秒）。实际 grace = min(该值, threshold*0.2)，
+#: 避免"静默一结束就按静默前的旧 idle 判死区"（真机 09:01:39 idle=8640.1 误报）。
+STALE_GRACE_MAX_S = 1800.0
 #: 内部调度/心跳事件不是"真实活动"，不刷新 last_event_ts（避免调度喂饱哨兵）
+#: P6-b：``proactive_schedule`` 例外——哨兵本应工作时它证明 ticker 循环活着（见
+#: Gateway._counts_as_activity；disabled/静默/STOP 时保持不刷新）。
 STALE_IGNORED_KINDS = frozenset({"gateway_stale", "proactive_schedule"})
 
 # P0-22：紧急停止日志节流 / 静默覆盖有效期
@@ -63,6 +68,8 @@ QUIET_OVERRIDE_S = 86400.0         # proactive_override_quiet 24h 后自动失�
 STALE_SUPPRESS_DISABLED = "disabled"   # proactive_enabled=false
 STALE_SUPPRESS_STOPPED = "stopped"     # STOP 紧急停止文件存在
 STALE_SUPPRESS_QUIET = "quiet"         # 夜间静默时段（且无 24h override）
+#: P6-b：静默刚结束的宽限期（stale_suppressed 仍为 True，原因 grace）
+STALE_SUPPRESS_GRACE = "grace"
 
 
 def _log(entry: dict, path: Path | None = None) -> None:
@@ -106,6 +113,11 @@ class Gateway:
         # P0-2 死区哨兵：任何事件都会刷新 last_event_ts；长时间没有事件就写 gateway_stale
         self.last_event_ts = self.started_at
         self._last_stale_ts = 0.0
+        # P6-b：静默状态跟踪 / 静默结束后的宽限期截止时刻
+        self._quiet_was_active = False
+        self._stale_grace_until = 0.0
+        # P6-b：最近一次静默结束时刻——静默期间本来就不会有活动，不能算进死区 idle
+        self._stale_quiet_end_ts = 0.0
         # P0-22：配置热加载 / 紧急停止 / 夜间静默硬保护
         self._config_hot_reload = True       # run_cycle 每轮按 mtime 重读 config.json
         self._last_stop_log_ts = 0.0         # proactive_stopped 日志节流（10 分钟）
@@ -160,12 +172,32 @@ class Gateway:
         if self.worker and self.worker.is_alive():
             self.worker.join(timeout=2)
 
+    def _counts_as_activity(self, kind: str, ts: float) -> bool:
+        """P6-b：一条事件是否算"真实活动"（刷新 ``last_event_ts``）。
+
+        - 普通事件（inbound/outbound/send_blocked/…）→ 算；
+        - ``gateway_stale`` 心跳 → 不算（防哨兵自我续命）；
+        - ``proactive_schedule``：P0-16 一度整体排除，P6-b 收紧为**有条件算活动**：
+          只有哨兵本应工作时（``proactive_enabled`` 且非 disabled/stopped/quiet，
+          静默刚结束的 grace 也算"应工作"）才刷新——它证明 ticker 循环还活着。
+          disabled / 静默 / STOP 时保持旧语义不刷新（否则会掩盖真实死区）。
+        """
+        if kind == "gateway_stale":
+            return False
+        if kind in STALE_IGNORED_KINDS:
+            try:
+                reason = self.stale_suppression(ts)
+            except Exception:  # noqa: BLE001 - 活动判定失败时按旧语义（不刷新）
+                return False
+            return reason in ("", STALE_SUPPRESS_GRACE)
+        return True
+
     def _record(self, kind: str, data: dict) -> None:
         entry = {"ts": time.time(), **data}
         # kind 以事件名为准，防止 payload 里的同名字段把它覆盖掉（P0-7.1 实测踩到）
         entry["kind"] = kind
-        if kind not in STALE_IGNORED_KINDS:
-            # 死区心跳/内部调度不算"有活动"：否则哨兵会自我续命或被调度喂饱
+        if self._counts_as_activity(kind, entry["ts"]):
+            # 死区心跳不算活动；P6-b：proactive_schedule 在"应工作"时算活动
             self.last_event_ts = entry["ts"]
         with self.lock:
             self.recent.append(entry)
@@ -227,32 +259,52 @@ class Gateway:
         return True
 
     def stale_suppression(self, now: float | None = None) -> str:
-        """P0-24：当前是否处于「预期不发送」状态。
+        """P0-24/P6-b：当前是否处于「预期不发送」状态。
 
-        返回抑制原因（``disabled`` / ``stopped`` / ``quiet``），空串表示哨兵正常工作。
-        这三种状态下本来就不会有活动，报 ``gateway_stale`` 是纯噪音，会淹没真实死区。
+        返回抑制原因（``disabled`` / ``stopped`` / ``quiet`` / ``grace``），空串表示
+        哨兵正常工作。前三种状态下本来就不会有活动，报 ``gateway_stale`` 是纯噪音；
+        ``grace`` 是静默刚结束的宽限期（P6-b）：静默期间没有真实活动，不能一结束就
+        拿静默前的旧 ``idle`` 判死区。
 
         判断读的是 ``self.cfg``（与 proactive 循环热加载更新的是同一个对象），
         所以 ``proactive_enabled`` / ``quiet_hours`` / ``proactive_override_quiet``
-        变化后下一轮检查立即生效。优先级：disabled → stopped → quiet。
+        变化后下一轮检查立即生效。优先级：disabled → stopped → quiet → grace。
         **只读**：不写日志事件、不推进 override 窗口（观测不能反过来制造"活动"）。
         """
         now = time.time() if now is None else float(now)
         # ① 主动消息关闭：没有"应该发生的事"，也就没有死区
         if not bool(self.cfg.get("proactive_enabled")):
+            self._quiet_was_active = False
             return STALE_SUPPRESS_DISABLED
         # ② STOP 文件：紧急停止，预期不发送
         try:
             if self.stop_present():
+                self._quiet_was_active = False
                 return STALE_SUPPRESS_STOPPED
         except Exception:  # noqa: BLE001 - 探测失败不能反过来打断哨兵
             pass
         # ③ 夜间静默（含 24h override 放行语义）：发送被硬拦，同样预期无活动
         try:
             if self._quiet_active(now):
+                self._quiet_was_active = True
                 return STALE_SUPPRESS_QUIET
         except Exception:  # noqa: BLE001
             pass
+        # ④ P6-b：静默刚结束 → 宽限 grace_s = min(1800, threshold*0.2)
+        if self._quiet_was_active:
+            self._quiet_was_active = False
+            # 静默期间"没有活动"是预期行为，不能算进死区 idle：把静默结束时刻作为
+            # 有效活动锚点（真机事故：06:37 最后活动、08:00 静默结束、09:01:39
+            # idle 才刚过 8640 —— 只看全局 last_event 会误报，必须扣除静默段）。
+            self._stale_quiet_end_ts = now
+            try:
+                threshold = self.stale_threshold()
+            except Exception:  # noqa: BLE001
+                threshold = 8640.0
+            grace_s = min(STALE_GRACE_MAX_S, max(0.0, threshold * 0.2))
+            self._stale_grace_until = now + grace_s
+        if now < float(getattr(self, "_stale_grace_until", 0.0) or 0.0):
+            return STALE_SUPPRESS_GRACE
         return ""
 
     def _check_stale(self, now: float | None = None) -> bool:
@@ -265,12 +317,20 @@ class Gateway:
         P0-24：``proactive_enabled=false`` / STOP 文件 / 夜间静默这三种
         「预期不发送」状态直接不判定（不写 gateway_stale、不占用 30 分钟节流窗口），
         状态恢复后按真实空闲时长立刻重新判定；真实死区照旧告警。
+        P6-b：静默刚结束有 ``grace`` 宽限期；且 ``proactive_schedule`` 在哨兵应工作时
+        会刷新 ``last_event_ts``（见 :meth:`_counts_as_activity`）。另外**静默期间不算
+        死区**：有效活动时间取 ``max(last_event_ts, 静默结束时刻)``，长静默不会再被
+        误判成"网关死了几小时"；真实死区仍从静默结束后按阈值照常告警。
         """
         now = time.time() if now is None else float(now)
         if self.stale_suppression(now):
             return False
         alert_s = self.stale_threshold()
+        # P6-b：静默期间不算死区——有效活动时间 = max(真实活动, 静默结束锚点)
         last_event = float(getattr(self, "last_event_ts", 0.0) or 0.0)
+        quiet_end = float(getattr(self, "_stale_quiet_end_ts", 0.0) or 0.0)
+        if quiet_end > last_event:
+            last_event = quiet_end
         if not last_event or now - last_event <= alert_s:
             return False
         if now - float(getattr(self, "_last_stale_ts", 0.0) or 0.0) < STALE_REPEAT_S:
@@ -1090,8 +1150,8 @@ class Gateway:
                               "max": self.cfg.get("proactive_probability_max")},
                           "last": self.last_proactive},
             "inner": inner_status,
-            # P0-24：stale_suppressed=true 表示当前处于「预期不发送」状态，
-            # 哨兵主动静默；reason ∈ {disabled, stopped, quiet} 或 null。
+            # P0-24/P6-b：stale_suppressed=true 表示当前处于「预期不发送」状态，
+            # 哨兵主动静默；reason ∈ {disabled, stopped, quiet, grace} 或 null。
             "stale_suppressed": bool(stale_reason),
             "stale_suppressed_reason": stale_reason or None,
             "backend": state,

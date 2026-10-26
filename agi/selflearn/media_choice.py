@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 from collections import deque
 from pathlib import Path
@@ -50,8 +51,30 @@ MEDIA_INSTRUCTION = (
     "- 心情差/严肃/负面话题不要发搞笑贴纸；不要每条都发；只能用下面清单里的名字。\n"
     "- 如果清单里没有你想发的表情，输出 "
     "[[media:wish:想表达\"无语但好笑\"]]，本次不会发，会登记愿望给后续补素材。\n"
+    "- **正文绝对不能出现**：表情包/素材/清单/表情库/系统/指令/代码块/[[media "
+    "这些元话题；想发就只输出指令行，不要用文字描述“我要发表情包/那个表情”。\n"
     "素材：\n"
 )
+META_TOPIC_RE = re.compile(r"表情包|素材|清单|表情库|系统|指令|\[\[media")
+STICKER_REFERENCE_RE = re.compile(
+    r"(那个|这个|刚才那个).{0,5}(表情|贴纸)|这个表情|发个表情|发个贴纸|表情包|贴纸")
+MEDIA_DESCRIPTION_RE = re.compile(
+    r"(我要|我给你|给你|下面|准备)(发|丢|甩).{0,4}(表情|贴纸)|发个(表情|贴纸)")
+ANCHOR_RE = re.compile(
+    r"资料|项目|工作|片子|电影|专辑|歌|代码|论文|考试|加班|吃饭|咖啡|天气|今天|昨天|"
+    r"刚才|刚|看到|翻到|想到|那批|这件事|朋友|同事|周末|早上|晚上|聊|说|早点|休息|"
+    r"在听|在看|在写|在做|在吃|在喝|在走|在睡|听|看|写|做|吃|喝|走|睡|回|家|路|"
+    r"手机|电脑|书|剧|游戏|照片|消息|话|事|次|遍|顿|句|夜|小时|分钟|杯|件")
+DANGLING_REF_RE = re.compile(r"那个|它|这事|这个|那些|那批")
+FEELING_ONLY_RE = re.compile(r"心里|心情|感觉|整个人|一下子|轻了|松了|舒服|踏实|空落|安稳")
+# P6-a：内心独白/书面抒情句式（真人微信几乎不说）
+INNER_MONOLOGUE_RE = re.compile(
+    r"心里.{0,4}(轻了|暖|一暖|发暖|凉|一沉|一紧|松了|空了|堵)|"
+    r"悬着的?心.{0,4}放下|心头.{0,4}(一暖|一热)|眼眶.{0,3}(热|湿)|"
+    r"百感交集|说不出.{0,2}(滋味|感觉)")
+NEGATIVE_WORDS = ("烦", "累", "难受", "失望", "难过", "闷", "焦虑", "委屈",
+                  "崩溃", "心累", "没劲", "丧", "不想动")
+LAUGH_WORDS = ("哈哈哈", "哈哈", "笑死", "笑死我了", "hhh", "233")
 _TAGS_CACHE: dict[str, Any] = {"mtime": None, "tags": {}}
 _RECENT_MEDIA: dict[str, deque] = {}
 INDEXED: dict[str, Any] = {"done": False}
@@ -69,16 +92,18 @@ def media_settings() -> dict:
         "tag_file": str(getattr(config, "MEDIA_TAG_FILE", TAGS_PATH)),
         "wish_file": str(getattr(config, "MEDIA_WISH_FILE", config.DATA_DIR / "media_wishes.jsonl")),
     }
-    try:
-        raw = json.loads(Path(config.WEB_CONFIG).read_text(encoding="utf-8"))
-        if isinstance(raw, dict):
-            for key in ("media_enabled", "media_sticker_in_reply", "media_material_limit",
-                        "media_max_stickers", "media_sticker_cooldown_days",
-                        "media_max_consecutive", "media_tag_file", "media_wish_file"):
-                if key in raw:
-                    values[key[len("media_"):]] = raw[key]
-    except Exception:  # noqa: BLE001
-        pass
+    for cfg_path in (Path(config.WEB_CONFIG),
+                     ROOT / "agi" / "selflearn" / "web_config.json"):
+        try:
+            raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                for key in ("media_enabled", "media_sticker_in_reply", "media_material_limit",
+                            "media_max_stickers", "media_sticker_cooldown_days",
+                            "media_max_consecutive", "media_tag_file", "media_wish_file"):
+                    if key in raw:
+                        values[key[len("media_"):]] = raw[key]
+        except Exception:  # noqa: BLE001
+            continue
     env = os.environ
     if env.get("MEDIA_ENABLED") is not None:
         values["enabled"] = str(env["MEDIA_ENABLED"]).strip().lower() in ("1", "true", "yes", "on")
@@ -94,6 +119,9 @@ def media_settings() -> dict:
                 values[field] = int(env[env_key])
             except ValueError:
                 pass
+    # 测试隔离：未显式设置 MEDIA_ENABLED 时忽略本地 web_config，避免生产开关污染套件
+    if ("PYTEST_CURRENT_TEST" in env or "pytest" in sys.modules) and env.get("MEDIA_ENABLED") is None:
+        values["enabled"] = False
     if env.get("MEDIA_TAG_FILE"):
         values["tag_file"] = env["MEDIA_TAG_FILE"]
     if env.get("MEDIA_WISH_FILE"):
@@ -377,17 +405,21 @@ def build_plan(path: Path | str | None, directives: dict | None, text: str, *,
     sticker_cap = 1 if consecutive >= int(settings.get("max_consecutive") or 2) else int(
         settings.get("max_stickers") or 3)
     accepted: list[dict] = []
+    dropped: list[str] = []
     seen: set[str] = set()
     for name in list(directives.get("stickers") or []):
         if len(accepted) >= sticker_cap:
-            break
+            dropped.append(f"over_cap:{name}")
+            continue
         name = _clean_directive_value(name)
         if not name or name in seen:
+            dropped.append(f"duplicate_or_empty:{name}")
             continue
         single = validate_plan({"type": "sticker", "value": name}, state,
                                recent_media, path=path,
                                allow_sticker=allow_sticker, now=now)
         if not single:
+            dropped.append(f"rejected:{name}")
             # 库外/被拦的名字不进素材，但保留为 wish 供后续补库
             if not find_asset(name, path):
                 result = record_wish(f"想发贴纸:{name}", context=text[:120], path=path)
@@ -405,8 +437,8 @@ def build_plan(path: Path | str | None, directives: dict | None, text: str, *,
         else:
             accepted = []
     if not accepted and not emoji_ok:
-        return ({"bubbles": [], "wishes": recorded_wishes, "reason": "model:wish"}
-                if recorded_wishes else None)
+        return ({"bubbles": [], "wishes": recorded_wishes, "reason": "model:wish",
+                 "dropped": dropped} if recorded_wishes else None)
     bubbles: list[dict] = []
     reason_parts: list[str] = []
     if emoji_ok:
@@ -426,7 +458,135 @@ def build_plan(path: Path | str | None, directives: dict | None, text: str, *,
         reason_parts.append(f"model:sticker:{name}")
     reason = ",".join(reason_parts) if reason_parts else "model:wish"
     return {"bubbles": bubbles, "wishes": recorded_wishes,
-            "reason": reason, "stickers": [b.get("name") for b in bubbles[1:]]}
+            "reason": reason, "dropped": dropped,
+            "stickers": [b.get("name") for b in bubbles[1:]]}
+
+
+def _has_sticker(plan: dict | None) -> bool:
+    return bool(plan and any(
+        isinstance(item, dict) and item.get("type") in ("sticker", "gif", "image")
+        for item in plan.get("bubbles") or []))
+
+
+def _split_sentences(text: str) -> list[str]:
+    return [part for part in re.split(r"(?<=[。！？!?])", str(text or "")) if part.strip()]
+
+
+def polarity_conflict(text: Any) -> bool:
+    value = str(text or "")
+    return (any(word in value for word in NEGATIVE_WORDS)
+            and any(word in value for word in LAUGH_WORDS))
+
+
+def has_concrete_anchor(text: Any, anchors: str = "") -> bool:
+    """第一条是否含具体事由/对象；允许引用用户上条消息里的具体短语。"""
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if ANCHOR_RE.search(value):
+        return True
+    context = str(anchors or "")
+    for match in re.finditer(r"(?:那条|这个|那个|那批)([一-鿿]{2,6})", value):
+        if match.group(1) and match.group(1) in context:
+            return True
+    return False
+
+
+def _segments(text: Any) -> list[str]:
+    return [part.strip() for part in str(text or "").splitlines() if part.strip()]
+
+
+def coherence_issues(text: Any, anchors: str = "") -> list[str]:
+    """多气泡自足性：第一条要事由；后续指代词要有可见锚点。"""
+    issues: list[str] = []
+    parts = _segments(text)
+    if not parts:
+        return issues
+    # 只对“纯内心感受/多气泡首条”强制具体事由；普通短句不误伤
+    if (len(parts[0]) >= 5 and not has_concrete_anchor(parts[0], anchors)
+            and (len(parts) > 1 or FEELING_ONLY_RE.search(parts[0]))):
+        issues.append("first_bubble_no_anchor")
+    if len(parts) > 1:
+        context = parts[0] + "\n" + str(anchors or "")
+        for part in parts[1:]:
+            if DANGLING_REF_RE.search(part) and not ANCHOR_RE.search(context):
+                issues.append("dangling_reference")
+                break
+    return issues
+
+
+def text_media_issues(text: Any, plan: dict | None, *,
+                      anchors: str = "") -> list[str]:
+    """文本—媒体一致性/元话题/极性/多气泡自足检测。"""
+    issues: list[str] = []
+    value = str(text or "")
+    if not value:
+        return issues
+    if META_TOPIC_RE.search(value):
+        issues.append("meta_topic")
+    has_sticker = _has_sticker(plan)
+    if STICKER_REFERENCE_RE.search(value) and not has_sticker:
+        issues.append("sticker_ref_without_media")
+    if has_sticker and MEDIA_DESCRIPTION_RE.search(value):
+        issues.append("media_description_without_need")
+    if polarity_conflict(value):
+        issues.append("polarity_conflict")
+    if INNER_MONOLOGUE_RE.search(value):
+        issues.append("inner_monologue")
+    issues.extend(coherence_issues(value, anchors))
+    return issues
+
+
+def _strip_sentences(text: str, predicate) -> str:
+    kept = [sentence for sentence in _split_sentences(text) if not predicate(sentence)]
+    return "".join(kept).strip()
+
+
+def sanitize_text_media(text: Any, plan: dict | None, *,
+                        anchors: str = "") -> str:
+    """确定性兜底：删元话题/未发贴纸引用/发贴纸描述；极性冲突去笑词。"""
+    value = str(text or "").strip()
+    if not value:
+        return value
+    parts = _segments(value)
+    if (parts and len(parts[0]) >= 5 and not has_concrete_anchor(parts[0], anchors)
+            and (len(parts) > 1 or FEELING_ONLY_RE.search(parts[0]))):
+        return ""
+    if parts and len(parts) > 1:
+        context = parts[0] + "\n" + str(anchors or "")
+        kept = [parts[0]]
+        for part in parts[1:]:
+            if DANGLING_REF_RE.search(part) and not ANCHOR_RE.search(context):
+                continue
+            kept.append(part)
+        value = "\n".join(kept)
+    if META_TOPIC_RE.search(value):
+        value = _strip_sentences(value, lambda s: bool(META_TOPIC_RE.search(s)))
+    if INNER_MONOLOGUE_RE.search(value):
+        value = _strip_sentences(value, lambda s: bool(INNER_MONOLOGUE_RE.search(s)))
+    has_sticker = _has_sticker(plan)
+    if STICKER_REFERENCE_RE.search(value) and not has_sticker:
+        value = _strip_sentences(value, lambda s: bool(STICKER_REFERENCE_RE.search(s)))
+    if has_sticker and MEDIA_DESCRIPTION_RE.search(value):
+        value = _strip_sentences(value, lambda s: bool(MEDIA_DESCRIPTION_RE.search(s)))
+    if polarity_conflict(value):
+        for word in sorted(LAUGH_WORDS, key=len, reverse=True):
+            value = value.replace(word, "")
+        value = re.sub(r"[，,；;、]+$", "", value).strip()
+    return value.strip("，,；; ")
+
+
+def sync_plan_text(plan: dict | None, text: str) -> dict | None:
+    """文本被收口后同步 media.bubbles[0] 的文本。"""
+    if not plan or not plan.get("bubbles"):
+        return plan
+    first = plan["bubbles"][0]
+    if isinstance(first, dict) and first.get("type") in ("text", "emoji_text"):
+        if first.get("type") == "emoji_text":
+            first["text"] = str(text or "") + str(plan.get("emoji") or "")
+        else:
+            first["text"] = str(text or "")
+    return plan
 
 
 def record_media(path: Path | str | None, plan: dict | None) -> None:

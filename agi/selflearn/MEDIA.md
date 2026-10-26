@@ -90,3 +90,14 @@ OK（同意）
 `media.bubbles` 是完整顺序：`[{type:"text"/"emoji_text",text}, {type:"sticker"/"gif",name,path}...]`。
 worker 已发文本后，把非文本项交给 `gateway.send_bubbles(contact, items, proactive=True)`；
 `media_enabled=false` 时完全跳过，失败不影响已发文本。
+
+## 8. P6-a 内容收口（真机 4 条问题）
+
+- **正文元话题禁令**：media 开启时 prompt 明确禁止正文出现 `表情包/素材/清单/表情库/系统/指令/代码块/[[media`；想发只输出指令行。
+- **文本—媒体一致性**：正文引用贴纸（"那个/这个表情/表情包"）但本条 media 为空 → 重生成 1 次；仍不一致 → 删除该句。反向：media 已发但正文在描述"我要发表情"→ 删描述句。
+- **内心独白禁令**（P6-a 用户追加）：`心里…轻了/暖/凉/一沉`、`悬着的心放下`、`心头一暖`、`眼眶热/湿`、`百感交集`、`说不出滋味` 一律重生成；仍命中删整句，删空走 kind 兜底。
+  - 正确替代：❌心里一下子轻了 → ✅终于弄完了，舒服；❌心里暖暖的 → ✅这话听着挺舒服；❌悬着的心放下了 → ✅总算放心了。
+- **多气泡自足**：第一条必须有具体事由（"资料还没理完，有点烦" OK；"心里一下子轻了" 不 OK）；后续气泡只能承接第一条或用户上条真实消息，不用"那个/它/这事"指代没出现的东西；悬空指代删句。
+- **情绪极性**：负面词 + `哈哈哈/笑死` 冲突 → 重生成 1 次，仍冲突去笑词。
+- **观测**：tick 返回 `media{bubbles,wishes,reason,dropped}` 与 `text_media_check{issues,fixed,final_issues}`；worker `proactive_send`/`proactive_media` 日志带这些字段。
+- 关闭 media 时整段 prompt 不注入、文本收口仍生效（保证无 media 时正文也不出现表情包相关词），prompt 基线锁保持绿。

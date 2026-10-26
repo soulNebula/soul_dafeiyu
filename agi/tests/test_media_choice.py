@@ -230,10 +230,11 @@ def test_worker_sends_multiple_media(monkeypatch):
 
     monkeypatch.setattr(ticker, "run_once", lambda *a, **k: {
         "ok": True, "ran": True, "gate": {"allowed": True},
-        "proactive": {"ok": True, "available": True, "messages": ["笑死了"],
-                      "message": "笑死了", "kind": "share", "turn_id": "T-1",
+        "proactive": {"ok": True, "available": True,
+                      "messages": ["看到一个段子，笑死了"],
+                      "message": "看到一个段子，笑死了", "kind": "share", "turn_id": "T-1",
                       "media": {"bubbles": [
-                          {"type": "text", "text": "笑死了"},
+                          {"type": "text", "text": "看到一个段子，笑死了"},
                           {"type": "sticker", "name": "666", "path": "/tmp/666.png"},
                           {"type": "sticker", "name": "偷笑", "path": "/tmp/偷笑.png"}],
                           "wishes": [], "reason": "model:sticker:666,model:sticker:偷笑"}}})
@@ -299,3 +300,214 @@ def test_chat_parses_emoji_directive(monkeypatch, tmp_path):
     assert row["reply_media"] is not None
     assert "😄" in row["reply"]
     assert "[[media:" not in row["reply"]
+
+
+def test_text_media_quality_helpers():
+    assert "meta_topic" in media_choice.text_media_issues("翻到一堆旧表情包，有点想笑", None)
+    assert "sticker_ref_without_media" in media_choice.text_media_issues(
+        "那个好了听着比表情包舒服", None)
+    plan = {"bubbles": [{"type": "text", "text": "x"},
+                        {"type": "sticker", "name": "666", "path": "/tmp/666.png"}]}
+    assert "media_description_without_need" in media_choice.text_media_issues(
+        "我要发个表情包了", plan)
+    assert "polarity_conflict" in media_choice.text_media_issues(
+        "我是不是特别容易被逗啊，有点烦，哈哈哈", None)
+    clean = media_choice.sanitize_text_media("翻到一堆旧表情包，有点想笑", None)
+    assert "表情包" not in clean
+    clean = media_choice.sanitize_text_media("那个好了听着比表情包舒服", None)
+    assert "表情包" not in clean
+    clean = media_choice.sanitize_text_media("今天有点烦，哈哈哈", None)
+    assert "哈哈" not in clean and "烦" in clean
+    # 第一条没有具体事由 → 收口返回空，交给 tick 的兜底
+    assert media_choice.sanitize_text_media("心里一下子轻了", None) == ""
+
+
+def test_prompt_meta_topic_ban_only_when_enabled(monkeypatch):
+    monkeypatch.setenv("MEDIA_ENABLED", "1")
+    block = media_choice.media_prompt_block(None)
+    assert "正文绝对不能出现" in block
+    monkeypatch.setenv("MEDIA_ENABLED", "0")
+    assert media_choice.media_prompt_block(None) == ""
+
+
+def _tick_once(path, client, now):
+    old = proactive.build_candidates
+    proactive.build_candidates = lambda p, n=None: [{
+        "kind": "care", "text": "x", "reason": "t", "base": 0.5,
+        "score": 0.6, "anchor": "", "topic": ""}]
+    try:
+        return proactive.tick(path, client=client, now=now, cooldown=0,
+                              min_score=0, respect_state=False)
+    finally:
+        proactive.build_candidates = old
+
+
+def test_real_machine_four_cases_are_fixed(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEDIA_ENABLED", "1")
+    from agi.selflearn import db, trust
+    path = tmp_path / "p6.sqlite3"
+    con = db.connect(path)
+    con.execute("INSERT INTO messages(id,role,text,ts,proactive) VALUES(?,?,?,?,0)",
+                ("M-1", "user", "今天有点累", time.time() - 3600))
+    con.execute("INSERT OR REPLACE INTO state(key,value,updated_at) VALUES('autonomy',?,?)",
+                (json.dumps({"daily_budget": 0}), time.time()))
+    con.commit()
+    con.close()
+    trust.set_value(path, 0.6)
+
+    cases = [
+        "我是不是特别容易被逗啊，有点烦，哈哈哈",
+        "心里一下子轻了",
+        "那个好了听着比表情包舒服",
+        "翻到一堆旧表情包，有点想笑",
+    ]
+
+    class FixClient:
+        def __init__(self):
+            self.current = ""
+            self.calls = 0
+
+        def available(self):
+            return True
+
+        def chat(self, messages, **kwargs):
+            self.calls += 1
+            prompt = "\n".join(str(m.get("content") or "") for m in messages)
+            if "【重生成】" in prompt:
+                return {"ok": True, "text": "今天先这样，你也早点休息"}
+            return {"ok": True, "text": self.current}
+
+    client = FixClient()
+    for index, raw in enumerate(cases):
+        client.current = raw
+        row = _tick_once(path, client, time.time())
+        assert row["available"] is True
+        final = str(row.get("message") or "")
+        assert media_choice.text_media_issues(final, row["media"]) == []
+        assert row["text_media_check"]["final_issues"] == []
+
+
+def test_twenty_ticks_stats_zero(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEDIA_ENABLED", "1")
+    from agi.selflearn import db, trust
+    path = tmp_path / "p6b.sqlite3"
+    con = db.connect(path)
+    con.execute("INSERT INTO messages(id,role,text,ts,proactive) VALUES(?,?,?,?,0)",
+                ("M-1", "user", "今天有点累", time.time() - 3600))
+    con.execute("INSERT OR REPLACE INTO state(key,value,updated_at) VALUES('autonomy',?,?)",
+                (json.dumps({"daily_budget": 0}), time.time()))
+    con.commit()
+    con.close()
+    trust.set_value(path, 0.6)
+
+    bad = ["我是不是特别容易被逗啊，有点烦，哈哈哈",
+           "那个好了听着比表情包舒服", "翻到一堆旧表情包，有点想笑"]
+
+    class Client:
+        def __init__(self):
+            self.count = 0
+
+        def available(self):
+            return True
+
+        def chat(self, messages, **kwargs):
+            prompt = "\n".join(str(m.get("content") or "") for m in messages)
+            if "【重生成】" in prompt:
+                return {"ok": True, "text": "今天先这样，你也早点休息"}
+            return {"ok": True, "text": bad[self.count % len(bad)]}
+
+    client = Client()
+    stats = {"meta": 0, "polarity": 0, "inconsistent": 0, "inner_monologue": 0}
+    for index in range(20):
+        client.count = index
+        row = _tick_once(path, client, time.time())
+        text = str(row.get("message") or "")
+        issues = media_choice.text_media_issues(text, row["media"])
+        stats["meta"] += int("meta_topic" in issues)
+        stats["polarity"] += int("polarity_conflict" in issues)
+        stats["inconsistent"] += int("sticker_ref_without_media" in issues)
+        stats["inner_monologue"] += int("inner_monologue" in issues)
+    assert stats == {"meta": 0, "polarity": 0, "inconsistent": 0,
+                     "inner_monologue": 0}
+
+
+def test_inner_monologue_blacklist_and_replacements(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEDIA_ENABLED", "1")
+    from agi.selflearn import db, trust
+    path = tmp_path / "p6c.sqlite3"
+    con = db.connect(path)
+    con.execute("INSERT INTO messages(id,role,text,ts,proactive) VALUES(?,?,?,?,0)",
+                ("M-1", "user", "今天有点累", time.time() - 3600))
+    con.execute("INSERT OR REPLACE INTO state(key,value,updated_at) VALUES('autonomy',?,?)",
+                (json.dumps({"daily_budget": 0}), time.time()))
+    con.commit()
+    con.close()
+    trust.set_value(path, 0.6)
+
+    bad_cases = [
+        "心里一下子轻了",
+        "心里暖暖的",
+        "悬着的心终于放下了",
+        "心头一热，差点没绷住",
+        "眼眶有点热，说不出什么滋味",
+        "百感交集，有点想哭",
+    ]
+    for text in bad_cases:
+        assert "inner_monologue" in media_choice.text_media_issues(text, None)
+
+    class FixClient:
+        def __init__(self):
+            self.current = ""
+            self.calls = 0
+
+        def available(self):
+            return True
+
+        def chat(self, messages, **kwargs):
+            self.calls += 1
+            prompt = "\n".join(str(m.get("content") or "") for m in messages)
+            if "【重生成】" in prompt:
+                return {"ok": True, "text": "终于弄完了，舒服"}
+            return {"ok": True, "text": self.current}
+
+    client = FixClient()
+    for text in bad_cases:
+        client.current = text
+        row = _tick_once(path, client, time.time())
+        final = str(row.get("message") or "")
+        assert not media_choice.INNER_MONOLOGUE_RE.search(final), (text, final)
+        assert row["text_media_check"]["final_issues"] == []
+
+
+def test_text_media_consistency_media_off(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEDIA_ENABLED", "0")
+    from agi.selflearn import db, trust
+    path = tmp_path / "p6off.sqlite3"
+    con = db.connect(path)
+    con.execute("INSERT INTO messages(id,role,text,ts,proactive) VALUES(?,?,?,?,0)",
+                ("M-1", "user", "今天有点累", time.time() - 3600))
+    con.execute("INSERT OR REPLACE INTO state(key,value,updated_at) VALUES('autonomy',?,?)",
+                (json.dumps({"daily_budget": 0}), time.time()))
+    con.commit()
+    con.close()
+    trust.set_value(path, 0.6)
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        def available(self):
+            return True
+
+        def chat(self, messages, **kwargs):
+            self.calls += 1
+            prompt = "\n".join(str(m.get("content") or "") for m in messages)
+            if "【重生成】" in prompt:
+                return {"ok": True, "text": "今天先这样，你也早点休息"}
+            assert "可选媒体素材" not in prompt  # 关闭时不注入素材
+            return {"ok": True, "text": "那个好了听着比表情包舒服"}
+
+    row = _tick_once(path, Client(), time.time())
+    final = str(row.get("message") or "")
+    assert "表情包" not in final and "那个好了" not in final
+    assert row["text_media_check"]["final_issues"] == []

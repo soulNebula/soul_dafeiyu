@@ -569,6 +569,8 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                           "error": f"{type(exc).__name__}: {exc}"}
             gateway._record("proactive_send", {
                 "friend": contact, "text": text[:120], "intent_kind": kind,
+                "media": media_plan,
+                "text_media_check": pro.get("text_media_check"),
                 "status": status.get("status"), "draft_id": status.get("draft_id"),
                 # P0-6：失败率统计口径 status∈{failed,draft}，真正失败证据看 send_failed
                 "send_failed": bool(status.get("send_failed")),

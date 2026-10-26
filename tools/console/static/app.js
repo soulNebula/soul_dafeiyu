@@ -11,6 +11,7 @@ const state = {
   timer: null,
   feedKind: '',
   feedAuto: true,
+  feedSig: '',
   refreshing: false,
   prompts: null,
   promptKey: null,
@@ -324,12 +325,30 @@ function feedBubble(event) {
     </div></div>`;
 }
 
+function feedSignature(items) {
+  return (items || []).slice(0, 60).map((e) => [e.ts, e.kind, e.status || '', e.text || '', e.reason || ''].join('~')).join('|');
+}
+
 async function renderFeed(auto) {
   if (!auto) $('#app').innerHTML = '<div class="empty">加载对话流…</div>';
   let feed = null;
   const errors = [];
   try { feed = await api('/api/feed?limit=200&kind=' + encodeURIComponent(state.feedKind)); }
   catch (e) { errors.push(e.message); }
+  // 自动刷新：内容没变就直接返回，避免整页重绘闪烁
+  if (auto) {
+    const items = (feed && feed.items) || [];
+    const sig = feedSignature(items);
+    const listEl = $('#feed-list');
+    const countEl = $('#feed-count');
+    if (listEl && countEl && sig === state.feedSig) return;
+    if (listEl && countEl) {
+      state.feedSig = sig;
+      countEl.textContent = items.length + ' 条 · 文件 ' + ((feed && feed.source) || '');
+      listEl.innerHTML = feedList(items);
+      return;
+    }
+  }
   const html = `
     ${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
     <div class="card">
@@ -339,11 +358,12 @@ async function renderFeed(auto) {
             `<option value="${value}" ${value === state.feedKind ? 'selected' : ''}>${label}</option>`).join('')}</select>
           <label class="switch"><input type="checkbox" id="feed-auto" ${state.feedAuto ? 'checked' : ''}> 自动刷新 3s</label>
         </div>
-        <div class="refresh-bar">${feed ? (feed.items || []).length : 0} 条 · 文件 ${esc((feed && feed.source) || '')}</div>
+        <div class="refresh-bar"><span id="feed-count">${feed ? (feed.items || []).length : 0} 条 · 文件 ${esc((feed && feed.source) || '')}</span></div>
       </div>
-      <div style="margin-top:12px">${feedList((feed && feed.items) || [])}</div>
+      <div id="feed-list" style="margin-top:12px">${feedList((feed && feed.items) || [])}</div>
     </div>`;
   $('#app').innerHTML = html;
+  state.feedSig = feedSignature((feed && feed.items) || []);
   const select = $('#feed-kind');
   if (select) select.onchange = () => { state.feedKind = select.value; renderFeed(false); };
   const autoBox = $('#feed-auto');
@@ -1239,7 +1259,6 @@ function bindGlobal() {
   state.timer = setInterval(() => {
     if (document.hidden) return;
     if (state.page === 'feed' && state.feedAuto) renderFeed(true).then(setLastRefresh).catch(() => {});
-    else if (state.page === 'overview') renderOverview().then(setLastRefresh).catch(() => {});
   }, 3000);
 }
 

@@ -2130,7 +2130,7 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
                  style_fix: bool = False, continuity_ctx: str = "",
                  continuity_fix: bool = False, continuity_hint: str = "",
                  concrete_fix: bool = False, inner_ctx: str = "",
-                 media_ctx: str = "") -> str:
+                 media_ctx: str = "", text_fix: bool = False) -> str:
     """按 kind 选生成指令 + 全局约束（禁元话题/反编造/标点/人格边界/开头/问句/连续性）。"""
     instruction = prompt_store.get(
         f"proactive.kind.{kind}",
@@ -2189,6 +2189,16 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
         prompt += ("\n【重生成】只写数字生活/自己的感受，不要写任何物理起居、身体、"
                    "天气、位置、出行细节；开头按指定模式、不要用「刚」开头；"
                    "必须带你自己的感受或想法；句子可短可长，换一种结构。")
+    if text_fix:
+        prompt += ("\n【重生成】正文不要出现表情包/素材/清单/表情库/系统/指令等元话题；"
+                   "不要用文字描述“我要发表情/那个表情”，要发就单独输出 [[media:...]] 指令行；"
+                   "如果本条没有发贴纸，就不要提“那个/表情/贴纸”；"
+                   "第一条必须带具体事由，让人单看就懂；后续气泡只能承接第一条或用户上条消息，"
+                   "不要用“那个/它/这事”指代前文没出现的东西；"
+                   "不要把负面情绪和“哈哈哈/笑死”放同一句；"
+                   "不要写“心里/心头/悬着的心/眼眶/百感交集”这种内心独白。"
+                   "改写成具体表达：❌心里一下子轻了 → ✅终于弄完了，舒服；"
+                   "❌心里暖暖的 → ✅这话听着挺舒服；❌悬着的心放下了 → ✅总算放心了。")
     if media_ctx:
         prompt += "\n" + media_ctx
     prompt += "如果实在没话说，输出 SKIP。最近对话：" + dialog
@@ -2602,6 +2612,53 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         media_choice.record_media(path, bool(media_plan and media_plan.get("bubbles")))
     except Exception:  # noqa: BLE001 - 媒体解析失败不影响文本
         media_plan = None
+    # P6-a：文本—媒体一致性 / 元话题 / 情绪极性；先重生成 1 次，再确定性删句
+    coherence_context = dialog + "\n" + "\n".join(
+        str(item.get("text") or "") for item in recent_own)
+    text_media_check = {"issues": [], "fixed": False, "final_issues": []}
+    try:
+        from . import media_choice as _media
+        issues = _media.text_media_issues(text, media_plan, anchors=coherence_context)
+        text_media_check["issues"] = issues
+        if issues:
+            fix_prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
+                                      force_statement=force_statement,
+                                      opener_mode=opener_mode,
+                                      continuity_ctx=continuity_ctx,
+                                      inner_ctx=inner_ctx, media_ctx=media_ctx,
+                                      text_fix=True)
+            fix_text, fix_answered = _ask_llm(client, fix_prompt)
+            if fix_answered and fix_text and not fix_text.upper().startswith("SKIP"):
+                fix_clean, fix_directives = _media.parse_media_directive(fix_text)
+                fix_candidate = _normalize_content(fix_clean, kind, best,
+                                                   force_statement=force_statement)
+                if emotion_conflict(fix_candidate, previous_polarity, mood):
+                    for strong in _STRONG_POSITIVE_EMOTION:
+                        fix_candidate = fix_candidate.replace(strong, "心情还行")
+                if (grounding_ok(fix_candidate, anchors)
+                        and find_physical_detail(fix_candidate) is None
+                        and len(fix_candidate) <= 25
+                        and not (_media.has_concrete_anchor(text, coherence_context)
+                                 and not _media.has_concrete_anchor(
+                                     fix_candidate, coherence_context))):
+                    text = fix_candidate
+                    media_directives = fix_directives
+                    media_plan = _media.build_plan(
+                        path, media_directives, text,
+                        state={"mood": mood, "crisis": bool(own.get("crisis"))},
+                        recent_media=_media.recent_media(path),
+                        allow_sticker=True, now=now)
+                    text_media_check["fixed"] = True
+            if _media.text_media_issues(text, media_plan, anchors=coherence_context):
+                text = _media.sanitize_text_media(text, media_plan,
+                                                  anchors=coherence_context)
+                if not text:
+                    text = _safe_fallback(kind)
+                media_plan = _media.sync_plan_text(media_plan, text)
+        text_media_check["final_issues"] = _media.text_media_issues(
+            text, media_plan, anchors=coherence_context)
+    except Exception:  # noqa: BLE001
+        pass
     if (media_plan and media_plan.get("bubbles")
             and media_plan["bubbles"][0].get("type") == "emoji_text"):
         text = str(media_plan["bubbles"][0].get("text") or text)
@@ -2645,7 +2702,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
             "message_id": ids[0], "turn_id": turn_id,
             "kind": best["kind"], "action": action, "score": best["score"],
             "inner": inner_info, "voice_polished": voice_info,
-            "media": media_plan,
+            "media": media_plan, "text_media_check": text_media_check,
             "reason": best["reason"], "mood": mood, "sharing": share_drive,
             "initiative": {k: init_info.get(k) for k in
                             ("available", "score", "reason", "max_bubbles", "bubble_count",

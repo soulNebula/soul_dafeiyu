@@ -50,6 +50,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | 模型 | `agi/selflearn/model_registry`（list/health/start/stop；`soul-05b` 可启停，`qwen15` reserved 拒绝；含 inner mode 开关，写回网关 config 热加载） |
 | 数据管理 | `/api/data/*`：体量/备份/导出/导入（写操作 token+审计）；按记忆库/人格库分栏，含 legacy 旧库 |
 | 记忆编辑 | `/api/memory/*`：列表/搜索/claims/行内改重要性/标记/软删除/合并（token+审计） |
+| B站 | 扫码登录（真实 B站 passport 接口，凭证写 `~/.dsh/bili-duty/bili_credential.json`）+ 与 DSH 刷B站同字段配置（`config.json` 白名单）+ 状态/日报 |
 | 日志 | `gateway.log`(JSONL)/`inner.log`/`prompt_override.log`/regen_failed；搜索+时间倒序+错误标红 |
 | 设置 | `/api/config`（主动开关/概率/间隔/静默时段）+ STOP/恢复 |
 
@@ -152,6 +153,18 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 - **日志**：`GET /api/logs?source=gateway|inner|prompt|regen&limit=200&q=&kind=`，读 gateway.log(JSONL) /
   inner.log / prompt_override.log / regen_failed 计数；关键词+kind 过滤、时间倒序、错误行红色、点行看整条 JSON。
 - 顶部导航新增「对话测试 / 模型配置 / 日志」三项。
+
+## B站页（P11）
+
+- **登录卡**：点「生成二维码」→ 显示二维码（`GET /api/bili/login/qr/image`，no-store）→ 每 2s 轮询
+  `/api/bili/login/poll?key=`，显示等待扫码/已扫码请确认/成功/已过期；成功时写
+  `~/.dsh/bili-duty/bili_credential.json`（`sessdata/bili_jct/buvid3/dedeuserid`，原子写 0600）并查 nav 显示 uname/mid；
+  已登录可「重新登录」。凭证只写本机插件家目录，不落仓库。
+- **设置表单**：与 DSH「刷B站」设置页同字段（每日条数、关键词、峰谷/中午/夜间、自动评论、本地转写、ASR 模型、
+  私信模式/UID、每轮评论/回复数、@ 昵称、人设提示词、日报详细度、工作区、python/dsh/profile、收藏夹 ID 等），
+  后端白名单+类型/范围校验，保存只改 `config.json` 并保留未知键。
+- **状态/日报**：今日已跑/已挑/额度、最近运行时间与原因、窗口；今日日报前 1500 字预览 +「查看全文」弹窗。
+- 家目录支持 `BILI_DUTY_HOME` 覆盖；不触发刷B站（触发仍由 DSH 定时任务负责）。
 
 ## 媒体页（P5-d + P5-e-B 本地导入）
 

@@ -3201,6 +3201,414 @@ def media_wish_fulfill(body: dict, *, client: str = "") -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# P11：B站页（扫码登录 / 配置 / 状态 / 日报）
+# --------------------------------------------------------------------------- #
+BILI_QR_PNG = DATA_DIR / "selflearn" / "bili_login_qr.png"
+BILI_QR_TTL_S = 180
+BILI_HTTP_TIMEOUT = 8.0
+BILI_GENERATE_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
+BILI_POLL_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
+BILI_NAV_URL = "https://api.bilibili.com/x/web-interface/nav"
+BILI_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36")
+
+BILI_FIELDS: list[dict] = [
+    {"key": "perDay", "label": "每天最多挑几条", "type": "int", "min": 0, "max": 50,
+     "note": "填 0 = 不自动刷（还是能手动跑）"},
+    {"key": "keywords", "label": "关键词（一行一个；留空=刷首页推荐）", "type": "list"},
+    {"key": "peakValley", "label": "峰谷时段自动刷", "type": "bool",
+     "note": "只在谷时跑：工作日 12:00–14:00 与 18:00 之后（周末也算谷时）"},
+    {"key": "noon", "label": "中午谷时（12:00–14:00）", "type": "bool"},
+    {"key": "night", "label": "晚上/夜间谷时（18:00–09:00）", "type": "bool"},
+    {"key": "autoComment", "label": "自动评论并 @ 你", "type": "bool"},
+    {"key": "transcribe", "label": "本地转写没字幕的视频", "type": "bool"},
+    {"key": "asrModel", "label": "ASR 模型", "type": "str", "options": ["tiny", "base", "small", "medium"]},
+    {"key": "dmMode", "label": "投递方式", "type": "str",
+     "options": ["only", "off", "both"],
+     "option_labels": {"only": "只发私信", "off": "只发评论", "both": "私信 + 评论"}},
+    {"key": "dmUid", "label": "私信 UID（0=按昵称自动查）", "type": "int", "min": 0, "max": 10 ** 12},
+    {"key": "dmWatch", "label": "私信双向（有人私信它就回一句）", "type": "bool"},
+    {"key": "dmWatchMinutes", "label": "私信轮询间隔（分钟）", "type": "int", "min": 1, "max": 120},
+    {"key": "dmReplyPerDay", "label": "每天最多回几条私信", "type": "int", "min": 0, "max": 100},
+    {"key": "dmOwnerUid", "label": "主人 UID（0=自动识别）", "type": "int", "min": 0, "max": 10 ** 12},
+    {"key": "commentPerRound", "label": "每轮最多发几条评论", "type": "int", "min": 0, "max": 20},
+    {"key": "mentionName", "label": "发给谁 / @ 谁（B站昵称）", "type": "str"},
+    {"key": "replyToComments", "label": "回复评论（只回楼中楼）", "type": "bool"},
+    {"key": "replyPerRound", "label": "每轮最多回几条", "type": "int", "min": 1, "max": 10},
+    {"key": "reportLevel", "label": "日报写多细", "type": "str",
+     "options": ["full", "brief", "off"],
+     "option_labels": {"full": "完整", "brief": "薄", "off": "不写"}},
+    {"key": "personaPrompt", "label": "它按什么说话（人设提示词）", "type": "text"},
+    {"key": "workspace", "label": "工作区", "type": "str"},
+    {"key": "favFolderId", "label": "自动收藏夹 ID（0=不收藏）", "type": "int", "min": 0,
+     "max": 10 ** 12},
+    {"key": "pythonPath", "label": "python 路径", "type": "str"},
+    {"key": "dshBin", "label": "dsh 路径", "type": "str"},
+    {"key": "headlessProfile", "label": "值班 profile", "type": "str"},
+    {"key": "overlayMcp", "label": "覆盖 MCP", "type": "bool"},
+]
+BILI_FIELD_MAP = {field["key"]: field for field in BILI_FIELDS}
+BILI_DEFAULTS = {
+    "dmWatch": True, "dmWatchMinutes": 1, "dmReplyPerDay": 0, "dmOwnerUid": 0,
+    "personaPrompt": "", "perDay": 5, "peakValley": True, "noon": True,
+    "night": True, "autoComment": False, "transcribe": False, "asrModel": "small",
+    "dmMode": "only", "dmUid": 0, "keywords": [], "commentPerRound": 1,
+    "mentionName": "", "pythonPath": r"C:\Python314\python.exe", "dshBin": "",
+    "headlessProfile": "bili-duty", "overlayMcp": True, "workspace": "",
+    "reportLevel": "full", "replyToComments": False, "replyPerRound": 1,
+    "favFolderId": 0,
+}
+_BILI_NAV_CACHE: dict = {"ts": 0.0, "data": None}
+
+
+def bili_home() -> Path:
+    raw = os.environ.get("BILI_DUTY_HOME") or str(Path.home() / ".dsh" / "bili-duty")
+    return Path(raw)
+
+
+def bili_config_path() -> Path:
+    return bili_home() / "config.json"
+
+
+def bili_state_path() -> Path:
+    return bili_home() / "state.json"
+
+
+def bili_credential_path() -> Path:
+    return bili_home() / "bili_credential.json"
+
+
+def _bili_home_error() -> dict | None:
+    if not bili_home().is_dir():
+        return {"ok": False, "error": "bili_home_missing",
+                "hint": f"插件家目录不存在: {bili_home()}"}
+    return None
+
+
+def _bili_http_json(url: str, *, headers: dict | None = None) -> dict:
+    """B站 HTTP GET；测试 monkeypatch 本函数（不真联网）。"""
+    request = urllib.request.Request(url)
+    request.add_header("User-Agent", BILI_USER_AGENT)
+    request.add_header("Referer", "https://www.bilibili.com/")
+    for key, value in (headers or {}).items():
+        request.add_header(key, value)
+    try:
+        with urllib.request.urlopen(request, timeout=BILI_HTTP_TIMEOUT) as response:
+            raw = response.read().decode("utf-8", "replace") or "{}"
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"{type(exc).__name__}: {exc}") from exc
+    return json.loads(raw)
+
+
+def _bili_request(path_suffix: str, *, headers: dict | None = None) -> dict:
+    base = "https://passport.bilibili.com"
+    if path_suffix.startswith("http"):
+        url = path_suffix
+    elif path_suffix.startswith("/x/"):
+        url = "https://api.bilibili.com" + path_suffix
+    else:
+        url = base + path_suffix
+    return _bili_http_json(url, headers=headers)
+
+
+def _bili_read_json(path: Path, default: dict) -> dict:
+    payload = read_json(path, default)
+    return payload if isinstance(payload, dict) else dict(default)
+
+
+def _bili_merge_config(raw: dict) -> dict:
+    merged = dict(BILI_DEFAULTS)
+    for key in BILI_DEFAULTS:
+        if key in raw:
+            merged[key] = raw[key]
+    return merged
+
+
+def bili_config_state() -> dict:
+    raw = _bili_read_json(bili_config_path(), {})
+    config = _bili_merge_config(raw)
+    home_error = _bili_home_error()
+    return {
+        "ok": home_error is None,
+        "home": str(bili_home()),
+        "config": config, "defaults": dict(BILI_DEFAULTS),
+        "fields": BILI_FIELDS,
+        "unknown_keys": sorted(set(raw) - set(BILI_DEFAULTS)),
+        **({"error": home_error["error"], "hint": home_error["hint"]}
+           if home_error else {}),
+    }
+
+
+def _bili_validate_updates(updates: dict) -> tuple[dict, list[str]]:
+    if not isinstance(updates, dict):
+        return {}, ["body 必须是对象"]
+    cleaned: dict = {}
+    errors: list[str] = []
+    for key, value in updates.items():
+        field = BILI_FIELD_MAP.get(key)
+        if field is None:
+            errors.append(f"not_allowed:{key}")
+            continue
+        try:
+            kind = field["type"]
+            if kind == "bool":
+                if not isinstance(value, bool):
+                    raise ValueError("需要布尔值")
+                cleaned[key] = value
+            elif kind == "int":
+                number = int(value)
+                low = int(field.get("min", -(10 ** 12)))
+                high = int(field.get("max", 10 ** 12))
+                if not low <= number <= high:
+                    raise ValueError(f"取值 {low}–{high}")
+                cleaned[key] = number
+            elif kind == "list":
+                if isinstance(value, str):
+                    value = [item.strip() for item in value.replace("，", ",").splitlines()
+                             if item.strip()]
+                if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                    raise ValueError("需要字符串数组")
+                items = [str(item).strip()[:50] for item in value if str(item).strip()]
+                cleaned[key] = items[:100]
+            else:
+                text = str(value if value is not None else "")
+                options = field.get("options")
+                if options and text not in options:
+                    raise ValueError(f"只能是 {'/'.join(options)}")
+                if len(text) > 60000:
+                    raise ValueError("超过 60000 字")
+                cleaned[key] = text
+        except (TypeError, ValueError) as exc:
+            errors.append(f"{key}: {exc}")
+    return cleaned, errors
+
+
+def bili_config_update(updates: dict, *, client: str = "") -> dict:
+    home_error = _bili_home_error()
+    if home_error:
+        return home_error
+    cleaned, errors = _bili_validate_updates(updates)
+    if errors:
+        audit("bili_config_update", {"keys": sorted(updates or {})}, ok=False,
+              note=";".join(errors)[:200], client=client)
+        return {"ok": False, "errors": errors, "config": bili_config_state()["config"]}
+    raw = _bili_read_json(bili_config_path(), {})
+    before = {key: raw.get(key) for key in cleaned}
+    raw.update(cleaned)
+    try:
+        write_json_atomic(bili_config_path(), raw)
+    except OSError as exc:
+        audit("bili_config_update", {"keys": sorted(cleaned)}, ok=False,
+              note=str(exc), client=client)
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    audit("bili_config_update", {"keys": sorted(cleaned), "before": before,
+                                 "after": cleaned}, ok=True, client=client)
+    state = bili_config_state()
+    state["note"] = "已保存；插件下一轮生效（不改 DSH 的 local-override）"
+    return state
+
+
+def _render_qr_png(text: str, target: Path) -> None:
+    import qrcode
+    image = qrcode.make(text)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    image.save(tmp)
+    os.replace(tmp, target)
+
+
+def bili_login_qr(*, client: str = "") -> dict:
+    home_error = _bili_home_error()
+    if home_error:
+        return home_error
+    try:
+        payload = _bili_http_json(BILI_GENERATE_URL)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "network", "hint": f"{type(exc).__name__}: {exc}"}
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or not data.get("qrcode_key") or not data.get("url"):
+        return {"ok": False, "error": "network",
+                "hint": f"二维码接口返回异常: {str(payload)[:200]}"}
+    key = str(data["qrcode_key"])
+    try:
+        _render_qr_png(str(data["url"]), Path(BILI_QR_PNG))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "qr_render_failed",
+                "hint": f"{type(exc).__name__}: {exc}"}
+    audit("bili_login_qr", {"key": key[:8] + "…"}, ok=True, client=client)
+    return {"ok": True, "key": key,
+            "image": f"/api/bili/login/qr/image?ts={int(time.time())}",
+            "expires_in": BILI_QR_TTL_S}
+
+
+def _bili_cookie_from_url(data_url: str) -> dict:
+    from urllib.parse import parse_qs, urlsplit
+    query = parse_qs(urlsplit(str(data_url or "")).query)
+    lowered = {str(key).lower(): values for key, values in query.items()}
+    mapping = {
+        "sessdata": "sessdata", "bili_jct": "bili_jct",
+        "dedeuserid": "dedeuserid", "buvid3": "buvid3",
+    }
+    cookies = {}
+    for source, target in mapping.items():
+        values = lowered.get(source) or query.get(source) or []
+        if values:
+            cookies[target] = str(values[0])
+    return cookies
+
+
+def _bili_nav(cookies: dict, *, force: bool = False) -> dict | None:
+    if not cookies:
+        return None
+    cached = _BILI_NAV_CACHE
+    if not force and cached["data"] and time.time() - cached["ts"] < 60:
+        return cached["data"]
+    cookie_header = "; ".join(f"{key}={value}" for key, value in cookies.items())
+    try:
+        payload = _bili_http_json(BILI_NAV_URL, headers={"Cookie": cookie_header})
+    except Exception:  # noqa: BLE001
+        return None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or not data.get("isLogin"):
+        return None
+    result = {"uname": str(data.get("uname") or ""), "mid": data.get("mid")}
+    _BILI_NAV_CACHE.update(ts=time.time(), data=result)
+    return result
+
+
+def _bili_write_credential(cookies: dict) -> dict:
+    required = ("sessdata", "bili_jct", "buvid3", "dedeuserid")
+    missing = [key for key in required if not cookies.get(key)]
+    if missing:
+        return {"ok": False, "error": "credential_incomplete",
+                "hint": f"缺少字段: {','.join(missing)}"}
+    target = bili_credential_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {key: str(cookies[key]) for key in required}
+    tmp = target.with_name(target.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, target)
+    except OSError as exc:
+        return {"ok": False, "error": "credential_write_failed",
+                "hint": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "path": str(target)}
+
+
+def _bili_credential() -> dict:
+    payload = read_json(bili_credential_path(), {})
+    if not isinstance(payload, dict):
+        return {}
+    return {str(key).lower(): str(value) for key, value in payload.items() if value}
+
+
+def bili_login_poll(key: str, *, client: str = "") -> dict:
+    home_error = _bili_home_error()
+    if home_error:
+        return home_error
+    key = str(key or "").strip()
+    if not key:
+        return {"ok": False, "error": "missing_key", "status": "expired"}
+    try:
+        payload = _bili_http_json(
+            BILI_POLL_URL + "?qrcode_key=" + urllib.parse.quote(key))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "network", "hint": f"{type(exc).__name__}: {exc}"}
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "network", "hint": "轮询返回异常"}
+    try:
+        code = int(data.get("code"))
+    except (TypeError, ValueError):
+        code = -1
+    if code == 86101:
+        return {"ok": True, "status": "waiting"}
+    if code == 86090:
+        return {"ok": True, "status": "scanned"}
+    if code == 86038:
+        return {"ok": True, "status": "expired"}
+    if code != 0:
+        return {"ok": False, "error": "network", "status": "expired",
+                "hint": f"未知状态码: {code}"}
+    cookies = _bili_cookie_from_url(str(data.get("url") or ""))
+    written = _bili_write_credential(cookies)
+    if not written.get("ok"):
+        audit("bili_login", {"ok": False}, ok=False, client=client)
+        return written
+    nav = _bili_nav(cookies, force=True) or {}
+    audit("bili_login", {"uname": nav.get("uname"), "mid": nav.get("mid")},
+          ok=True, client=client)
+    return {"ok": True, "status": "ok", "uname": nav.get("uname") or "",
+            "mid": nav.get("mid"), "path": written.get("path")}
+
+
+def bili_status() -> dict:
+    home_error = _bili_home_error()
+    if home_error:
+        return home_error
+    config_state = bili_config_state()
+    state = _bili_read_json(bili_state_path(), {})
+    credential = _bili_credential()
+    logged_in = bool(credential)
+    nav = _bili_nav(credential) if logged_in else None
+    today = time.strftime("%Y-%m-%d")
+    report_path = bili_home() / "out" / f"{today}.md"
+    preview = ""
+    if report_path.is_file():
+        try:
+            preview = report_path.read_text(encoding="utf-8", errors="replace")[:1500]
+        except OSError:
+            preview = ""
+    return {
+        "ok": True,
+        "home": str(bili_home()),
+        "logged_in": logged_in,
+        "uname": (nav or {}).get("uname") or "",
+        "mid": (nav or {}).get("mid"),
+        "credential_path": str(bili_credential_path()),
+        "config": config_state["config"],
+        "config_path": str(bili_config_path()),
+        "state": {
+            "day": state.get("day") or "",
+            "count": state.get("count") or 0,
+            "picked": state.get("picked") or 0,
+            "windows": state.get("windows") or {},
+            "lastRunAt": state.get("lastRunAt") or "",
+            "lastWhy": state.get("lastWhy") or "",
+        },
+        "report": {"date": today, "path": str(report_path), "preview": preview,
+                   "exists": report_path.is_file()},
+    }
+
+
+def bili_report(date: str = "") -> dict:
+    home_error = _bili_home_error()
+    if home_error:
+        return home_error
+    day = str(date or "").strip() or time.strftime("%Y-%m-%d")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        return {"ok": False, "error": "bad_date", "hint": "date 需要 YYYY-MM-DD"}
+    path = bili_home() / "out" / f"{day}.md"
+    if not path.is_file():
+        return {"ok": False, "error": "no_report", "date": day,
+                "path": str(path)}
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return {"ok": False, "error": "no_report", "hint": str(exc)}
+    limit = 200 * 1024
+    truncated = len(content.encode("utf-8")) > limit
+    if truncated:
+        content = content.encode("utf-8")[:limit].decode("utf-8", "ignore")
+    return {"ok": True, "date": day, "path": str(path), "content": content,
+            "truncated": truncated, "bytes": len(content.encode("utf-8"))}
+
+
+# --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
 def host_ok(host: str) -> bool:
@@ -3379,6 +3787,34 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, mood_snapshot(
                     str((query.get("contact") or [""])[0] or ""),
                     self._limit(query, 20))); return
+            if path == "/api/bili/login/qr/image":
+                png = Path(BILI_QR_PNG)
+                if not png.is_file():
+                    self._json(404, {"ok": False, "error": "qr_not_generated"}); return
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(png.stat().st_size))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(png.read_bytes()); return
+            if path == "/api/bili/status":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, bili_status()); return
+            if path == "/api/bili/config":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, bili_config_state()); return
+            if path == "/api/bili/report":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, bili_report(
+                    str((query.get("date") or [""])[0] or ""))); return
+            if path == "/api/bili/login/poll":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, bili_login_poll(
+                    str((query.get("key") or [""])[0] or ""))); return
             if path == "/api/stats":
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
@@ -3514,6 +3950,14 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("mode") or "merge"),
                     overwrite_confirm=str(body.get("overwrite_confirm") or ""),
                     client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/bili/login/qr":
+                result = bili_login_qr(client=client)
+                self._json(200 if result.get("ok") else 502, result); return
+            if path == "/api/bili/config":
+                updates = body.get("updates", body)
+                result = bili_config_update(
+                    updates if isinstance(updates, dict) else {}, client=client)
                 self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/mood/inject":
                 if "inject" not in body:

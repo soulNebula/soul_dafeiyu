@@ -26,6 +26,7 @@ const state = {
   dataInfo: null,
   memoryEdit: null,
   statsState: null,
+  bili: null,
   status: null,
   inner: null,
   tone: null,
@@ -45,6 +46,7 @@ const PAGES = {
   stats: '统计',
   providers: '模型配置',
   logs: '日志',
+  bili: 'B站',
   settings: '设置',
 };
 
@@ -2238,6 +2240,215 @@ async function loadStats() {
   setLastRefresh();
 }
 
+/* ---------------- B站（P11） ---------------- */
+function biliFieldControl(field, value) {
+  const key = 'bili-' + field.key;
+  if (field.type === 'bool') {
+    return `<label class="switch"><input type="checkbox" id="${key}" ${value ? 'checked' : ''}>
+      <span>${esc(field.label)}</span></label>${field.note ? `<div class="hint">${esc(field.note)}</div>` : ''}`;
+  }
+  if (field.options) {
+    return `<label>${esc(field.label)}</label>
+      <select id="${key}">${field.options.map((option) =>
+        `<option value="${esc(option)}" ${String(value) === String(option) ? 'selected' : ''}>${esc((field.option_labels || {})[option] || option)}</option>`).join('')}</select>`;
+  }
+  if (field.type === 'int') {
+    return `<label>${esc(field.label)}</label>
+      <input type="number" id="${key}" value="${esc(value ?? 0)}" min="${esc(field.min ?? '')}" max="${esc(field.max ?? '')}">
+      ${field.note ? `<div class="hint">${esc(field.note)}</div>` : ''}`;
+  }
+  if (field.type === 'list') {
+    return `<label>${esc(field.label)}</label>
+      <textarea id="${key}" rows="5" class="mono">${esc((value || []).join('\n'))}</textarea>
+      ${field.note ? `<div class="hint">${esc(field.note)}</div>` : ''}`;
+  }
+  if (field.type === 'text') {
+    return `<label>${esc(field.label)}</label>
+      <textarea id="${key}" rows="5">${esc(value ?? '')}</textarea>
+      ${field.note ? `<div class="hint">${esc(field.note)}</div>` : ''}`;
+  }
+  return `<label>${esc(field.label)}</label>
+    <input type="text" id="${key}" value="${esc(value ?? '')}">
+    ${field.note ? `<div class="hint">${esc(field.note)}</div>` : ''}`;
+}
+
+function biliLoginCard(status, login) {
+  const loggedIn = !!(status && status.logged_in);
+  const qr = login && login.qr;
+  return card('B站登录', `
+    ${loggedIn ? `<div class="row between">
+      <div>${pill('已登录', 'ok')} <b>${esc(status.uname || '（已写入凭证）')}</b>
+        <span class="hint">mid ${esc(status.mid ?? '—')} · 凭证 ${esc(status.credential_path || '')}</span></div>
+      <button class="btn small" id="bili-relogin">重新登录</button></div>`
+      : `<div class="row between">
+        <div class="hint">手机 B站 → 我的 → 扫一扫。确认时选「记住我/长期」那张。</div>
+        <button class="btn primary" id="bili-qr-btn">${qr ? '刷新二维码' : '生成二维码'}</button></div>`}
+    <div id="bili-login-area" style="margin-top:10px">
+      ${qr ? `<div class="bili-qr">
+        <img src="${esc(qr.image)}" alt="B站登录二维码">
+        <div class="hint" id="bili-login-state">${esc(login.state || '等待扫码…')}</div>
+      </div>` : ''}
+      ${loggedIn && status && status.credential_path ? `<div class="hint" style="margin-top:6px">登录成功会写 ${esc(status.credential_path)}（本机文件，不落仓库），插件工具立刻可用。</div>` : ''}
+    </div>`);
+}
+
+async function renderBili() {
+  $('#app').innerHTML = '<div class="empty">加载 B站…</div>';
+  if (!state.token) {
+    $('#app').innerHTML = card('B站', '<div class="error-text">B站页需要 admin token：请在右上角填写。</div>');
+    return;
+  }
+  if (state.bili && state.bili.timer) { clearInterval(state.bili.timer); }
+  let status = null, configState = null;
+  const errors = [];
+  try { status = await api('/api/bili/status'); } catch (err) { errors.push('状态: ' + err.message); }
+  try { configState = await api('/api/bili/config'); } catch (err) { errors.push('配置: ' + err.message); }
+  const prev = state.bili || {};
+  state.bili = { status, configState, qr: prev.qr || null, timer: null, polling: false };
+  if (!status && !configState) {
+    $('#app').innerHTML = card('B站', `<div class="error-text">${esc(errors.join('；'))}</div>`);
+    return;
+  }
+  const biliStatus = status || {};
+  const config = (configState && configState.config) || biliStatus.config || {};
+  const fields = (configState && configState.fields) || [];
+  const stateInfo = biliStatus.state || {};
+  const report = biliStatus.report || {};
+  const login = state.bili.qr ? { qr: state.bili.qr, state: state.bili.loginState || '等待扫码…' } : null;
+
+  const formHtml = fields.map((field) => {
+    const full = ['text', 'list'].includes(field.type) || field.key === 'personaPrompt';
+    return `<div class="field ${full ? 'span-2' : ''}">${biliFieldControl(field, config[field.key])}</div>`;
+  }).join('');
+
+  $('#app').innerHTML = `
+    ${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
+    ${biliLoginCard(biliStatus, login)}
+    <div class="grid cols-3">
+      ${card('今日状态', `<div class="kv">
+        <span class="k">日期</span><span class="v">${esc(stateInfo.day || '—')}</span>
+        <span class="k">已跑/已挑</span><span class="v">${num(stateInfo.count)} / ${num(stateInfo.picked)}（额度 ${num(config.perDay)}）</span>
+        <span class="k">最近运行</span><span class="v">${esc(stateInfo.lastRunAt || '—')} ${stateInfo.lastWhy ? '· ' + esc(stateInfo.lastWhy) : ''}</span>
+        <span class="k">窗口</span><span class="v">${esc(JSON.stringify(stateInfo.windows || {}))}</span></div>`)}
+      ${card('家目录/报告', `<div class="kv">
+        <span class="k">家目录</span><span class="v mono">${esc(biliStatus.home || '')}</span>
+        <span class="k">今日日报</span><span class="v mono">${esc(report.path || '—')}</span>
+        <span class="k">存在</span><span class="v">${report.exists ? '是' : '否'}</span></div>`)}
+      ${card('说明', `<div class="hint">登录凭证写入插件家目录（本机文件，不落仓库）；配置保存只改 config.json，不覆盖未知键。
+        刷B站触发仍由 DSH 定时任务负责，这里不主动跑。</div>`)}
+    </div>
+    ${card('设置（与 DSH 刷B站设置页同字段）', `
+      <div class="bili-form">${formHtml}</div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" id="bili-save">保存生效</button>
+        <span class="hint">保存后插件下一轮生效；逐字段校验失败会显示原因。</span>
+      </div>
+      <div id="bili-save-result" style="margin-top:8px"></div>`)}
+    ${card('今日日报预览', report.preview
+      ? `<pre class="bili-report">${esc(report.preview)}</pre>
+         <div class="row"><button class="btn small" id="bili-report-full">查看全文</button>
+         <span class="hint">${esc(report.path || '')}</span></div>`
+      : '<div class="empty">今天还没有日报（插件还没跑，或 reportLevel=off）</div>')}`;
+
+  const qrBtn = $('#bili-qr-btn');
+  if (qrBtn) qrBtn.onclick = startBiliQr;
+  const relogin = $('#bili-relogin');
+  if (relogin) relogin.onclick = () => { state.bili.qr = null; state.bili.loginState = ''; renderBili(); };
+  const save = $('#bili-save');
+  if (save) save.onclick = saveBiliConfig;
+  const reportFull = $('#bili-report-full');
+  if (reportFull) reportFull.onclick = showBiliReport;
+  if (state.bili.qr && !state.bili.timer) startBiliPoll();
+}
+
+async function startBiliQr() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  try {
+    const result = await api('/api/bili/login/qr', { method: 'POST', body: {} });
+    if (!result.ok) { toast(result.hint || result.error || '生成二维码失败', 'err'); return; }
+    state.bili.qr = { key: result.key, image: result.image, expires_in: result.expires_in };
+    state.bili.loginState = '等待扫码…';
+    state.bili.polledAt = Date.now();
+    state.bili.loginExpired = false;
+    renderBili();
+    startBiliPoll();
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+function startBiliPoll() {
+  if (state.bili.timer) clearInterval(state.bili.timer);
+  state.bili.timer = setInterval(async () => {
+    if (state.page !== 'bili' || !state.bili || !state.bili.qr) {
+      if (state.bili && state.bili.timer) clearInterval(state.bili.timer);
+      return;
+    }
+    if (Date.now() - (state.bili.polledAt || 0) > (state.bili.qr.expires_in || 180) * 1000) {
+      state.bili.loginState = '二维码已过期，点上方「刷新二维码」重新生成';
+      state.bili.loginExpired = true;
+      clearInterval(state.bili.timer); state.bili.timer = null;
+      const node = $('#bili-login-state'); if (node) node.textContent = state.bili.loginState;
+      const refreshBtn = $('#bili-qr-btn'); if (refreshBtn) refreshBtn.textContent = '刷新二维码';
+      toast('二维码已过期，请点「刷新二维码」', 'err');
+      return;
+    }
+    try {
+      const result = await api('/api/bili/login/poll?key=' + encodeURIComponent(state.bili.qr.key));
+      if (!result.ok) { state.bili.loginState = result.hint || result.error || '网络错误'; }
+      else if (result.status === 'waiting') state.bili.loginState = '等待扫码…';
+      else if (result.status === 'scanned') state.bili.loginState = '已扫码，请在手机上确认…';
+      else if (result.status === 'expired') state.bili.loginState = '二维码已过期，请重新生成';
+      else if (result.status === 'ok') {
+        state.bili.loginState = '登录成功' + (result.uname ? '：' + result.uname : '');
+        clearInterval(state.bili.timer); state.bili.timer = null;
+        toast('B站登录成功' + (result.uname ? '：' + result.uname : ''), 'ok');
+        state.bili.qr = null;
+        renderBili();
+        return;
+      }
+      const node = $('#bili-login-state');
+      if (node) node.textContent = state.bili.loginState;
+    } catch (err) { state.bili.loginState = err.message; }
+  }, 2000);
+}
+
+async function saveBiliConfig() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const fields = (state.bili.configState && state.bili.configState.fields) || [];
+  const updates = {};
+  for (const field of fields) {
+    const node = $('#bili-' + field.key);
+    if (!node) continue;
+    if (field.type === 'bool') updates[field.key] = node.checked;
+    else if (field.type === 'int') updates[field.key] = Number(node.value);
+    else if (field.type === 'list') updates[field.key] = node.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+    else updates[field.key] = node.value;
+  }
+  try {
+    const result = await api('/api/bili/config', { method: 'POST', body: { updates } });
+    if (result.errors && result.errors.length) {
+      $('#bili-save-result').innerHTML = `<div class="error-text">${esc(result.errors.join('；'))}</div>`;
+      toast('保存失败：字段校验未通过', 'err');
+      return;
+    }
+    $('#bili-save-result').innerHTML = '<span class="pill ok"><span class="dot"></span>已保存，插件下一轮生效</span>';
+    toast('B站配置已保存', 'ok');
+    state.bili.configState = result;
+  } catch (err) {
+    $('#bili-save-result').innerHTML = `<div class="error-text">${esc(err.message)}</div>`;
+    toast(err.message, 'err');
+  }
+}
+
+async function showBiliReport() {
+  const date = ((state.bili && state.bili.status && state.bili.status.report) || {}).date || '';
+  try {
+    const result = await api('/api/bili/report' + (date ? '?date=' + encodeURIComponent(date) : ''));
+    if (!result.ok) { toast(result.error === 'no_report' ? '今天还没有日报' : (result.hint || result.error), 'err'); return; }
+    showModal('B站日报 ' + (result.date || ''),
+      `${result.content || ''}${result.truncated ? '\n\n...（超过 200KB 已截断）' : ''}`);
+  } catch (err) { toast(err.message, 'err'); }
+}
+
 /* ---------------- 路由 ---------------- */
 const RENDERERS = {
   overview: renderOverview,
@@ -2253,11 +2464,15 @@ const RENDERERS = {
   stats: renderStats,
   providers: renderProviders,
   logs: renderLogs,
+  bili: renderBili,
   settings: renderSettings,
 };
 
 async function go(page, auto) {
   if (!PAGES[page]) page = 'overview';
+  if (page !== 'bili' && state.bili && state.bili.timer) {
+    clearInterval(state.bili.timer); state.bili.timer = null;
+  }
   state.page = page;
   $('#page-title').textContent = PAGES[page];
   $$('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.page === page));

@@ -1626,3 +1626,80 @@ def test_console_media_wishes_status_and_fulfill(tmp_path, write_env, monkeypatc
     assert status == 400 and data["reason"] == "already_fulfilled"
     status, _ = _call("POST", "/api/media/wish/fulfill", {"wish_id": wish_id})
     assert status == 401
+
+
+# ============================================================ P11 B站页 HTTP
+def _bili_http_fake(url, headers=None):
+    if "qrcode/generate" in url:
+        return {"code": 0, "data": {
+            "url": "https://passport.bilibili.com/login?SESSDATA=s1&bili_jct=j1"
+                   "&DedeUserID=42&buvid3=b1",
+            "qrcode_key": "KEY-HTTP"}}
+    if "qrcode/poll" in url:
+        code = _bili_http_fake.poll_code
+        data = {"code": code}
+        if code == 0:
+            data["url"] = ("https://passport.bilibili.com/login?SESSDATA=s1"
+                           "&bili_jct=j1&DedeUserID=42&buvid3=b1")
+        return {"code": 0, "data": data}
+    if "web-interface/nav" in url:
+        return {"code": 0, "data": {"isLogin": True, "uname": "UP主", "mid": 42}}
+    raise AssertionError("unexpected url " + url)
+
+
+def _bili_console_env(tmp_path, monkeypatch, write_env):
+    home = tmp_path / "bili-duty"
+    (home / "out").mkdir(parents=True)
+    (home / "config.json").write_text(json.dumps({"perDay": 2, "extra": "keep"},
+                                                 ensure_ascii=False), encoding="utf-8")
+    (home / "out" / (time.strftime("%Y-%m-%d") + ".md")).write_text("# report\n", encoding="utf-8")
+    monkeypatch.setenv("BILI_DUTY_HOME", str(home))
+    monkeypatch.setattr(console, "BILI_QR_PNG", tmp_path / "qr.png")
+    monkeypatch.setattr(console, "_bili_http_json", _bili_http_fake)
+    _bili_http_fake.poll_code = 86101
+    console._BILI_NAV_CACHE.update(ts=0.0, data=None)
+    return home
+
+
+def test_console_bili_qr_poll_status_config_http(tmp_path, write_env, monkeypatch):
+    home = _bili_console_env(tmp_path, monkeypatch, write_env)
+    status, _ = _call("POST", "/api/bili/login/qr", {})
+    assert status == 401
+    status, data = _call("POST", "/api/bili/login/qr", {}, token="tok")
+    assert status == 200 and data["ok"] is True and data["key"] == "KEY-HTTP"
+    qr_png = Path(console.BILI_QR_PNG)
+    assert qr_png.is_file() and qr_png.read_bytes().startswith(b"\x89PNG")
+    # poll waiting → scanned → ok
+    status, data = _call("GET", "/api/bili/login/poll?key=KEY-HTTP", token="tok")
+    assert status == 200 and data["status"] == "waiting"
+    _bili_http_fake.poll_code = 86090
+    assert _call("GET", "/api/bili/login/poll?key=KEY-HTTP", token="tok")[1]["status"] == "scanned"
+    _bili_http_fake.poll_code = 0
+    status, data = _call("GET", "/api/bili/login/poll?key=KEY-HTTP", token="tok")
+    assert status == 200 and data["status"] == "ok" and data["uname"] == "UP主"
+    assert (home / "bili_credential.json").is_file()
+
+    status, data = _call("GET", "/api/bili/status", token="tok")
+    assert status == 200 and data["logged_in"] is True and data["uname"] == "UP主"
+    status, _ = _call("GET", "/api/bili/status")
+    assert status == 401
+    status, data = _call("GET", "/api/bili/report", token="tok")
+    assert status == 200 and data["ok"] is True
+    status, data = _call("GET", "/api/bili/report?date=2020-01-01", token="tok")
+    assert status == 200 and data["error"] == "no_report"
+
+
+def test_console_bili_config_http_whitelist(tmp_path, write_env, monkeypatch):
+    home = _bili_console_env(tmp_path, monkeypatch, write_env)
+    status, data = _call("GET", "/api/bili/config", token="tok")
+    assert status == 200 and data["ok"] is True
+    status, data = _call("POST", "/api/bili/config",
+                         {"updates": {"perDay": 9, "night": False}}, token="tok")
+    assert status == 200 and data["ok"] is True and data["config"]["perDay"] == 9
+    saved = json.loads((home / "config.json").read_text(encoding="utf-8"))
+    assert saved["extra"] == "keep" and saved["perDay"] == 9
+    status, data = _call("POST", "/api/bili/config",
+                         {"updates": {"nope": 1}}, token="tok")
+    assert status == 400 and data["ok"] is False
+    status, _ = _call("POST", "/api/bili/config", {"updates": {"perDay": 1}})
+    assert status == 401

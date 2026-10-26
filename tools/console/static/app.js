@@ -2303,7 +2303,17 @@ async function renderBili() {
   try { status = await api('/api/bili/status'); } catch (err) { errors.push('状态: ' + err.message); }
   try { configState = await api('/api/bili/config'); } catch (err) { errors.push('配置: ' + err.message); }
   const prev = state.bili || {};
-  state.bili = { status, configState, qr: prev.qr || null, timer: null, polling: false };
+  // 注意：重建对象时必须保留轮询相关的瞬时状态，否则 polledAt 丢失
+  // → 过期判断变成 Date.now()-0 > 180s → 二维码一生成就显示"已过期"（实测 bug）
+  state.bili = {
+    status, configState,
+    qr: prev.qr || null,
+    timer: null,
+    polling: false,
+    loginState: prev.loginState || '',
+    polledAt: prev.polledAt || 0,
+    loginExpired: prev.loginExpired || false,
+  };
   if (!status && !configState) {
     $('#app').innerHTML = card('B站', `<div class="error-text">${esc(errors.join('；'))}</div>`);
     return;

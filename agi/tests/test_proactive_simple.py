@@ -278,3 +278,36 @@ def test_bracket_still_bad_after_regen_is_discarded(tmp_path):
     row = _tick(path, FakeClient(queue=["（笑）今天有点累", "【旁白】今天有点累"]))
     assert row["available"] is False
     assert "bracket_action" in row["discard_reason"]
+
+
+def test_tick_returns_topic_seed_and_switch_off(tmp_path, monkeypatch):
+    path = _seed(tmp_path, name="topic.sqlite3")
+    con = db.connect(path)
+    con.execute(
+        "INSERT OR REPLACE INTO user_memories"
+        "(id,scope,kind,content,evidence,confidence,status,created_at,importance) "
+        "VALUES('UM-T','user','preference','喜欢喝手冲咖啡','原话',0.9,'active',?,0.9)",
+        (T0 - 3600,))
+    con.commit()
+    con.close()
+    client = FakeClient(text="看到一个说法，挺有意思")
+    row = _tick(path, client)
+    assert row["available"] is True
+    assert row["topic_seed"]["candidates"]
+    assert any("可自然提起的旧话题" in prompt for prompt in client.prompts)
+
+    monkeypatch.setenv("PROACTIVE_TOPIC_SEED", "0")
+    path2 = _seed(tmp_path, name="topic2.sqlite3")
+    con = db.connect(path2)
+    con.execute(
+        "INSERT OR REPLACE INTO user_memories"
+        "(id,scope,kind,content,evidence,confidence,status,created_at,importance) "
+        "VALUES('UM-T2','user','preference','喜欢喝手冲咖啡','原话',0.9,'active',?,0.9)",
+        (T0 - 3600,))
+    con.commit()
+    con.close()
+    client2 = FakeClient(text="看到一个说法，挺有意思")
+    row2 = _tick(path2, client2)
+    assert row2["available"] is True
+    assert row2["topic_seed"]["reason"] == "disabled"
+    assert not any("可自然提起的旧话题" in prompt for prompt in client2.prompts)

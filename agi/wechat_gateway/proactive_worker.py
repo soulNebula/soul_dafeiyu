@@ -588,6 +588,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 "proactive_style": pro.get("style"),
                 "discard_reason": pro.get("discard_reason"),
                 "regen_reason": pro.get("regen_reason"),
+                "topic_seed": pro.get("topic_seed"),
                 "status": status.get("status"), "draft_id": status.get("draft_id"),
                 # P0-6：失败率统计口径 status∈{failed,draft}，真正失败证据看 send_failed
                 "send_failed": bool(status.get("send_failed")),

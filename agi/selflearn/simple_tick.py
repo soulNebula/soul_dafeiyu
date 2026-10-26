@@ -100,7 +100,7 @@ def _violations(text: str, media: dict | None, anchors: list[str],
 
 
 def _simple_prompt(kind: str, dialog: str, media_ctx: str,
-                   fix_reason: str = "") -> str:
+                   fix_reason: str = "", topic_ctx: str = "") -> str:
     from . import proactive
     prompt = (proactive.PERSONA_CONSTRAINTS + "\n" + proactive.GROUNDING_CONSTRAINTS +
               "\n像真人微信聊天：短句、口语、不加句号；只说一句，不写作文/独白。"
@@ -108,6 +108,8 @@ def _simple_prompt(kind: str, dialog: str, media_ctx: str,
               "不要问对方为什么不回。"
               "\n正文禁止出现：表情包/素材/清单/表情库/系统/指令/记忆库/记忆/[[media："
               "想发贴纸就单独输出 [[media:...]] 指令行，不要用文字描述。")
+    if topic_ctx:
+        prompt += "\n" + topic_ctx
     if media_ctx:
         prompt += "\n" + media_ctx
     if fix_reason:
@@ -248,10 +250,21 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
         media_ctx = media_choice.media_prompt_block(path)
     except Exception:  # noqa: BLE001
         media_ctx = ""
-    prompt = _simple_prompt(kind, dialog, media_ctx)
+    from . import topic_seed as _topic_seed
+    topic = {"picked": "", "candidates": [], "reason": "disabled"}
+    topic_ctx = ""
+    if _topic_seed.enabled():
+        try:
+            topic = _topic_seed.build(path, now)
+            topic_ctx = _topic_seed.prompt_block(topic)
+        except Exception:  # noqa: BLE001
+            topic = {"picked": "", "candidates": [], "reason": "error"}
+            topic_ctx = ""
+    prompt = _simple_prompt(kind, dialog, media_ctx, topic_ctx=topic_ctx)
     raw, answered = _ask_simple(client, prompt)
     if not answered or not raw or raw.upper().startswith("SKIP"):
-        return {"ok": True, "available": False, "reason": "llm_skip", "style": "simple"}
+        return {"ok": True, "available": False, "reason": "llm_skip",
+                "style": "simple", "topic_seed": topic}
     text, directives = _parse_generated(raw)
     text = _light_polish(text)
     media_choice = None
@@ -268,7 +281,8 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
     reasons = _violations(text, media, anchors, recent_texts)
     regen_reason = ",".join(reasons)
     if reasons:
-        fix_prompt = _simple_prompt(kind, dialog, media_ctx, fix_reason=regen_reason)
+        fix_prompt = _simple_prompt(kind, dialog, media_ctx,
+                                    fix_reason=regen_reason, topic_ctx=topic_ctx)
         fix_raw, fix_answered = _ask_simple(client, fix_prompt)
         if fix_answered and fix_raw and not fix_raw.upper().startswith("SKIP"):
             fix_text, fix_directives = _parse_generated(fix_raw)
@@ -288,7 +302,7 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
     if reasons:
         return {"ok": True, "available": False, "reason": "discarded",
                 "discard_reason": ",".join(reasons), "regen_reason": regen_reason,
-                "style": "simple", "media": None}
+                "style": "simple", "media": None, "topic_seed": topic}
     if media_choice is not None:
         try:
             media_choice.record_media(path, bool(media and media.get("bubbles")))
@@ -298,5 +312,6 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
                        best.get("score"), now, media)
     return {"ok": True, "available": True, "style": "simple",
             "regen_reason": regen_reason, "discard_reason": "",
+            "topic_seed": topic,
             "kind": kind, "action": "simple", "score": best.get("score"),
             "reason": best.get("reason"), **recorded}

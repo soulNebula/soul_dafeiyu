@@ -25,3 +25,6 @@ MEDIA_TAG_FILE = DATA_DIR.parent / "media_tags.json"
 MEDIA_WISH_FILE = DATA_DIR / "media_wishes.jsonl"
 #: 预留：素材获取管线默认关闭（本仓库不下载、不联网）
 MEDIA_ACQUISITION_ENABLED = False
+
+# P8-b：simple 主动链路话题种子（默认开启；legacy 不受影响）
+PROACTIVE_TOPIC_SEED = True

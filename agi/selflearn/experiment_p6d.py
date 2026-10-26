@@ -21,6 +21,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from agi.selflearn import db
+
 ROOT = Path(__file__).resolve().parents[2]
 CONTACT_DB = ROOT / "agi" / "data" / "selflearn" / "wechat_contacts" / "4260fd457d8355.sqlite3"
 FEWSHOT = ROOT / "agi" / "eval_data" / "human_tone" / "fewshot.json"
@@ -93,6 +95,7 @@ def _copy_real_context(target_ts: float) -> tuple[str, dict]:
     tmp = tempfile.mkdtemp(prefix="p6d_real_")
     path = os.path.join(tmp, "ctx.sqlite3")
     shutil.copy2(CONTACT_DB, path)
+    from agi.selflearn import db
     con = db.connect(path)
     try:
         for table, column in (("proactive", "created_at"), ("messages", "ts"),

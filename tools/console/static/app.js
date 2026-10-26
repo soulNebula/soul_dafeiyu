@@ -2505,6 +2505,17 @@ function bindGlobal() {
   });
   const tokenInput = $('#token-input');
   tokenInput.value = state.token;
+  // 本机便利：没填 token 时自动从 /api/token 拉（后端只允许回环地址）
+  if (!state.token) {
+    api('/api/token').then((data) => {
+      if (data && data.ok && data.token) {
+        state.token = data.token;
+        tokenInput.value = state.token;
+        sessionStorage.setItem('console_token', state.token);
+        go(state.page);
+      }
+    }).catch(() => {});
+  }
   tokenInput.oninput = () => {
     state.token = tokenInput.value.trim();
     sessionStorage.setItem('console_token', state.token);

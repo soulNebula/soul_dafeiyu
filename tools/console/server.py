@@ -3743,6 +3743,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "service": "soul-console",
                                  "ts": now_ts(), "contact_db": str(contact_db_path() or "")})
                 return
+            if path == "/api/token":
+                # 本机调试便利：仅回环地址可读本机 admin token（免手动抄 config.json）
+                client = self._client()
+                if client not in ("127.0.0.1", "::1", "localhost"):
+                    self._json(403, {"ok": False, "error": "loopback only"})
+                    return
+                self._json(200, {"ok": True, "token": admin_token()})
+                return
             if path == "/api/status":
                 self._json(200, gateway_status()); return
             if path == "/api/feed":

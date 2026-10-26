@@ -393,6 +393,416 @@ def wait_window_closed(window: dict[str, Any] | None, *, poll: float = WINDOW_PO
 
 
 # --------------------------------------------------------------------------- #
+# P7-d：桌面通知（纯函数，供单测；PowerShell 只负责显示）
+# --------------------------------------------------------------------------- #
+NOTIFY_LOG_PATH = ROOT / "agi" / "data" / "wechat" / "gateway.log"
+NOTIFY_STATE_PATH = ROOT / "agi" / "data" / "desktop_notify_state.json"
+GATEWAY_CONFIG_PATH = ROOT / "agi" / "data" / "wechat" / "config.json"
+TRAY_SCRIPT = ROOT / "tools" / "desktop" / "tray.ps1"
+AUTOSTART_PS1 = ROOT / "tools" / "desktop" / "autostart.ps1"
+NOTIFY_TAIL_BYTES = 200_000       # 首次只回放最近 200KB，不通知历史积压
+NOTIFY_DEDUPE_S = 60.0            # 相同事件 60s 内去重
+NOTIFY_SEEN_TTL_S = 3600.0        # 去重表最多记 1h
+DEFAULT_QUIET_HOURS = (23, 8)     # 夜间（与网关默认一致）只报错误
+
+#: 会被通知的事件 → (标题, 是否错误) 的映射在 _map_event 里逐条实现
+NOTIFY_KINDS = ("proactive_send", "send_blocked", "send_failed",
+                "proactive_discarded", "gateway_stale", "proactive_breaker_open")
+
+
+def _parse_event(line: Any) -> dict[str, Any] | None:
+    """解析一行 gateway.log（也接受已经是 dict 的行，方便测试）。"""
+    if isinstance(line, dict):
+        return line
+    try:
+        event = json.loads(str(line or ""))
+    except (TypeError, ValueError):
+        return None
+    return event if isinstance(event, dict) else None
+
+
+def _event_ts(event: dict[str, Any], default: float) -> float:
+    try:
+        value = float(event.get("ts"))
+        return value if value > 0 else float(default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _normalise_quiet(value: Any) -> tuple[int, int] | None:
+    """静默区间归一：合法 [start,end]（int 小时，可跨零点）；None/非法 → None。"""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        try:
+            return int(value[0]), int(value[1])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _quiet_hours_from_config() -> tuple[int, int] | None:
+    """从网关 config.json 读静默时段（只读；read 失败时退回默认 [23,8]）。"""
+    try:
+        raw = json.loads(GATEWAY_CONFIG_PATH.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return DEFAULT_QUIET_HOURS
+        quiet = _normalise_quiet(raw.get("quiet_hours"))
+        return quiet if quiet is not None else DEFAULT_QUIET_HOURS
+    except (OSError, ValueError):
+        return DEFAULT_QUIET_HOURS
+
+
+def _is_night(ts: float, quiet: tuple[int, int] | None) -> bool:
+    """ts 所在本地小时是否落在静默区间（支持跨零点；start==end 视为不静默）。"""
+    if not quiet:
+        return False
+    hour = time.localtime(float(ts)).tm_hour
+    start, end = int(quiet[0]), int(quiet[1])
+    if start == end:
+        return False
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end       # 跨零点，如 23→8
+
+
+def _map_event(event: dict[str, Any]) -> dict[str, Any] | None:
+    """事件 → 通知内容；不关心的事件返回 None。"""
+    kind = str(event.get("kind") or "").strip()
+    if kind == "proactive_send":
+        status = str(event.get("status") or "").strip()
+        text = str(event.get("text") or "").strip()
+        if status in ("sent", "ok"):
+            return {"level": "info", "title": "已发送",
+                    "body": f"已发：{text[:30] or '(无文本)'}", "error": False}
+        reason = str(event.get("error") or event.get("reason") or status or "unknown")
+        return {"level": "error", "title": "发送失败",
+                "body": f"未发送：{reason[:80]}", "error": True}
+    if kind == "send_blocked":
+        reason = str(event.get("reason") or event.get("error") or "blocked")
+        return {"level": "error", "title": "未发送（被拦）",
+                "body": f"未发送：{reason[:80]}", "error": True}
+    if kind == "send_failed":
+        reason = str(event.get("error_key") or event.get("error") or "failed")
+        return {"level": "error", "title": "发送失败",
+                "body": f"未发送：{reason[:80]}", "error": True}
+    if kind == "proactive_discarded":
+        reason = str(event.get("reason") or event.get("text") or "discarded")
+        return {"level": "error", "title": "主动消息已丢弃",
+                "body": f"未发送：{reason[:80]}", "error": True}
+    if kind == "gateway_stale":
+        idle = event.get("idle_s")
+        suffix = f"（空闲 {idle}s）" if idle is not None else ""
+        return {"level": "warn", "title": "网关可能卡住",
+                "body": f"长时间没有活动{suffix}", "error": True}
+    if kind == "proactive_breaker_open":
+        consecutive = event.get("consecutive")
+        key = str(event.get("error_key") or "")[:60]
+        return {"level": "error", "title": "熔断：连续失败",
+                "body": f"连续 {consecutive or '?'} 次同类失败{('：' + key) if key else ''}",
+                "error": True}
+    return None
+
+
+def _notify_key(kind: str, mapped: dict[str, Any]) -> str:
+    return f"{kind}|{mapped.get('title')}|{str(mapped.get('body'))[:60]}"
+
+
+def collect_notifications(state: dict[str, Any] | None,
+                          lines: list[Any], *, now: float | None = None,
+                          quiet_hours: tuple[int, int] | None = None,
+                          ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """P7-d 核心纯函数：把新的 gateway.log 行变成桌面通知（不弹窗、不写盘）。
+
+    - 覆盖 5 类事件：正常发送 / 被拦/失败/丢弃 / 死区 / 熔断；
+    - 相同事件（kind+标题+内容前 60 字）``NOTIFY_DEDUPE_S``（60s）内去重；
+    - 夜间（``quiet_hours``，默认取 state 里的或 [23,8]）**只报错误**，不报正常发送；
+    - 返回 ``(notifications, new_state)``，new_state 带 ``seen`` 去重表（保留 1h）。
+
+    PS 只负责把 notifications 里的 title/body/level 显示成 balloon。
+    """
+    now = time.time() if now is None else float(now)
+    state = dict(state or {})
+    quiet = _normalise_quiet(quiet_hours)
+    if quiet is None:
+        quiet = _normalise_quiet(state.get("quiet_hours")) or DEFAULT_QUIET_HOURS
+    seen_raw = state.get("seen")
+    seen: dict[str, float] = {}
+    if isinstance(seen_raw, dict):
+        for key, value in seen_raw.items():
+            try:
+                seen[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+
+    notifications: list[dict[str, Any]] = []
+    for line in (lines or []):
+        event = _parse_event(line)
+        if event is None:
+            continue
+        kind = str(event.get("kind") or "").strip()
+        mapped = _map_event(event)
+        if mapped is None:
+            continue
+        ts = _event_ts(event, now)
+        if _is_night(ts, quiet) and not mapped["error"]:
+            continue                          # 夜间只报错误
+        key = _notify_key(kind, mapped)
+        last = float(seen.get(key) or 0.0)
+        if ts - last < NOTIFY_DEDUPE_S:       # 60s 内相同事件去重
+            continue
+        seen[key] = ts
+        notifications.append({"kind": kind, "ts": ts, "key": key,
+                              "title": mapped["title"], "body": mapped["body"],
+                              "level": mapped["level"]})
+
+    cutoff = now - NOTIFY_SEEN_TTL_S
+    seen = {key: value for key, value in seen.items() if value >= cutoff}
+    new_state = dict(state)
+    new_state["seen"] = seen
+    new_state["updated_at"] = now
+    new_state["quiet_hours"] = list(quiet) if quiet else None
+    return notifications, new_state
+
+
+def read_new_log_lines(log_path: Path | str, state: dict[str, Any] | None,
+                       *, max_bytes: int = NOTIFY_TAIL_BYTES,
+                       ) -> tuple[list[str], dict[str, Any]]:
+    """按 state 里的 offset 增量读 gateway.log（文件被截断/轮转时自动从头）。
+
+    首次（没有 offset）只读最近 ``max_bytes``，避免把历史全弹一遍；读不完的下次继续。
+    """
+    target = Path(log_path)
+    new_state = dict(state or {})
+    try:
+        size = target.stat().st_size
+    except OSError:
+        return [], new_state
+    offset = int(new_state.get("offset") or 0)
+    if offset < 0 or offset > size:
+        offset = 0
+    tail_start = False
+    if offset == 0 and size > max_bytes:
+        offset = size - max_bytes
+        tail_start = True                    # 从中间开始：先丢掉半行
+    try:
+        with target.open("rb") as handle:
+            handle.seek(offset)
+            data = handle.read(max_bytes)
+    except OSError:
+        return [], new_state
+    if tail_start and data:
+        cut = data.find(b"\n")
+        if cut < 0:
+            return [], new_state             # 一个完整行都没有，等下次
+        offset += cut + 1
+        data = data[cut + 1:]
+    consumed = len(data)
+    if data and not data.endswith(b"\n"):
+        cut = data.rfind(b"\n")
+        if cut < 0:
+            return [], new_state             # 还没读到完整行，等下次
+        consumed = cut + 1
+        data = data[:cut + 1]
+    lines = [line for line in data.decode("utf-8", "replace").splitlines() if line.strip()]
+    new_state["offset"] = offset + consumed
+    return lines, new_state
+
+
+def notifications_once(*, log_path: Path | str | None = None,
+                       state_path: Path | str | None = None,
+                       now: float | None = None) -> dict[str, Any]:
+    """托盘内部用：轮询一次日志 → 返回通知 JSON 并推进 offset/去重 state。"""
+    log = Path(log_path or NOTIFY_LOG_PATH)
+    target = Path(state_path or NOTIFY_STATE_PATH)
+    state = load_state(target)
+    first_run = not state.get("offset")          # 第一次轮询：只保留近 10 分钟事件
+    lines, state = read_new_log_lines(log, state)
+    notifications, state = collect_notifications(
+        state, lines, now=now, quiet_hours=_quiet_hours_from_config())
+    if first_run:
+        cutoff = (time.time() if now is None else float(now)) - 600.0
+        notifications = [item for item in notifications
+                         if float(item.get("ts") or 0) >= cutoff]
+    try:
+        save_state(state, target)
+    except OSError:
+        pass
+    return {"ok": True, "notifications": notifications, "lines": len(lines),
+            "offset": state.get("offset"), "log": str(log), "state": str(target)}
+
+
+# --------------------------------------------------------------------------- #
+# P7-d：托盘进程（托盘本体是 tray.ps1；这里只负责拉起/单实例）
+# --------------------------------------------------------------------------- #
+def _powershell_exe() -> str:
+    return shutil.which("powershell") or "powershell.exe"
+
+
+def _spawn_tray(*, no_notify: bool = False) -> Any:
+    """后台拉起 PowerShell 托盘（隐藏窗口）；返回 Popen。"""
+    if not TRAY_SCRIPT.is_file():
+        raise LauncherError(f"托盘脚本不存在：{TRAY_SCRIPT}")
+    argv = [_powershell_exe(), "-NoProfile", "-NonInteractive",
+            "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+            "-File", str(TRAY_SCRIPT),
+            "-Python", sys.executable, "-RepoRoot", str(ROOT)]
+    if no_notify:
+        argv.append("-NoNotify")
+    kwargs: dict[str, Any] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0) | \
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    return subprocess.Popen(argv, **kwargs)  # noqa: S603 - argv 由本文件构造
+
+
+def ensure_tray(state: dict[str, Any], *, no_notify: bool = False) -> dict[str, Any]:
+    """托盘单实例：state 里的 tray_pid 还活着就复用，否则拉起新托盘。"""
+    pid = int(state.get("tray_pid") or 0)
+    if pid and _pid_alive(pid):
+        return {"started": False, "pid": pid}
+    try:
+        proc = _spawn_tray(no_notify=no_notify)
+    except LauncherError as exc:
+        return {"started": False, "pid": None, "error": str(exc)}
+    new_pid = int(getattr(proc, "pid", 0) or 0)
+    return {"started": True, "pid": new_pid}
+
+
+# --------------------------------------------------------------------------- #
+# P7-d：开机自启（用户级：启动目录 bat / 可选 HKCU Run；不需要管理员）
+# --------------------------------------------------------------------------- #
+AUTOSTART_NAME = "SoulCompanion"
+AUTOSTART_BAT = "SoulCompanionAutostart.bat"
+REG_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def _startup_dir(startup_dir: Path | str | None = None) -> Path:
+    if startup_dir:
+        return Path(startup_dir)
+    env = os.environ.get("WXBOX_STARTUP_DIR")
+    if env:
+        return Path(env)
+    appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+
+
+def _pythonw_exe() -> Path:
+    exe = Path(sys.executable)
+    candidate = exe.with_name("pythonw.exe")
+    return candidate if candidate.is_file() else exe
+
+
+def _autostart_argv() -> list[str]:
+    return [str(_pythonw_exe()), str(ROOT / "tools" / "desktop" / "launcher.py"),
+            "--tray", "--no-open"]
+
+
+def _autostart_command() -> str:
+    python, launcher = _autostart_argv()[0], _autostart_argv()[1]
+    return f'"{python}" "{launcher}" --tray --no-open'
+
+
+def _autostart_bat_text() -> str:
+    python, launcher = _autostart_argv()[0], _autostart_argv()[1]
+    return ("@echo off\r\n"
+            f'cd /d "{ROOT}"\r\n'
+            f'start "" "{python}" "{launcher}" --tray --no-open\r\n')
+
+
+def _autostart_bat_path(startup_dir: Path | str | None = None) -> Path:
+    return _startup_dir(startup_dir) / AUTOSTART_BAT
+
+
+def _reg_set(command: str) -> None:
+    import winreg
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY) as key:
+        winreg.SetValueEx(key, AUTOSTART_NAME, 0, winreg.REG_SZ, str(command))
+
+
+def _reg_get() -> str | None:
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY) as key:
+            return str(winreg.QueryValueEx(key, AUTOSTART_NAME)[0])
+    except (OSError, ImportError):
+        return None
+
+
+def _reg_delete() -> bool:
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, AUTOSTART_NAME)
+        return True
+    except (OSError, ImportError):
+        return False
+
+
+def autostart_status(*, startup_dir: Path | str | None = None) -> dict[str, Any]:
+    bat = _autostart_bat_path(startup_dir)
+    try:
+        bat_installed = bat.is_file()
+    except OSError:
+        bat_installed = False
+    registry_value = _reg_get()
+    return {"ok": True, "startup_dir": str(_startup_dir(startup_dir)),
+            "startup_bat": str(bat), "bat_installed": bat_installed,
+            "registry_name": AUTOSTART_NAME,
+            "registry_value": registry_value,
+            "registry_installed": bool(registry_value),
+            "command": _autostart_command()}
+
+
+def autostart_install(*, use_registry: bool = False,
+                      startup_dir: Path | str | None = None) -> dict[str, Any]:
+    """安装开机自启：默认写「启动」目录 bat；``use_registry=True`` 写 HKCU Run。"""
+    bat = _autostart_bat_path(startup_dir)
+    if use_registry:
+        try:
+            _reg_set(_autostart_command())
+        except (OSError, ImportError) as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                    "method": "registry"}
+        method = "registry"
+        target = AUTOSTART_NAME
+    else:
+        try:
+            bat.parent.mkdir(parents=True, exist_ok=True)
+            bat.write_text(_autostart_bat_text(), encoding="utf-8")
+        except OSError as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                    "method": "startup"}
+        method = "startup"
+        target = str(bat)
+    result = {"ok": True, "method": method, "target": target}
+    result.update(autostart_status(startup_dir=startup_dir))
+    return result
+
+
+def autostart_uninstall(*, startup_dir: Path | str | None = None) -> dict[str, Any]:
+    """卸载开机自启（两种方式都清）；返回删掉了什么。"""
+    bat = _autostart_bat_path(startup_dir)
+    removed_bat = False
+    try:
+        if bat.is_file():
+            bat.unlink()
+            removed_bat = True
+    except OSError:
+        removed_bat = False
+    removed_registry = _reg_delete()
+    result = {"ok": True, "removed_bat": removed_bat,
+              "removed_registry": removed_registry}
+    result.update(autostart_status(startup_dir=startup_dir))
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # state（单实例 / 只杀自有 PID）
 # --------------------------------------------------------------------------- #
 def load_state(path: Path | str | None = None) -> dict[str, Any]:
@@ -441,6 +851,12 @@ def owned_pids(state: dict[str, Any]) -> dict[str, int]:
             pids["window"] = int(window["pid"])
     except (TypeError, ValueError):
         pass
+    # P7-d：托盘也是本启动器拉起的进程，--stop/--exit-with-window 一起收
+    try:
+        if state.get("tray_pid"):
+            pids["tray"] = int(state["tray_pid"])
+    except (TypeError, ValueError):
+        pass
     return pids
 
 
@@ -487,9 +903,18 @@ def status_report(state: dict[str, Any] | None = None,
             "owned_alive": bool(owned.get(name) and _pid_alive(owned[name])),
         }
     window = state.get("window") or {}
+    try:
+        tray_pid = int(state.get("tray_pid") or 0)
+    except (TypeError, ValueError):
+        tray_pid = 0
     return {"ok": True, "state_path": str(state_path or STATE_PATH),
             "state": state or None, "services": services,
             "window": window or None,
+            "tray": {"pid": tray_pid or None,
+                     "alive": bool(tray_pid and _pid_alive(tray_pid)),
+                     "no_notify": bool(state.get("tray_no_notify"))},
+            "notify": {"state_path": str(NOTIFY_STATE_PATH),
+                       "log_path": str(NOTIFY_LOG_PATH)},
             "running": any(item["port_open"] for item in services.values())}
 
 
@@ -515,6 +940,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help=f"服务日志目录（默认 {DEFAULT_LOG_DIR}，不可写时回退 {FALLBACK_LOG_DIR}）")
     parser.add_argument("--state-path", default=None, help="state 文件路径（测试用）")
     parser.add_argument("--profile-dir", default=None, help="浏览器 user-data-dir（默认桌面专用目录）")
+    # ---- P7-d 桌面增强 ----
+    parser.add_argument("--tray", action="store_true",
+                        help="确保 801/802 后拉起系统托盘（tray.ps1；单实例）")
+    parser.add_argument("--no-notify", action="store_true",
+                        help="关闭桌面通知（托盘不轮询 gateway.log）")
+    parser.add_argument("--notify-once", action="store_true",
+                        help="轮询一次 gateway.log，输出通知 JSON（托盘内部调用）")
+    parser.add_argument("--notify-log", default=None, help="通知轮询的日志路径（测试用）")
+    parser.add_argument("--notify-state", default=None, help="通知 offset/去重 state 路径（测试用）")
+    parser.add_argument("--autostart", choices=("install", "uninstall", "status"),
+                        default=None, help="开机自启：install/uninstall/status")
+    parser.add_argument("--autostart-registry", action="store_true",
+                        help="自启写 HKCU Run（默认写「启动」目录 bat）")
     return parser.parse_args(argv)
 
 
@@ -543,6 +981,24 @@ def main(argv: list[str] | None = None) -> int:
     state_path = Path(args.state_path) if args.state_path else STATE_PATH
     profile_dir = Path(args.profile_dir) if args.profile_dir else PROFILE_DIR
 
+    # ---- P7-d：开机自启（纯文件/HKCU，不要求管理员） ----
+    if args.autostart:
+        if args.autostart == "install":
+            result = autostart_install(use_registry=bool(args.autostart_registry))
+        elif args.autostart == "uninstall":
+            result = autostart_uninstall()
+        else:
+            result = autostart_status()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+
+    # ---- P7-d：通知轮询一次（托盘定时调用；PowerShell 只负责显示） ----
+    if args.notify_once:
+        result = notifications_once(log_path=args.notify_log,
+                                    state_path=args.notify_state)
+        print(json.dumps(result, ensure_ascii=False, default=str))
+        return 0
+
     if args.status:
         print(json.dumps(status_report(load_state(state_path), state_path),
                          ensure_ascii=False, indent=2))
@@ -559,16 +1015,26 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
 
-    # 单实例：已有 launcher/自有服务在跑 → 只重新打开窗口
+    # 单实例：已有 launcher/自有服务在跑 → 只重新打开窗口（并按需确保托盘）
     state = load_state(state_path)
     if another_instance_running(state):
         print("[desktop] 已有实例在运行：只重新打开窗口，不重复起服务")
+        if args.tray:
+            tray = ensure_tray(state, no_notify=args.no_notify)
+            state["tray_pid"] = tray.get("pid") or state.get("tray_pid")
+            state["tray_no_notify"] = bool(args.no_notify)
+            if tray.get("started"):
+                print(f"[desktop] 托盘已启动 pid={tray.get('pid')}")
+            elif tray.get("error"):
+                print(f"[desktop] 托盘启动失败：{tray['error']}", file=sys.stderr)
+            else:
+                print(f"[desktop] 托盘已在运行 pid={tray.get('pid')}")
         if not args.no_open:
             window = launch_window(url=CONSOLE_URL, profile_dir=profile_dir)
             state["window"] = window
             state["launcher_pid"] = os.getpid()
-            save_state(state, state_path)
             print(f"[desktop] 窗口已打开（{window['mode']} app 模式）：{CONSOLE_URL}")
+        save_state(state, state_path)
         return 0
 
     log_dir = resolve_log_dir(args.log_dir)
@@ -591,7 +1057,21 @@ def main(argv: list[str] | None = None) -> int:
         "log_dir": str(log_dir),
         "profile_dir": str(profile_dir),
         "window": None,
+        "tray_pid": None,
+        "tray_no_notify": bool(args.no_notify),
     }
+
+    # ---- P7-d：托盘（单实例；--no-notify 时托盘不轮询通知） ----
+    if args.tray:
+        tray = ensure_tray(state, no_notify=args.no_notify)
+        if tray.get("pid"):
+            state["tray_pid"] = tray["pid"]
+        if tray.get("started"):
+            print(f"[desktop] 托盘已启动 pid={tray.get('pid')}")
+        elif tray.get("error"):
+            print(f"[desktop] 托盘启动失败：{tray['error']}", file=sys.stderr)
+        else:
+            print(f"[desktop] 托盘已在运行 pid={tray.get('pid')}")
     save_state(state, state_path)
 
     if args.no_open:

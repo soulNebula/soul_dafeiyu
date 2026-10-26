@@ -773,7 +773,18 @@ def test_generate_via_client_usage_and_errors():
 
 
 def test_make_llama_client_missing_module_has_clear_error(monkeypatch):
+    import importlib
     import sys as _sys
+
+    # 全量套件里其它用例可能已把该模块导入并缓存到父包属性上；
+    # 这里先清一遍缓存，保证"模块缺失"的语义可复现。
+    _sys.modules.pop("agi.soul.llama_client", None)
+    try:
+        import agi.soul as _soul
+        monkeypatch.delattr(_soul, "llama_client", raising=False)
+    except Exception:  # noqa: BLE001
+        pass
+    importlib.invalidate_caches()
     monkeypatch.setitem(_sys.modules, "agi.soul.llama_client", None)
     with pytest.raises(RuntimeError) as exc:
         evaluate._make_llama_client("http://127.0.0.1:8123", 30.0)

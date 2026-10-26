@@ -245,6 +245,28 @@ CREATE TABLE IF NOT EXISTS intents(
 CREATE TABLE IF NOT EXISTS state(
   key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at REAL NOT NULL
 );
+
+-- P9：心情判定（移植「鱼的心情」）。mood=0-100 基调；7 情绪 dims 0-100。
+-- mood_state 单行（id='self'）：当前心情 + 上次判定/注入时间；mood_timeline 每次有效判定一行。
+CREATE TABLE IF NOT EXISTS mood_state(
+  id TEXT PRIMARY KEY, mood REAL NOT NULL DEFAULT 70,
+  dims_json TEXT NOT NULL DEFAULT '{}',
+  last_decay_at REAL NOT NULL DEFAULT 0,
+  last_reason TEXT NOT NULL DEFAULT '',
+  last_confidence REAL NOT NULL DEFAULT 0,
+  last_mode TEXT NOT NULL DEFAULT '',
+  last_at REAL NOT NULL DEFAULT 0,
+  last_injected_at REAL NOT NULL DEFAULT 0,
+  updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mood_timeline(
+  id TEXT PRIMARY KEY, at REAL NOT NULL, mood REAL NOT NULL,
+  dims_delta_json TEXT NOT NULL DEFAULT '{}',
+  reason TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0,
+  mode TEXT NOT NULL DEFAULT 'user',
+  user_text TEXT NOT NULL DEFAULT '', reply_text TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL
+);
 """
 
 
@@ -266,6 +288,8 @@ PERSONA_TABLES = frozenset({
     "practice_runs", "reflections", "lessons", "errors", "weak_checks",
     "trust_events", "state", "goals", "intents", "proactive",
     "share_candidates", "share_events", "wake_runs", "learning_proposals",
+    # P9：心情判定状态 / 时间线（属于「人格库」：它自己的心情）
+    "mood_state", "mood_timeline",
 })
 TABLE_DOMAIN = {name: "memory" for name in MEMORY_TABLES}
 TABLE_DOMAIN.update({name: "persona" for name in PERSONA_TABLES})
@@ -685,7 +709,7 @@ def counts(path: Path | str = DB_PATH) -> dict[str, int]:
                  "emoji_archive", "emoji_usage", "score_records", "learning_proposals",
                  "weak_rechecks", "wake_runs", "goals", "persona_layers",
                  "persona_changelog", "share_candidates", "share_events", "pairs",
-                 "inner_states"]
+                 "inner_states", "mood_state", "mood_timeline"]
         return {name: int(con.execute(f"SELECT count(*) FROM {name}").fetchone()[0])
                 for name in names}
     finally:

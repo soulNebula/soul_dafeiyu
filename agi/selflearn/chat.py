@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..inner import inject as inner_inject
-from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, timefuzz, tool_reply, trust
+from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, mood_judge, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, timefuzz, tool_reply, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -76,13 +76,24 @@ SYSTEM = """你是一个通过长期对话自我改进的 AI，不是客服，�
 有自伤/危机信号时优先安全，建议联系信任的人或专业帮助。"""
 
 
-def _system_prompt() -> str:
-    """P4-b：SYSTEM 支持 prompt_store 覆盖；未配置时返回代码常量（逐字节一致）。"""
+def _system_prompt(path: Path | str | None = None) -> str:
+    """P4-b：SYSTEM 支持 prompt_store 覆盖；未配置时返回代码常量（逐字节一致）。
+
+    P9：``path`` 给出且 ``mood_inject=true`` 时，在 **system prompt 尾部**追加一段
+    心情 context（一次变化只说一次）；默认关闭时返回值与改动前逐字节一致。
+    """
     try:
         from . import prompt_store
-        return prompt_store.get("chat.system", SYSTEM)
+        base = prompt_store.get("chat.system", SYSTEM)
     except Exception:  # noqa: BLE001 - 覆盖读取失败不影响主链
-        return SYSTEM
+        base = SYSTEM
+    if path is None:
+        return base
+    try:
+        mood_line = mood_judge.context_line(path)
+    except Exception:  # noqa: BLE001 - 心情注入失败不影响主链
+        mood_line = ""
+    return base + mood_line if mood_line else base
 
 
 def _id(prefix: str, *parts) -> str:
@@ -322,6 +333,37 @@ class SelfLearnAgent:
                 "SELECT count(*) FROM messages WHERE role='user'").fetchone()[0])
         finally:
             con.close()
+
+    # ---------------------------------------------------------- 口语化安全层
+    def _judge_mood_after_reply(self, user_text: str, turn_reply: str):
+        """P9：回复后判一次心情（默认关闭）。
+
+        - ``mood_judge_enabled=false`` → 直接 None（不读模型、不落库、不拖慢主链）；
+        - ``mood_judge_async``（默认 true）→ 后台线程判定，send 立刻返回
+          ``{"queued": true}``（与原项目异步 judgeChain 一致）；
+        - 同步模式（``MOOD_JUDGE_ASYNC=0``，测试/调试用）→ 直接返回 apply 结果。
+        """
+        try:
+            cfg = mood_judge.settings()
+            if not cfg.get("judge_enabled"):
+                return None
+            if cfg.get("async", True):
+                import threading
+                worker = threading.Thread(
+                    target=self._judge_mood_now, args=(user_text, turn_reply),
+                    name="mood-judge", daemon=True)
+                worker.start()
+                return {"queued": True, "mode": "user"}
+            return self._judge_mood_now(user_text, turn_reply)
+        except Exception:  # noqa: BLE001 - 判定失败不影响回复
+            return None
+
+    def _judge_mood_now(self, user_text: str, turn_reply: str):
+        try:
+            return mood_judge.judge_and_apply(
+                self.path, mode="user", user_text=user_text, our_reply=turn_reply)
+        except Exception:  # noqa: BLE001
+            return None
 
     # ---------------------------------------------------------- 口语化安全层
     def _polish_outbound(self, text: str) -> str:
@@ -680,7 +722,7 @@ class SelfLearnAgent:
                 except Exception:  # noqa: BLE001
                     pass
             if image:
-                system_text = _system_prompt()
+                system_text = _system_prompt(self.path)
                 content = [{"type": "text", "text": prompt},
                            {"type": "image_url", "image_url": {"url": image}}]
                 messages = [{"role": "system", "content": system_text},
@@ -689,7 +731,7 @@ class SelfLearnAgent:
                                           max_tokens=1200, temperature=0.7)
                 gen_meta = {"two_stage": False, "claims": []}
             else:
-                system_text = _system_prompt()
+                system_text = _system_prompt(self.path)
                 result, gen_meta = generation.generate(
                     self.client, system_text, prompt, mems,
                     purpose="selflearn_chat", max_tokens=500, temperature=0.7,
@@ -875,8 +917,15 @@ class SelfLearnAgent:
                 profile_info = profile.distill(self.path, self.client)
             except Exception:  # noqa: BLE001
                 profile_info = None
+        # P9：每轮回复后判一次心情（默认关闭；失败静默，不影响主链）。
+        # crisis 不判（安全优先）；skip 路径在前面已 return。下一条消息才会注入这次变化。
+        # 默认后台线程判定（与原项目异步 judgeChain 一致），不拖慢被动回复主链。
+        mood_info = None
+        if not crisis:
+            mood_info = self._judge_mood_after_reply(text, turn_reply)
         return {"ok": True, "reply": bubbles[0], "bubbles": bubbles, "turn_id": turn_id,
                 "summary": summary_info,
+                "mood": mood_info,
                 "new_memories": new_memories, "memory_ids": [m["id"] for m in mems],
                 "claims": claim_result, "retrieval_count": len(hits),
                 "retrieval_dropped_stale": dropped_stale,

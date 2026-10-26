@@ -19,6 +19,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from . import db as _db
+
 DOCS_TABLE = "search_documents"
 FTS_TABLE = "search_fts"
 META_TABLE = "search_meta"
@@ -48,9 +50,7 @@ _TRIM = ".-"
 
 
 def _connect(path: Path | str) -> sqlite3.Connection:
-    con = sqlite3.connect(str(path), timeout=5.0)
-    con.row_factory = sqlite3.Row
-    return con
+    return _db.memory_connect(path)
 
 
 def _table_exists(con: sqlite3.Connection, name: str) -> bool:
@@ -355,7 +355,9 @@ def search(path: Path | str, query: str, limit: int = 8) -> list[dict]:
         return []
 
     db_path = Path(path)
-    if not db_path.exists() or db_path.is_dir():
+    mem_path = _db.memory_path(db_path)
+    check_path = mem_path if mem_path.exists() else db_path
+    if not check_path.exists() or check_path.is_dir():
         return []
     try:
         con = _connect(db_path)

@@ -19,10 +19,11 @@ from __future__ import annotations
 import hashlib
 import random
 import re
-import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+
+from agi.selflearn import db as _selflearn_db
 
 #: 主动消息收到"负反馈"后冷却多久（秒）；连续两次负反馈再拉长
 NEGATIVE_COOLDOWN_S = 24 * 3600
@@ -45,12 +46,13 @@ CREATE TABLE IF NOT EXISTS proactive_events(
 """
 
 
-def _db(db_path: Path | str) -> str:
-    return str(db_path)
+def _connect(db_path: Path | str):
+    """P7-f：事件表在 memory 域，统一走 selflearn db 层，禁止打开基名文件。"""
+    return _selflearn_db.connect(db_path)
 
 
 def _ensure_events(db_path: Path | str) -> None:
-    con = sqlite3.connect(_db(db_path))
+    con = _connect(db_path)
     try:
         con.executescript(_EVENTS_SCHEMA)
         # 兼容 P0-2 之前创建的旧表：补 kind 列（记录模板分布用）
@@ -68,7 +70,7 @@ def record_event(db_path: Path | str, contact: str, text: str,
     now = time.time() if now is None else float(now)
     _ensure_events(db_path)
     eid = "PE-" + hashlib.md5(f"{contact}|{now}|{text[:40]}".encode()).hexdigest()[:14]
-    con = sqlite3.connect(_db(db_path))
+    con = _connect(db_path)
     try:
         con.execute("INSERT OR REPLACE INTO proactive_events"
                     "(id, contact, ts, text, status, kind) VALUES(?,?,?,?,?,?)",
@@ -94,7 +96,7 @@ def mark_response(db_path: Path | str, text: str, now: float | None = None) -> s
         kind = "neutral"
     try:
         _ensure_events(db_path)
-        con = sqlite3.connect(_db(db_path))
+        con = _connect(db_path)
     except Exception:  # noqa: BLE001
         return ""
     try:
@@ -118,7 +120,7 @@ def feedback_cooldown(db_path: Path | str, now: float | None = None) -> str:
     now = time.time() if now is None else float(now)
     try:
         _ensure_events(db_path)
-        con = sqlite3.connect(_db(db_path))
+        con = _connect(db_path)
     except Exception:  # noqa: BLE001
         return ""
     try:
@@ -213,7 +215,7 @@ def recent_sent_texts(db_path: Path | str, contact: str,
     """取该联系人窗口内**真正发出去过**的文本（status='sent'），新→旧。"""
     try:
         _ensure_events(db_path)
-        con = sqlite3.connect(_db(db_path))
+        con = _connect(db_path)
     except Exception:  # noqa: BLE001
         return []
     try:

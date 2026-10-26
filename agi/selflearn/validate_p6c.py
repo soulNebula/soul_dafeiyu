@@ -40,7 +40,8 @@ def _copy_context(target_ts: float) -> str:
     temp = tempfile.mkdtemp(prefix="p6c_")
     path = os.path.join(temp, "ctx.sqlite3")
     shutil.copy2(CONTACT_DB, path)
-    con = sqlite3.connect(path)
+    from agi.selflearn import db
+    con = db.connect(path)
     try:
         for table, column in TRUNCATE:
             con.execute(f"DELETE FROM {table} WHERE {column} >= ?", (target_ts - 60,))

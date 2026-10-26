@@ -69,10 +69,17 @@ def budget(path: Path | str = DB_PATH, window: int = 20) -> dict:
     """最近 window 条 turn 内同类错误 >=3 → 保守模式。"""
     con = db.connect(path)
     try:
-        rows = con.execute(
-            "SELECT category,count(*) n FROM errors WHERE turn_id IN ("
-            "SELECT id FROM turns ORDER BY created_at DESC LIMIT ?) GROUP BY category",
+        turn_rows = con.execute(
+            "SELECT id FROM turns ORDER BY created_at DESC LIMIT ?",
             (int(window),)).fetchall()
+        turn_ids = [str(r[0]) for r in turn_rows]
+        if not turn_ids:
+            rows = []
+        else:
+            marks = ",".join("?" for _ in turn_ids)
+            rows = con.execute(
+                f"SELECT category,count(*) n FROM errors WHERE turn_id IN ({marks}) "
+                "GROUP BY category", turn_ids).fetchall()
     finally:
         con.close()
     total = sum(int(r["n"]) for r in rows)

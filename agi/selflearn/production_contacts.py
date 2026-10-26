@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from . import db as _db
 from . import production
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,11 +18,21 @@ def _paths(paths=None) -> list[Path]:
         return [Path(p) for p in paths]
     if not CONTACT_DB_DIR.exists():
         return []
-    return sorted(CONTACT_DB_DIR.glob("*.sqlite3"))
+    # P7-e：联系人库已拆成 <base>.memory.sqlite3 / .persona.sqlite3
+    return sorted(CONTACT_DB_DIR.glob("*.memory.sqlite3"))
 
 
 def aggregate(paths=None, *, days: int = 7) -> dict[str, Any]:
-    files = [p for p in _paths(paths) if p.exists()]
+    candidates = _paths(paths)
+    files = []
+    seen = set()
+    for p in candidates:
+        base = _db._base_path(p)
+        if base in seen:
+            continue
+        if p.exists() or _db.memory_path(p).exists() or _db.persona_path(p).exists():
+            files.append(base)
+            seen.add(base)
     snapshots = [production.snapshot(p, days=days) for p in files]
     raw = {k: 0 for k in ("messages", "user_messages", "turns", "feedback",
                           "explicit_feedback", "memories", "persona", "claims",
@@ -33,7 +44,7 @@ def aggregate(paths=None, *, days: int = 7) -> dict[str, Any]:
     feedback_set: set[str] = set()
     for p in files:
         try:
-            con = sqlite3.connect(p)
+            con = _db.memory_connect(p)
             for r in con.execute("SELECT DISTINCT date(ts,'unixepoch','localtime') FROM messages"):
                 if r[0]:
                     days_set.add(str(r[0]))

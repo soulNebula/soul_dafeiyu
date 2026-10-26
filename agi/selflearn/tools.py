@@ -233,7 +233,11 @@ def _tool_memory_query(db_path: Path | str | None = None, **kwargs: Any) -> dict
         path = Path(db_path)
     except (TypeError, ValueError) as exc:
         raise ToolError(f"db_path 非法: {exc}") from exc
-    if not path.is_file():
+    from . import db as _db
+    if path.is_dir():
+        raise ToolError("记忆库不存在")
+    if not (path.is_file() or _db.memory_path(path).exists()
+            or _db.persona_path(path).exists()):
         raise ToolError("记忆库不存在")
     return memory_query(query, k=k, db_path=path)
 

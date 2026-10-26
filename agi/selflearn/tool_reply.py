@@ -160,7 +160,8 @@ def record_sources(db_path: Path | str, query: str, research: dict,
     if not db_path or not sources:
         return 0
     try:
-        con = sqlite3.connect(str(db_path))
+        from . import db as _db
+        con = _db.memory_connect(db_path)
         try:
             con.executescript(_SCHEMA)
             now = time.time()
@@ -211,7 +212,8 @@ def remember_research(db_path: Path | str, research: dict,
     now = time.time()
     written = 0
     try:
-        con = sqlite3.connect(str(db_path))
+        from . import db as _db
+        con = _db.connect(db_path)
         try:
             con.execute(
                 "CREATE TABLE IF NOT EXISTS user_memories("

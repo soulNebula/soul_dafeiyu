@@ -35,9 +35,9 @@ def _archived_message_ids(path: Path | str, source_ids: list[str]) -> dict[str, 
     if not ids:
         return {}
     try:
-        import sqlite3
-        con = sqlite3.connect(str(path), timeout=5.0)
-    except (sqlite3.Error, OSError):
+        from . import db as _db
+        con = _db.memory_connect(path)
+    except Exception:  # noqa: BLE001
         return {}
     try:
         cols = {r[1] for r in con.execute("PRAGMA table_info(messages)").fetchall()}

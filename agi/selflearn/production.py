@@ -152,8 +152,8 @@ def _count_by(con, table: str, col: str, value: str) -> int:
 
 def _table_exists(con, name: str) -> bool:
     try:
-        return bool(con.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone())
+        # RouterConnection 下 sqlite_master 只在 memory；用 PRAGMA 才能按域路由
+        return bool(con.execute(f"PRAGMA table_info({name})").fetchone())
     except Exception:  # noqa: BLE001
         return False
 

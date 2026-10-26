@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from agi.selflearn import search as search_mod
+from agi.selflearn import db, search as search_mod
 
 ITEMS = [
     {"source_type": "message", "source_id": "M-1",
@@ -17,7 +17,7 @@ ITEMS = [
 
 
 def _count(path, table):
-    con = sqlite3.connect(path)
+    con = sqlite3.connect(db.memory_path(path))
     try:
         return int(con.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
     finally:
@@ -25,7 +25,7 @@ def _count(path, table):
 
 
 def _tables(path):
-    con = sqlite3.connect(path)
+    con = sqlite3.connect(db.memory_path(path))
     try:
         return {str(r[0]) for r in con.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -100,7 +100,7 @@ def test_empty_query_and_missing_index(tmp_path):
 def test_fallback_when_fts_table_missing(tmp_path):
     path = tmp_path / "search.sqlite3"
     search_mod.index_texts(path, ITEMS)
-    con = sqlite3.connect(path)
+    con = sqlite3.connect(db.memory_path(path))
     con.execute("DROP TABLE search_fts")
     con.commit()
     con.close()
@@ -110,7 +110,7 @@ def test_fallback_when_fts_table_missing(tmp_path):
     assert hits[0]["score"] > 0
 
     # 同名但不是 FTS5 虚表：识别后继续走扫描
-    con = sqlite3.connect(path)
+    con = sqlite3.connect(db.memory_path(path))
     con.execute("CREATE TABLE search_fts(x TEXT)")
     con.commit()
     con.close()
@@ -122,7 +122,7 @@ def test_fallback_when_fts5_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr(search_mod, "_try_create_fts", lambda con: False)
     assert search_mod.index_texts(path, ITEMS) == 3
     assert "search_fts" not in _tables(path)
-    con = sqlite3.connect(path)
+    con = sqlite3.connect(db.memory_path(path))
     try:
         meta = con.execute(
             "SELECT value FROM search_meta WHERE key='fts_ok'").fetchone()[0]

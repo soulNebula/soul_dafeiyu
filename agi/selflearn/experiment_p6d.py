@@ -71,7 +71,7 @@ def _human_examples(limit: int = 10) -> list[str]:
 
 
 def _read_context(db_path: str, target_ts: float) -> dict:
-    con = sqlite3.connect(db_path)
+    con = db.memory_connect(db_path)
     try:
         rows = con.execute(
             "SELECT role,text,ts FROM messages WHERE ts < ? ORDER BY ts DESC LIMIT 8",
@@ -93,7 +93,7 @@ def _copy_real_context(target_ts: float) -> tuple[str, dict]:
     tmp = tempfile.mkdtemp(prefix="p6d_real_")
     path = os.path.join(tmp, "ctx.sqlite3")
     shutil.copy2(CONTACT_DB, path)
-    con = sqlite3.connect(path)
+    con = db.connect(path)
     try:
         for table, column in (("proactive", "created_at"), ("messages", "ts"),
                               ("turns", "created_at")):

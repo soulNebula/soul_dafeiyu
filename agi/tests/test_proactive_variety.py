@@ -291,7 +291,8 @@ def test_worker_polishes_before_send_and_logs_kind(monkeypatch, contact_db):
     events = [data for kind, data in g.records if kind == "proactive_send"]
     assert events and events[0]["intent_kind"] == "care"
     assert events[0]["text"] == "在吗 今天有点累"
-    con = sqlite3.connect(contact_db)
+    from agi.selflearn import db as _db
+    con = sqlite3.connect(_db.memory_path(contact_db))
     try:
         row = con.execute("SELECT kind, text, status FROM proactive_events").fetchone()
     finally:
@@ -334,7 +335,8 @@ def test_record_event_persists_kind_and_migrates_old_table(tmp_path):
     con.commit()
     con.close()
     proactive_worker.record_event(path, "好友A", "在吗", "sent", now=1.0, kind="followup")
-    con = sqlite3.connect(path)
+    from agi.selflearn import db as _db
+    con = sqlite3.connect(_db.memory_path(path))
     try:
         row = con.execute("SELECT kind, text FROM proactive_events").fetchone()
     finally:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
+import time
 from pathlib import Path
 
 from .config import DB_PATH
@@ -246,19 +248,152 @@ CREATE TABLE IF NOT EXISTS state(
 """
 
 
-def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path)
-    con.row_factory = sqlite3.Row
-    con.executescript(SCHEMA)
-    # 兼容早期 selflearn 文件：补 scope 列
+# --------------------------------------------------------------------------- #
+# P7-e：记忆库 / 人格库拆分（透明路由 + 旧库迁移 + 可回滚）
+# --------------------------------------------------------------------------- #
+logger = logging.getLogger("agi.selflearn.db")
+
+MEMORY_TABLES = frozenset({
+    "messages", "user_memories", "claims", "summaries", "attachments",
+    "media_understanding", "turns", "feedback", "pairs", "inner_states",
+    "raw_events", "sessions", "session_segments", "emoji_archive", "emoji_usage",
+    "user_profile", "score_records", "weak_rechecks", "conflicts",
+    "search_documents", "search_fts", "search_meta", "research_sources",
+})
+PERSONA_TABLES = frozenset({
+    "persona", "persona_candidates", "persona_layers", "persona_changelog",
+    "skills", "skill_nodes", "skill_cards", "variants", "learn_tasks",
+    "practice_runs", "reflections", "lessons", "errors", "weak_checks",
+    "trust_events", "state", "goals", "intents", "proactive",
+    "share_candidates", "share_events", "wake_runs", "learning_proposals",
+})
+TABLE_DOMAIN = {name: "memory" for name in MEMORY_TABLES}
+TABLE_DOMAIN.update({name: "persona" for name in PERSONA_TABLES})
+_FTS_TABLES = frozenset({"search_fts"})
+_KNOWN_TABLES = frozenset(TABLE_DOMAIN)
+
+_EXTRA_MEMORY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS search_documents(
+  id INTEGER PRIMARY KEY,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  updated_at REAL NOT NULL,
+  UNIQUE(source_type, source_id)
+);
+CREATE INDEX IF NOT EXISTS ix_search_documents_type
+  ON search_documents(source_type);
+CREATE TABLE IF NOT EXISTS search_meta(
+  key TEXT PRIMARY KEY, value TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(tokens);
+CREATE TABLE IF NOT EXISTS research_sources(
+  id TEXT PRIMARY KEY, ts REAL NOT NULL, query TEXT NOT NULL, url TEXT NOT NULL,
+  title TEXT DEFAULT '', snippet TEXT DEFAULT '', turn_id TEXT DEFAULT ''
+);
+"""
+
+
+class CrossDomainQuery(RuntimeError):
+    """同一条 SQL 同时引用 memory/persona 两个域。"""
+
+
+def _split_schema(schema: str) -> tuple[str, str]:
+    statements = re.findall(r"CREATE\s+(?:TABLE|INDEX).*?;", schema, re.S | re.I)
+    memory: list[str] = []
+    persona: list[str] = []
+    for statement in statements:
+        table_match = re.search(
+            r"CREATE\s+(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_]\w*)",
+            statement, re.I)
+        name = table_match.group(1) if table_match else ""
+        if re.match(r"CREATE\s+INDEX", statement, re.I):
+            on_match = re.search(r"\bON\s+([A-Za-z_]\w*)", statement, re.I)
+            name = on_match.group(1) if on_match else name
+        domain = TABLE_DOMAIN.get(name, "memory")
+        (persona if domain == "persona" else memory).append(statement)
+    return "\n".join(memory) + "\n", "\n".join(persona) + "\n"
+
+
+MEMORY_SCHEMA, PERSONA_SCHEMA = _split_schema(SCHEMA)
+# 注意：FTS/search_documents 由 search/tool_reply 按需创建（memory 域），
+# 不放进核心 schema，避免 connect() 每次把 drop 掉的 FTS 表重建。
+
+
+def _base_path(path: Path | str = DB_PATH) -> Path:
+    text = str(Path(path))
+    for suffix in (".memory.sqlite3", ".persona.sqlite3", ".legacy.sqlite3"):
+        if text.endswith(suffix):
+            return Path(text[: -len(suffix)])
+    return Path(path)
+
+
+def _with_suffix(path: Path | str, suffix: str) -> Path:
+    text = str(_base_path(path))
+    if text.endswith(".sqlite3"):
+        text = text[:-len(".sqlite3")]
+    return Path(text + suffix)
+
+
+def memory_path(path: Path | str = DB_PATH) -> Path:
+    return _with_suffix(path, ".memory.sqlite3")
+
+
+def persona_path(path: Path | str = DB_PATH) -> Path:
+    return _with_suffix(path, ".persona.sqlite3")
+
+
+def legacy_path(path: Path | str = DB_PATH) -> Path:
+    return _with_suffix(path, ".legacy.sqlite3")
+
+
+_TABLE_PATTERNS = (
+    re.compile(r"\bFROM\s+([`\"\[]?[A-Za-z_][\w.]*)", re.I),
+    re.compile(r"\bJOIN\s+([`\"\[]?[A-Za-z_][\w.]*)", re.I),
+    re.compile(r"\bINTO\s+([`\"\[]?[A-Za-z_][\w.]*)", re.I),
+    re.compile(r"\bTABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([`\"\[]?[A-Za-z_][\w.]*)", re.I),
+    re.compile(r"\bUPDATE\s+(?!SET\b)([`\"\[]?[A-Za-z_][\w.]*)", re.I),
+    re.compile(r"PRAGMA\s+table_info\s*\(\s*([`\"\[]?[A-Za-z_][\w.]*)", re.I),
+)
+_route_warned: set[str] = set()
+
+
+def _clean_identifier(raw: str) -> str:
+    value = str(raw or "").strip().strip("`\"[]")
+    if "." in value:
+        value = value.rsplit(".", 1)[-1]
+    return value.strip("`\"[]")
+
+
+def _tables_in_sql(sql: str) -> set[str]:
+    found: set[str] = set()
+    for pattern in _TABLE_PATTERNS:
+        for match in pattern.finditer(str(sql or "")):
+            name = _clean_identifier(match.group(1))
+            if name:
+                found.add(name)
+    return found
+
+
+def _domains_in_sql(sql: str) -> set[str]:
+    domains: set[str] = set()
+    for name in _tables_in_sql(sql):
+        domain = TABLE_DOMAIN.get(name)
+        if domain is None:
+            domain = "memory"
+            if name not in _route_warned:
+                _route_warned.add(name)
+                logger.warning("db_route_unknown table=%s sql=%s", name, str(sql)[:200])
+        domains.add(domain)
+    return domains
+
+
+def _ensure_columns(con: sqlite3.Connection, persona: sqlite3.Connection) -> None:
     cols = {r[1] for r in con.execute("PRAGMA table_info(user_memories)").fetchall()}
     if "scope" not in cols:
         con.execute("ALTER TABLE user_memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'user'")
     if "conflict_group" not in cols:
         con.execute("ALTER TABLE user_memories ADD COLUMN conflict_group TEXT")
-    # P1-a：重要性/访问统计/历史证据（幂等 ALTER；首次迁移时按 kind 回填 importance）
     added: list[str] = []
     for col, ddl in (
         ("importance", "importance REAL NOT NULL DEFAULT 0.5"),
@@ -282,33 +417,30 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
             history = json.dumps([snippet], ensure_ascii=False) if snippet else "[]"
             con.execute("UPDATE user_memories SET evidence_history=? WHERE id=?",
                         (history, row[0]))
-    # 索引放在列补齐之后建（极早期库可能缺 scope 列）
     con.execute("CREATE INDEX IF NOT EXISTS ix_user_memories_kind "
                 "ON user_memories(status, scope, kind)")
-    ecols = {r[1] for r in con.execute("PRAGMA table_info(errors)").fetchall()}
+    ecols = {r[1] for r in persona.execute("PRAGMA table_info(errors)").fetchall()}
     for col, ddl in (("root_cause", "root_cause TEXT NOT NULL DEFAULT ''"),
                      ("fix_verified", "fix_verified INTEGER NOT NULL DEFAULT 0"),
                      ("hit_count", "hit_count INTEGER NOT NULL DEFAULT 1")):
         if col not in ecols:
-            con.execute(f"ALTER TABLE errors ADD COLUMN {ddl}")
+            persona.execute(f"ALTER TABLE errors ADD COLUMN {ddl}")
+    persona.commit()
     mcols = {r[1] for r in con.execute("PRAGMA table_info(messages)").fetchall()}
     if "proactive" not in mcols:
         con.execute("ALTER TABLE messages ADD COLUMN proactive INTEGER NOT NULL DEFAULT 0")
-    # P1-d：原文冷归档标记（只标记 archived_at，不动 content/ts）
     if "archived_at" not in mcols:
         con.execute("ALTER TABLE messages ADD COLUMN archived_at REAL")
     con.execute("CREATE INDEX IF NOT EXISTS ix_messages_archived ON messages(archived_at)")
     tcols = {r[1] for r in con.execute("PRAGMA table_info(turns)").fetchall()}
     if "latency_ms" not in tcols:
         con.execute("ALTER TABLE turns ADD COLUMN latency_ms REAL")
-    # P3-a：inner_states 可观测列（旧库自动补列，老行为空字符串/NULL）
     icols = {r[1] for r in con.execute("PRAGMA table_info(inner_states)").fetchall()}
     for col, ddl in (("latency_ms", "latency_ms REAL"),
                      ("fallback", "fallback TEXT NOT NULL DEFAULT ''"),
                      ("source", "source TEXT NOT NULL DEFAULT ''")):
         if col not in icols:
             con.execute(f"ALTER TABLE inner_states ADD COLUMN {ddl}")
-    # P1-c/P1-d：月度 gist 的三列统一在 connect() 迁移（summary.context 不再每轮 PRAGMA）
     scols = {r[1] for r in con.execute("PRAGMA table_info(summaries)").fetchall()}
     for col, ddl in (("kind", "kind TEXT NOT NULL DEFAULT 'stage'"),
                      ("year_month", "year_month TEXT NOT NULL DEFAULT ''"),
@@ -316,13 +448,245 @@ def connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         if col not in scols:
             con.execute(f"ALTER TABLE summaries ADD COLUMN {ddl}")
     con.commit()
+
+
+def _schema_con(path: Path, schema: str) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    con.executescript(schema)
+    con.commit()
+    return con
+
+
+def _copy_legacy_tables(source: sqlite3.Connection, target: sqlite3.Connection,
+                        tables: list[str]) -> tuple[int, int]:
+    total_tables = total_rows = 0
+    for table in tables:
+        # FTS5 shadow 表由虚表自动维护，不能逐行拷贝（否则会破坏索引）
+        if table.startswith("search_fts_"):
+            continue
+        try:
+            info = source.execute(f"PRAGMA table_info({table})").fetchall()
+            columns = [str(row[1]) for row in info]
+            if not columns:
+                continue
+            table_sql_row = source.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            table_sql = str(table_sql_row[0] or "") if table_sql_row else ""
+            if table_sql:
+                try:
+                    target.execute(table_sql)
+                except sqlite3.Error:
+                    pass
+            target.execute(f"INSERT OR REPLACE INTO {table}({', '.join(columns)}) "
+                           f"SELECT {', '.join(columns)} FROM legacy.{table}")
+            total_tables += 1
+            total_rows += len(columns)
+        except sqlite3.Error as exc:
+            logger.warning("db_split_migrate_table_failed table=%s error=%s", table, exc)
+    return total_tables, total_rows
+
+
+def _migrate_legacy(base: Path) -> None:
+    text = str(base)
+    old = base if text.endswith(".sqlite3") else Path(text + ".sqlite3")
+    if not old.exists() or memory_path(base).exists() or persona_path(base).exists():
+        return
+    logger.info("db_split_migration_started old=%s", old)
+    mem = _schema_con(memory_path(base), MEMORY_SCHEMA)
+    per = _schema_con(persona_path(base), PERSONA_SCHEMA)
+    # errors 的额外诊断列在旧 connect 里是 ALTER 补的；迁移前先补，否则拷贝旧列失败
+    ecols = {r[1] for r in per.execute("PRAGMA table_info(errors)").fetchall()}
+    for col, ddl in (("root_cause", "root_cause TEXT NOT NULL DEFAULT ''"),
+                     ("fix_verified", "fix_verified INTEGER NOT NULL DEFAULT 0"),
+                     ("hit_count", "hit_count INTEGER NOT NULL DEFAULT 1")):
+        if col not in ecols:
+            per.execute(f"ALTER TABLE errors ADD COLUMN {ddl}")
+    per.commit()
+    legacy = sqlite3.connect(old)
+    legacy.row_factory = sqlite3.Row
+    mem.execute("ATTACH DATABASE ? AS legacy", (str(old),))
+    per.execute("ATTACH DATABASE ? AS legacy", (str(old),))
+    try:
+        rows = legacy.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%'").fetchall()
+        table_names = [str(row[0]) for row in rows]
+        for name in table_names:
+            domain = TABLE_DOMAIN.get(name, "memory")
+            target = per if domain == "persona" else mem
+            _copy_legacy_tables(legacy, target, [name])
+        for row in legacy.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type IN ('index','trigger') "
+                "AND sql IS NOT NULL").fetchall():
+            sql = str(row[1] or "")
+            domains = _domains_in_sql(sql)
+            target = per if domains == {"persona"} else mem
+            try:
+                target.execute(sql)
+            except sqlite3.Error as exc:
+                logger.warning("db_split_migrate_ddl_failed sql=%s error=%s", sql[:200], exc)
+        # 旧库缺列时：迁移到带默认值的新表后按 kind 回填（与旧 connect 行为一致）
+        try:
+            old_cols = {r[1] for r in legacy.execute(
+                "PRAGMA table_info(user_memories)").fetchall()}
+        except sqlite3.Error:
+            old_cols = set()
+        if old_cols:
+            if "importance" not in old_cols:
+                mem.execute(
+                    "UPDATE user_memories SET importance = CASE lower(kind) "
+                    "WHEN 'value' THEN 0.8 WHEN 'plan' THEN 0.8 "
+                    "WHEN 'preference' THEN 0.7 WHEN 'insight' THEN 0.6 "
+                    "WHEN 'fact' THEN 0.5 WHEN 'event' THEN 0.4 ELSE 0.5 END")
+            if "evidence_history" not in old_cols:
+                for row in mem.execute(
+                        "SELECT id, evidence FROM user_memories "
+                        "WHERE evidence_history=''").fetchall():
+                    snippet = re.sub(r"\s+", " ", str(row[1] or "")).strip()[:120]
+                    history = json.dumps([snippet], ensure_ascii=False) if snippet else "[]"
+                    mem.execute("UPDATE user_memories SET evidence_history=? WHERE id=?",
+                                (history, row[0]))
+        mem.commit()
+        per.commit()
+    finally:
+        legacy.close()
+        mem.close()
+        per.close()
+    migrated = legacy_path(base)
+    try:
+        if migrated.exists():
+            logger.warning("db_split_legacy_exists path=%s", migrated)
+        else:
+            old.replace(migrated)
+    except OSError as exc:
+        logger.warning("db_split_legacy_rename_failed old=%s error=%s", old, exc)
+    logger.info("db_split_migrated old=%s legacy=%s memory=%s persona=%s",
+                old.name, migrated.name, memory_path(base).name, persona_path(base).name)
+
+
+class RouterConnection:
+    """按 SQL 中的表名透明路由到 memory/persona 两个连接。"""
+
+    def __init__(self, memory: sqlite3.Connection, persona: sqlite3.Connection,
+                 *, base_path: Path | str = ""):
+        self._memory = memory
+        self._persona = persona
+        self.base_path = str(base_path)
+        self.memory = memory
+        self.persona = persona
+
+    @property
+    def row_factory(self):
+        return self._memory.row_factory
+
+    @row_factory.setter
+    def row_factory(self, value):
+        self._memory.row_factory = value
+        self._persona.row_factory = value
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._memory.in_transaction or self._persona.in_transaction
+
+    def _target(self, sql: str) -> sqlite3.Connection:
+        domains = _domains_in_sql(sql)
+        if len(domains) > 1:
+            message = ("CrossDomainQuery: SQL touches both memory and persona; "
+                       f"sql={sql}")
+            print(message)
+            raise CrossDomainQuery(message)
+        return self._persona if domains == {"persona"} else self._memory
+
+    def execute(self, sql: str, parameters=()):
+        return self._target(sql).execute(sql, parameters)
+
+    def executemany(self, sql: str, seq_of_parameters):
+        return self._target(sql).executemany(sql, seq_of_parameters)
+
+    def executescript(self, statements: str):
+        domains = _domains_in_sql(statements)
+        if len(domains) > 1:
+            message = ("CrossDomainQuery: executescript touches both domains; "
+                       f"sql={statements[:500]}")
+            print(message)
+            raise CrossDomainQuery(message)
+        target = self._persona if domains == {"persona"} else self._memory
+        return target.executescript(statements)
+
+    def commit(self) -> None:
+        self._memory.commit()
+        self._persona.commit()
+
+    def rollback(self) -> None:
+        self._memory.rollback()
+        self._persona.rollback()
+
+    def close(self) -> None:
+        self._memory.close()
+        self._persona.close()
+
+    def __getattr__(self, name):
+        return getattr(self._memory, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.commit()
+        else:
+            self.rollback()
+        return False
+
+
+def connect(path: Path | str = DB_PATH) -> RouterConnection:
+    if Path(path).exists() and Path(path).is_dir():
+        raise sqlite3.OperationalError(f"DB 路径是目录：{path}")
+    base = _base_path(path)
+    _migrate_legacy(base)
+    mem = _schema_con(memory_path(base), MEMORY_SCHEMA)
+    per = _schema_con(persona_path(base), PERSONA_SCHEMA)
+    _ensure_columns(mem, per)
+    return RouterConnection(mem, per, base_path=base)
+
+
+def memory_connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
+    base = _base_path(path)
+    _migrate_legacy(base)
+    if not memory_path(base).exists():
+        connect(base)
+    con = sqlite3.connect(memory_path(base))
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def persona_connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
+    base = _base_path(path)
+    _migrate_legacy(base)
+    if not persona_path(base).exists():
+        connect(base)
+    con = sqlite3.connect(persona_path(base))
+    con.row_factory = sqlite3.Row
     return con
 
 
 def counts(path: Path | str = DB_PATH) -> dict[str, int]:
     con = connect(path)
     try:
-        names = ["messages", "user_memories", "turns", "feedback", "persona", "persona_candidates", "skills", "variants", "reflections", "trust_events", "errors", "lessons", "weak_checks", "proactive", "intents", "conflicts", "attachments", "summaries", "skill_nodes", "learn_tasks", "claims", "skill_cards", "practice_runs", "raw_events", "sessions", "session_segments", "media_understanding", "user_profile", "emoji_archive", "emoji_usage", "score_records", "learning_proposals", "weak_rechecks", "wake_runs", "goals", "persona_layers", "persona_changelog", "share_candidates", "share_events", "pairs", "inner_states"]
-        return {name: int(con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]) for name in names}
+        names = ["messages", "user_memories", "turns", "feedback", "persona",
+                 "persona_candidates", "skills", "variants", "reflections",
+                 "trust_events", "errors", "lessons", "weak_checks", "proactive",
+                 "intents", "conflicts", "attachments", "summaries", "skill_nodes",
+                 "learn_tasks", "claims", "skill_cards", "practice_runs", "raw_events",
+                 "sessions", "session_segments", "media_understanding", "user_profile",
+                 "emoji_archive", "emoji_usage", "score_records", "learning_proposals",
+                 "weak_rechecks", "wake_runs", "goals", "persona_layers",
+                 "persona_changelog", "share_candidates", "share_events", "pairs",
+                 "inner_states"]
+        return {name: int(con.execute(f"SELECT count(*) FROM {name}").fetchone()[0])
+                for name in names}
     finally:
         con.close()

@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from agi.selflearn import chat, tool_reply
+from agi.selflearn import chat, db as db_mod, tool_reply
 
 
 # ---------------------------------------------------------------- 判定
@@ -84,7 +84,7 @@ def test_record_sources_writes_rows(tmp_path):
                     {"title": "重复链接", "url": "https://a.example/x"},
                     {"title": "无链接", "url": ""}]})
     assert n == 1  # 同一 URL 去重（本次调用内保留第一条）
-    con = sqlite3.connect(db)
+    con = sqlite3.connect(db_mod.memory_path(db))
     try:
         rows = con.execute("select url, title, query from research_sources").fetchall()
     finally:
@@ -136,7 +136,7 @@ def test_remember_research_writes_world_memory(tmp_path):
         turn_id="T-1")
     assert n == 2
     import sqlite3 as _s
-    con = _s.connect(db)
+    con = _s.connect(db_mod.memory_path(db))
     try:
         rows = con.execute("select scope, kind, evidence from user_memories").fetchall()
     finally:

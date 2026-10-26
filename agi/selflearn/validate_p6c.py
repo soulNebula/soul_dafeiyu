@@ -18,7 +18,20 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-CONTACT_DB = ROOT / "agi" / "data" / "selflearn" / "wechat_contacts" / "4260fd457d8355.sqlite3"
+_CONTACT_BASE = ROOT / "agi" / "data" / "selflearn" / "wechat_contacts" / "4260fd457d8355.sqlite3"
+
+
+def _resolve_contact_db() -> "Path":
+    """存储拆库后：优先 .memory.sqlite3，其次单库，最后 legacy。"""
+    base = _CONTACT_BASE
+    for suffix in (".memory.sqlite3", ".sqlite3", ".legacy.sqlite3"):
+        candidate = base.with_name(base.stem + suffix)
+        if candidate.exists():
+            return candidate
+    return base
+
+
+CONTACT_DB = _resolve_contact_db()
 # 今天真机 4 条的原 proactive 时间点（10:17 / 10:33 两条 / 11:08）
 TARGETS = (
     ("case1-1017", 1792981038.2920806),

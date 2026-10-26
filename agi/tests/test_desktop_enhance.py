@@ -364,7 +364,10 @@ def test_status_report_includes_tray(tmp_path, monkeypatch):
 def test_main_notify_once_prints_json(tmp_path, monkeypatch, capsys):
     log = tmp_path / "gateway.log"
     log.write_text(_send_sent(time.time() - 10) + "\n", encoding="utf-8")
-    monkeypatch.setattr(launcher, "_quiet_hours_from_config", lambda: (23, 8))
+    # 静默窗口必须"不含当前小时"，否则白天/夜间跑会得到不同结果（wall-clock flake）
+    hour = time.localtime().tm_hour
+    monkeypatch.setattr(launcher, "_quiet_hours_from_config",
+                        lambda: ((hour + 1) % 24, (hour + 2) % 24))
     code = launcher.main(["--notify-once", "--notify-log", str(log),
                           "--notify-state", str(tmp_path / "notify.json")])
     payload = json.loads(capsys.readouterr().out)

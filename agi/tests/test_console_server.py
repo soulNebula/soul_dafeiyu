@@ -1301,28 +1301,29 @@ def test_data_split_memory_persona_layout(tmp_path, write_env, monkeypatch):
 
 # ============================================================ P8-a 统计
 def _stats_env(tmp_path, monkeypatch, write_env):
-    now = time.time()
+    # 锚定在「今天零点」而不是 now：避免测试跨越午夜时 days=1 窗口抖动
+    anchor = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, 0))
     events = [
-        {"ts": now - 3600, "kind": "outbound", "friend": "alice", "text": "回复", "status": "sent"},
-        {"ts": now - 2 * 86400, "kind": "outbound", "friend": "alice", "text": "前天", "status": "sent"},
-        {"ts": now - 1800, "kind": "proactive_send", "friend": "alice", "text": "在吗",
+        {"ts": anchor + 3600, "kind": "outbound", "friend": "alice", "text": "回复", "status": "sent"},
+        {"ts": anchor - 2 * 86400, "kind": "outbound", "friend": "alice", "text": "前天", "status": "sent"},
+        {"ts": anchor + 1800, "kind": "proactive_send", "friend": "alice", "text": "在吗",
          "status": "sent", "latency_ms": 100,
          "inner": {"latency_ms": 200},
          "text_media_check": {"regen_failed": ["too_long", "too_long", "emoji"]}},
-        {"ts": now - 3 * 3600, "kind": "proactive_send", "friend": "bob", "text": "失败",
+        {"ts": anchor + 600, "kind": "proactive_send", "friend": "bob", "text": "失败",
          "status": "failed"},
-        {"ts": now - 7200, "kind": "send_blocked", "friend": "alice",
+        {"ts": anchor + 500, "kind": "send_blocked", "friend": "alice",
          "reason": "quiet_hours", "text": "被拦文本"},
-        {"ts": now - 7300, "kind": "send_blocked", "friend": "alice", "reason": "stop_file"},
-        {"ts": now - 7400, "kind": "proactive_discarded", "friend": "alice",
+        {"ts": anchor + 400, "kind": "send_blocked", "friend": "alice", "reason": "stop_file"},
+        {"ts": anchor + 300, "kind": "proactive_discarded", "friend": "alice",
          "reason": "banned_phrase", "text": "丢弃文本"},
-        {"ts": now - 7500, "kind": "proactive_skipped", "reason": "probability"},
-        {"ts": now - 7600, "kind": "proactive_schedule", "next_delay_s": 300},
-        {"ts": now - 7700, "kind": "proactive_schedule", "next_delay_s": 500},
-        {"ts": now - 7800, "kind": "send_media", "type": "sticker", "ok": True},
-        {"ts": now - 7900, "kind": "send_media", "type": "sticker", "status": "failed"},
-        {"ts": now - 8000, "kind": "send_media", "type": "image", "status": "sent"},
-        {"ts": now - 10 * 86400, "kind": "outbound", "friend": "alice", "status": "sent"},
+        {"ts": anchor + 200, "kind": "proactive_skipped", "reason": "probability"},
+        {"ts": anchor + 100, "kind": "proactive_schedule", "next_delay_s": 300},
+        {"ts": anchor + 90, "kind": "proactive_schedule", "next_delay_s": 500},
+        {"ts": anchor + 80, "kind": "send_media", "type": "sticker", "ok": True},
+        {"ts": anchor + 70, "kind": "send_media", "type": "sticker", "status": "failed"},
+        {"ts": anchor + 60, "kind": "send_media", "type": "image", "status": "sent"},
+        {"ts": anchor - 10 * 86400, "kind": "outbound", "friend": "alice", "status": "sent"},
     ]
     lines = [json.dumps(event, ensure_ascii=False) for event in events]
     lines.insert(4, "broken json")
@@ -1401,3 +1402,109 @@ def test_stats_days_filter_and_contact_filter(tmp_path, write_env, monkeypatch):
     assert status == 200 and data["ok"] is True
     status, _ = _call("GET", "/api/stats?days=7")
     assert status == 401
+
+
+# ============================================================ P9-c 心情卡片
+def _mood_env(tmp_path, monkeypatch, write_env):
+    contacts = tmp_path / "wechat_contacts"
+    contacts.mkdir(parents=True, exist_ok=True)
+    db_path = contacts / "alice.memory.sqlite3"
+    mood_json = tmp_path / "mood.json"
+    mood_json.write_text(json.dumps({
+        "judge_enabled": False, "inject": True, "confidence_min": 60,
+        "other_key": "keep-me",
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(console, "CONTACTS_DIR", contacts)
+    monkeypatch.setattr(console, "DEFAULT_CONTACT_DB", db_path)
+    monkeypatch.setattr(console, "MOOD_SETTINGS_PATH", mood_json)
+    monkeypatch.setenv("MOOD_CONFIG_PATH", str(mood_json))
+    from agi.selflearn import mood_judge
+    now = time.time()
+    mood_judge.db.connect(db_path).close()
+    for index, delta in enumerate((
+            {"moodDelta": 3, "dims": {"happy": 5, "sweet": 2},
+             "reason": "你说事情办成了，我跟着高兴起来", "confidence": 80},
+            {"moodDelta": -2, "dims": {"worry": 4}, "reason": "你说没睡好，我有点挂心",
+             "confidence": 65},
+            {"moodDelta": 1, "dims": {"calm": 2}, "reason": "你报了平安，我心里稳下来",
+             "confidence": 75},
+    )):
+        mood_judge.apply(db_path, delta, now=now - 300 + index * 60, mode="user",
+                         user_text="测试消息", reply_text="测试回复")
+    return {"contacts": contacts, "db": db_path, "mood_json": mood_json,
+            "now": now, "mood_judge": mood_judge}
+
+
+def test_mood_snapshot_timeline_and_limit(tmp_path, write_env, monkeypatch):
+    env = _mood_env(tmp_path, monkeypatch, write_env)
+    data = console.mood_snapshot(limit=2)
+    assert data["ok"] is True
+    assert isinstance(data["mood"], (int, float))
+    assert set(data["dims"]) == {"happy", "calm", "sweet", "heartache",
+                                 "worry", "sad", "jealous"}
+    assert len(data["timeline"]) == 2                 # limit 生效
+    assert data["settings"]["inject"] is True
+    assert data["settings"]["judge_enabled"] is False
+    assert data["pending_inject"] is True
+    assert data["injected_preview"]                       # inject=true 且有变化
+    assert data["db"] == str(env["db"].resolve())
+
+    by_contact = console.mood_snapshot(contact="alice", limit=1)
+    assert by_contact["ok"] is True and len(by_contact["timeline"]) == 1
+
+    status, http = _call("GET", "/api/mood?limit=2", token="tok")
+    assert status == 200 and http["ok"] is True
+    status, _ = _call("GET", "/api/mood?limit=2")
+    assert status == 401
+
+
+def test_mood_unavailable_when_module_or_db_missing(tmp_path, write_env, monkeypatch):
+    _mood_env(tmp_path, monkeypatch, write_env)
+    monkeypatch.setattr(console, "_mood_store", lambda: None)
+    data = console.mood_snapshot()
+    assert data["ok"] is False and data["error"] == "mood_unavailable"
+    status, http = _call("GET", "/api/mood")
+    assert status == 401                               # 无 token 优先 401
+    status, http = _call("GET", "/api/mood", token="tok")
+    assert status == 200 and http["ok"] is False
+
+    monkeypatch.setattr(console, "_mood_store",
+                        lambda: __import__("agi.selflearn.mood_judge",
+                                           fromlist=["mood_judge"]))
+    monkeypatch.setattr(console, "DEFAULT_CONTACT_DB", tmp_path / "missing.sqlite3")
+    monkeypatch.setattr(console, "CONTACTS_DIR", tmp_path / "empty_contacts")
+    data = console.mood_snapshot()
+    assert data["ok"] is False and data["error"] == "mood_unavailable"
+    assert "找不到联系人库" in data["hint"]
+
+
+def test_mood_toggles_write_whitelist_and_audit(tmp_path, write_env, monkeypatch):
+    env = _mood_env(tmp_path, monkeypatch, write_env)
+    mood_json = env["mood_json"]
+
+    status, data = _call("POST", "/api/mood/inject", {"inject": False}, token="tok")
+    assert status == 200 and data["ok"] is True
+    saved = json.loads(mood_json.read_text(encoding="utf-8"))
+    assert saved["inject"] is False
+    assert saved["judge_enabled"] is False            # 未动的键保留
+    assert saved["other_key"] == "keep-me"            # 其它键保留
+    audits = console.AUDIT_PATH.read_text(encoding="utf-8").splitlines()
+    assert any(json.loads(line)["action"] == "mood_inject_toggle" for line in audits)
+
+    status, data = _call("POST", "/api/mood/enabled", {"enabled": True}, token="tok")
+    assert status == 200 and data["ok"] is True
+    saved = json.loads(mood_json.read_text(encoding="utf-8"))
+    assert saved["judge_enabled"] is True and saved["inject"] is False
+    assert saved["other_key"] == "keep-me"
+
+    status, _ = _call("POST", "/api/mood/inject", {"inject": True})
+    assert status == 401
+    status, data = _call("POST", "/api/mood/inject", {}, token="tok")
+    assert status == 400
+    status, data = _call("POST", "/api/mood/enabled", {}, token="tok")
+    assert status == 400
+
+    illegal = console.mood_update({"mood": 50}, client="test")
+    assert illegal["ok"] is False
+    assert any("not_allowed:mood" in error for error in illegal["errors"])
+    assert json.loads(mood_json.read_text(encoding="utf-8"))["other_key"] == "keep-me"

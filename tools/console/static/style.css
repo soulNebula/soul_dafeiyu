@@ -349,3 +349,21 @@ table td input[type="number"], table td select { padding: 3px 6px; font-size: 12
 .bar-fill.warn { background: linear-gradient(90deg, #8a6a1e, var(--warning)); }
 .bar-fill.err { background: linear-gradient(90deg, #7a2b2c, var(--error)); }
 .bar-value { width: 46px; text-align: right; font-family: "Cascadia Mono", Consolas, monospace; color: var(--text); }
+
+/* ---------------- P9-c 心情卡片 ---------------- */
+.mood-card { border-color: #3a3f4a; background: linear-gradient(180deg, #242830, #242424 60%); }
+.mood-head { flex-wrap: wrap; }
+.mood-big { font-size: 44px; font-weight: 800; line-height: 1; color: var(--primary); margin-right: 6px; }
+.mood-label { font-size: 15px; font-weight: 700; }
+.mood-badges { flex-wrap: wrap; }
+.mood-dims { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 6px 18px; margin: 12px 0; }
+.mood-dim { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.mood-dim-label { width: 38px; color: var(--dim); text-align: right; }
+.mood-dim-track { flex: 1; height: 12px; background: #1f2022; border: 1px solid #2c2d2f; border-radius: 4px; overflow: hidden; }
+.mood-dim-fill { display: block; height: 100%; border-radius: 3px; }
+.mood-dim-fill.pos { background: linear-gradient(90deg, #2e7d32, var(--success)); }
+.mood-dim-fill.neg { background: linear-gradient(90deg, #8a2a2b, var(--error)); }
+.mood-dim-value { width: 42px; text-align: right; font-family: "Cascadia Mono", Consolas, monospace; }
+.mood-inject { margin: 8px 0 12px; padding: 8px 10px; background: #1f2022; border: 1px solid #2c2d2f; border-radius: 8px; }
+.mood-preview { display: block; margin-top: 4px; color: #cfe3f3; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mood-timeline { margin-top: 4px; }

@@ -384,27 +384,146 @@ async function renderFeed(auto) {
 }
 
 /* ---------------- 内状态 ---------------- */
+/* ---------------- 心情卡片（P9-c） ---------------- */
+const MOOD_DIMS = [
+  ['happy', '开心', 1], ['calm', '踏实', 1], ['sweet', '甜蜜', 1],
+  ['heartache', '心疼', -1], ['worry', '担心', -1], ['sad', '难过', -1],
+  ['jealous', '吃醋', -1],
+];
+
+function moodDimRowsHtml(dims) {
+  return '<div class="mood-dims">' + MOOD_DIMS.map(([key, label, polarity]) => {
+    const value = Number((dims || {})[key] || 0);
+    const width = Math.max(2, Math.min(100, Math.abs(value)));
+    return `<div class="mood-dim" title="${esc(label)}：${value}">
+      <span class="mood-dim-label">${esc(label)}</span>
+      <span class="mood-dim-track"><span class="mood-dim-fill ${polarity >= 0 ? 'pos' : 'neg'}"
+        style="width:${width}%"></span></span>
+      <span class="mood-dim-value">${value.toFixed(1)}</span>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function moodTimelineHtml(timeline) {
+  const rows = (timeline || []).slice(0, 10);
+  if (!rows.length) {
+    return '<div class="empty">还没有心情记录（mood_judge 未启用或还没跑过判定）</div>';
+  }
+  const labelOf = {};
+  MOOD_DIMS.forEach(([key, label]) => { labelOf[key] = label; });
+  return `<div style="overflow:auto"><table><thead><tr>
+      <th>时间</th><th>mood</th><th>主要变化</th><th>reason</th><th>confidence</th><th>mode</th>
+    </tr></thead><tbody>${rows.map((row) => {
+    const delta = row.dims_delta || {};
+    const top = Object.entries(delta)
+      .filter(([, value]) => Number(value) !== 0)
+      .sort((a, b) => Math.abs(Number(b[1])) - Math.abs(Number(a[1])))
+      .slice(0, 3)
+      .map(([key, value]) => `${labelOf[key] || key}${Number(value) > 0 ? '+' : ''}${Math.round(Number(value))}`)
+      .join(' ');
+    return `<tr><td>${row.at ? fmtDateTime(row.at) : '—'}</td>
+      <td class="num">${row.mood === undefined ? '—' : esc(row.mood)}</td>
+      <td>${esc(top || '—')}</td>
+      <td>${esc(String(row.reason || '').slice(0, 80))}</td>
+      <td class="num">${esc(row.confidence === undefined ? '—' : row.confidence)}</td>
+      <td>${badge(row.mode || '')}</td></tr>`;
+  }).join('')}</tbody></table></div>`;
+}
+
+function moodCardHtml(mood) {
+  if (!mood) return '';
+  if (!mood.ok) {
+    return card('心情', `<div class="error-text">心情不可用：${esc(mood.error || 'mood_unavailable')}</div>
+      <p class="hint">${esc(mood.hint || '')}</p>`);
+  }
+  const settings = mood.settings || {};
+  const dims = mood.dims || {};
+  const pending = !!mood.pending_inject;
+  const injectOn = !!settings.inject;
+  const judgeOn = !!settings.judge_enabled;
+  const preview = String(mood.injected_preview || '').trim();
+  const confidenceMin = Number(settings.confidence_min || 0);
+  return `<div class="card mood-card">
+    <div class="row between">
+      <div class="row mood-head">
+        <div class="mood-big">${esc(mood.mood === undefined ? '—' : Number(mood.mood).toFixed(0))}</div>
+        <div>
+          <div class="mood-label">${esc(mood.mood_label || '')}</div>
+          <div class="hint">${esc(mood.last_reason || '还没有心情变化记录')}</div>
+        </div>
+        <div class="row mood-badges">
+          ${judgeOn ? badge('判定开', 'green') : badge('判定关', 'orange')}
+          ${injectOn ? badge('注入开', 'green') : badge('注入关', '')}
+          ${pending ? badge('有待注入变化', 'blue') : badge('无待注入', '')}
+          <span class="hint">后端 ${esc(settings.backend || 'rule/model')} · 门槛 ≥${esc(confidenceMin)}</span>
+        </div>
+      </div>
+      <div class="row">
+        <button class="btn small" id="mood-refresh">刷新心情</button>
+        <button class="btn small" data-mood-toggle="inject">${injectOn ? '关闭注入' : '开启注入'}</button>
+        <button class="btn small ${judgeOn ? 'danger' : ''}" data-mood-toggle="enabled">${judgeOn ? '关闭判定' : '开启判定'}</button>
+      </div>
+    </div>
+    ${moodDimRowsHtml(dims)}
+    <div class="mood-inject"><span class="hint">下一轮会注入的那句话（预览）：</span>
+      ${preview ? `<code class="mood-preview">${esc(preview)}</code>`
+        : '<span class="hint">（没有待注入内容：判定关 / 未过 confidence 门槛 / 这次变化已经说过了）</span>'}
+    </div>
+    <div class="mood-timeline">
+      <div class="row between" style="margin-bottom:6px"><b>最近心情时间线</b>
+        <span class="hint">${esc(mood.db || '')} · ${esc(mood.settings_path || '')}</span></div>
+      ${moodTimelineHtml(mood.timeline)}
+    </div>
+  </div>`;
+}
+
+async function toggleMood(kind, value) {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  try {
+    const body = kind === 'inject' ? { inject: value } : { enabled: value };
+    const result = await api('/api/mood/' + kind, { method: 'POST', body });
+    toast('已更新：' + (result.note || '下一轮生效'), 'ok');
+    renderInner();
+  } catch (err) { toast(err.message, 'err'); }
+}
 async function renderInner() {
   $('#app').innerHTML = '<div class="empty">加载内状态…</div>';
-  let data = null;
+  let data = null, mood = null;
   try { data = await api('/api/inner?limit=100'); }
   catch (e) {
     $('#app').innerHTML = card('内状态', `<div class="error-text">${esc(e.message)}</div>`);
     return;
   }
   state.inner = data;
-  if (!data.ok && !data.items.length) {
-    $('#app').innerHTML = card('内状态', `<div class="error-text">${esc(data.error || '读取失败')}</div>`);
-    return;
-  }
-  const items = data.items || [];
+  try { mood = await api('/api/mood?limit=10'); }
+  catch (e) { mood = { ok: false, error: e.message, hint: '心情卡片需要 admin token' }; }
+  state.mood = mood;
+  const items = (data && data.items) || [];
   const cards = items.map((item) => innerCard(item)).join('');
-  $('#app').innerHTML = `
+  const listError = (!data.ok && !items.length)
+    ? `<div class="card"><div class="error-text">${esc(data.error || '读取失败')}</div></div>`
+    : '';
+  $('#app').innerHTML = `${moodCardHtml(mood)}
+    ${listError}
     <div class="card">
-      <div class="row between"><div class="hint">来源：${esc(data.db || '')} · 只读</div>
+      <div class="row between"><div class="hint">来源：${esc((data && data.db) || '')} · 只读</div>
         <span class="hint">“注入”= 这条 inner block 进入了 prompt；shadow 模式只记录不注入。</span></div>
     </div>
     <div class="grid cols-2">${cards || '<div class="empty">还没有 inner_states（INNER_MODE 未开或还没新消息）</div>'}</div>`;
+  const refresh = $('#mood-refresh');
+  if (refresh) refresh.onclick = () => renderInner();
+  $$('[data-mood-toggle]').forEach((button) => {
+    button.onclick = () => {
+      const kind = button.dataset.moodToggle;
+      const settings = (state.mood && state.mood.settings) || {};
+      const current = kind === 'inject' ? !!settings.inject : !!settings.judge_enabled;
+      if (kind === 'enabled' && !current
+          && !window.confirm('当前 mood.json 里 judge_enabled=false（等 P9-b 后端切换），仍要打开模型判定吗？')) {
+        return;
+      }
+      toggleMood(kind, !current);
+    };
+  });
 }
 
 function stateCell(label, value) {

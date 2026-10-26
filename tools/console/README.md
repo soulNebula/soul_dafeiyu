@@ -42,10 +42,11 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | 内状态 | 联系人库 `inner_states`（只读 URI 连接；mode/injected/state_json/block/延迟/fallback） |
 | 对话测试 | 隔离库 `agi/data/selflearn/console_test.sqlite3` → 进程内 `SelfLearnAgent.send()`，可试提示词/模型效果，不影响真实联系人 |
 | 媒体 | `agi/wechat_gateway/media.capabilities()`（import 失败降级静态矩阵）+ `emoji_archive`/目录扫描 + `agi/data/media_wishes.jsonl`；测试发送只允许文件传输助手 |
+| 内状态（心情卡片） | `/api/mood`（`mood_judge.snapshot`）：心情值/7 情绪/注入预览/时间线；`/api/mood/inject`、`/api/mood/enabled` 只写 mood.json 白名单键 |
 | 记忆 | `agi/selflearn/memory.metrics()` + `user_memories` 最近 50 条 + `/api/tone`（AI 语气 vs `agi/eval_data/human_tone/profile.md` 真人基线） |
 | 提示词 | `agi/selflearn/prompt_store`（11 个内置键的 defaults/overrides/effective；降级时直读 `agi/data/prompts.json`）。左列选键 → 右侧大文本框编辑 → 保存/恢复默认/全部恢复默认 |
 | 模型配置 | 网关 `config.json` 的白名单键（llm_model/llm_temperature/llm_max_tokens/soul_server_url/soul_timeout_s/inner_schema）+ DeepSeek key 仅显示已配置/未配置 |
-| 统计 | `/api/stats?days=&contact=`：发送/成功率/丢弃/重生成/内状态/延迟/媒体；CSS 条形图、最近被拦表 |
+| 统计 | `/api/stats?days=&contact=` `/api/mood?contact=&limit=`：发送/成功率/丢弃/重生成/内状态/延迟/媒体；CSS 条形图、最近被拦表 |
 | 模型 | `agi/selflearn/model_registry`（list/health/start/stop；`soul-05b` 可启停，`qwen15` reserved 拒绝；含 inner mode 开关，写回网关 config 热加载） |
 | 数据管理 | `/api/data/*`：体量/备份/导出/导入（写操作 token+审计）；按记忆库/人格库分栏，含 legacy 旧库 |
 | 记忆编辑 | `/api/memory/*`：列表/搜索/claims/行内改重要性/标记/软删除/合并（token+审计） |
@@ -74,6 +75,8 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | `/api/prompts/reset` | `{"keys":[...]}` 或 `{"all":true}` | 恢复默认（`prompt_store.delete/delete_all`，降级时删 JSON 键/文件） |
 | `/api/chat-test` | `{"text":"..."}` 或 `{"reset":true}` | 隔离库对话测试（60s 超时；reset 删除 console_test.sqlite3）；不会发微信 |
 | `/api/model-config` | `{"updates":{...}}` | 保存模型/内状态白名单键（DeepSeek key 不回传明文） |
+| `/api/mood/inject` | `{inject: bool}` | 写 mood.json 的 `inject`（原子写/保留其它键/审计） |
+| `/api/mood/enabled` | `{enabled: bool}` | 写 mood.json 的 `judge_enabled`（审计；注意等 P9-b 后端切换后再开） |
 | `/api/data/backup` | `{}` | 打包运行数据到 `E:gentackups\manual_<ts>.zip`（不改数据） |
 | `/api/data/import` | `{zip_path, confirm:"导入备份", mode, overwrite_confirm?}` | 只允许备份目录 zip；merge 不覆盖，overwrite 需双短语 |
 | `/api/data/backup/delete` | `{name, confirm:"删除备份"}` | 删除备份 zip |
@@ -101,6 +104,15 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
   warning `#faad14`、error `#ff4d4f`、text `#e8eaed`、border `#333`、气泡 `#2d2e30`。
 - 侧边栏 240px + 顶部 header 56px + 圆角 10px 卡片；JSON 用等宽字体。
 - 所有页面右上角显示「刷新于 HH:MM:SS」；接口失败显示红色原因而不是空白。
+
+## 心情卡片（P9-c）
+
+内状态页顶部：大字心情值 + 中文 label、7 情绪条形（happy/calm/sweet 绿、heartache/worry/sad/jealous 红）、
+判定开关/注入开关（点击即写 `agi/data/selflearn/mood.json` 对应键）、下一轮注入预览（`injected_preview`）、
+最近 10 条时间线（时间/mood/主要变化/reason/confidence/mode）。
+接口：`GET /api/mood?contact=&limit=`（token；调 `mood_judge.snapshot()`，只读）、
+`POST /api/mood/inject` / `/api/mood/enabled`（token；只写白名单两键，原子写并审计）。
+`mood.json` 当前 `judge_enabled=false`（等 P9-b 后端切换），页面会有确认提示，不会自动打开。
 
 ## 统计（P8-a）
 

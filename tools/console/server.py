@@ -2976,6 +2976,95 @@ def stats_snapshot(days: int = 7, contact: str = "") -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# P9-c：心情卡片（内状态页顶部）
+# --------------------------------------------------------------------------- #
+MOOD_SETTINGS_PATH = SELFLEARN_DIR / "mood.json"
+MOOD_WRITABLE_KEYS = ("inject", "judge_enabled")
+
+
+def _mood_store():
+    try:
+        from agi.selflearn import mood_judge
+        return mood_judge
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _mood_settings_view() -> dict:
+    payload = read_json(MOOD_SETTINGS_PATH, {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def mood_snapshot(contact: str = "", limit: int = 20) -> dict:
+    store = _mood_store()
+    if store is None:
+        return {"ok": False, "error": "mood_unavailable",
+                "hint": "agi.selflearn.mood_judge 不可用（P9 模块未落地）"}
+    if contact:
+        db_path = _contact_db_by_alias(contact)
+    else:
+        db_path = contact_db_path()
+    if db_path is None or not Path(db_path).is_file():
+        return {"ok": False, "error": "mood_unavailable",
+                "hint": f"找不到联系人库: {contact or 'default'}"}
+    try:
+        limit = max(1, min(100, int(limit)))
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        snapshot = store.snapshot(db_path, timeline_limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "mood_unavailable",
+                "hint": f"{type(exc).__name__}: {exc}", "db": str(db_path)}
+    if not isinstance(snapshot, dict):
+        return {"ok": False, "error": "mood_unavailable", "hint": "snapshot 返回非 dict"}
+    result = dict(snapshot)
+    result["ok"] = True
+    result["db"] = str(db_path)
+    result["settings_path"] = str(MOOD_SETTINGS_PATH)
+    result["pending_inject"] = bool(snapshot.get("pending_inject"))
+    return result
+
+
+def mood_update(updates: dict, *, client: str = "") -> dict:
+    if not isinstance(updates, dict) or not updates:
+        return {"ok": False, "error": "body 必须是非空对象"}
+    cleaned: dict = {}
+    errors: list[str] = []
+    for key, value in updates.items():
+        if key not in MOOD_WRITABLE_KEYS:
+            errors.append(f"not_allowed:{key}")
+            continue
+        if not isinstance(value, bool):
+            try:
+                value = bool(_as_bool(value))
+            except (TypeError, ValueError):
+                errors.append(f"{key}: 需要布尔值")
+                continue
+        cleaned[key] = bool(value)
+    if errors:
+        audit("mood_inject_toggle", {"keys": sorted(updates)}, ok=False,
+              note=";".join(errors)[:200], client=client)
+        return {"ok": False, "errors": errors, "settings": _mood_settings_view()}
+    before = _mood_settings_view()
+    payload = dict(before)
+    payload.update(cleaned)
+    try:
+        write_json_atomic(MOOD_SETTINGS_PATH, payload)
+    except OSError as exc:
+        audit("mood_inject_toggle", {"keys": sorted(cleaned)}, ok=False,
+              note=str(exc), client=client)
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    action = "mood_inject_toggle" if "inject" in cleaned else "mood_judge_toggle"
+    audit(action, {"keys": sorted(cleaned), "before": {k: before.get(k) for k in cleaned},
+                   "after": cleaned}, ok=True, client=client)
+    return {"ok": True, "settings": _mood_settings_view(),
+            "changed_keys": sorted(cleaned),
+            "path": str(MOOD_SETTINGS_PATH),
+            "note": "已写入 mood.json（原子写，保留其它键）；下一轮生效"}
+
+
+# --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
 def host_ok(host: str) -> bool:
@@ -3148,6 +3237,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(404, {"ok": False, "error": "file not in media dirs"}); return
                 content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
                 self._bytes(200, target.read_bytes(), content_type); return
+            if path == "/api/mood":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, mood_snapshot(
+                    str((query.get("contact") or [""])[0] or ""),
+                    self._limit(query, 20))); return
             if path == "/api/stats":
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
@@ -3283,6 +3378,17 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("mode") or "merge"),
                     overwrite_confirm=str(body.get("overwrite_confirm") or ""),
                     client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/mood/inject":
+                if "inject" not in body:
+                    self._json(400, {"ok": False, "error": "缺少 inject"}); return
+                result = mood_update({"inject": body.get("inject")}, client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/mood/enabled":
+                value = body.get("judge_enabled", body.get("enabled"))
+                if value is None:
+                    self._json(400, {"ok": False, "error": "缺少 enabled/judge_enabled"}); return
+                result = mood_update({"judge_enabled": value}, client=client)
                 self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/memory/update":
                 result = memory_update(

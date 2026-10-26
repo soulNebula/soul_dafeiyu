@@ -2335,6 +2335,13 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
          inner_client=None) -> dict[str, Any]:
     """网页轮询：由它自己的心情/分享欲决定说不说，可一次说 1-2 条。"""
     now = time.time() if now is None else float(now)
+    # P6-e：可回滚分流；默认 legacy，运行期 wechat config 可切 simple
+    from .simple_tick import proactive_style, tick_simple
+    if proactive_style(path) == "simple":
+        return tick_simple(path, client=client, now=now,
+                           idle_seconds=idle_seconds, cooldown=cooldown,
+                           min_score=min_score, respect_state=respect_state,
+                           inner_client=inner_client)
     own = state.load(path)["self"]
     mood = float(own.get("mood", 0.55))
     share_drive = float(own.get("sharing", 0.45))
@@ -2847,3 +2854,7 @@ def list_proactive(path: Path | str = DB_PATH, limit: int = 20) -> list[dict]:
             "SELECT * FROM proactive ORDER BY created_at DESC LIMIT ?", (int(limit),))]
     finally:
         con.close()
+
+
+# P6-e：供测试/可回滚观察使用；实际分流在 tick 顶部
+from .simple_tick import proactive_style, tick_simple as _tick_simple  # noqa: E402

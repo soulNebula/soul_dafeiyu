@@ -512,6 +512,18 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             continue
         pro = tick.get("proactive") or {}
         if not tick.get("ran") or not pro.get("available"):
+            if pro.get("style") == "simple" and pro.get("reason") == "discarded":
+                try:
+                    gateway._record("proactive_discarded", {
+                        "friend": contact,
+                        "discard_reason": str(pro.get("discard_reason") or "")[:200],
+                        "regen_reason": str(pro.get("regen_reason") or "")[:200],
+                        "style": "simple"})
+                except Exception:  # noqa: BLE001
+                    pass
+                out["skipped"].append({"contact": contact,
+                                       "reason": "discarded:simple"})
+                continue
             out["skipped"].append({
                 "contact": contact,
                 "reason": str(tick.get("reason") or pro.get("reason") or "gate")[:80]})
@@ -571,6 +583,9 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 "friend": contact, "text": text[:120], "intent_kind": kind,
                 "media": media_plan,
                 "text_media_check": pro.get("text_media_check"),
+                "proactive_style": pro.get("style"),
+                "discard_reason": pro.get("discard_reason"),
+                "regen_reason": pro.get("regen_reason"),
                 "status": status.get("status"), "draft_id": status.get("draft_id"),
                 # P0-6：失败率统计口径 status∈{failed,draft}，真正失败证据看 send_failed
                 "send_failed": bool(status.get("send_failed")),

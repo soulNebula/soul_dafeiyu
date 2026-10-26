@@ -10,7 +10,22 @@ from .llm import parse_json
 
 
 def enabled() -> bool:
-    return os.environ.get("SELFLEARN_TWO_STAGE", "1") != "0"
+    """两段式（先抽有证据的 claims 再生成）——防编造，但每条回复多一次模型调用。
+
+    优先级：env ``SELFLEARN_TWO_STAGE`` > 网关配置 ``two_stage_enabled`` > 默认关闭。
+    默认已改为关闭：实测每条多 2–5 秒，聊天体验明显变慢；需要更强防编造时再打开。
+    """
+    env = os.environ.get("SELFLEARN_TWO_STAGE")
+    if env is not None:
+        return env.strip() not in ("", "0", "false", "False")
+    try:
+        from . import config as _cfg
+        raw = json.loads(
+            (_cfg.ROOT / "agi" / "data" / "wechat" / "config.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        raw = {}
+    value = raw.get("two_stage_enabled") if isinstance(raw, dict) else None
+    return bool(value)
 
 
 def _evidence_stage(client, user_text: str, memories: list[dict]) -> list[dict]:

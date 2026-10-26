@@ -328,10 +328,12 @@ def test_proactive_loop_schedule_error_falls_back_to_one_hour(tmp_path, monkeypa
 
     def fake_wait(delay):
         delays.append(delay)
-        g.stop_event.set()
+        # P18-A 的 ticker 是 1s 分段等待：断言累计等待时长
+        if sum(delays) >= 3600.0:
+            g.stop_event.set()
 
     monkeypatch.setattr(g.stop_event, "wait", fake_wait)
     g._proactive_loop()
-    assert delays and delays[0] == 3600.0
+    assert abs(sum(delays) - 3600.0) < 1e-6
     errors = [e for e in g.recent if e["kind"] == "proactive_schedule_error"]
     assert errors

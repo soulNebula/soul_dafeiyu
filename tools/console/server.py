@@ -3725,6 +3725,119 @@ def bili_report(date: str = "") -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# P15-B：推理过程（路由接线；实现由 w3-latency 的 tools/console/trace_api.py 提供）
+# --------------------------------------------------------------------------- #
+def _load_trace_api():
+    """加载同目录 trace_api.py；不存在返回 None（页面显示后端未就绪）。"""
+    try:
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        target = here / "trace_api.py"
+        if target.is_file():
+            spec = importlib.util.spec_from_file_location("console_trace_api", target)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                return module
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def trace_dispatch(path: str, query: dict) -> dict:
+    """把 /api/trace/* 转给 trace_api.handle_trace(suffix, query)。
+
+    约定：suffix = "/turns" | "/turn" | "/stream" | "/stats"（path 去掉 /api/trace）；
+    query 为 parse_qs 的 dict（值是 list）。若实现方期望完整 path，会在 not_found 时兜底再试一次。
+    """
+    module = _load_trace_api()
+    if module is None:
+        return {"ok": False, "error": "trace_backend_unavailable",
+                "hint": "推理过程后端尚未就绪（tools/console/trace_api.py 未落地）"}
+    handler = getattr(module, "handle_trace", None)
+    if not callable(handler):
+        return {"ok": False, "error": "trace_backend_unavailable",
+                "hint": "trace_api 没有 handle_trace(path, query)"}
+    suffix = str(path or "")[len("/api/trace"):] or "/"
+    try:
+        result = handler(suffix, query)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "trace_api_error",
+                "hint": f"{type(exc).__name__}: {exc}"}
+    if isinstance(result, dict) and result.get("ok") is False \
+            and str(result.get("error") or "").startswith("not_found"):
+        try:
+            retry = handler(str(path or ""), query)
+            if isinstance(retry, dict):
+                return retry
+        except Exception:  # noqa: BLE001
+            pass
+    if isinstance(result, dict):
+        return result
+    if isinstance(result, (list, tuple)):
+        return {"ok": True, "items": list(result)}
+    return {"ok": True, "data": result}
+
+
+# --------------------------------------------------------------------------- #
+# P18-B：引擎一键启停（代理网关 /api/engine）
+# --------------------------------------------------------------------------- #
+ENGINE_TIMEOUT_S = 5.0
+
+
+def _engine_gateway(path: str, *, method: str = "GET") -> dict:
+    """代理网关 801 的引擎接口；网关不可达不抛错，返回 ok:false。"""
+    base = GATEWAY_STATUS_URL.rsplit("/status", 1)[0]
+    data = b"{}" if method == "POST" else None
+    request = urllib.request.Request(base + path, data=data, method=method)
+    request.add_header("Content-Type", "application/json")
+    token = admin_token()
+    if token:
+        request.add_header("X-Admin-Token", token)
+    try:
+        with urllib.request.urlopen(request, timeout=ENGINE_TIMEOUT_S) as response:
+            raw = response.read().decode("utf-8", "replace") or "{}"
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:300]
+        except Exception:  # noqa: BLE001
+            detail = ""
+        return {"ok": False, "available": True,
+                "error": f"gateway_http_{exc.code}",
+                "gateway_status": exc.code, "hint": detail}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "available": False,
+                "error": "gateway_unreachable",
+                "hint": f"{type(exc).__name__}: {exc}"}
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return {"ok": False, "available": True, "error": "gateway_bad_json",
+                "hint": raw[:200]}
+    if not isinstance(payload, dict):
+        return {"ok": False, "available": True, "error": "gateway_bad_payload"}
+    payload["available"] = True
+    return payload
+
+
+def engine_state() -> dict:
+    return _engine_gateway("/api/engine")
+
+
+def engine_toggle(action: str, *, client: str = "") -> dict:
+    action = str(action or "").strip().lower()
+    if action not in ("start", "stop"):
+        return {"ok": False, "error": "bad_action"}
+    result = _engine_gateway(f"/api/engine/{action}", method="POST")
+    audit("engine_toggle", {"action": action, "ok": bool(result.get("ok")),
+                            "enabled": result.get("enabled"),
+                            "error": result.get("error") or ""},
+          ok=bool(result.get("ok")), client=client)
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
 def host_ok(host: str) -> bool:
@@ -3917,6 +4030,22 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(404, {"ok": False, "error": "no_avatar"}); return
                 raw, ctype = avatar
                 self._bytes(200, raw, ctype or "image/jpeg"); return
+            if path == "/api/engine":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, engine_state()); return
+            if path.startswith("/api/trace"):
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                result = trace_dispatch(path, query)
+                if result.get("ok", True) is False and result.get(
+                        "error") == "trace_backend_unavailable":
+                    code = 501
+                elif result.get("ok", True) is False:
+                    code = 500
+                else:
+                    code = 200
+                self._json(code, result); return
             if path == "/api/bili/login/qr/image":
                 png = Path(BILI_QR_PNG)
                 if not png.is_file():
@@ -4081,6 +4210,9 @@ class Handler(BaseHTTPRequestHandler):
                     overwrite_confirm=str(body.get("overwrite_confirm") or ""),
                     client=client)
                 self._json(200 if result.get("ok") else 400, result); return
+            if path in ("/api/engine/start", "/api/engine/stop"):
+                result = engine_toggle(path.rsplit("/", 1)[-1], client=client)
+                self._json(200, result); return
             if path == "/api/bili/login/qr":
                 result = bili_login_qr(client=client)
                 self._json(200 if result.get("ok") else 502, result); return

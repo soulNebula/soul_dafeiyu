@@ -75,13 +75,22 @@ class Client:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     payload = json.loads(resp.read().decode("utf-8", "replace"))
             choice = (payload.get("choices") or [{}])[0]
-            text = (choice.get("message") or {}).get("content") or ""
+            message = choice.get("message") or {}
+            text = message.get("content") or ""
+            # P15-A：reasoning_content 原文（DeepSeek reasoner / 兼容字段）。
+            # 只是**额外返回**：没有该字段时为空串，不影响 ok/text/usage 等既有行为。
+            reasoning = ""
+            if isinstance(message, dict):
+                reasoning = str(message.get("reasoning_content")
+                                or message.get("reasoning") or "")
             return {"ok": bool(text), "text": text, "model": self.model,
+                    "reasoning": reasoning,
                     "usage": payload.get("usage") or {},
                     "finish_reason": choice.get("finish_reason") or "",
                     "elapsed": round(time.time() - started, 3)}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "text": "", "model": self.model, "usage": {},
+                    "reasoning": "",
                     "error": f"{type(exc).__name__}: {str(exc)[:200]}",
                     "elapsed": round(time.time() - started, 3)}
 

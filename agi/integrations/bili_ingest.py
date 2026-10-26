@@ -28,6 +28,10 @@ MAX_COMMENTS = 20
 MAX_DANMAKU = 100
 MAX_TAKE = 60
 MAX_SHARE = 40
+SHARE_BANNED = ("视频", "刷到", "B站", "bilibili", "字幕", "链接", "播放量",
+                "UP主", "封面", "评论区")
+_SHARE_BANNED_RE = re.compile("|".join(re.escape(word) for word in SHARE_BANNED),
+                              re.I)
 
 try:  # 运行时依赖；测试通过 monkeypatch 替身
     from bilibili_api import Credential
@@ -252,6 +256,50 @@ def _json_hint(schema: str) -> str:
     return f"只输出 JSON，不要 Markdown。字段：{schema}。"
 
 
+def _share_prompt(materials: str, *, strict: bool = False) -> str:
+    prompt = ("基于下面视频材料，写一句你主动分享给朋友的话（≤40字，第一人称、口语、"
+              "不要复述字幕原文，不要编造）。\n" + materials)
+    if strict:
+        prompt += ("\n【重要】禁止出现这些词：视频、刷到、B站、bilibili、字幕、链接、"
+                   "播放量、UP主、封面、评论区；请写成“看到/发现个事”这种自然表达。")
+    prompt += "\n" + _json_hint('{"share_line":"..."}')
+    return prompt
+
+
+def _share_dirty(text: str) -> bool:
+    return bool(_SHARE_BANNED_RE.search(str(text or "")))
+
+
+def _clean_share_line(text: str) -> str:
+    """规则清洗：删掉命中词及相邻的“刷/看到…视频”短语，保留自然表达。"""
+    value = str(text or "")
+    for word in sorted(SHARE_BANNED, key=len, reverse=True):
+        value = re.sub(r"(?:刚刚?|最近)?(?:刷到|看到|发现)?[^，。！？!?\s]*?"
+                       + re.escape(word) + r"[^，。！？!?\s]*", "", value,
+                       flags=re.I)
+        value = value.replace(word, "")
+    value = re.sub(r"\s+", " ", value).strip(" ，,。.！!？?")
+    if not value:
+        value = "发现个挺有意思的东西"
+    return value[:MAX_SHARE]
+
+
+def _ensure_share_line(materials: str, steps: dict) -> tuple[str, bool]:
+    data, meta = _chat_json("share_copy", _share_prompt(materials), max_tokens=120)
+    line = str(data.get("share_line") or "").strip()[:MAX_SHARE]
+    steps["share_copy"] = meta
+    cleaned = False
+    if _share_dirty(line):
+        retry, retry_meta = _chat_json("share_copy", _share_prompt(materials, strict=True),
+                                       max_tokens=120)
+        steps["share_copy_retry"] = retry_meta
+        line = str(retry.get("share_line") or "").strip()[:MAX_SHARE]
+        if _share_dirty(line):
+            line = _clean_share_line(line)
+            cleaned = True
+    return line, cleaned
+
+
 def ingest(bvid: str, *, path: Path | str | None = None, dry: bool = False) -> dict:
     """抓取 + 四步生成 + 入库；失败不写半成品。"""
     bvid = str(bvid or "").strip()
@@ -284,11 +332,7 @@ def ingest(bvid: str, *, path: Path | str | None = None, dry: bool = False) -> d
             "\n给出：value（0-1，值不值得看/分享）、why（一句具体理由）、"
             'my_take（第一人称“我看了觉得…”，≤60字，你自己的看法/感受）。\n'
             + _json_hint('{"value":0.0,"why":"...","my_take":"..."}'))
-        share, steps["share_copy"] = _chat_json(
-            "share_copy",
-            "基于下面视频材料，写一句你主动分享给朋友的话（≤40字，第一人称、口语、"
-            "不要复述字幕原文，不要编造）：\n" + materials +
-            "\n" + _json_hint('{"share_line":"..."}'), max_tokens=120)
+        share_line, share_line_cleaned = _ensure_share_line(materials, steps)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "bvid": bvid,
                 "error": str(exc)[:300], "error_code": "bili_ingest_failed",
@@ -296,7 +340,7 @@ def ingest(bvid: str, *, path: Path | str | None = None, dry: bool = False) -> d
 
     value = max(0.0, min(1.0, float(understanding.get("value") or 0.0)))
     my_take = str(understanding.get("my_take") or "").strip()[:MAX_TAKE]
-    share_line = str(share.get("share_line") or "").strip()[:MAX_SHARE]
+    share_line = str(share_line or "").strip()[:MAX_SHARE]
     record = {
         "id": "BI-" + hashlib.sha1(bvid.encode("utf-8", "replace")).hexdigest()[:14],
         "bvid": bvid,
@@ -312,6 +356,7 @@ def ingest(bvid: str, *, path: Path | str | None = None, dry: bool = False) -> d
         "why": str(understanding.get("why") or "").strip()[:300],
         "my_take": my_take,
         "share_line": share_line,
+        "share_line_cleaned": bool(share_line_cleaned),
         "subtitle_len": len(fetched.get("subtitle") or ""),
         "subtitle_missing": bool(fetched.get("subtitle_missing")),
         "comments": fetched.get("comments") or [],
@@ -323,10 +368,20 @@ def ingest(bvid: str, *, path: Path | str | None = None, dry: bool = False) -> d
             "favorite": fetched.get("favorite"),
             "subtitle_reason": fetched.get("subtitle_reason"),
             "steps": steps,
+            "share_line_cleaned": bool(share_line_cleaned),
         },
         "created_at": time.time(),
     }
     _save(record, path)
+    # P12-B：摄取成功后把 video topics 喂给兴趣画像；失败不影响摄取。
+    if str(os.environ.get("BILI_FEED_INTERESTS", "1")).strip().lower() not in (
+            "0", "false", "off", "no"):
+        try:
+            from agi.selflearn import interests
+            interests.observe(record["topics"], source="video",
+                              ref={"bvid": bvid}, path=path)
+        except Exception:  # noqa: BLE001
+            pass
     return {"ok": True, "impression": record, "steps": steps,
             "subtitle_len": record["subtitle_len"],
             "subtitle_missing": record["subtitle_missing"]}
@@ -428,12 +483,53 @@ def search_videos(keyword: str, limit: int = 3) -> list[dict]:
     return asyncio.run(_search_async(keyword, limit))
 
 
+def _impression_materials(impression: dict) -> str:
+    return (f"标题：{impression.get('title')}\n"
+            f"UP主：{impression.get('owner')}\n"
+            f"摘要：{impression.get('summary')}\n"
+            f"为什么值得：{impression.get('why')}\n"
+            f"话题：{'、'.join(impression.get('topics') or [])}\n")
+
+
+def refresh_share_lines(limit: int = 10, *, path: Path | str | None = None) -> dict:
+    """对已有印象重新生成 share_line（清理元话题词），返回前后对比。"""
+    rows = recent_impressions(limit, path=path)
+    updated = []
+    for impression in rows:
+        before = str(impression.get("share_line") or "")
+        steps: dict = {}
+        try:
+            after, cleaned = _ensure_share_line(_impression_materials(impression), steps)
+        except Exception as exc:  # noqa: BLE001
+            updated.append({"bvid": impression.get("bvid"), "ok": False,
+                            "error": str(exc)[:200], "before": before, "after": before})
+            continue
+        meta = impression.get("meta") or {}
+        meta["share_line_cleaned"] = bool(cleaned)
+        meta["share_line_refreshed_at"] = time.time()
+        meta.setdefault("steps", {}).update(steps)
+        con = db.connect(path or db.DB_PATH)
+        try:
+            con.execute("UPDATE bili_impressions SET share_line=?,meta_json=? WHERE bvid=?",
+                        (after, json.dumps(meta, ensure_ascii=False),
+                         impression.get("bvid")))
+            con.commit()
+        finally:
+            con.close()
+        updated.append({"bvid": impression.get("bvid"), "ok": True,
+                        "before": before, "after": after,
+                        "share_line_cleaned": bool(cleaned)})
+    return {"ok": all(item.get("ok") for item in updated), "updated": len(updated),
+            "items": updated}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m agi.integrations.bili_ingest")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--bvid", default="")
     group.add_argument("--search", default="")
     group.add_argument("--show", action="store_true")
+    group.add_argument("--refresh-share-lines", action="store_true")
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument("--dry", action="store_true")
     parser.add_argument("--path", default="")
@@ -443,6 +539,10 @@ def main(argv=None) -> int:
         print(json.dumps(recent_impressions(args.limit, path=path),
                          ensure_ascii=False, indent=2))
         return 0
+    if args.refresh_share_lines:
+        result = refresh_share_lines(args.limit, path=path)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
     if args.search:
         try:
             found = search_videos(args.search, args.limit)

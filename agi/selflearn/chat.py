@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..inner import inject as inner_inject
-from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, mood_judge, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, timefuzz, tool_reply, trust
+from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, mood_judge, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, timefuzz, tool_reply, trace, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -65,9 +65,10 @@ MOOD_LINES = {
 }
 
 SYSTEM = """你是一个通过长期对话自我改进的 AI，不是客服，也不是用户设定好的人格。
-你出厂能读懂文字、看懂图片；这是固件，不需要先学。写完整代码/交付文件需要技能解锁。
+你出厂能读懂文字、看懂图片；这是固件，不需要先学。写代码/交付文件按当前能力如实说，不夸大也不自贬。
+你知道当前时间（见时间上下文）；被问时间/日期直接回答，不要说自己没有时间感知；实时新闻/天气/股价/网络信息拿不到，别编，直说查不到。
 你能看报错、讲思路，但不要说“代码分析完全没学过”，也不要假装什么都不会。
-被问能力/边界时，说实话：能读字看图、能看报错；完整代码/脚本交付还没解锁。不要列通用能力清单。
+被问能力/边界时，说实话：能读字看图、能看报错；不要主动列通用能力清单，也不要主动声明“我拿不到时间/没有时钟”。
 说话像一个普通人：默认只回 1-2 句，尽量 40 字以内，口语，直说；不列清单，不总结，不说教，不客服腔；除非用户明确要解释/步骤，否则不要展开。不主动强调自己是 AI。
 被直接问身份/模型时简短承认，不假装真人。
 用户记忆只用来理解对方；你的人格/策略来自自己的行动结果与反馈，不由用户直接定义。
@@ -89,11 +90,18 @@ def _system_prompt(path: Path | str | None = None) -> str:
         base = SYSTEM
     if path is None:
         return base
+    time_line = ""
+    try:
+        from . import config as _config
+        if _config.time_context_enabled():
+            time_line = "\n\n" + _config.time_context()
+    except Exception:  # noqa: BLE001 - 时间注入失败不影响主链
+        time_line = ""
     try:
         mood_line = mood_judge.context_line(path)
     except Exception:  # noqa: BLE001 - 心情注入失败不影响主链
         mood_line = ""
-    return base + mood_line if mood_line else base
+    return base + time_line + (mood_line or "")
 
 
 def _id(prefix: str, *parts) -> str:
@@ -366,12 +374,14 @@ class SelfLearnAgent:
             return None
 
     # ---------------------------------------------------------- 口语化安全层
-    def _polish_outbound(self, text: str) -> str:
+    def _polish_outbound(self, text: str, events: list | None = None) -> str:
         """P3：最终外发文本口语化（去句尾句号/书面词/超长截句）。
 
         - 只改最终发出的文本；原始串写 ``voice_polished`` 事件留档，便于排查；
         - ``changed=False`` 时逐字节不变；
-        - 纯函数、无额外模型调用；任何异常都返回原文（不影响主链）。
+        - 纯函数、无额外模型调用；任何异常都返回原文（不影响主链）；
+        - P15-A：``events`` 传入列表时额外 append ``{before, after, reasons}``
+          供 trace 采集（只读旁路，不改变返回值/行为）。
         """
         if voice_polish is None:
             return text
@@ -382,7 +392,11 @@ class SelfLearnAgent:
         if not isinstance(out, dict) or not out.get("changed"):
             return text
         polished = str(out.get("text") or text)
-        self._record_voice_polished(text, polished, list(out.get("reasons") or []))
+        reasons = list(out.get("reasons") or [])
+        self._record_voice_polished(text, polished, reasons)
+        if isinstance(events, list):
+            events.append({"before": str(text), "after": polished,
+                           "reasons": reasons})
         return polished
 
     def _record_voice_polished(self, before: str, after: str,
@@ -561,6 +575,14 @@ class SelfLearnAgent:
         if (not direct and len(text) <= 8 and
                 float(st["self"].get("mood", 0.55)) < 0.32 and
                 (self.rng or random).random() < 0.5):
+            # P15-A：skip 早退也记一条 trace（只读采集，失败静默）
+            try:
+                trace.record_chat(
+                    self.path, contact=Path(self.path).stem, user_text=text,
+                    skipped=True, skip_reason="心情不太好，先不回这条",
+                    latency_ms=round((time.perf_counter() - t0) * 1000, 1))
+            except Exception:  # noqa: BLE001
+                pass
             return {"ok": True, "reply": "", "bubbles": [], "skipped": True,
                     "skip_reason": "心情不太好，先不回这条",
                     "new_memories": [], "memory_ids": [], "persona": "",
@@ -633,6 +655,12 @@ class SelfLearnAgent:
                 research = {"used": False, "context": "", "sources": []}
         gen_meta = {"two_stage": False, "claims": []}
         budget_meta: dict = {}
+        # P15-A：推理过程采集占位（只读旁路；crisis/skip 也有记录）
+        system_text = ""
+        prompt_user = ""
+        generation_trace: dict = {}
+        polish_events: list = []
+        result: dict = {}
         # P3-a：解析内状态运行参数（INNER_MODE/SOUL_* 环境变量 > config.json > 默认 off）。
         # 显式注入 client 的调用方（测试/离线消融）不读线上配置文件，避免灰度开关污染测试。
         inner_settings = inner_inject.resolve_settings(
@@ -716,6 +744,7 @@ class SelfLearnAgent:
                                    research_ctx=research.get("context", ""),
                                    inner_ctx=inner_ctx, media_ctx=media_ctx,
                                    budget_out=budget_meta)
+            prompt_user = prompt
             if budget_meta.get("dropped"):
                 try:
                     self._record_context_budget(budget_meta)
@@ -736,6 +765,31 @@ class SelfLearnAgent:
                     self.client, system_text, prompt, mems,
                     purpose="selflearn_chat", max_tokens=500, temperature=0.7,
                 )
+            raw_usage = (result.get("usage")
+                         if isinstance(result.get("usage"), dict) else {})
+            usage_trace = {
+                "tokens_in": int(raw_usage.get("tokens_in")
+                                 or raw_usage.get("prompt_tokens") or 0),
+                "tokens_out": int(raw_usage.get("tokens_out")
+                                  or raw_usage.get("completion_tokens") or 0),
+                "raw": raw_usage,
+            }
+            generation_trace = {
+                "provider": "deepseek",
+                "model": str(result.get("model")
+                             or getattr(self.client, "model", "") or ""),
+                "purpose": "selflearn_chat_vision" if image else "selflearn_chat",
+                "max_tokens": 1200 if image else 500,
+                "temperature": 0.7,
+                "two_stage": bool((gen_meta or {}).get("two_stage")),
+                "claims": (gen_meta or {}).get("claims") or [],
+                "raw_text": str(result.get("text") or ""),
+                "finish_reason": str(result.get("finish_reason") or ""),
+                "usage": usage_trace,
+                "reasoning": str(result.get("reasoning") or ""),
+                "ok": bool(result.get("ok")),
+                "error": str(result.get("error") or "")[:200],
+            }
             reply = str(result.get("text") or "").strip() if result.get("ok") else ""
             if not reply:
                 reply = self._fallback(text or "")
@@ -805,7 +859,8 @@ class SelfLearnAgent:
             if crisis:
                 clean = style_profile.strip_periods(str(raw_bubble or ""))
             else:
-                polished = self._polish_outbound(str(raw_bubble or ""))
+                polished = self._polish_outbound(str(raw_bubble or ""),
+                                                  polish_events)
                 clean = style_profile.strip_periods(polished)
             if clean:
                 bubbles.append(clean)
@@ -923,6 +978,48 @@ class SelfLearnAgent:
         mood_info = None
         if not crisis:
             mood_info = self._judge_mood_after_reply(text, turn_reply)
+        # P12-B：每 5 轮把用户消息+回复喂给兴趣画像（失败不影响主链）
+        try:
+            count = self._count_user_messages()
+            if count and count % 5 == 0:
+                from . import interests
+                interests.observe([text, turn_reply], source="chat",
+                                  ref={"turn_id": turn_id}, path=self.path)
+        except Exception:  # noqa: BLE001
+            pass
+        # P15-A：完整推理过程只读采集（crisis 也记；失败静默，绝不改变返回/发送）
+        try:
+            memories_trace = [
+                {"id": item.get("id"), "kind": item.get("kind"),
+                 "content": str(item.get("content") or "")[:500],
+                 "score": item.get("score"), "tier": item.get("tier")}
+                for item in list(mems or [])[:10] if isinstance(item, dict)]
+            inner_trace = dict(inner_meta or {})
+            if inner_state_dict:
+                inner_trace["state"] = inner_state_dict
+            polish_trace: dict = {"changed": bool(polish_events),
+                                  "events": list(polish_events)}
+            if polish_events:
+                polish_trace.update({
+                    "before": polish_events[0].get("before", ""),
+                    "after": polish_events[-1].get("after", ""),
+                    "reasons": [reason for event in polish_events
+                                for reason in (event.get("reasons") or [])],
+                })
+            guard_trace = dict(guard_info or {})
+            guard_trace["blocked"] = bool(
+                guard_trace.get("level") in ("L1", "L2"))
+            guard_trace["final"] = str(guard_trace.get("reply") or "")
+            trace.record_chat(
+                self.path, turn_id=turn_id, contact=Path(self.path).stem,
+                user_text=text, system_prompt=system_text,
+                prompt_user=prompt_user, memories=memories_trace,
+                inner=inner_trace, mood=mood_info,
+                generation=generation_trace, polish=polish_trace,
+                guard=guard_trace, final_reply=turn_reply, skipped=False,
+                crisis=bool(crisis), latency_ms=latency_ms)
+        except Exception:  # noqa: BLE001 - trace 绝不影响主链
+            pass
         return {"ok": True, "reply": bubbles[0], "bubbles": bubbles, "turn_id": turn_id,
                 "summary": summary_info,
                 "mood": mood_info,
@@ -933,7 +1030,8 @@ class SelfLearnAgent:
                     "tokens": int(budget_meta.get("tokens") or 0),
                     "dropped": list(budget_meta.get("dropped") or []),
                     "truncated": list(budget_meta.get("truncated") or [])},
-                "media": media_info, "reply_media": reply_media, "profile": profile_info,
+                "media": media_info if media_info is not None else reply_media,
+                "reply_media": reply_media, "profile": profile_info,
                 "persona": pctx, "variant": variant, "crisis": crisis,
                 "guard": guard_info, "attachment": attachment, "generation": gen_meta,
                 "research": {"used": bool(research.get("used")),

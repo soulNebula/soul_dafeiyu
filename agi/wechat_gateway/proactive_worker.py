@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from agi.selflearn import db as _selflearn_db
+from agi.selflearn import pacing
 
 from . import sendclass
 
@@ -343,6 +344,33 @@ def _contacts(gateway, contacts=None) -> list[str]:
     return [str(x) for x in raw if str(x).strip()]
 
 
+def _record_video_share(gateway, contact: str, pro: dict, *, delivered: bool,
+                        media_sent: int = 0, text: str = "") -> bool:
+    """P12-C：视频分享的发放记录（bvid/value/封面/结果）；送达后标记已分享。"""
+    video = (pro or {}).get("video_share") or {}
+    bvid = str(video.get("bvid") or "").strip()
+    marked = False
+    if delivered and bvid:
+        try:
+            from agi.integrations import bili_ingest
+            marked = bool(bili_ingest.mark_shared(bvid))
+        except Exception:  # noqa: BLE001 - 标记失败不影响发送结果
+            marked = False
+    try:
+        gateway._record("proactive_video_share", {
+            "friend": contact, "bvid": bvid,
+            "title": str(video.get("title") or "")[:80],
+            "value": video.get("value"),
+            "share_line": str(video.get("share_line") or "")[:60],
+            "cover_sent": bool(video.get("cover_sent")),
+            "media_sent": int(media_sent or 0),
+            "delivered": bool(delivered), "marked_shared": bool(marked),
+            "text": str(text or "")[:120]})
+    except Exception:  # noqa: BLE001
+        pass
+    return marked
+
+
 def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any]:
     """对所有（或指定）联系人跑一次主动循环；返回统计，不抛异常。"""
     from agi.selflearn import proactive as selflearn_proactive
@@ -447,7 +475,40 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     idle_gap = float(gateway.cfg.get("proactive_idle_s") or 0)
     media_sent = 0
     for contact in contact_list:
-        probability = _probability(gateway)
+        db_path = gw_cfg.contact_db(contact)
+        # P16-B：按近 7 天「用户主动 vs 它主动」对等度调整本轮调度（不写 config 文件）。
+        # pacing 未启用/出错时回退旧的固定概率闸门。
+        pacing_adjustment: dict[str, Any] | None = None
+        if pacing.enabled(gateway.cfg):
+            try:
+                balance_result = pacing.balance(
+                    db_path, now, contact=contact,
+                    log_path=getattr(gateway, "log_path", None))
+                pacing_adjustment = pacing.adjust(
+                    gateway.cfg, balance_result, now=now,
+                    stopped=bool(gateway.cfg.get("stop")))
+                out["pacing"] = dict(pacing.summary(balance_result, pacing_adjustment),
+                                     contact=contact)
+                try:
+                    gateway._record("pacing_adjusted", {
+                        "contact": contact, **out["pacing"],
+                        "target_ratio": pacing_adjustment.get("target_ratio")})
+                except Exception:  # noqa: BLE001
+                    pass
+                if not pacing_adjustment.get("send", True):
+                    out["skipped"].append({
+                        "contact": contact,
+                        "reason": "pacing:" + str(pacing_adjustment.get("reason") or "hold")})
+                    continue
+                out["pacing_suggested"] = {
+                    "probability": pacing_adjustment.get("probability"),
+                    "interval_min_s": pacing_adjustment.get("interval_min_s"),
+                    "interval_max_s": pacing_adjustment.get("interval_max_s")}
+                probability = float(pacing_adjustment.get("probability") or 0.0)
+            except Exception:  # noqa: BLE001 - pacing 失败不影响主链，回退旧概率
+                pacing_adjustment = None
+        if pacing_adjustment is None:
+            probability = _probability(gateway)
         roll = random.random()
         if roll >= probability:
             # 跳过时不查库、不调 LLM，只记一条带 contact 和本次 p 的日志
@@ -464,7 +525,6 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             except Exception:  # noqa: BLE001
                 pass
             continue
-        db_path = gw_cfg.contact_db(contact)
         last_in = float(getattr(gateway, "last_inbound", {}).get(contact, 0) or 0)
         if idle_gap > 0 and last_in and now - last_in < idle_gap:
             out["skipped"].append({"contact": contact, "reason": "user_active"})
@@ -626,13 +686,15 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 out["drafts"] += 1       # confirm 人工草稿（非故障，不影响熔断）
             # BLOCKED：闸门拦截，非故障非送达，不计数（send_blocked 日志已记）
         # P5-b：文本已发送后，媒体作为额外气泡发；失败不影响文本结果
+        local_media_sent = 0
         if sent_any and media_items and gateway.cfg.get("media_enabled"):
             sender = getattr(gateway, "send_bubbles", None)
             if callable(sender):
                 try:
                     results = sender(contact, media_items, proactive=True)
-                    media_sent = sum(1 for item in (results or [])
-                                     if isinstance(item, dict) and item.get("ok"))
+                    local_media_sent = sum(1 for item in (results or [])
+                                           if isinstance(item, dict) and item.get("ok"))
+                    media_sent = local_media_sent
                     out["media_sent"] = int(out.get("media_sent") or 0) + media_sent
                     gateway._record("proactive_media", {
                         "friend": contact, "items": media_items,
@@ -640,6 +702,11 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 except Exception as exc:  # noqa: BLE001
                     gateway._record("proactive_media_failed", {
                         "friend": contact, "error": f"{type(exc).__name__}: {exc}"[:200]})
+        # P12-C：视频分享的审计（bvid/value/封面/送达），送达后 mark_shared
+        if kind == "share_video":
+            _record_video_share(gateway, contact, pro, delivered=bool(sent_any),
+                                media_sent=local_media_sent,
+                                text=(outbound[0] if outbound else ""))
         if sent_any and turn_id:
             # 只有真的发出去了才登记：草稿还没到对方手里，反馈会错位
             gateway.last_turns[contact] = turn_id
@@ -739,10 +806,21 @@ def next_interval(gateway, *, client=None, last_outcome=None,
     用户要的是「1–120 分钟**均匀随机**」，不是模型决定，因此这里改为
     ``random.uniform(lo, hi)`` 纯随机，同时省掉每轮一次 DeepSeek 调用。
 
-    ``client`` / ``last_outcome`` / ``now`` 仅保留旧调用方签名兼容，已不参与计算。
+    ``client`` / ``now`` 仅保留旧调用方签名兼容，不参与计算；
     ``lo/hi`` 来自 ``_bounds()``（配置非法时兜底 60/7200）。
+    P16-B：若 ``last_outcome`` 带 ``pacing_suggested``（本轮对等节奏建议），
+    优先用建议区间（已按 pacing_min_interval_s 夹紧），实现「用户聊得多→它多发」。
     """
     lo, hi = _bounds(gateway)
+    suggestion = last_outcome.get("pacing_suggested") if isinstance(last_outcome, dict) else None
+    if suggestion and pacing.enabled(gateway.cfg):
+        try:
+            sugg_lo = float(suggestion.get("interval_min_s") or 0)
+            sugg_hi = float(suggestion.get("interval_max_s") or 0)
+            if sugg_lo > 0 and sugg_hi >= sugg_lo:
+                lo, hi = max(60.0, sugg_lo), max(sugg_lo, sugg_hi)
+        except (TypeError, ValueError):
+            pass
     try:
         delay = random.uniform(float(lo), float(hi))
     except (TypeError, ValueError):  # 极端防御：random 被替换成异常实现时

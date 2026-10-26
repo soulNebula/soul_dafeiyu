@@ -2441,10 +2441,10 @@ def record_proactive_turn(path: Path | str, assistant_message_id: str, reply: st
         con.close()
 
 
-def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
-         idle_seconds: float = 30, cooldown: float = 900,
-         min_score: float | None = None, respect_state: bool = True,
-         inner_client=None) -> dict[str, Any]:
+def _tick_impl(path: Path | str = DB_PATH, client=None, now: float | None = None,
+               idle_seconds: float = 30, cooldown: float = 900,
+               min_score: float | None = None, respect_state: bool = True,
+               inner_client=None) -> dict[str, Any]:
     """网页轮询：由它自己的心情/分享欲决定说不说，可一次说 1-2 条。"""
     now = time.time() if now is None else float(now)
     # P6-e：可回滚分流；默认 legacy，运行期 wechat config 可切 simple
@@ -2990,3 +2990,23 @@ def list_proactive(path: Path | str = DB_PATH, limit: int = 20) -> list[dict]:
 
 # P6-e：供测试/可回滚观察使用；实际分流在 tick 顶部
 from .simple_tick import proactive_style, tick_simple as _tick_simple  # noqa: E402
+
+
+def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
+         idle_seconds: float = 30, cooldown: float = 900,
+         min_score: float | None = None, respect_state: bool = True,
+         inner_client=None) -> dict[str, Any]:
+    """P15-A：主动消息对外入口（原逻辑在 ``_tick_impl``）。
+
+    与原来行为逐字节一致；额外**只读**记一条 ``turn_traces(mode=proactive)``
+    （候选/kind/概率/丢弃/regen/video_share 等，静默轮询不记）。trace 失败静默。
+    """
+    result = _tick_impl(path, client=client, now=now, idle_seconds=idle_seconds,
+                        cooldown=cooldown, min_score=min_score,
+                        respect_state=respect_state, inner_client=inner_client)
+    try:
+        from . import trace
+        trace.record_proactive(path, result, now=now)
+    except Exception:  # noqa: BLE001 - trace 失败绝不影响主动消息
+        pass
+    return result

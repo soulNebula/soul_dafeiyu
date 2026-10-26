@@ -62,6 +62,8 @@ STALE_IGNORED_KINDS = frozenset({"gateway_stale", "proactive_schedule"})
 # P0-22：紧急停止日志节流 / 静默覆盖有效期
 STOP_LOG_INTERVAL_S = 600.0        # proactive_stopped 每 10 分钟最多 1 条
 QUIET_OVERRIDE_S = 86400.0         # proactive_override_quiet 24h 后自动失效
+# P18-A：引擎暂停时，engine_paused_skip 审计节流（避免每条来信刷屏）
+ENGINE_PAUSE_LOG_INTERVAL_S = 60.0
 
 # P0-24：死区哨兵只在"应该有事发生"时才有意义。下面三种状态都是
 # **预期不发送**（本来就不会有活动），此时报 gateway_stale 是纯噪音：
@@ -83,12 +85,19 @@ def _log(entry: dict, path: Path | None = None) -> None:
 
 
 class Gateway:
-    def __init__(self, cfg_obj: dict, *, stop_path: Path | str | None = None):
+    def __init__(self, cfg_obj: dict, *, stop_path: Path | str | None = None,
+                 config_path: Path | str | None = None):
         self.cfg = dict(cfg_obj)
         self.draft_path = self.cfg.get("drafts_path") or drafts.DEFAULT_PATH
         self.log_path = Path(self.cfg.get("log_path") or LOG_PATH)
         # P0-22b：STOP 路径显式注入（None = 走 config.stop_path()，可被测试隔离）
         self._stop_path = Path(stop_path) if stop_path is not None else None
+        # P18-A：engine_enabled 持久化路径（默认生产 config.json；测试传 tmp）
+        self.config_path = Path(config_path) if config_path is not None else Path(cfg.CONFIG_PATH)
+        # P18-A：引擎软开关（监听+自动回复+主动）；默认 true
+        self.engine_enabled = bool(self.cfg.get("engine_enabled", True))
+        self.engine_since = time.time()
+        self.engine_reason = "startup" if self.engine_enabled else "config_disabled"
         self.receiver = None
         self.backend = None
         self.sender = WxAutoSender()
@@ -127,6 +136,9 @@ class Gateway:
         self._override_started_ts: float | None = None
         self._override_expired_logged = False
         self._quiet_warned_value: str | None = None
+        # P18-A：engine 审计/暂停日志节流 + 状态写锁
+        self._engine_lock = threading.Lock()
+        self._last_engine_pause_log = 0.0
 
     def start(self) -> None:
         if not self.cfg.get("enabled"):
@@ -395,6 +407,87 @@ class Gateway:
         self._record("proactive_stop_toggled", {"stopped": wanted, "path": str(target), "ts": now})
         return {"ok": True, "stopped": wanted}
 
+    # ------------------------------------------------------------------ #
+    # P18-A：引擎软开关（监听+自动回复+主动）；与 STOP 文件不同：
+    # STOP = 紧急全停发送（含人工 force）；engine = 软停，人工调试发送仍允许。
+    # ------------------------------------------------------------------ #
+    def _log_engine_pause(self, kind: str, now: float | None = None) -> None:
+        """engine_paused_skip 审计节流（每 60s 最多一条）。"""
+        now = time.time() if now is None else float(now)
+        last = float(getattr(self, "_last_engine_pause_log", 0.0) or 0.0)
+        if last and now - last < ENGINE_PAUSE_LOG_INTERVAL_S:
+            return
+        self._last_engine_pause_log = now
+        self._record("engine_paused_skip", {"skip_kind": str(kind)})
+
+    def _persist_engine(self) -> None:
+        """把 engine_enabled 原子写回 config.json，保留磁盘上的其它键。"""
+        payload = dict(self.cfg)
+        payload["engine_enabled"] = bool(self.engine_enabled)
+        try:
+            if self.config_path.exists():
+                raw = json.loads(self.config_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    raw["engine_enabled"] = bool(self.engine_enabled)
+                    payload = raw
+        except Exception:  # noqa: BLE001 - 读坏/缺失时用内存配置写一份完整配置
+            pass
+        cfg.save_atomic(payload, self.config_path)
+
+    def engine_state(self) -> dict:
+        return {"ok": True, "enabled": bool(self.engine_enabled),
+                "since": float(self.engine_since), "reason": str(self.engine_reason),
+                "manual": bool((not self.engine_enabled)
+                               and self.engine_reason == "manual_stop")}
+
+    def set_engine(self, enabled: bool, *, source: str = "api",
+                   now: float | None = None) -> dict:
+        """热切换引擎（幂等、原子写、审计）。停时清空待处理消息，不补发历史。"""
+        wanted = bool(enabled)
+        now = time.time() if now is None else float(now)
+        with self._engine_lock:
+            if wanted == self.engine_enabled:
+                result = self.engine_state()
+                result.update({"changed": False, "source": str(source)})
+                return result
+            if not wanted:
+                self.engine_enabled = False
+                self.engine_since = now
+                self.engine_reason = "manual_stop" if source == "api" else "config_disabled"
+                self.cfg["engine_enabled"] = False
+                self.pending.clear()
+                self.last_inbound.clear()
+                while True:
+                    try:
+                        self.queue.get_nowait()
+                    except queue.Empty:
+                        break
+                self._last_engine_pause_log = 0.0
+            else:
+                self.engine_enabled = True
+                self.engine_since = now
+                self.engine_reason = "manual_start" if source == "api" else "startup"
+                self.cfg["engine_enabled"] = True
+            try:
+                self._persist_engine()
+            except Exception as exc:  # noqa: BLE001 - 写盘失败回滚内存状态
+                self.engine_enabled = not wanted
+                self.engine_since = now
+                self.engine_reason = "persist_failed"
+                self.cfg["engine_enabled"] = self.engine_enabled
+                self._record("engine_persist_failed",
+                             {"error": f"{type(exc).__name__}: {exc}",
+                              "target": str(self.config_path)})
+                return {"ok": False, "enabled": self.engine_enabled,
+                        "since": float(self.engine_since), "reason": "persist_failed",
+                        "error": f"{type(exc).__name__}: {exc}", "changed": False}
+            kind = "engine_started" if wanted else "engine_stopped"
+            self._record(kind, {"enabled": wanted, "since": now,
+                                "reason": self.engine_reason, "source": str(source)})
+            result = self.engine_state()
+            result.update({"changed": True, "source": str(source)})
+            return result
+
     def _quiet_hours_value(self) -> list[int]:
         """夜间静默配置：``quiet_hours=[]`` 视为非法 → 回退默认 [23,8] 并告警一次。"""
         raw = self.cfg.get("quiet_hours")
@@ -453,6 +546,10 @@ class Gateway:
         return not active
 
     def on_inbound(self, msg: dict) -> None:
+        # P18-A：引擎停止时入口直接丢，不记录 inbound、不进队列、不补发历史
+        if not self.engine_enabled:
+            self._log_engine_pause("inbound")
+            return
         self._record("inbound", {"friend": msg.get("friend"), "text": msg.get("text"),
                                   "id": msg.get("id")})
         if self.cfg.get("complaint_stop", True) and control.is_complaint(str(msg.get("text") or "")):
@@ -471,6 +568,10 @@ class Gateway:
     def _proactive_loop(self) -> None:
         """M5：常驻主动调度（间隔 60–7200s 均匀随机 = 1–120 分钟，P0-12）。"""
         while not self.stop_event.is_set() and self.cfg.get("proactive_enabled"):
+            # P18-A：引擎停止时只空转等待，不跑 cycle、不 schedule、不发送
+            if not self.engine_enabled:
+                self.stop_event.wait(1.0)
+                continue
             outcome = {}
             try:
                 outcome = self._proactive_cycle()
@@ -491,9 +592,18 @@ class Gateway:
                 pass
             # P0-12：source=random 便于真机窗口按日志验收调度分布（不再是 LLM 决定）
             self._record("proactive_schedule", {"next_delay_s": delay, "source": "random"})
-            self.stop_event.wait(delay)
+            # P18-A：分段等待，engine 一停立刻醒来进入空转（不等到最长 2h）
+            deadline = time.time() + float(delay)
+            while (not self.stop_event.is_set() and self.engine_enabled
+                   and time.time() < deadline):
+                self.stop_event.wait(min(1.0, max(0.0, deadline - time.time())))
 
     def _proactive_cycle(self) -> dict:
+        # P18-A：直接调用（测试/其它入口）也受引擎开关约束
+        if not self.engine_enabled:
+            return {"ok": True, "ran": False, "reason": "engine_stopped",
+                    "contacts": 0, "sent": 0, "drafts": 0, "deduped": 0,
+                    "clipboard": 0, "skipped": []}
         from . import proactive_worker
         return proactive_worker.run_cycle(self)
 
@@ -560,6 +670,10 @@ class Gateway:
         buf["texts"].append(text)
 
     def _flush_pending(self, *, force: bool = False) -> None:
+        # P18-A：引擎停止时不冲刷攒着的回复（否则重启后会补发旧内容）
+        if not self.engine_enabled:
+            self.pending.clear()
+            return
         now = time.time()
         for contact in list(self.pending):
             buf = self.pending[contact]
@@ -614,7 +728,12 @@ class Gateway:
         except Exception:  # noqa: BLE001
             return ""
 
-    def _reply(self, msg: dict) -> None:
+    def _reply(self, msg: dict) -> dict | None:
+        # P18-A：自动回复前置检查；engine 关直接返回，不写草稿、不调 agent
+        if not self.engine_enabled:
+            self._log_engine_pause("reply")
+            return {"ok": False, "status": "engine_stopped",
+                    "error": "engine_stopped"}
         from agi.selflearn.chat import SelfLearnAgent
 
         contact = str(msg.get("friend") or "")
@@ -666,12 +785,18 @@ class Gateway:
                 time.sleep(float(self.cfg.get("reply_delay") or 0))
 
     def _send(self, contact: str, text: str, *, force: bool = False,
-              reactive: bool = False, proactive: bool = False) -> dict:
+              reactive: bool = False, proactive: bool = False,
+              manual: bool = False) -> dict:
         # P0-22：STOP 文件是最高优先级，先于任何发送判断（含 reactive/force）
         if self.stop_present():
             self._log_stopped()
             self._record("send_blocked", {"friend": contact, "reason": "stop_file"})
             return {"ok": False, "status": "blocked", "error": "stop_file"}
+        # P18-A：engine 软停只拦自动回复/主动；人工接口（manual/force）仍允许调试发送
+        if not self.engine_enabled and not (manual or force):
+            self._log_engine_pause("send")
+            return {"ok": False, "status": "engine_stopped",
+                    "error": "engine_stopped"}
         # 纵深防御：出站文本里的微信内部 ID 一律摘掉（2026-10-24 引用事故）
         original = str(text or "")
         text = textguard.strip_internal_ids(original)
@@ -804,7 +929,7 @@ class Gateway:
 
     def send_media_batch(self, contact: str, items: list[dict] | tuple[dict, ...], *,
                          proactive: bool = False, reactive: bool = False,
-                         force: bool = False) -> dict:
+                         force: bool = False, manual: bool = False) -> dict:
         """发送一组多媒体气泡（批量版，返回含统计/草稿的 dict）。
 
         items 规范见 :mod:`agi.wechat_gateway.media`：
@@ -824,6 +949,10 @@ class Gateway:
         if self.stop_present():
             self._log_stopped()
             return self._media_blocked(contact_name, "stop_file", raw_items)
+        # P18-A：engine 软停只拦自动/主动媒体；人工接口（/api/media/send）仍允许
+        if not self.engine_enabled and not (manual or force):
+            self._log_engine_pause("send_media")
+            return self._media_blocked(contact_name, "engine_stopped", raw_items)
         # ② 媒体开关（默认 false：上线前显式开启）
         if not media_mod.media_enabled(self.cfg):
             return self._media_blocked(contact_name, "media_disabled", raw_items)
@@ -1017,14 +1146,14 @@ class Gateway:
 
     def send_bubbles(self, contact: str, items: list[dict] | tuple[dict, ...], *,
                      proactive: bool = False, reactive: bool = False,
-                     force: bool = False) -> list[dict]:
+                     force: bool = False, manual: bool = False) -> list[dict]:
         """发送一组多媒体气泡，返回**逐条结果 list**（与 WxAutoSender.send_bubbles 同契约）。
 
         决策层（task-60）直接调用本方法：``results[i]`` = {ok, status, type, error,
         fallback_used, used}；批量统计/草稿详情见 :meth:`send_media_batch`。
         """
         batch = self.send_media_batch(contact, items, proactive=proactive,
-                                      reactive=reactive, force=force)
+                                      reactive=reactive, force=force, manual=manual)
         return batch.get("items") or []
 
     def _on_send_failure(self, contact: str, text: str, error: str, *,
@@ -1154,6 +1283,10 @@ class Gateway:
             "ready": self.ready,
             "start_error": self.start_error,
             "enabled": bool(self.cfg.get("enabled")),
+            # P18-A：引擎软开关状态（控制台总览页/按钮读这个）
+            "engine": {"enabled": bool(self.engine_enabled),
+                       "since": float(self.engine_since),
+                       "reason": str(self.engine_reason)},
             "auto_reply": bool(self.cfg.get("auto_reply")),
             "dry_run": bool(self.cfg.get("dry_run", True)),
             "allowed_contacts": self.cfg.get("allowed_contacts") or [],
@@ -1265,13 +1398,20 @@ def make_handler(gateway: Gateway):
                            {"ok": False, "error": str(exc)})
                 return
 
+            # P18-A：引擎一键启停（admin token 已由 _guard 校验；幂等）
+            if path in ("/api/engine/start", "/api/engine/stop"):
+                wanted = path.endswith("/start")
+                result = gateway.set_engine(wanted, source="api")
+                self._json(200 if result.get("ok") else 500, result)
+                return
+
             if path == "/api/approve":
                 contact = str(body.get("contact") or "")
                 text = str(body.get("text") or "")
                 if contact not in (gateway.cfg.get("allowed_contacts") or []) or not text:
                     self._json(400, {"ok": False, "error": "contact 不在白名单或 text 为空"})
                     return
-                self._json(200, gateway._send(contact, text, force=True))
+                self._json(200, gateway._send(contact, text, force=True, manual=True))
                 return
 
             if path == "/api/draft/approve":
@@ -1281,7 +1421,7 @@ def make_handler(gateway: Gateway):
                     self._json(404, {"ok": False, "error": "草稿不存在"})
                     return
                 out = gateway._send(str(item.get("contact") or ""),
-                                    str(item.get("text") or ""), force=True)
+                                    str(item.get("text") or ""), force=True, manual=True)
                 gateway._record("draft_approved", {"draft_id": draft_id,
                                                    "friend": item.get("contact"),
                                                    "status": out.get("status")})
@@ -1324,7 +1464,8 @@ def make_handler(gateway: Gateway):
                     contact, items,
                     proactive=bool(body.get("proactive")),
                     reactive=bool(body.get("reactive")),
-                    force=bool(body.get("force")))
+                    force=bool(body.get("force")),
+                    manual=True)
                 self._json(200 if result.get("ok") or result.get("sent") else 502, result)
                 return
 
@@ -1353,6 +1494,10 @@ def make_handler(gateway: Gateway):
                 return
             if path == "/status":
                 self._json(200, gateway.status())
+                return
+            # P18-A：引擎状态（控制台按钮读这个，比 /status 轻）
+            if path == "/api/engine":
+                self._json(200, gateway.engine_state())
                 return
             if path == "/api/drafts":
                 self._json(200, {"ok": True,

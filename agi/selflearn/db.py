@@ -180,6 +180,31 @@ CREATE TABLE IF NOT EXISTS inner_states(
   source TEXT NOT NULL DEFAULT '',
   created_at REAL NOT NULL
 );
+-- P15-A：每条回复的完整推理过程（只读采集；memory 域）。字段均按 trace.py 截断后写入。
+CREATE TABLE IF NOT EXISTS turn_traces(
+  id TEXT PRIMARY KEY,
+  ts REAL NOT NULL,
+  contact TEXT NOT NULL DEFAULT '',
+  user_text TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'chat',   -- chat | proactive
+  system_prompt TEXT NOT NULL DEFAULT '',
+  prompt_user TEXT NOT NULL DEFAULT '',
+  memories_json TEXT NOT NULL DEFAULT '[]',
+  inner_json TEXT NOT NULL DEFAULT '{}',
+  mood_json TEXT NOT NULL DEFAULT '{}',
+  generation_json TEXT NOT NULL DEFAULT '{}',
+  polish_json TEXT NOT NULL DEFAULT '{}',
+  guard_json TEXT NOT NULL DEFAULT '{}',
+  final_reply TEXT NOT NULL DEFAULT '',
+  skipped INTEGER NOT NULL DEFAULT 0,
+  skip_reason TEXT NOT NULL DEFAULT '',
+  crisis INTEGER NOT NULL DEFAULT 0,
+  latency_ms REAL,
+  proactive_json TEXT NOT NULL DEFAULT '{}',
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_turn_traces_ts ON turn_traces(ts);
+CREATE INDEX IF NOT EXISTS ix_turn_traces_mode ON turn_traces(mode, ts);
 CREATE TABLE IF NOT EXISTS feedback(
   id TEXT PRIMARY KEY, turn_id TEXT NOT NULL, reaction TEXT NOT NULL, score REAL NOT NULL,
   note TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL
@@ -282,6 +307,8 @@ MEMORY_TABLES = frozenset({
     "user_profile", "score_records", "weak_rechecks", "conflicts",
     "search_documents", "search_fts", "search_meta", "research_sources",
     "bili_impressions",
+    # P15-A：推理过程 trace（每条回复的上下文/生成/守卫等，memory 域）
+    "turn_traces",
 })
 PERSONA_TABLES = frozenset({
     "persona", "persona_candidates", "persona_layers", "persona_changelog",
@@ -291,6 +318,7 @@ PERSONA_TABLES = frozenset({
     "share_candidates", "share_events", "wake_runs", "learning_proposals",
     # P9：心情判定状态 / 时间线（属于「人格库」：它自己的心情）
     "mood_state", "mood_timeline",
+    "interests", "interest_events",
 })
 TABLE_DOMAIN = {name: "memory" for name in MEMORY_TABLES}
 TABLE_DOMAIN.update({name: "persona" for name in PERSONA_TABLES})
@@ -341,6 +369,30 @@ def _split_schema(schema: str) -> tuple[str, str]:
 
 
 MEMORY_SCHEMA, PERSONA_SCHEMA = _split_schema(SCHEMA)
+PERSONA_SCHEMA += """
+CREATE TABLE IF NOT EXISTS interests(
+  id TEXT PRIMARY KEY,
+  topic TEXT NOT NULL UNIQUE,
+  weight REAL NOT NULL DEFAULT 0.3,
+  source TEXT NOT NULL DEFAULT 'chat',
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  hits INTEGER NOT NULL DEFAULT 0,
+  last_seen_at REAL NOT NULL,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS interest_events(
+  id TEXT PRIMARY KEY,
+  topic TEXT NOT NULL,
+  delta REAL NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  ref_json TEXT NOT NULL DEFAULT '{}',
+  at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_interests_weight ON interests(weight);
+CREATE INDEX IF NOT EXISTS ix_interest_events_topic ON interest_events(topic);
+"""
 MEMORY_SCHEMA += """
 CREATE TABLE IF NOT EXISTS bili_impressions(
   id TEXT PRIMARY KEY,
@@ -737,7 +789,7 @@ def counts(path: Path | str = DB_PATH) -> dict[str, int]:
                  "emoji_archive", "emoji_usage", "score_records", "learning_proposals",
                  "weak_rechecks", "wake_runs", "goals", "persona_layers",
                  "persona_changelog", "share_candidates", "share_events", "pairs",
-                 "inner_states", "mood_state", "mood_timeline"]
+                 "inner_states", "mood_state", "mood_timeline", "turn_traces"]
         return {name: int(con.execute(f"SELECT count(*) FROM {name}").fetchone()[0])
                 for name in names}
     finally:

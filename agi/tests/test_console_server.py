@@ -388,7 +388,7 @@ def test_http_write_requires_token(write_env):
     assert not console.STOP_PATH.exists()
 
 
-def test_http_config_and_prompts(write_env):
+def test_http_config_and_prompts(prompt_env):
     status, data = _call("POST", "/api/config", {"updates": {"proactive_enabled": False}},
                          token="tok")
     assert status == 200 and data["ok"] is True
@@ -1703,3 +1703,124 @@ def test_console_bili_config_http_whitelist(tmp_path, write_env, monkeypatch):
     assert status == 400 and data["ok"] is False
     status, _ = _call("POST", "/api/bili/config", {"updates": {"perDay": 1}})
     assert status == 401
+
+
+# ============================================================ P15-B 推理过程
+class _FakeTraceApi:
+    calls = []
+
+    @staticmethod
+    def handle_trace(path, query):
+        _FakeTraceApi.calls.append((path, query))
+        if path == "/turns":
+            return {"ok": True, "items": [
+                {"id": "T1", "ts": 1800000000.0, "mode": "chat",
+                 "user_text": "你好", "final_reply": "在", "latency_ms": 120.0,
+                 "skipped": False, "kind": "chat"}],
+                "limit": query.get("limit")}
+        if path == "/turn":
+            return {"ok": True, "item": {
+                "id": (query.get("id") or [""])[0], "user_text": "你好",
+                "final_reply": "在", "generation": {"reasoning": "先接住"},
+                "memories": [], "inner": {}, "polish": {}, "guard": {}}}
+        if path == "/stats":
+            return {"ok": True, "total": 1, "avg_latency_ms": 120.0,
+                    "skip_rate": 0.0, "p95_latency_ms": 120.0}
+        return {"ok": False, "error": "not_found:" + str(path)}
+
+
+def test_console_trace_routes_and_static_assets(tmp_path, write_env, monkeypatch):
+    _FakeTraceApi.calls = []
+    monkeypatch.setattr(console, "_load_trace_api", lambda: _FakeTraceApi)
+    status, _ = _call("GET", "/api/trace/turns?limit=5")
+    assert status == 401
+    status, data = _call("GET", "/api/trace/turns?limit=5", token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["items"][0]["id"] == "T1"
+    assert _FakeTraceApi.calls[-1][0] == "/turns"
+    assert _FakeTraceApi.calls[-1][1]["limit"] == ["5"]
+
+    status, data = _call("GET", "/api/trace/turn?id=T1", token="tok")
+    assert status == 200 and data["item"]["id"] == "T1"
+    status, data = _call("GET", "/api/trace/stats?days=7", token="tok")
+    assert status == 200 and data["total"] == 1
+
+    static_dir = Path(console.STATIC_DIR)
+    index = (static_dir / "index.html").read_text(encoding="utf-8")
+    app_js = (static_dir / "app.js").read_text(encoding="utf-8")
+    style = (static_dir / "style.css").read_text(encoding="utf-8")
+    assert 'data-page="trace"' in index
+    assert "renderTrace" in app_js and "traceDetailHtml" in app_js
+    assert ".trace-step" in style and ".trace-pre" in style
+    assert "推理过程" in app_js
+
+
+def test_console_trace_backend_unavailable_or_error(write_env, monkeypatch):
+    monkeypatch.setattr(console, "_load_trace_api", lambda: None)
+    status, data = _call("GET", "/api/trace/turns", token="tok")
+    assert status == 501 and data["error"] == "trace_backend_unavailable"
+    assert "trace_api.py" in data["hint"]
+
+    class BoomApi:
+        @staticmethod
+        def handle_trace(path, query):
+            raise RuntimeError("db locked")
+
+    monkeypatch.setattr(console, "_load_trace_api", lambda: BoomApi)
+    status, data = _call("GET", "/api/trace/turn?id=T1", token="tok")
+    assert status == 500 and data["error"] == "trace_api_error"
+    assert "db locked" in data["hint"]
+
+
+# ============================================================ P18-B 引擎启停
+def test_console_engine_get_and_unreachable(tmp_path, write_env, monkeypatch):
+    original_engine = console._engine_gateway
+    monkeypatch.setattr(console, "_engine_gateway",
+                        lambda path, method="GET": {"ok": True, "enabled": True,
+                                                    "since": 1800000000.0,
+                                                    "reason": "startup", "manual": False,
+                                                    "available": True})
+    status, _ = _call("GET", "/api/engine")
+    assert status == 401
+    status, data = _call("GET", "/api/engine", token="tok")
+    assert status == 200 and data["enabled"] is True and data["available"] is True
+
+    monkeypatch.setattr(console, "_engine_gateway", original_engine)
+    monkeypatch.setattr(console, "GATEWAY_STATUS_URL", "http://127.0.0.1:1/status")
+    status, data = _call("GET", "/api/engine", token="tok")
+    assert status == 200 and data["ok"] is False
+    assert data["error"] == "gateway_unreachable" and data["available"] is False
+
+
+def test_console_engine_toggle_proxy_and_audit(tmp_path, write_env, monkeypatch):
+    calls = []
+
+    def fake(path, method="GET"):
+        calls.append((path, method))
+        enabled = path.endswith("/start")
+        return {"ok": True, "enabled": enabled, "since": 1800000000.0,
+                "reason": "manual_start" if enabled else "manual_stop",
+                "manual": not enabled, "available": True, "changed": True}
+
+    monkeypatch.setattr(console, "_engine_gateway", fake)
+    status, data = _call("POST", "/api/engine/stop", {}, token="tok")
+    assert status == 200 and data["enabled"] is False and data["changed"] is True
+    status, data = _call("POST", "/api/engine/start", {}, token="tok")
+    assert status == 200 and data["enabled"] is True
+    assert calls == [("/api/engine/stop", "POST"), ("/api/engine/start", "POST")]
+    audits = console.AUDIT_PATH.read_text(encoding="utf-8").splitlines()
+    actions = [json.loads(line) for line in audits if "engine_toggle" in line]
+    assert len(actions) == 2 and all(entry["ok"] is True for entry in actions)
+    status, _ = _call("POST", "/api/engine/start", {})
+    assert status == 401
+
+    monkeypatch.setattr(console, "_engine_gateway",
+                        lambda path, method="GET": {"ok": False, "available": True,
+                                                    "error": "gateway_http_401"})
+    status, data = _call("POST", "/api/engine/stop", {}, token="tok")
+    assert status == 200 and data["ok"] is False and data["error"] == "gateway_http_401"
+
+    static_dir = Path(console.STATIC_DIR)
+    app_js = (static_dir / "app.js").read_text(encoding="utf-8")
+    assert "renderEngineCard" in app_js and "engine-start" in app_js and "engine-stop" in app_js
+    assert "bindEngineActions" in app_js and "toggleEngine" in app_js

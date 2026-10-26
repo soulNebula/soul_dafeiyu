@@ -27,6 +27,7 @@ const state = {
   memoryEdit: null,
   statsState: null,
   bili: null,
+  trace: null,
   status: null,
   inner: null,
   tone: null,
@@ -35,6 +36,7 @@ const state = {
 const PAGES = {
   overview: '总览',
   feed: '对话流',
+  trace: '推理过程',
   chat: '对话测试',
   inner: '内状态',
   media: '媒体',
@@ -195,6 +197,10 @@ function renderPills() {
   } else if (status) {
     pills.push(pill('gateway 未连接', 'err'));
   }
+  const engine = state.engine || (status && status.status && status.status.engine);
+  if (engine) {
+    pills.push(pill(engine.enabled ? '运行中' : '已停止', engine.enabled ? 'ok' : 'err'));
+  }
   if (state.config && state.config.config) {
     const cfg = state.config.config;
     pills.push(pill('inner: ' + (cfg.inner_mode || 'off'), cfg.inner_mode && cfg.inner_mode !== 'off' ? 'info' : ''));
@@ -207,20 +213,23 @@ function renderPills() {
 /* ---------------- 总览 ---------------- */
 async function renderOverview() {
   $('#app').innerHTML = '<div class="empty">加载总览…</div>';
-  let status = null, feed = null, config = null, models = null;
+  let status = null, feed = null, config = null, models = null, engine = null;
   const errors = [];
   try { status = await api('/api/status'); } catch (e) { errors.push('gateway: ' + e.message); }
+  try { engine = await api('/api/engine'); } catch (e) { errors.push('引擎: ' + e.message); }
   try { feed = await api('/api/feed?limit=6'); } catch (e) { errors.push('事件流: ' + e.message); }
   try { config = await api('/api/config'); } catch (e) { errors.push('配置: ' + e.message); }
   try { models = await api('/api/models'); } catch (e) { errors.push('模型: ' + e.message); }
-  state.status = status; state.config = config; state.models = models;
+  state.status = status; state.config = config; state.models = models; state.engine = engine;
   renderPills();
 
   if (!status || !status.ok) {
     const reason = (status && status.error) || (errors[0] || '未知错误');
-    $('#app').innerHTML = card('网关状态', `<div class="error-text">gateway 未连接：${esc(reason)}</div>
+    $('#app').innerHTML = renderEngineCard(engine) +
+      card('网关状态', `<div class="error-text">gateway 未连接：${esc(reason)}</div>
       <p class="hint">确认 <code>python -m agi.wechat_gateway.server</code> 正在 127.0.0.1:801 运行；本页数据仍会显示本机文件部分。</p>`) +
       card('最近事件', renderEventList((feed && feed.items) || []));
+    bindEngineActions();
     return;
   }
 
@@ -242,6 +251,7 @@ async function renderOverview() {
 
   const html = `
     ${errors.length ? `<div class="card"><div class="error-text">部分数据获取失败：${esc(errors.join('；'))}</div></div>` : ''}
+    ${renderEngineCard(engine)}
     <div class="grid cols-4">
       ${card('主动消息', `<div class="big">${proactive.enabled ? '开' : '关'}</div>
         <div class="muted">概率 ${num((proactive.probability || {}).min)}–${num((proactive.probability || {}).max)} · 间隔 ${num((proactive.interval_s || {}).min)}–${num((proactive.interval_s || {}).max)}s</div>
@@ -256,6 +266,58 @@ async function renderOverview() {
       ${card('最近对话片段', renderMiniMessages((st.recent || []).slice(-6).reverse()))}
     </div>`;
   $('#app').innerHTML = html;
+  bindEngineActions();
+}
+
+function renderEngineCard(engine) {
+  const available = engine && engine.available !== false;
+  const enabled = engine ? !!engine.enabled : null;
+  const statusPill = enabled === true ? pill('🟢 运行中', 'ok')
+    : (enabled === false ? pill('⏸ 已停止', 'err') : pill('状态未知', 'warn'));
+  const since = engine && engine.since ? fmtDateTime(engine.since) : '—';
+  const reasonMap = { startup: '开机启动', manual_start: '手动开始', manual_stop: '手动停止',
+    config_disabled: '配置禁用', persist_failed: '持久化失败' };
+  const reason = engine ? (reasonMap[engine.reason] || engine.reason || '—') : '—';
+  const button = enabled === true
+    ? '<button class="btn danger" id="engine-stop">停止运行</button>'
+    : `<button class="btn success" id="engine-start" ${available && enabled !== null ? '' : 'disabled'}>开始运行</button>`;
+  return `<div class="card engine-card">
+    <div class="row between">
+      <div>
+        <div class="row">${statusPill}<b>${enabled === true ? '引擎运行中' : (enabled === false ? '引擎已停止' : '引擎状态未知')}</b></div>
+        <div class="hint" style="margin-top:6px">起始 ${esc(since)} · 原因 ${esc(reason)}${engine && engine.manual ? ' · 手动停止' : ''}</div>
+        <div class="hint">停止后不再监听和自动回复、主动消息暂停；控制台与对话测试仍可用（停止不会关闭控制台）。</div>
+      </div>
+      <div class="row">${button}${available ? '' : '<span class="pill err"><span class="dot"></span>网关不可达</span>'}</div>
+    </div>
+    ${engine && engine.ok === false ? `<div class="error-text" style="margin-top:6px">${esc(engine.error || '')} ${esc(engine.hint || '')}</div>` : ''}
+  </div>`;
+}
+
+function bindEngineActions() {
+  const stop = $('#engine-stop');
+  if (stop) stop.onclick = () => toggleEngine('stop');
+  const start = $('#engine-start');
+  if (start) start.onclick = () => toggleEngine('start');
+}
+
+async function toggleEngine(action) {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  if (action === 'stop' && !window.confirm('停止后不再监听和自动回复、主动消息暂停；控制台与对话测试仍可用。 确定停止运行？')) return;
+  const button = action === 'stop' ? $('#engine-stop') : $('#engine-start');
+  const label = button ? button.textContent : '';
+  if (button) { button.disabled = true; button.textContent = '处理中…'; }
+  try {
+    const result = await api('/api/engine/' + action, { method: 'POST', body: {} });
+    if (result.ok === false) {
+      throw new Error(result.error === 'gateway_unreachable' ? '网关不可达' : (result.error || '操作失败'));
+    }
+    toast(action === 'stop' ? '已停止运行' : '已开始运行', 'ok');
+    await renderOverview();
+  } catch (err) {
+    toast(err.message, 'err');
+    if (button) { button.disabled = false; button.textContent = label; }
+  }
 }
 
 function renderEventList(items) {
@@ -2490,10 +2552,359 @@ async function showBiliReport() {
   } catch (err) { toast(err.message, 'err'); }
 }
 
+/* ---------------- 推理过程（P15-B） ---------------- */
+let traceCopyBuffer = [];
+
+function traceJson(value, fallback) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'string') {
+    try { return JSON.parse(value); } catch (err) { return value; }
+  }
+  return value;
+}
+
+function traceText(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value, null, 2); } catch (err) { return String(value); }
+}
+
+function traceCopyButton(text, label) {
+  const index = traceCopyBuffer.push(String(text || '')) - 1;
+  return `<button class="btn small" data-trace-copy="${index}">${esc(label || '复制全文')}</button>`;
+}
+
+function tracePre(text, cls) {
+  return `<pre class="trace-pre ${cls || ''}">${esc(String(text || ''))}</pre>`;
+}
+
+function traceStep(title, bodyHtml, open) {
+  return `<details class="trace-step" ${open ? 'open' : ''}><summary>${esc(title)}</summary>
+    <div class="trace-step-body">${bodyHtml}</div></details>`;
+}
+
+function traceKV(rows) {
+  return `<div class="kv">${rows.map(([key, value]) =>
+    `<span class="k">${esc(key)}</span><span class="v">${esc(value === undefined || value === null ? '—' : value)}</span>`).join('')}</div>`;
+}
+
+function traceSummaryText(value, chars) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return esc(text.length > chars ? text.slice(0, chars) + '…' : text);
+}
+
+async function renderTrace() {
+  $('#app').innerHTML = '<div class="empty">加载推理过程…</div>';
+  if (!state.token) {
+    $('#app').innerHTML = card('推理过程', '<div class="error-text">推理过程需要 admin token：请在右上角填写。</div>');
+    return;
+  }
+  const prev = state.trace || {};
+  state.trace = {
+    mode: prev.mode || '', limit: prev.limit || 50,
+    auto: prev.auto || false, turns: null, stats: null,
+    selected: prev.selected || null, detail: prev.detail || null,
+    demo: false, error: '', timer: prev.timer || null,
+  };
+  await loadTrace();
+}
+
+async function loadTrace() {
+  const trace = state.trace || {};
+  const params = 'limit=' + encodeURIComponent(trace.limit)
+    + '&mode=' + encodeURIComponent(trace.mode);
+  let turns = null, stats = null, error = '';
+  try { turns = await api('/api/trace/turns?' + params); }
+  catch (err) { error = err.message; }
+  try { stats = await api('/api/trace/stats?days=7'); }
+  catch (err) { if (!error) error = err.message; }
+  trace.turns = turns;
+  trace.stats = stats;
+  trace.error = error;
+  renderTracePage();
+}
+
+function renderTracePage() {
+  const trace = state.trace || {};
+  const unavailable = !!(trace.error && (String(trace.error).indexOf('trace_backend') >= 0
+    || String(trace.error).indexOf('501') >= 0 || String(trace.error).indexOf('尚未就绪') >= 0));
+  const turns = (trace.turns && (trace.turns.items || trace.turns.turns || trace.turns.data)) || [];
+  const stats = trace.stats || {};
+  const detail = trace.detail || null;
+  traceCopyBuffer = [];
+
+  const statsCards = `<div class="grid cols-4">
+    ${card('近 7 天条数', `<div class="big">${num(stats.total ?? stats.count)}</div><div class="muted">trace 记录</div>`)}
+    ${card('平均延迟', `<div class="big">${stats.avg_latency_ms === undefined ? '—' : num(stats.avg_latency_ms) + 'ms'}</div><div class="muted">avg latency</div>`)}
+    ${card('跳过率', `<div class="big">${pct(stats.skip_rate)}</div><div class="muted">skipped / total</div>`)}
+    ${card('P95 延迟', `<div class="big">${stats.p95_latency_ms === undefined && stats.p95 === undefined ? '—' : num(stats.p95_latency_ms ?? stats.p95) + 'ms'}</div><div class="muted">P95</div>`)}
+  </div>`;
+
+  const listHtml = turns.length ? turns.map((item) => {
+    const active = trace.selected === item.id;
+    return `<div class="trace-turn ${active ? 'active' : ''}" data-trace-id="${esc(item.id)}">
+      <div class="row between"><span class="hint">${item.ts ? fmtDateTime(item.ts) : '—'}</span>
+        ${badge(item.mode || 'chat', item.mode === 'proactive' ? 'purple' : 'blue')}
+        ${item.skipped ? badge('跳过', 'orange') : ''}</div>
+      <div class="trace-turn-user">${traceSummaryText(item.user_text, 40) || '<span class="hint">（无用户原文）</span>'}</div>
+      <div class="trace-turn-reply">${traceSummaryText(item.final_reply, 40) || '<span class="hint">（无回复）</span>'}</div>
+      <div class="row between"><span class="hint">延迟 ${item.latency_ms === undefined || item.latency_ms === null ? '—' : num(item.latency_ms) + 'ms'}</span>
+        ${item.kind ? badge(item.kind, '') : ''}</div>
+    </div>`;
+  }).join('') : '<div class="empty">还没有 trace 记录（trace_enabled 关着或还没跑过新 turn）</div>';
+
+  let detailHtml = '<div class="empty">点左侧一条 turn 查看完整推理链</div>';
+  if (detail) detailHtml = traceDetailHtml(detail);
+
+  const unavailableHtml = unavailable ? `<div class="card">
+    <div class="error-text">推理过程后端未就绪：${esc(trace.error)}</div>
+    <p class="hint">等 w3-latency 的 task-90（tools/console/trace_api.py）落地后自动切真；现在可以先看演示数据。</p>
+    <button class="btn" id="trace-demo">加载演示数据</button></div>` : '';
+
+  $('#app').innerHTML = `
+    <div class="card">
+      <div class="row between">
+        <div class="row">
+          <span class="hint">模式</span>
+          <select id="trace-mode">
+            <option value="" ${trace.mode === '' ? 'selected' : ''}>全部</option>
+            <option value="chat" ${trace.mode === 'chat' ? 'selected' : ''}>chat</option>
+            <option value="proactive" ${trace.mode === 'proactive' ? 'selected' : ''}>proactive</option>
+          </select>
+          <select id="trace-limit">${[20, 50, 100].map((value) =>
+            `<option value="${value}" ${trace.limit === value ? 'selected' : ''}>最近 ${value} 条</option>`).join('')}</select>
+          <label class="switch"><input type="checkbox" id="trace-auto" ${trace.auto ? 'checked' : ''}> 自动刷新 5s</label>
+          <button class="btn small" id="trace-refresh">刷新</button>
+        </div>
+        <div class="row">
+          ${trace.demo ? badge('演示数据', 'orange') : ''}
+          ${pill('含用户原文/模型输出，仅本机', 'warn')}
+        </div>
+      </div>
+      ${unavailableHtml}
+      ${trace.error && !unavailable ? `<div class="error-text" style="margin-top:8px">${esc(trace.error)}</div>` : ''}
+    </div>
+    ${statsCards}
+    <div class="trace-layout">
+      <div class="card trace-list">${listHtml}</div>
+      <div class="card trace-detail">${detailHtml}</div>
+    </div>`;
+
+  const mode = $('#trace-mode');
+  if (mode) mode.onchange = () => { state.trace.mode = mode.value; state.trace.selected = null; state.trace.detail = null; loadTrace(); };
+  const limit = $('#trace-limit');
+  if (limit) limit.onchange = () => { state.trace.limit = Number(limit.value); loadTrace(); };
+  const refresh = $('#trace-refresh');
+  if (refresh) refresh.onclick = () => loadTrace();
+  const auto = $('#trace-auto');
+  if (auto) auto.onchange = () => {
+    state.trace.auto = auto.checked;
+    if (state.trace.timer) { clearInterval(state.trace.timer); state.trace.timer = null; }
+    if (state.trace.auto) state.trace.timer = setInterval(() => {
+      if (state.page !== 'trace') return;
+      if (!state.trace.auto) return;
+      loadTrace();
+    }, 5000);
+  };
+  const demoBtn = $('#trace-demo');
+  if (demoBtn) demoBtn.onclick = loadTraceDemo;
+  $$('[data-trace-id]').forEach((node) => {
+    node.onclick = () => loadTraceTurn(node.dataset.traceId);
+  });
+  $$('[data-trace-copy]').forEach((button) => {
+    button.onclick = () => copyTraceText(traceCopyBuffer[Number(button.dataset.traceCopy)] || '');
+  });
+}
+
+async function loadTraceTurn(id) {
+  if (!id) return;
+  state.trace.selected = id;
+  if (state.trace.demo) {
+    state.trace.detail = ((state.trace.details || {})[id]) || { id, error: '演示数据里没有这条' };
+    renderTracePage();
+    return;
+  }
+  try {
+    const detail = await api('/api/trace/turn?id=' + encodeURIComponent(id));
+    state.trace.detail = (detail && (detail.item || detail.turn || detail.data)) || detail;
+  } catch (err) {
+    toast(err.message, 'err');
+    state.trace.detail = { id, error: err.message };
+  }
+  renderTracePage();
+}
+
+function traceDetailHtml(raw) {
+  if (raw && raw.error) return `<div class="error-text">${esc(raw.error)}</div>`;
+  const detail = raw || {};
+  const memories = traceJson(detail.memories ?? detail.memories_json, []);
+  const inner = traceJson(detail.inner ?? detail.inner_json, {});
+  const mood = traceJson(detail.mood ?? detail.mood_json, null);
+  const generation = traceJson(detail.generation ?? detail.generation_json, {});
+  const polish = traceJson(detail.polish ?? detail.polish_json, {});
+  const guard = traceJson(detail.guard ?? detail.guard_json, {});
+  const proactive = traceJson(detail.proactive ?? detail.proactive_json, null);
+  const userText = detail.user_text || '';
+  const systemPrompt = detail.system_prompt || '';
+  const promptUser = detail.prompt_user || '';
+  const reasoning = generation.reasoning || generation.reasoning_content || '';
+  const rawText = generation.raw_text || generation.raw_output || '';
+
+  const contextBody = `
+    <div class="trace-label">用户原文</div>${tracePre(userText || '（空）')}
+    ${systemPrompt ? `<details class="trace-sub"><summary>system prompt（${systemPrompt.length} 字）</summary>
+      <div class="row" style="justify-content:flex-end">${traceCopyButton(systemPrompt)}</div>${tracePre(systemPrompt)}</details>` : ''}
+    ${promptUser ? `<details class="trace-sub"><summary>user prompt（${promptUser.length} 字）</summary>
+      <div class="row" style="justify-content:flex-end">${traceCopyButton(promptUser)}</div>${tracePre(promptUser)}</details>` : ''}`;
+
+  const memoriesBody = (Array.isArray(memories) && memories.length)
+    ? `<div style="overflow:auto"><table><thead><tr><th>id</th><th>kind</th><th>content</th><th>score</th></tr></thead><tbody>
+      ${memories.map((item) => `<tr><td class="mono hint">${esc(item.id || '')}</td><td>${badge(item.kind || '')}</td>
+        <td>${esc(item.content || '')}</td><td class="num">${item.score === undefined ? '—' : esc(item.score)}</td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="hint">无（本轮没有命中记忆）</div>';
+
+  const innerBody = `<div class="row">${badge('mode: ' + (inner.mode || '—'))}${badge('source: ' + (inner.source || '—'))}
+    ${inner.injected ? badge('已注入 prompt', 'green') : badge('未注入', 'orange')}
+    <span class="hint">latency ${inner.latency_ms === undefined ? '—' : num(inner.latency_ms) + 'ms'}</span></div>
+    ${inner.state_json ? tracePre(traceText(traceJson(inner.state_json, inner.state_json))) : traceKV([
+      ['stance', inner.stance], ['intent', inner.intent], ['monologue', inner.monologue],
+      ['behavior', traceText(inner.behavior)]])}`;
+
+  const moodBody = (mood && Object.keys(mood).length)
+    ? `${traceKV([['delta', mood.delta ?? mood.mood_delta], ['reason', mood.reason],
+        ['confidence', mood.confidence], ['backend', mood.backend ?? mood.source]])}
+       <details class="trace-sub"><summary>原始 JSON</summary>${tracePre(traceText(mood))}</details>`
+    : '<div class="hint">本轮没有心情判定记录</div>';
+
+  const generationBody = `
+    ${traceKV([['model', generation.model], ['purpose', generation.purpose],
+      ['two_stage', generation.two_stage === undefined ? '—' : String(generation.two_stage)],
+      ['usage', traceText(generation.usage)], ['耗时', generation.elapsed ?? generation.latency_ms],
+      ['finish_reason', generation.finish_reason]])}
+    ${generation.claims && generation.claims.length ? `<div class="trace-label">claims</div>${tracePre(traceText(generation.claims))}` : ''}
+    ${reasoning ? `<details class="trace-sub" open><summary>reasoning 原文（${String(reasoning).length} 字）</summary>
+      <div class="row" style="justify-content:flex-end">${traceCopyButton(reasoning)}</div>
+      ${tracePre(reasoning, 'trace-reasoning')}</details>`
+      : '<div class="hint">模型没有返回 reasoning 原文（provider 未提供或非 reasoning 模型）</div>'}
+    ${rawText ? `<details class="trace-sub"><summary>raw_text 模型原始输出（${String(rawText).length} 字）</summary>
+      <div class="row" style="justify-content:flex-end">${traceCopyButton(rawText)}</div>${tracePre(rawText)}</details>` : ''}`;
+
+  const polishBody = (polish && Object.keys(polish).length)
+    ? `<div class="trace-diff"><div><div class="trace-label">before</div>${tracePre(polish.before || '')}</div>
+       <div><div class="trace-label">after</div>${tracePre(polish.after || '')}</div></div>
+       ${(polish.reasons || []).length ? `<div class="hint">reasons: ${esc((polish.reasons || []).join(' · '))}</div>` : ''}`
+    : '<div class="hint">无润色记录（未改或未启用）</div>';
+
+  const guardBody = `${traceKV([['blocked', guard.blocked], ['regenerated', guard.regenerated],
+      ['final', guard.final]])}
+    ${(guard.violations || []).length ? `<div class="trace-label">violations</div>${tracePre(traceText(guard.violations))}` : '<div class="hint">没有违规项</div>'}
+    ${Object.keys(guard).length ? `<details class="trace-sub"><summary>guard 原始 JSON</summary>${tracePre(traceText(guard))}</details>` : ''}`;
+
+  const sendBody = `${traceKV([['skipped', detail.skipped], ['skip_reason', detail.skip_reason],
+      ['crisis', detail.crisis], ['status', detail.status || guard.status],
+      ['latency_ms', detail.latency_ms]])}
+    <div class="trace-label">最终回复</div>${tracePre(detail.final_reply || '')}
+    ${detail.media || (generation && generation.media) ? `<details class="trace-sub"><summary>媒体</summary>${tracePre(traceText(detail.media || generation.media))}</details>` : ''}`;
+
+  return `<div class="trace-head">
+    <div class="row between"><b class="mono">${esc(detail.id || '')}</b>
+      ${badge(detail.mode || 'chat', detail.mode === 'proactive' ? 'purple' : 'blue')}
+      ${detail.skipped ? badge('跳过', 'orange') : ''}
+      <span class="hint">${detail.ts ? fmtDateTime(detail.ts) : ''} · ${detail.latency_ms === undefined ? '—' : num(detail.latency_ms) + 'ms'}</span></div>
+    <div class="hint">trace 含用户原文与模型输出，只在本机展示，勿外传。</div>
+  </div>
+  ${traceStep('① 上下文（用户原文 / system / user prompt）', contextBody, true)}
+  ${traceStep('② 记忆检索', memoriesBody)}
+  ${traceStep('③ 内状态', innerBody)}
+  ${traceStep('④ 心情判定', moodBody)}
+  ${traceStep('⑤ 生成（model/usage/reasoning/raw_text）', generationBody)}
+  ${traceStep('⑥ 润色（before → after）', polishBody)}
+  ${traceStep('⑦ 守卫 / 后处理', guardBody)}
+  ${traceStep('⑧ 发送结果', sendBody)}
+  ${proactive ? traceStep('⑨ 主动消息决策', tracePre(traceText(proactive))) : ''}`;
+}
+
+function traceDemoData() {
+  const now = Date.now() / 1000;
+  const turns = [
+    { id: 'T-demo-001', ts: now - 120, mode: 'chat', user_text: '今天有点累，不太想说话',
+      final_reply: '那就先歇会儿，不用硬撑着跟我聊', latency_ms: 812.4, skipped: false, kind: 'chat' },
+    { id: 'T-demo-002', ts: now - 5400, mode: 'proactive', user_text: '',
+      final_reply: '刚看到你昨天说的那家店今天排队少了', latency_ms: 1203.0, skipped: false, kind: 'proactive' },
+  ];
+  const details = {
+    'T-demo-001': {
+      id: 'T-demo-001', ts: now - 120, mode: 'chat', contact: 'demo',
+      user_text: '今天有点累，不太想说话',
+      system_prompt: '你是一个通过长期对话自我改进的 AI……\n[演示 system prompt，真实页面会显示最终版]',
+      prompt_user: '用户：今天有点累，不太想说话\n最近记忆：…',
+      memories: [{ id: 'UM-demo-1', kind: 'preference', content: '用户不喜欢被催', score: 0.83 },
+                 { id: 'UM-demo-2', kind: 'fact', content: '用户最近加班多', score: 0.71 }],
+      inner: { mode: 'model', source: 'local', latency_ms: 380.5, injected: true,
+        stance: '有点心疼', intent: '先接住情绪，不给建议',
+        monologue: '他都说不想说话了，别追问', behavior: { length: 'short', ask: false, advice: false } },
+      mood: { delta: -2, reason: '听你说累，我心里有点沉', confidence: 78, backend: 'deepseek' },
+      generation: { model: 'deepseek-flash', purpose: 'chat', two_stage: false,
+        usage: { prompt_tokens: 1800, completion_tokens: 40 }, elapsed: 640,
+        reasoning: '用户说累，先共情，不要讲道理。语气放软，短句。',
+        raw_text: '那就先歇会儿，不用硬撑着跟我聊。' },
+      polish: { before: '那就先歇会儿，不用硬撑着跟我聊。', after: '那就先歇会儿，不用硬撑着跟我聊',
+        reasons: ['strip_period', '口语化'] },
+      guard: { blocked: false, regenerated: false, violations: [], final: '那就先歇会儿，不用硬撑着跟我聊' },
+      final_reply: '那就先歇会儿，不用硬撑着跟我聊', latency_ms: 812.4, skipped: false, crisis: false,
+    },
+    'T-demo-002': {
+      id: 'T-demo-002', ts: now - 5400, mode: 'proactive', contact: 'demo',
+      user_text: '',
+      system_prompt: '[演示] 主动消息 prompt：…',
+      prompt_user: '[演示] 最近对话与话题种子',
+      memories: [{ id: 'UM-demo-3', kind: 'event', content: '用户提过想试那家店', score: 0.66 }],
+      inner: { mode: 'rule', source: 'rule', latency_ms: 0, injected: false },
+      mood: { delta: 1, reason: '想到能帮上他，心里轻快', confidence: 70, backend: 'deepseek' },
+      generation: { model: 'deepseek-flash', purpose: 'proactive', two_stage: true,
+        usage: { prompt_tokens: 2200, completion_tokens: 35 }, elapsed: 980,
+        reasoning: '不要复述他说过的话；用具体信息开场，一句就够。',
+        raw_text: '刚看到你昨天说的那家店今天排队少了' },
+      polish: { before: '', after: '', reasons: [] },
+      guard: { blocked: false, regenerated: false, violations: [], final: '刚看到你昨天说的那家店今天排队少了' },
+      final_reply: '刚看到你昨天说的那家店今天排队少了', latency_ms: 1203.0, skipped: false, crisis: false,
+    },
+  };
+  return { turns, details };
+}
+
+function loadTraceDemo() {
+  const demo = traceDemoData();
+  state.trace.demo = true;
+  state.trace.error = '';
+  state.trace.turns = { ok: true, items: demo.turns };
+  state.trace.stats = { ok: true, total: 2, avg_latency_ms: 1007.7,
+    skip_rate: 0, p95_latency_ms: 1203.0 };
+  state.trace.details = demo.details;
+  state.trace.selected = demo.turns[0].id;
+  state.trace.detail = demo.details[demo.turns[0].id];
+  renderTracePage();
+}
+
+async function copyTraceText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(String(text || ''));
+    } else {
+      const area = document.createElement('textarea');
+      area.value = String(text || '');
+      document.body.appendChild(area); area.select();
+      document.execCommand('copy'); area.remove();
+    }
+    toast('已复制全文', 'ok');
+  } catch (err) { toast('复制失败：' + err.message, 'err'); }
+}
+
 /* ---------------- 路由 ---------------- */
 const RENDERERS = {
   overview: renderOverview,
   feed: renderFeed,
+  trace: renderTrace,
   chat: renderChatTest,
   inner: renderInner,
   media: renderMedia,
@@ -2513,6 +2924,9 @@ async function go(page, auto) {
   if (!PAGES[page]) page = 'overview';
   if (page !== 'bili' && state.bili && state.bili.timer) {
     clearInterval(state.bili.timer); state.bili.timer = null;
+  }
+  if (page !== 'trace' && state.trace && state.trace.timer) {
+    clearInterval(state.trace.timer); state.trace.timer = null;
   }
   state.page = page;
   $('#page-title').textContent = PAGES[page];

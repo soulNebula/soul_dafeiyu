@@ -50,6 +50,10 @@ class FakeComment:
         ]}
 
 
+def fake_chat_clean(purpose, messages, **kwargs):
+    return _fake_chat_factory()[0](purpose, messages, **kwargs)
+
+
 def _fake_chat_factory(overrides=None, calls=None):
     overrides = overrides or {}
     calls = calls if calls is not None else []
@@ -73,7 +77,7 @@ def _fake_chat_factory(overrides=None, calls=None):
             "ingest_summary": {"summary": "一个测试视频的摘要", "emotion": "positive"},
             "video_understanding": {"value": 0.8, "why": "讲得具体",
                                     "my_take": "我看了觉得挺有意思"},
-            "share_copy": {"share_line": "刷到一个讲得挺清楚的视频"},
+            "share_copy": {"share_line": "发现个讲得挺清楚的东西"},
         }
         data = defaults.get(purpose, {})
         return {"ok": True, "text": json.dumps(data, ensure_ascii=False),
@@ -132,6 +136,53 @@ def test_subtitle_missing_still_summarizes(tmp_path, monkeypatch):
     assert result["impression"]["subtitle_missing"] is True
     assert result["subtitle_len"] == 0
     assert any("标题" in prompt for prompt in prompts)
+
+
+def test_dirty_share_regenerated_then_clean(tmp_path):
+    calls = []
+    def fake_share(purpose, messages, **kwargs):
+        if purpose != "share_copy":
+            return _fake_chat_factory()[0](purpose, messages, **kwargs)
+        calls.append(messages[-1]["content"])
+        line = "刷到个讲得挺清楚的视频" if len(calls) == 1 else "发现个讲得挺清楚的东西"
+        return {"ok": True, "text": json.dumps({"share_line": line}),
+                "backend": "api", "usage": {}, "latency_ms": 1}
+    bili_ingest.llm_chat = fake_share
+    result = bili_ingest.ingest("BV1CLEAN", path=tmp_path / "db.sqlite3")
+    assert result["ok"] is True, result
+    line = result["impression"]["share_line"]
+    assert all(word not in line for word in bili_ingest.SHARE_BANNED)
+    assert result["impression"]["share_line_cleaned"] is False
+    assert len(calls) == 2
+
+
+def test_dirty_share_still_dirty_is_rule_cleaned(tmp_path):
+    bili_ingest.llm_chat = lambda purpose, messages, **kwargs: {
+        "ok": True, "text": json.dumps({"share_line": "刷到个B站视频"}),
+        "backend": "api", "usage": {}, "latency_ms": 1}
+    result = bili_ingest.ingest("BV1DIRTY", path=tmp_path / "db.sqlite3")
+    assert result["ok"] is True
+    assert result["impression"]["share_line_cleaned"] is True
+    assert all(word not in result["impression"]["share_line"]
+               for word in bili_ingest.SHARE_BANNED)
+
+
+def test_refresh_share_lines_updates_rows(tmp_path, monkeypatch):
+    path = tmp_path / "db.sqlite3"
+    bili_ingest.llm_chat = fake_chat_clean
+    first = bili_ingest.ingest("BV1REFRESH", path=path)
+    assert first["ok"] is True, first
+    con = bili_ingest.db.connect(path)
+    con.execute("UPDATE bili_impressions SET share_line=? WHERE bvid=?",
+                ("刷到个B站视频", "BV1REFRESH"))
+    con.commit(); con.close()
+    payload = bili_ingest.refresh_share_lines(5, path=path)
+    assert payload["updated"] == 1
+    item = payload["items"][0]
+    assert item["before"] == "刷到个B站视频"
+    assert all(word not in item["after"] for word in bili_ingest.SHARE_BANNED)
+    got = bili_ingest.get_impression("BV1REFRESH", path=path)
+    assert got["share_line"] == item["after"]
 
 
 def test_bad_json_retries_once_then_fails_without_partial(tmp_path):

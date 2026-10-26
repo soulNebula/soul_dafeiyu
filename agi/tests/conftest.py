@@ -29,6 +29,18 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _isolate_pacing(monkeypatch):
+    """P16-B：自适应节奏默认只在专项测试里开启。
+
+    pacing 会改写主动消息的概率与间隔（按用户/agent 消息比例自适应），
+    若在普通测试里默认生效会改变既有断言（skip reason、是否发送等）。
+    这里统一关闭，`test_pacing.py` 等专项测试自行 `monkeypatch.setenv("PACING_ENABLED", "1")`。
+    """
+    monkeypatch.setenv("PACING_ENABLED", "0")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_contact_db(tmp_path, monkeypatch):
     """把联系人库路径重定向到临时目录，避免测试污染真实 agi/data。"""
     contacts = tmp_path / "_contacts"

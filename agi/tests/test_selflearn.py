@@ -247,7 +247,9 @@ def test_dynamic_variant_is_limited_and_deduped(tmp_path):
     assert len(skills.variant_stats(path)) <= 8
 
 
-def test_two_stage_generation_uses_valid_claims(tmp_path):
+def test_two_stage_generation_uses_valid_claims(tmp_path, monkeypatch):
+    # 两段式默认已关（聊天提速）；此用例显式打开验证其行为
+    monkeypatch.setenv("SELFLEARN_TWO_STAGE", "1")
     path = tmp_path / "selflearn.sqlite3"
     class C:
         def __init__(self): self.seen = []

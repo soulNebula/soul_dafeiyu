@@ -37,7 +37,8 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 
 | 页面 | 数据来源 |
 | --- | --- |
-| 总览 | `/api/status`（网关 801 代理）+ `/api/feed` + `/api/config` + `/api/models` |
+| 总览 | `/api/status`（网关 801 代理）+ `/api/engine`（引擎启停卡）；停止不关闭控制台 |+ `/api/feed` + `/api/config` + `/api/models` |
+| 推理过程 | `/api/trace/*`（w3-latency P15-A `tools/console/trace_api.py`）：最近 turn 列表/完整推理链/统计；后端未就绪时显示提示+演示数据 |
 | 对话流 | `agi/data/wechat/gateway.log`（JSONL 事件，只读 tail，3s 自动刷新） |
 | 内状态 | 联系人库 `inner_states`（只读 URI 连接；mode/injected/state_json/block/延迟/fallback） |
 | 对话测试 | 隔离库 `agi/data/selflearn/console_test.sqlite3` → 进程内 `SelfLearnAgent.send()`，可试提示词/模型效果，不影响真实联系人 |
@@ -153,6 +154,25 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 - **日志**：`GET /api/logs?source=gateway|inner|prompt|regen&limit=200&q=&kind=`，读 gateway.log(JSONL) /
   inner.log / prompt_override.log / regen_failed 计数；关键词+kind 过滤、时间倒序、错误行红色、点行看整条 JSON。
 - 顶部导航新增「对话测试 / 模型配置 / 日志」三项。
+
+## 总览 · 引擎启停（P18-B）
+
+总览页顶部一张引擎卡：🟢 运行中 / ⏸ 已停止 + 起始时间 + 原因（startup/manual_start/manual_stop/config_disabled）；
+运行中显示红色「停止运行」（二次确认：停止后不再监听/自动回复、主动消息暂停，控制台与对话测试仍可用）；
+已停止显示绿色「开始运行」（直接启动）。点击后按钮 loading→toast→刷新状态；失败保持原状态并 toast。
+顶部 pills 增加「运行中/已停止」。控制台只代理网关 801 的 `/api/engine` 与 `/api/engine/start|stop`（5s 超时），
+不缓存、不改网关状态文件；网关不可达时 `gateway_unreachable`，页面提示但不崩。
+
+## 推理过程页（P15-B）
+
+- 最近 turn 列表（时间/模式 chat|proactive/用户前 40 字/回复前 40 字/延迟/跳过/kind），点开显示完整推理链：
+  ① 上下文（用户原文、system prompt、user prompt，折叠+复制） ② 记忆命中 ③ 内状态 ④ 心情判定
+  ⑤ 生成（model/usage/two_stage/claims/**reasoning 原文**/raw_text） ⑥ 润色 before→after ⑦ 守卫/违规
+  ⑧ 发送结果 ⑨ 主动消息决策（若有）；长文本折叠 + 复制全文，等宽 pre-wrap
+- 顶部：模式筛选（全部/chat/proactive）、条数、自动刷新（默认关，5s）、统计卡（条数/平均延迟/跳过率/p95）、
+  隐私提示（含用户原文与模型输出，仅本机）
+- 后端接口由 w3-latency 的 `tools/console/trace_api.py` 提供（`handle_trace(suffix, query)`，suffix=`/turns` 等）；
+  未落地时页面显示「后端未就绪」并支持加载演示数据。
 
 ## B站页（P11）
 

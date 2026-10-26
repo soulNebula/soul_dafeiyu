@@ -21,6 +21,9 @@ CONTACT_DB_DIR = ROOT / "agi" / "data" / "selflearn" / "wechat_contacts"
 
 DEFAULTS = {
     "enabled": False,
+    # P18-A：引擎总开关（监听+自动回复+主动消息）；默认 true，与 enabled 不同：
+    # enabled 是网关进程是否启动，engine_enabled 是运行中的软开关（控制台一键运行/停止）。
+    "engine_enabled": True,
     "port": 801,
     "auto_reply": False,
     "dry_run": True,
@@ -58,6 +61,14 @@ DEFAULTS = {
     # 每轮检查的发送概率：在 [min, max] 随机采（旧键 proactive_probability 作为固定值兼容）
     "proactive_probability_min": 0.3,
     "proactive_probability_max": 0.9,
+    # P16-B：主动节奏对等（按近 7 天用户主动量自适应；只影响本轮调度，不改写配置文件）
+    #   pacing_enabled：总开关；pacing_target_ratio：目标 agent/user；容差 ±tolerance
+    #   pacing_daily_cap：每天主动条数硬上限；pacing_min_interval_s：间隔下限（秒）
+    "pacing_enabled": True,
+    "pacing_target_ratio": 1.0,
+    "pacing_tolerance": 0.25,
+    "pacing_daily_cap": 12,
+    "pacing_min_interval_s": 1200,
     "proactive_until_ts": 0,
     "reply_debounce_ms": 2000,
     # 对方多久之前还在说话就不主动（秒）：15 分钟，对齐 qq-bridge 的静默要求
@@ -78,6 +89,11 @@ DEFAULTS = {
     "soul_server_url": "http://127.0.0.1:8123",
     "soul_timeout_s": 2.0,
     "inner_shadow_only": False,
+    # P15-A：推理过程采集（turn_traces）。默认开；只读采集，失败不影响主链。
+    #   trace_enabled: 是否记录每条回复的上下文/生成/润色/守卫
+    #   trace_max_rows: 表内最多保留多少条（超出删最旧，防库膨胀）
+    "trace_enabled": True,
+    "trace_max_rows": 5000,
 }
 
 #: P0-5 迁移阈值：低于这些值视为历史事故配置
@@ -191,6 +207,15 @@ def save(cfg: dict) -> None:
     target = Path(CONFIG_PATH)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def save_atomic(cfg: dict, path: Path | str | None = None) -> None:
+    """P18-A：原子写回配置（同目录临时文件 + os.replace），保留其它键。"""
+    target = Path(path) if path else Path(CONFIG_PATH)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".engine.tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, target)
 
 
 def contact_db(contact: str) -> Path:

@@ -139,11 +139,14 @@ def test_proactive_schedule_event_records_source_random(tmp_path, monkeypatch):
 
     def fake_wait(delay):
         waits.append(delay)
-        g.stop_event.set()
+        # P18-A：ticker 改成 1s 分段等待（以便及时响应引擎启停），
+        # 因此断言"累计等待"而不是"单次等待"
+        if sum(waits) >= 600.0:
+            g.stop_event.set()
 
     monkeypatch.setattr(g.stop_event, "wait", fake_wait)
     g._proactive_loop()
-    assert waits == [600.0]
+    assert abs(sum(waits) - 600.0) < 1e-6
     schedules = [e for e in g.recent if e["kind"] == "proactive_schedule"]
     assert len(schedules) == 1
     assert schedules[0]["next_delay_s"] == 600.0

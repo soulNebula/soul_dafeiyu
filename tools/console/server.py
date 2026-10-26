@@ -24,6 +24,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import http.cookiejar
 import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -3205,6 +3206,8 @@ def media_wish_fulfill(body: dict, *, client: str = "") -> dict:
 # --------------------------------------------------------------------------- #
 BILI_QR_PNG = DATA_DIR / "selflearn" / "bili_login_qr.png"
 _BILI_LAST_KEY = {"key": ""}
+_BILI_JAR = http.cookiejar.CookieJar()
+_BILI_OPENER = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_BILI_JAR))
 BILI_QR_TTL_S = 180
 BILI_HTTP_TIMEOUT = 8.0
 BILI_GENERATE_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
@@ -3294,7 +3297,7 @@ def _bili_http_json(url: str, *, headers: dict | None = None) -> dict:
     for key, value in (headers or {}).items():
         request.add_header(key, value)
     try:
-        with urllib.request.urlopen(request, timeout=BILI_HTTP_TIMEOUT) as response:
+        with _BILI_OPENER.open(request, timeout=BILI_HTTP_TIMEOUT) as response:
             raw = response.read().decode("utf-8", "replace") or "{}"
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"{type(exc).__name__}: {exc}") from exc
@@ -3443,6 +3446,19 @@ def bili_login_qr(*, client: str = "") -> dict:
             "expires_in": BILI_QR_TTL_S}
 
 
+def _bili_login_debug(kind: str, payload: dict) -> None:
+    """扫码登录调试日志（不含凭证值），写 agi/data/selflearn/bili_login_debug.log。"""
+    try:
+        line = json.dumps({"ts": round(time.time(), 3), "kind": kind, **(payload or {})},
+                          ensure_ascii=False)
+        path = DATA_DIR / "selflearn" / "bili_login_debug.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _bili_cookie_from_url(data_url: str) -> dict:
     from urllib.parse import parse_qs, urlsplit
     query = parse_qs(urlsplit(str(data_url or "")).query)
@@ -3527,6 +3543,7 @@ def bili_login_poll(key: str, *, client: str = "") -> dict:
         code = int(data.get("code"))
     except (TypeError, ValueError):
         code = -1
+    _bili_login_debug("poll", {"code": code})
     if code == 86101:
         return {"ok": True, "status": "waiting"}
     if code == 86090:
@@ -3537,6 +3554,15 @@ def bili_login_poll(key: str, *, client: str = "") -> dict:
         return {"ok": False, "error": "network", "status": "expired",
                 "hint": f"未知状态码: {code}"}
     cookies = _bili_cookie_from_url(str(data.get("url") or ""))
+    # B站的 buvid3 常常不在 url 里，而是在 generate/poll 的 Set-Cookie 里
+    if not cookies.get("buvid3"):
+        for cookie in _BILI_JAR:
+            if cookie.name.lower() == "buvid3" and cookie.value:
+                cookies["buvid3"] = cookie.value
+                break
+    _bili_login_debug("poll_ok", {"have": sorted(cookies.keys()),
+                                  "url_keys": sorted(urllib.parse.parse_qs(
+                                      urllib.parse.urlsplit(str(data.get("url") or "")).query).keys())})
     written = _bili_write_credential(cookies)
     if not written.get("ok"):
         audit("bili_login", {"ok": False}, ok=False, client=client)

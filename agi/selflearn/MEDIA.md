@@ -45,7 +45,7 @@ OK（同意）
 | 低情绪 | mood<0.35 且贴纸 tags 命中搞笑类（好笑/搞笑/恶搞/赞/嘲讽）→ 丢弃 |
 | 同贴纸 7 天 | 按 `emoji_usage` 去重（`media_sticker_cooldown_days=7`） |
 | 素材库 | 名字必须存在于 `emoji_archive`；否则拒绝/记 wish |
-| 被动回复 | 默认 `media_sticker_in_reply=false` → 只允许 emoji，不允许 sticker |
+| 被动回复 | 默认 `media_sticker_in_reply=true`；受 P19 配额（≥2/10）约束 |
 
 连续媒体历史是进程内记录（`media_choice.record_media/recent_media`），重启清零。
 
@@ -77,7 +77,7 @@ OK（同意）
 ```json
 {
   "media_enabled": false,
-  "media_sticker_in_reply": false,
+  "media_sticker_in_reply": true,
   "media_material_limit": 40,
   "media_max_stickers": 3,
   "media_sticker_cooldown_days": 7,
@@ -104,3 +104,21 @@ worker 已发文本后，把非文本项交给 `gateway.send_bubbles(contact, it
 - **情绪极性**：负面词 + `哈哈哈/笑死` 冲突 → 重生成 1 次，仍冲突去笑词。
 - **观测**：tick 返回 `media{bubbles,wishes,reason,dropped}` 与 `text_media_check{issues,fixed,final_issues}`；worker `proactive_send`/`proactive_media` 日志带这些字段。
 - 关闭 media 时整段 prompt 不注入、文本收口仍生效（保证无 media 时正文也不出现表情包相关词），prompt 基线锁保持绿。
+
+## 9. 回复媒体配额（P19，≥2/10）
+
+用户要求：发表情是日常节奏——**一般 10 条被动回复里最少 2 条带表情包/emoji/GIF；最多 10 条全发也行**。
+
+- 记录表 `reply_media_log`（memory 库，`agi/selflearn/media_quota.py`）：
+  `id, turn_id, at, used, types_json(emoji/sticker/image/gif), names_json`。
+  **正文 Unicode emoji 也算媒体**。
+- `need_media(path)` 基于最近 10 条：
+  - 带媒体 **<2** → `force=True, reason=quota_min`，prompt 强制本条带一个表情；
+  - **2–3** → 不强制，prompt 自然鼓励“大约 10 条里 2–3 条”；
+  - **≥4** → 不强制（允许 10/10，不设上限）；
+  - 最近连续 **3 条**带媒体 → `soft_cool=True`，优先正文 emoji/文字表情，不额外发贴纸。
+- force 时 prompt 原文：
+  `这一条请带一个表情（贴纸指令 [[media:sticker:名字]] 或正文 emoji 均可，选最贴切的）。`
+- 回复后 `record(path, turn_id, reply_media, turn_reply)`：无媒体也记 `used=0`；表缺失/写失败不阻断回复。
+- 不改变：贴纸最多 3、7 天去重、mood<0.35 禁搞笑、硬拦截与长度限制。
+- 开关：`media_sticker_in_reply` 控制是否允许贴纸；`MEDIA_QUOTA_ENABLED`（默认 true，env 可覆盖）关闭后配额不强制。配额只在被动回复非 crisis 时生效。

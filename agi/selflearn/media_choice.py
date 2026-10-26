@@ -188,11 +188,36 @@ def ensure_indexed(path: Path | str | None = None, *, force: bool = False) -> di
 
 
 def list_assets(path: Path | str | None = None) -> list[dict]:
+    """素材清单：media_assets（控制台「素材库」）优先，空表时回退 emoji_archive。
+
+    每次调用都重读 DB（不缓存死），所以改名/改类型/禁用后下一次生成立即生效。
+    """
     ensure_indexed(path)
     con = None
     try:
         from . import db
         con = db.connect(path if path is not None else config.DB_PATH)
+        has_table = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='media_assets'"
+        ).fetchone() is not None
+        if has_table:
+            rows = con.execute(
+                "SELECT id,name,path,tags_json,enabled FROM media_assets "
+                "WHERE enabled = 1 ORDER BY builtin DESC, created_at DESC, rowid DESC"
+            ).fetchall()
+            if rows:
+                items = []
+                for row in rows:
+                    try:
+                        tags = json.loads(row["tags_json"] or "[]")
+                    except (TypeError, ValueError):
+                        tags = []
+                    items.append({"id": row["id"], "name": str(row["name"]),
+                                  "path": str(row["path"]),
+                                  "tags": [str(t) for t in tags],
+                                  "extension": Path(str(row["path"] or "")).suffix.lower(),
+                                  "usage_count": 0, "source": "media_assets"})
+                return items
         rows = con.execute(
             "SELECT id,name,path,tags_json,usage_count FROM emoji_archive "
             "WHERE path LIKE '%.png' OR path LIKE '%.jpg' OR path LIKE '%.jpeg' "

@@ -42,6 +42,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | 对话流 | `agi/data/wechat/gateway.log`（JSONL 事件，只读 tail，3s 自动刷新） |
 | 内状态 | 联系人库 `inner_states`（只读 URI 连接；mode/injected/state_json/block/延迟/fallback） |
 | 对话测试 | 隔离库 `agi/data/selflearn/console_test.sqlite3` → 进程内 `SelfLearnAgent.send()`，可试提示词/模型效果，不影响真实联系人 |
+| 素材库 | `media_assets`（memory 库）+ `tools/console/media_store.py`：增删改/类型/含义/标签/启用/软删回收；126 个现有素材自动导入 builtin=1 |
 | 媒体 | `agi/wechat_gateway/media.capabilities()`（import 失败降级静态矩阵）+ `emoji_archive`/目录扫描 + `agi/data/media_wishes.jsonl`；测试发送只允许文件传输助手 |
 | 内状态（心情卡片） | `/api/mood`（`mood_judge.snapshot`）：心情值/7 情绪/注入预览/时间线；`/api/mood/inject`、`/api/mood/enabled` 只写 mood.json 白名单键 |
 | 记忆 | `agi/selflearn/memory.metrics()` + `user_memories` 最近 50 条 + `/api/tone`（AI 语气 vs `agi/eval_data/human_tone/profile.md` 真人基线） |
@@ -154,6 +155,17 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 - **日志**：`GET /api/logs?source=gateway|inner|prompt|regen&limit=200&q=&kind=`，读 gateway.log(JSONL) /
   inner.log / prompt_override.log / regen_failed 计数；关键词+kind 过滤、时间倒序、错误行红色、点行看整条 JSON。
 - 顶部导航新增「对话测试 / 模型配置 / 日志」三项。
+
+## 素材库页（P17）
+
+独立侧栏「素材」组 · 「素材库」页：统计（贴纸/图片/GIF/软删）、搜索/类型筛选/只看启用、网格缩略图；
+新增（多选上传或本地路径 + 类型/名称/具体含义/标签）、编辑弹窗（类型 sticker/image/gif、名称、caption、
+tags、启用开关）、删除（确认短语「删除素材」；默认软删可恢复，二次确认可彻底删除→文件移到
+`agi/data/selflearn/media_trash/` 并从索引移除）。
+数据：`media_assets` 表（memory 库，`tools/console/media_store.py` CRUD）；现有素材（`wx_core/emoji_assets` +
+`media/stickers` + `selflearn/media`）首次访问幂等导入 builtin=1（当前 126 条）。
+`agi/selflearn/media_choice` 已适配为 media_assets 优先读取，改名/改类型/禁用后下一次生成立即生效。
+接口：`/api/library/{list,asset,stats}` + `/api/library/{create,update,delete,restore}`（admin token，写审计）。
 
 ## 总览 · 引擎启停（P18-B）
 

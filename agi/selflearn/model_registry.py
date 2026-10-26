@@ -216,8 +216,17 @@ def _save_state(state: dict, path: Path | None = None) -> None:
                           encoding="utf-8")
 
 
-def _port_owner(port: int) -> int | None:
-    """用 netstat 查监听该端口的 PID；失败返回 None。"""
+def _port_open(port: int, timeout: float = 0.4) -> bool:
+    """端口是否在监听（只连本地回环，不发送业务请求）。"""
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _port_pid(port: int) -> int | None:
+    """用 netstat 反查监听该端口的 PID；失败返回 None。"""
     try:
         result = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True,
                                 text=True, encoding="gbk", errors="replace", timeout=5)
@@ -231,6 +240,41 @@ def _port_owner(port: int) -> int | None:
     return None
 
 
+#: 兼容旧名字（之前叫 `_port_owner`）
+_port_owner = _port_pid
+
+
+def _process_cmdline(pid: int) -> str:
+    """取进程命令行；优先 psutil，失败回退 PowerShell（只读查询）。"""
+    try:
+        import psutil  # type: ignore
+
+        return " ".join(psutil.Process(int(pid)).cmdline())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-CimInstance Win32_Process -Filter \"ProcessId={int(pid)}\").CommandLine"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8)
+        return (result.stdout or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _process_identity(pid: int | None) -> dict:
+    """安全识别：命令行必须同时含 llama-server 和 .gguf 才认为可操作。"""
+    if not pid:
+        return {"pid": None, "command": "", "is_llama": False, "has_gguf": False,
+                "safe": False}
+    command = _process_cmdline(int(pid))
+    lower = command.lower()
+    is_llama = ("llama-server" in lower) or ("llama_server" in lower)
+    has_gguf = ".gguf" in lower
+    return {"pid": int(pid), "command": command, "is_llama": is_llama,
+            "has_gguf": has_gguf, "safe": bool(is_llama and has_gguf)}
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         result = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/FO", "CSV", "/NH"],
@@ -241,28 +285,61 @@ def _pid_alive(pid: int) -> bool:
     return "llama-server.exe" in result.stdout.lower()
 
 
+def _kill_pid(pid: int, timeout: float = 8.0) -> dict:
+    """只 kill 已通过安全识别的 PID；返回 {ok, error?}。"""
+    try:
+        result = subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+                                capture_output=True, text=True, encoding="gbk",
+                                errors="replace", timeout=timeout)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"kill_failed:{exc}"}
+    if int(getattr(result, "returncode", 0) or 0) != 0:
+        detail = ((result.stderr or result.stdout or "")[-300:]).strip()
+        return {"ok": False, "error": f"kill_failed:{detail or 'taskkill_nonzero'}"}
+    return {"ok": True}
+
+
 def start(name: str, *, path: Path | None = None, extra_args: list[str] | None = None) -> dict:
-    """启动已登记模型（reserved 状态拒绝启动，保护 1.5B 预留位）。"""
+    """启动已登记模型；端口已在监听时返回真实 PID（外部启动也报出来）。"""
     model = get(name, path)
     if not model:
-        return {"ok": False, "error": f"unknown_model:{name}"}
+        return {"ok": False, "error": f"unknown_model:{name}",
+                "hint": f"注册表里没有名为 {name} 的模型"}
     if model.get("role") == "reserved" or model.get("status") == "reserved":
         return {"ok": False, "error": "reserved_model_not_started",
                 "hint": "qwen15 为预留模型；如确需启动请先改配置 status/role"}
     port = model.get("port")
-    gguf = model.get("gguf")
     if not port:
-        return {"ok": False, "error": "model_has_no_port"}
+        return {"ok": False, "error": "model_has_no_port",
+                "hint": "该模型没有登记端口，无法启动"}
+    gguf = model.get("gguf")
+    state = _load_state(path)
+    record = state.get(name) or {}
+    if _port_open(int(port)):
+        pid = _port_pid(int(port))
+        identity = _process_identity(pid)
+        external = not (record and int(record.get("pid") or 0) == pid
+                        and int(record.get("port") or 0) == int(port))
+        if not identity["safe"]:
+            return {"ok": False, "error": "port_in_use_by_other_process",
+                    "port": int(port), "pid": pid, "external": False,
+                    "hint": f"端口 {port} 已被非 llama-server 进程占用（PID {pid}），"
+                            f"为安全起见不启动；请先检查。"}
+        return {"ok": True, "already_running": True, "pid": pid, "port": int(port),
+                "external": bool(external), "healthy": health(name, path=path),
+                "hint": f"端口 {port} 已有 llama-server 在运行（PID {pid}，"
+                        + ("外部启动" if external else "注册表启动")
+                        + "），未重复启动。"}
     if not gguf or not Path(str(gguf)).exists():
-        return {"ok": False, "error": "gguf_not_found", "path": str(gguf)}
-    if health(name, path=path):
-        return {"ok": True, "already_running": True, "port": int(port)}
+        return {"ok": False, "error": "gguf_not_found", "path": str(gguf),
+                "hint": f"GGUF 文件不存在：{gguf}"}
     config = load_config(path)
     llama_bin = Path(str(config.get("llama_bin") or DEFAULT_LLAMA_BIN))
     torch_lib = Path(str(config.get("torch_lib") or DEFAULT_TORCH_LIB))
     exe = llama_bin / "llama-server.exe"
     if not exe.exists():
-        return {"ok": False, "error": "llama_server_missing", "path": str(exe)}
+        return {"ok": False, "error": "llama_server_missing", "path": str(exe),
+                "hint": f"找不到 llama-server.exe：{exe}"}
     env = dict(os.environ)
     if torch_lib.exists():
         env["PATH"] = str(torch_lib) + os.pathsep + env.get("PATH", "")
@@ -281,41 +358,107 @@ def start(name: str, *, path: Path | None = None, extra_args: list[str] | None =
                                    stderr=subprocess.STDOUT, **kwargs)
     except OSError as exc:
         log_handle.close()
-        return {"ok": False, "error": f"spawn_failed:{exc}"}
+        return {"ok": False, "error": f"spawn_failed:{exc}",
+                "hint": f"启动 llama-server 失败：{exc}"}
     state = _load_state(path)
     state[name] = {"pid": process.pid, "port": int(port), "gguf": str(gguf),
                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                    "log": str(log_path)}
     _save_state(state, path)
-    return {"ok": True, "pid": process.pid, "port": int(port),
-            "command": command, "log": str(log_path)}
+    return {"ok": True, "pid": process.pid, "port": int(port), "external": False,
+            "command": command, "log": str(log_path),
+            "hint": f"已启动 {name}（PID {process.pid}，端口 {port}）"}
 
 
-def stop(name: str, *, path: Path | None = None, timeout: float = 8.0) -> dict:
-    """停止由本模块启动的模型进程；未登记/未启动/进程不符则拒绝，绝不误杀。"""
+def stop(name: str, *, path: Path | None = None, timeout: float = 8.0,
+         force_external: bool = False) -> dict:
+    """停止模型；无注册表记录时按端口反查，外部进程需 force_external 二次确认。"""
     model = get(name, path)
     if not model:
-        return {"ok": False, "error": f"unknown_model:{name}"}
+        return {"ok": False, "error": f"unknown_model:{name}",
+                "hint": f"注册表里没有名为 {name} 的模型"}
+    port = int(model.get("port") or 0)
+    if not port:
+        return {"ok": False, "error": "model_has_no_port",
+                "hint": "该模型没有登记端口，无法停止"}
     state = _load_state(path)
     record = state.get(name)
-    if not record:
-        return {"ok": False, "error": "not_started_by_registry"}
-    pid = int(record.get("pid") or 0)
-    port = int(record.get("port") or 0)
-    if port != int(model.get("port") or 0):
-        return {"ok": False, "error": "port_mismatch_with_registry"}
-    if not _pid_alive(pid):
+    # 1) 注册表记录有效：只 kill 端口 owner 一致且命令行安全的进程
+    if record:
+        pid = int(record.get("pid") or 0)
+        record_port = int(record.get("port") or 0)
+        owner = _port_pid(port)
+        identity = _process_identity(pid)
+        if (record_port == port and pid and _pid_alive(pid)
+                and owner == pid and identity["safe"]):
+            killed = _kill_pid(pid, timeout=timeout)
+            if not killed.get("ok"):
+                return {"ok": False, "error": killed.get("error") or "kill_failed",
+                        "pid": pid, "port": port,
+                        "hint": f"停止 PID {pid} 失败，请手动检查。"}
+            state.pop(name, None)
+            _save_state(state, path)
+            return {"ok": True, "pid": pid, "port": port, "external": False,
+                    "hint": f"已停止 {name}（PID {pid}，端口 {port}）"}
+        # 记录失效/进程不符：清掉脏记录，转入外部进程识别，绝不误杀
         state.pop(name, None)
         _save_state(state, path)
-        return {"ok": False, "error": "pid_not_alive", "pid": pid}
-    try:
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
-                       text=True, encoding="gbk", errors="replace", timeout=timeout)
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"kill_failed:{exc}", "pid": pid}
-    state.pop(name, None)
-    _save_state(state, path)
-    return {"ok": True, "pid": pid, "port": port}
+    # 2) 无有效记录：端口反查 + 命令行安全校验
+    if not _port_open(port):
+        return {"ok": False, "status": "not_running",
+                "error": "not_started_by_registry", "port": port, "pid": None,
+                "hint": f"端口 {port} 当前没有在监听，模型可能已经停止。"}
+    pid = _port_pid(port)
+    identity = _process_identity(pid)
+    if not pid:
+        return {"ok": False, "status": "pid_unknown", "error": "pid_unknown",
+                "port": port,
+                "hint": f"端口 {port} 在监听，但查不到 PID；为安全起见不停止。"}
+    if not identity["safe"]:
+        return {"ok": False, "status": "refused", "error": "unsafe_process",
+                "pid": pid, "port": port, "command": identity["command"],
+                "hint": f"端口 {port} 被非 llama-server/.gguf 进程占用（PID {pid}），"
+                        f"为安全起见拒绝停止，请手动检查。"}
+    if not force_external:
+        return {"ok": False, "status": "external", "external": True,
+                "needs_confirm": True, "pid": pid, "port": port,
+                "command": identity["command"],
+                "hint": f"检测到 {name} 是外部启动的 llama-server（PID {pid}，"
+                        f"端口 {port}，注册表无记录）。停止前请二次确认；"
+                        f"确认后带 force_external=true 再调用。"}
+    killed = _kill_pid(pid, timeout=timeout)
+    if not killed.get("ok"):
+        return {"ok": False, "status": "failed", "error": killed.get("error") or "kill_failed",
+                "pid": pid, "port": port,
+                "hint": f"停止外部 PID {pid} 失败，请手动检查。"}
+    return {"ok": True, "pid": pid, "port": port, "external": True,
+            "hint": f"已停止外部启动的 {name}（PID {pid}，端口 {port}）"}
+
+
+def runtime_info(name: str, *, path: Path | None = None) -> dict:
+    """运行态摘要（控制台卡片用）：running/pid/external/healthy。
+
+    external=true 表示端口上的 llama-server 不是注册表 state 记录的进程。
+    """
+    model = get(name, path)
+    if not model:
+        return {"ok": False, "error": f"unknown_model:{name}", "running": False,
+                "pid": None, "external": False, "healthy": False}
+    port = model.get("port")
+    if not port:
+        return {"ok": True, "running": bool(health(name, path=path)), "pid": None,
+                "external": False, "healthy": health(name, path=path), "port": None}
+    port = int(port)
+    running = _port_open(port)
+    pid = _port_pid(port) if running else None
+    healthy = bool(health(name, path=path)) if running else False
+    external = False
+    if running:
+        record = (_load_state(path).get(name) or {})
+        external = not (record and int(record.get("pid") or 0) == pid
+                        and int(record.get("port") or 0) == port)
+    return {"ok": True, "running": running, "pid": pid, "port": port,
+            "external": external, "healthy": healthy}
 
 
 # --------------------------------------------------------------------------- #
@@ -333,6 +476,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--validate", action="store_true")
     parser.add_argument("--start", metavar="NAME")
     parser.add_argument("--stop", metavar="NAME")
+    parser.add_argument("--force-external", action="store_true",
+                        help="确认停止外部启动的 llama-server（二次确认后使用）")
     args = parser.parse_args(argv)
     config = Path(args.config)
 
@@ -356,7 +501,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.start:
         print(json.dumps(start(args.start, path=config), ensure_ascii=False, indent=1))
     elif args.stop:
-        print(json.dumps(stop(args.stop, path=config), ensure_ascii=False, indent=1))
+        print(json.dumps(stop(args.stop, path=config,
+                              force_external=bool(args.force_external)),
+                         ensure_ascii=False, indent=1))
     else:
         parser.print_help()
         return 2

@@ -573,6 +573,13 @@ def models_snapshot() -> dict:
             healthy = bool(registry.health(name))
         except Exception:  # noqa: BLE001
             healthy = False
+        runtime: dict = {}
+        try:
+            if hasattr(registry, "runtime_info"):
+                runtime = dict(registry.runtime_info(name) or {})
+        except Exception:  # noqa: BLE001
+            runtime = {}
+        running = bool(runtime.get("running", healthy))
         items.append({
             "name": name, "port": model.get("port"), "role": model.get("role"),
             "status": model.get("status"), "purpose": model.get("purpose"),
@@ -580,9 +587,39 @@ def models_snapshot() -> dict:
             "reserved": str(model.get("role")) == "reserved"
                         or str(model.get("status")) == "reserved",
             "gguf": model.get("gguf"),
+            "running": running, "pid": runtime.get("pid"),
+            "external": bool(runtime.get("external")),
+            "hint": "该模型是外部启动的，停止前会二次确认"
+                    if runtime.get("external") else "",
         })
     return {"ok": True, "models": items,
             "allow_start": sorted(MODEL_ALLOWLIST)}
+
+
+#: P20：注册表错误码 → 控制台中文提示（前端不再显示英文 error 原文）
+MODEL_ERROR_HINTS = {
+    "model_registry unavailable": "模型注册表不可用，请检查 agi/selflearn/model_registry.py 与配置",
+    "model_not_editable": "该模型不允许启停（只允许 soul-05b；reserved/研究模型不可动）",
+    "not_started_by_registry": "该模型不是控制台启动的（可能已停止，或由外部命令启动）",
+    "external": "该模型是外部启动的 llama-server，停止前需要二次确认",
+    "unsafe_process": "端口上的进程不是 llama-server（或缺少 .gguf），为安全起见已拒绝停止",
+    "port_in_use_by_other_process": "端口已被非 llama-server 进程占用，为安全起见不启动",
+    "reserved_model_not_started": "该模型为 reserved 预留位，禁止启动",
+    "gguf_not_found": "GGUF 模型文件不存在，请检查模型配置",
+    "model_has_no_port": "该模型没有登记端口，无法启停",
+    "llama_server_missing": "找不到 llama-server.exe，请检查 llama.cpp 路径",
+}
+
+
+def _with_model_hint(result: dict) -> dict:
+    """给 start/stop 结果补中文 hint；外部进程的 hint 以注册表返回为准。"""
+    data = dict(result or {})
+    if data.get("hint"):
+        return data
+    key = str(data.get("error") or data.get("status") or "")
+    data["hint"] = MODEL_ERROR_HINTS.get(key) or ("操作失败：" + (key or "未知错误"))
+    return data
+
 
 
 def _config_view() -> dict:
@@ -1150,12 +1187,13 @@ def start_model(name: str, *, client: str = "") -> dict:
             result = registry.start(name)
         except Exception as exc:  # noqa: BLE001
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    result = _with_model_hint(result)
     audit("model_start", {"name": name, "result": result}, ok=bool(result.get("ok")),
           client=client)
     return result
 
 
-def stop_model(name: str, *, client: str = "") -> dict:
+def stop_model(name: str, *, client: str = "", force_external: bool = False) -> dict:
     name = str(name or "").strip()
     if name not in MODEL_ALLOWLIST:
         audit("model_stop", {"name": name}, ok=False, note="not_allowlisted",
@@ -1167,12 +1205,25 @@ def stop_model(name: str, *, client: str = "") -> dict:
         result = {"ok": False, "error": "model_registry unavailable"}
     else:
         try:
-            result = registry.stop(name)
+            # 兼容旧假 registry（不接受 force_external）：仅二次确认时才传
+            if force_external:
+                result = registry.stop(name, force_external=True)
+            else:
+                result = registry.stop(name)
+        except TypeError:
+            # 测试/旧实现不支持 force_external：退回普通 stop
+            try:
+                result = registry.stop(name)
+            except Exception as exc:  # noqa: BLE001
+                result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         except Exception as exc:  # noqa: BLE001
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    audit("model_stop", {"name": name, "result": result}, ok=bool(result.get("ok")),
+    result = _with_model_hint(result)
+    audit("model_stop", {"name": name, "force_external": bool(force_external),
+                         "result": result}, ok=bool(result.get("ok")),
           client=client)
     return result
+
 
 
 # --------------------------------------------------------------------------- #
@@ -3838,6 +3889,32 @@ def engine_toggle(action: str, *, client: str = "") -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# P17：素材库管理（tools/console/media_store.py 的 HTTP 包装）
+# --------------------------------------------------------------------------- #
+def _load_media_store():
+    try:
+        import importlib.util
+        target = Path(__file__).resolve().parent / "media_store.py"
+        if not target.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location("console_media_store", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _library_store():
+    module = _load_media_store()
+    if module is None:
+        return None
+    return module
+
+
+# --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
 def host_ok(host: str) -> bool:
@@ -4030,6 +4107,27 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(404, {"ok": False, "error": "no_avatar"}); return
                 raw, ctype = avatar
                 self._bytes(200, raw, ctype or "image/jpeg"); return
+            if path.startswith("/api/library/"):
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                store = _library_store()
+                if store is None:
+                    self._json(501, {"ok": False, "error": "library_store_unavailable"}); return
+                if path == "/api/library/list":
+                    result = store.list_assets(
+                        str((query.get("type") or [""])[0] or ""),
+                        str((query.get("tag") or [""])[0] or ""),
+                        str((query.get("q") or [""])[0] or ""),
+                        str((query.get("enabled") or [""])[0] or ""),
+                        self._limit(query, 100),
+                        int((query.get("offset") or ["0"])[0] or 0))
+                    self._json(200 if result.get("ok", True) else 400, result); return
+                if path == "/api/library/asset":
+                    result = store.get_asset(str((query.get("id") or [""])[0] or ""))
+                    self._json(200 if result.get("ok") else 404, result); return
+                if path == "/api/library/stats":
+                    self._json(200, store.stats()); return
+                self._json(404, {"ok": False, "error": "not found"}); return
             if path == "/api/engine":
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
@@ -4178,7 +4276,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = start_model(str(body.get("name") or ""), client=client)
                 self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/models/stop":
-                result = stop_model(str(body.get("name") or ""), client=client)
+                result = stop_model(str(body.get("name") or ""), client=client,
+                                    force_external=bool(body.get("force_external")))
                 self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/prompts":
                 result = save_prompts(body.get("prompts") or {}, client=client)
@@ -4209,6 +4308,60 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("mode") or "merge"),
                     overwrite_confirm=str(body.get("overwrite_confirm") or ""),
                     client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/library/create":
+                store = _library_store()
+                if store is None:
+                    self._json(501, {"ok": False, "error": "library_store_unavailable"}); return
+                data = None
+                if body.get("data"):
+                    try:
+                        data = _decode_media_payload(body.get("data"))
+                    except Exception as exc:  # noqa: BLE001
+                        self._json(400, {"ok": False, "error": f"base64_invalid:{exc}"}); return
+                result = store.create_asset(
+                    data=data, file_path=str(body.get("path") or "") or None,
+                    type_=str(body.get("type") or "sticker"),
+                    name=str(body.get("name") or ""),
+                    caption=str(body.get("caption") or ""),
+                    tags=body.get("tags") if isinstance(body.get("tags"), list) else [])
+                audit("media_asset_create", {"ok": bool(result.get("ok")),
+                                             "duplicate": bool(result.get("duplicate")),
+                                             "name": body.get("name")},
+                      ok=bool(result.get("ok")), client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/library/update":
+                store = _library_store()
+                if store is None:
+                    self._json(501, {"ok": False, "error": "library_store_unavailable"}); return
+                raw = body.get("updates", body)
+                fields = {key: value for key, value in raw.items()
+                          if key not in ("id", "contact")}
+                result = store.update_asset(str(body.get("id") or ""), fields)
+                audit("media_asset_update", {"id": body.get("id"), "fields": sorted(fields),
+                                             "ok": bool(result.get("ok"))},
+                      ok=bool(result.get("ok")), client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/library/delete":
+                store = _library_store()
+                if store is None:
+                    self._json(501, {"ok": False, "error": "library_store_unavailable"}); return
+                result = store.delete_asset(
+                    str(body.get("id") or ""), hard=bool(body.get("hard", False)),
+                    confirm=str(body.get("confirm") or ""))
+                audit("media_asset_delete", {"id": body.get("id"),
+                                             "hard": bool(body.get("hard", False)),
+                                             "ok": bool(result.get("ok"))},
+                      ok=bool(result.get("ok")), client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/library/restore":
+                store = _library_store()
+                if store is None:
+                    self._json(501, {"ok": False, "error": "library_store_unavailable"}); return
+                result = store.restore_asset(str(body.get("id") or ""))
+                audit("media_asset_restore", {"id": body.get("id"),
+                                              "ok": bool(result.get("ok"))},
+                      ok=bool(result.get("ok")), client=client)
                 self._json(200 if result.get("ok") else 400, result); return
             if path in ("/api/engine/start", "/api/engine/stop"):
                 result = engine_toggle(path.rsplit("/", 1)[-1], client=client)

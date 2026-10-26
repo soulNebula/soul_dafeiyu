@@ -24,6 +24,8 @@ MEDIA_MATERIAL_LIMIT = 40
 MEDIA_MAX_STICKERS = 3
 MEDIA_STICKER_COOLDOWN_DAYS = 7
 MEDIA_MAX_CONSECUTIVE = 2
+#: P19：被动回复媒体配额（≥2/10）；关闭后只保留原有 media 行为
+MEDIA_QUOTA_ENABLED = True
 MEDIA_TAG_FILE = DATA_DIR.parent / "media_tags.json"
 MEDIA_WISH_FILE = DATA_DIR / "media_wishes.jsonl"
 #: 预留：素材获取管线默认关闭（本仓库不下载、不联网）

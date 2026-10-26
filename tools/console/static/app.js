@@ -28,6 +28,7 @@ const state = {
   statsState: null,
   bili: null,
   trace: null,
+  library: null,
   status: null,
   inner: null,
   tone: null,
@@ -40,6 +41,7 @@ const PAGES = {
   chat: '对话测试',
   inner: '内状态',
   media: '媒体',
+  library: '素材库',
   data: '数据管理',
   knowledge: '记忆编辑',
   memory: '记忆',
@@ -179,8 +181,13 @@ async function api(path, options) {
     throw new Error('需要 admin token：请在右上角填入 agi/data/wechat/config.json 的 admin_token');
   }
   if (!response.ok || (payload && payload.ok === false)) {
-    const detail = payload ? (payload.error || (payload.errors || []).join('; ')) : response.status;
-    throw new Error(detail || ('HTTP ' + response.status));
+    // P20：优先展示服务端中文 hint；保留 payload 供外部进程二次确认使用
+    const detail = payload ? (payload.hint || payload.error
+      || (payload.errors || []).join('; ')) : response.status;
+    const error = new Error(detail || ('HTTP ' + response.status));
+    error.payload = payload;
+    error.httpStatus = response.status;
+    throw error;
   }
   return payload || {};
 }
@@ -864,6 +871,8 @@ async function resetPrompt(all) {
 }
 
 /* ---------------- 模型 ---------------- */
+const modelBusy = new Set();   // P20：防止启动/停止按钮重复提交/重复 toast
+
 async function renderModels() {
   $('#app').innerHTML = '<div class="empty">加载模型…</div>';
   let models = null, config = null;
@@ -878,17 +887,20 @@ async function renderModels() {
     <div class="card">
       <div class="row between">
         <div><b>${esc(model.name)}</b> ${badge(model.role || '')} ${model.reserved ? badge('reserved', 'orange') : ''}</div>
-        ${model.healthy ? pill('健康', 'ok') : pill('未运行', '')}
+        ${model.running
+          ? (model.external ? badge('运行中（外部启动）', 'orange') : pill('运行中', 'ok'))
+          : (model.healthy ? pill('健康', 'ok') : pill('未运行', ''))}
       </div>
       <div class="kv" style="margin-top:8px">
         <span class="k">端口</span><span class="v">${num(model.port)}</span>
         <span class="k">状态</span><span class="v">${esc(model.status || '—')}</span>
+        ${model.pid ? `<span class="k">PID</span><span class="v">${num(model.pid)}</span>` : ''}
         <span class="k">用途</span><span class="v">${esc(model.purpose || '')}</span>
       </div>
       <div class="row" style="margin-top:10px">
         <button class="btn small primary" data-model-start="${esc(model.name)}" ${model.editable ? '' : 'disabled'}>启动</button>
         <button class="btn small danger" data-model-stop="${esc(model.name)}" ${model.editable ? '' : 'disabled'}>停止</button>
-        <span class="hint">${model.editable ? '' : (model.reserved ? '预留模型，禁止启停' : '只读')}</span>
+        <span class="hint">${model.external ? '外部启动的进程，停止前会二次确认' : (model.editable ? '' : (model.reserved ? '预留模型，禁止启停' : '只读'))}</span>
       </div>
     </div>`).join('') || '<div class="empty">模型注册表为空（agi/data/local_models.json）</div>';
 
@@ -913,29 +925,65 @@ async function renderModels() {
   $('#app').innerHTML = `${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
     <div class="grid cols-3">${cards}</div>
     ${card('内状态注入开关（热加载，保存后下一条消息生效）', innerForm)}
-    ${card('说明', `<p class="hint">启停按钮只允许 ${esc(allow.join(', ') || 'soul-05b')}；1.5B 为 reserved，故意拒绝。停止只 kill 本注册表启动的 PID。</p>`)}`;
+    ${card('说明', `<p class="hint">启停按钮只允许 ${esc(allow.join(', ') || 'soul-05b')}；1.5B 为 reserved，故意拒绝。外部启动的 llama-server 停止前会二次确认；不会误杀其它进程。</p>`)}`;
 
   $$('[data-model-start]').forEach((btn) => {
     btn.onclick = async () => {
+      const name = btn.dataset.modelStart;
       if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+      if (modelBusy.has(name)) return;           // P20：防重复提交/重复 toast
+      modelBusy.add(name);
       btn.disabled = true;
       try {
-        const result = await api('/api/models/start', { method: 'POST', body: { name: btn.dataset.modelStart } });
-        toast('已启动 ' + btn.dataset.modelStart + '（PID ' + (result.pid || '?') + '）', 'ok');
-        renderModels();
-      } catch (e) { toast(e.message, 'err'); btn.disabled = false; }
+        const result = await api('/api/models/start', { method: 'POST', body: { name } });
+        const pid = (result.pid === null || result.pid === undefined) ? '未知' : result.pid;
+        let message;
+        if (result.already_running) {
+          message = name + (result.external
+            ? ' 已在运行（外部启动，PID ' + pid + '）'
+            : ' 已在运行（PID ' + pid + '）');
+        } else {
+          message = '已启动 ' + name + '（PID ' + pid + '）';
+        }
+        toast(message, 'ok');
+        await renderModels();
+      } catch (e) { toast(e.message || '启动失败', 'err'); }
+      finally { modelBusy.delete(name); btn.disabled = false; }
     };
   });
   $$('[data-model-stop]').forEach((btn) => {
     btn.onclick = async () => {
+      const name = btn.dataset.modelStop;
       if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
-      if (!confirm('停止 ' + btn.dataset.modelStop + '？')) return;
+      if (modelBusy.has(name)) return;
+      modelBusy.add(name);
       btn.disabled = true;
       try {
-        await api('/api/models/stop', { method: 'POST', body: { name: btn.dataset.modelStop } });
-        toast('已停止 ' + btn.dataset.modelStop, 'ok');
-        renderModels();
-      } catch (e) { toast(e.message, 'err'); btn.disabled = false; }
+        const result = await api('/api/models/stop', { method: 'POST', body: { name } });
+        toast(result.hint || ('已停止 ' + name), 'ok');
+        await renderModels();
+      } catch (e) {
+        const payload = e.payload || {};
+        // P20：外部启动的进程不直接 kill；先弹中文二次确认，再带 force_external 重试
+        if (payload.status === 'external' || payload.external || payload.needs_confirm) {
+          const pid = payload.pid === null || payload.pid === undefined ? '未知' : payload.pid;
+          const port = payload.port === null || payload.port === undefined ? '未知' : payload.port;
+          const ok = confirm(name + ' 不是控制台启动的（PID ' + pid + '、端口 ' + port + '），仍要停止吗？');
+          if (ok) {
+            try {
+              const forced = await api('/api/models/stop', {
+                method: 'POST', body: { name, force_external: true },
+              });
+              toast(forced.hint || ('已停止 ' + name), 'ok');
+              await renderModels();
+            } catch (e2) { toast(e2.message || '停止失败', 'err'); }
+          } else {
+            toast('已取消停止', '');
+          }
+        } else {
+          toast(e.message || '停止失败', 'err');
+        }
+      } finally { modelBusy.delete(name); btn.disabled = false; }
     };
   });
   const saveInner = $('#btn-save-inner');
@@ -1369,7 +1417,7 @@ function renderMediaPage(errors) {
     ${card('能力矩阵', capTable)}
     ${card('测试发送（只发文件传输助手）', sendPanel)}
     ${mediaImportPanelHtml(data)}
-    ${card('素材库', `
+    ${card('素材库（完整管理请到「素材库」页）', `
       <div class="row between" style="margin-bottom:10px">
         <div class="row"><select id="media-filter">
           <option value="">全部类型</option>
@@ -2898,6 +2946,235 @@ async function copyTraceText(text) {
     }
     toast('已复制全文', 'ok');
   } catch (err) { toast('复制失败：' + err.message, 'err'); }
+}
+
+/* ---------------- 素材库（P17） ---------------- */
+const LIBRARY_TYPES = [['sticker', '贴纸'], ['image', '图片'], ['gif', 'GIF']];
+let libraryFiles = [];
+
+function libraryTypeLabel(type) {
+  const row = LIBRARY_TYPES.find(([value]) => value === type);
+  return row ? row[1] : (type || '—');
+}
+
+async function renderLibrary() {
+  $('#app').innerHTML = '<div class="empty">加载素材库…</div>';
+  if (!state.token) {
+    $('#app').innerHTML = card('素材库', '<div class="error-text">素材库需要 admin token：请在右上角填写。</div>');
+    return;
+  }
+  const prev = state.library || {};
+  state.library = {
+    q: prev.q || '', type: prev.type || '', enabled: prev.enabled || '',
+    limit: prev.limit || 120, offset: prev.offset || 0,
+    stats: null, data: null, editing: null, timer: null,
+  };
+  await loadLibrary();
+}
+
+async function loadLibrary() {
+  const lib = state.library || {};
+  let stats = null, data = null, errors = [];
+  try { stats = await api('/api/library/stats'); } catch (err) { errors.push('统计: ' + err.message); }
+  const params = new URLSearchParams({
+    type: lib.type || '', q: lib.q || '', enabled: lib.enabled || '',
+    limit: lib.limit, offset: lib.offset,
+  });
+  try { data = await api('/api/library/list?' + params.toString()); }
+  catch (err) { errors.push('列表: ' + err.message); }
+  lib.stats = stats; lib.data = data; lib.errors = errors;
+  renderLibraryPage();
+}
+
+function libraryCardHtml(asset) {
+  const disabled = !asset.enabled;
+  return `<div class="library-card ${disabled ? 'disabled' : ''}" data-library-id="${esc(asset.id)}">
+    <div class="library-thumb">${asset.thumb
+      ? `<img src="${esc(asset.thumb)}&ts=${Date.now()}" alt="${esc(asset.name)}" loading="lazy">`
+      : '<div class="asset-missing">无预览</div>'}</div>
+    <div class="library-meta">
+      <div class="row between"><b class="library-name">${esc(asset.name || '（未命名）')}</b>
+        ${badge(libraryTypeLabel(asset.type), asset.type === 'sticker' ? 'purple' : (asset.type === 'gif' ? 'orange' : 'blue'))}</div>
+      <div class="hint library-caption">${esc(asset.caption || '（未填写具体含义）')}</div>
+      <div class="library-tags">${(asset.tags || []).slice(0, 3).map((tag) => `<span class="badge">${esc(tag)}</span>`).join('')}</div>
+      ${disabled ? '<div class="hint" style="color:var(--warning)">已软删除（可恢复）</div>' : ''}
+    </div>
+    <div class="library-actions">
+      <button class="btn small" data-lib-edit="${esc(asset.id)}">编辑</button>
+      ${disabled ? `<button class="btn small success" data-lib-restore="${esc(asset.id)}">恢复</button>`
+        : `<button class="btn small danger" data-lib-delete="${esc(asset.id)}">删除</button>`}
+    </div>
+  </div>`;
+}
+
+function renderLibraryPage() {
+  const lib = state.library || {};
+  const stats = lib.stats || {};
+  const items = (lib.data && lib.data.items) || [];
+  const total = (lib.data && lib.data.total) || 0;
+  const byType = stats.by_type || {};
+  const errors = lib.errors || [];
+
+  const typeOptions = '<option value="">全部类型</option>' + LIBRARY_TYPES.map(([value, label]) =>
+    `<option value="${value}" ${lib.type === value ? 'selected' : ''}>${label}</option>`).join('');
+  const cards = items.length ? items.map(libraryCardHtml).join('') : '<div class="empty">没有匹配的素材（可新增，或清空筛选）</div>';
+
+  $('#app').innerHTML = `${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
+    <div class="grid cols-4">
+      ${card('贴纸', `<div class="big">${num(byType.sticker)}</div><div class="muted">sticker</div>`)}
+      ${card('图片', `<div class="big">${num(byType.image)}</div><div class="muted">image</div>`)}
+      ${card('GIF', `<div class="big">${num(byType.gif)}</div><div class="muted">gif</div>`)}
+      ${card('软删除', `<div class="big">${num(stats.soft_deleted)}</div><div class="muted">enabled=0，可恢复</div>`)}
+    </div>
+    ${card('新增素材', `
+      <div class="row" style="align-items:flex-end">
+        <div class="field"><label>选择图片（可多选）</label><input type="file" id="lib-files" multiple accept=".png,.jpg,.jpeg,.gif,.webp"></div>
+        <div class="field"><label>或本地路径</label><input type="text" id="lib-path" placeholder="Desktop / 素材库 / 仓库 media" style="min-width:260px"></div>
+      </div>
+      <div class="row" style="align-items:flex-end;margin-top:8px">
+        <div class="field"><label>类型（必填）</label><select id="lib-create-type">${LIBRARY_TYPES.map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></div>
+        <div class="field"><label>名称（必填，≤30）</label><input type="text" id="lib-create-name" maxlength="30" style="min-width:180px"></div>
+        <div class="field"><label>标签（逗号分隔，≤10）</label><input type="text" id="lib-create-tags" style="min-width:200px"></div>
+        <button class="btn primary" id="lib-create-btn">新增到素材库</button>
+      </div>
+      <div class="field" style="margin-top:8px"><label>具体含义（可选，≤200）：它代表什么情绪/场景</label>
+        <input type="text" id="lib-create-caption" maxlength="200"></div>
+      <div id="lib-create-result" style="margin-top:8px"></div>`)}
+    ${card('素材库', `
+      <div class="row between" style="margin-bottom:10px">
+        <div class="row">
+          <input type="text" id="lib-q" placeholder="搜索名称/含义/标签" value="${esc(lib.q)}" style="max-width:240px">
+          <select id="lib-type">${typeOptions}</select>
+          <select id="lib-enabled"><option value="">全部</option>
+            <option value="1" ${lib.enabled === '1' ? 'selected' : ''}>只看启用</option>
+            <option value="0" ${lib.enabled === '0' ? 'selected' : ''}>只看软删</option></select>
+          <button class="btn" id="lib-search">搜索</button>
+        </div>
+        <span class="hint">${total} 条 · 类型：贴纸/图片/GIF；标签表达情绪/用途</span>
+      </div>
+      <div class="library-grid">${cards}</div>`)}`;
+
+  const fileInput = $('#lib-files');
+  if (fileInput) fileInput.onchange = () => { libraryFiles = Array.from(fileInput.files || []); };
+  const createBtn = $('#lib-create-btn');
+  if (createBtn) createBtn.onclick = createLibraryAsset;
+  const search = $('#lib-search');
+  if (search) search.onclick = () => {
+    state.library.q = $('#lib-q').value.trim();
+    state.library.type = $('#lib-type').value;
+    state.library.enabled = $('#lib-enabled').value;
+    state.library.offset = 0;
+    loadLibrary();
+  };
+  $$('[data-lib-edit]').forEach((button) => {
+    button.onclick = () => openLibraryEdit(button.dataset.libEdit);
+  });
+  $$('[data-lib-delete]').forEach((button) => {
+    button.onclick = () => deleteLibraryAsset(button.dataset.libDelete, false);
+  });
+  $$('[data-lib-restore]').forEach((button) => {
+    button.onclick = async () => {
+      try {
+        await api('/api/library/restore', { method: 'POST', body: { id: button.dataset.libRestore } });
+        toast('已恢复', 'ok'); loadLibrary();
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  });
+}
+
+async function createLibraryAsset() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const type = $('#lib-create-type').value;
+  const name = $('#lib-create-name').value.trim();
+  const caption = $('#lib-create-caption').value.trim();
+  const tags = ($('#lib-create-tags').value || '').split(/[,，]/).map((item) => item.trim()).filter(Boolean);
+  const pathValue = ($('#lib-path').value || '').trim();
+  if (!name) { toast('名称必填', 'err'); return; }
+  if (!type) { toast('类型必填', 'err'); return; }
+  const files = libraryFiles.length ? libraryFiles : [];
+  if (!files.length && !pathValue) { toast('先选图片或填本地路径', 'err'); return; }
+  const results = [];
+  const button = $('#lib-create-btn');
+  button.disabled = true;
+  try {
+    if (files.length) {
+      for (const file of files) {
+        const data = await readFileAsDataURL(file);
+        const result = await api('/api/library/create', {
+          method: 'POST', body: { data, type, name, caption, tags },
+        });
+        results.push({ file: file.name, ...result });
+      }
+    } else {
+      const result = await api('/api/library/create', {
+        method: 'POST', body: { path: pathValue, type, name, caption, tags },
+      });
+      results.push({ file: pathValue, ...result });
+    }
+    const html = results.map((item) => `<div class="hint">${esc(item.file)}：${item.ok
+      ? (item.duplicate ? '已存在（去重）' : '已新增') : ('失败 ' + esc(item.error || ''))}</div>`).join('');
+    $('#lib-create-result').innerHTML = html;
+    toast(`新增完成：成功 ${results.filter((item) => item.ok).length}/${results.length}`, 'ok');
+    libraryFiles = [];
+    loadLibrary();
+  } catch (err) {
+    toast(err.message, 'err');
+    $('#lib-create-result').innerHTML = `<div class="error-text">${esc(err.message)}</div>`;
+  } finally { button.disabled = false; }
+}
+
+function openLibraryEdit(id) {
+  const items = (state.library.data && state.library.data.items) || [];
+  const asset = items.find((item) => item.id === id);
+  if (!asset) { toast('素材不存在（刷新列表试试）', 'err'); return; }
+  $('#modal-title').textContent = '编辑素材 · ' + (asset.name || asset.id);
+  $('#modal-body').innerHTML = `
+    <div class="grid cols-2">
+      <div class="field"><label>类型</label><select id="lib-edit-type">${LIBRARY_TYPES.map(([value, label]) =>
+        `<option value="${value}" ${asset.type === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
+      <div class="field"><label>名称（≤30）</label><input type="text" id="lib-edit-name" maxlength="30" value="${esc(asset.name || '')}"></div>
+    </div>
+    <div class="field" style="margin-top:8px"><label>具体含义/描述（≤200）</label>
+      <textarea id="lib-edit-caption" rows="3" maxlength="200">${esc(asset.caption || '')}</textarea></div>
+    <div class="field" style="margin-top:8px"><label>标签（逗号分隔，≤10）</label>
+      <input type="text" id="lib-edit-tags" value="${esc((asset.tags || []).join(', '))}"></div>
+    <label class="switch" style="margin-top:8px"><input type="checkbox" id="lib-edit-enabled" ${asset.enabled ? 'checked' : ''}> 启用（禁用后模型素材清单里不再出现）</label>
+    <div class="row" style="margin-top:10px;justify-content:flex-end">
+      <button class="btn" id="lib-edit-cancel">取消</button>
+      <button class="btn primary" id="lib-edit-save">保存</button>
+    </div>`;
+  $('#modal-mask').classList.add('open');
+  $('#lib-edit-cancel').onclick = closeModal;
+  $('#lib-edit-save').onclick = async () => {
+    const updates = {
+      type: $('#lib-edit-type').value,
+      name: $('#lib-edit-name').value.trim(),
+      caption: $('#lib-edit-caption').value.trim(),
+      tags: ($('#lib-edit-tags').value || '').split(/[,，]/).map((item) => item.trim()).filter(Boolean),
+      enabled: $('#lib-edit-enabled').checked,
+    };
+    try {
+      await api('/api/library/update', { method: 'POST', body: { id, ...updates } });
+      toast('已保存', 'ok');
+      closeModal();
+      loadLibrary();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
+async function deleteLibraryAsset(id, hard) {
+  const phrase = window.prompt('删除素材需要输入确认短语「删除素材」' + (hard ? '（彻底删除会把文件移到 media_trash/）' : '（默认软删除，可恢复）') + '：');
+  if (phrase === null) return;
+  if (!hard && window.confirm('是否同时彻底删除（移到 media_trash/，不可恢复）？\n点「取消」= 只软删除（可恢复）')) {
+    hard = true;
+  }
+  try {
+    const result = await api('/api/library/delete', {
+      method: 'POST', body: { id, hard, confirm: phrase },
+    });
+    toast(result.mode === 'hard' ? '已彻底删除（移入 media_trash）' : '已软删除（可恢复）', 'ok');
+    loadLibrary();
+  } catch (err) { toast(err.message, 'err'); }
 }
 
 /* ---------------- 路由 ---------------- */

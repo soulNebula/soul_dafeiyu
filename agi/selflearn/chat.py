@@ -450,6 +450,12 @@ class SelfLearnAgent:
             con.commit()
         finally:
             con.close()
+        # P19：固定兜底回复也记一条（无媒体），避免配额统计漏条
+        try:
+            from . import media_quota
+            media_quota.record(self.path, turn_id, None, reply)
+        except Exception:  # noqa: BLE001
+            pass
         return {"ok": True, "reply": reply, "bubbles": [reply], "turn_id": turn_id,
                 "new_memories": [], "memory_ids": [], "persona": "",
                 "variant": {"variant_id": None, "hint": "自然回应"},
@@ -728,13 +734,24 @@ class SelfLearnAgent:
                 inner_meta = {"mode": inner_mode, "source": inner_mode,
                               "fallback": "", "latency_ms": None,
                               "injected": bool(inner_ctx)}
-            # P5-b：media 开启时才注入素材清单；关闭时 prompt 逐字节不变
+            # P5-b：media 开启时才注入素材清单；P19 媒体配额独立注入自然/强制提示
             media_ctx = ""
+            quota_info: dict = {}
+            quota_ctx = ""
             try:
                 from . import media_choice
                 media_ctx = media_choice.media_prompt_block(self.path)
             except Exception:  # noqa: BLE001
                 media_ctx = ""
+            if not crisis:
+                try:
+                    from . import media_quota
+                    quota_info = media_quota.need_media(self.path)
+                    quota_ctx = media_quota.prompt_block(quota_info)
+                except Exception:  # noqa: BLE001
+                    quota_info, quota_ctx = {}, ""
+            if quota_ctx:
+                media_ctx = (media_ctx + "\n" + quota_ctx).strip() if media_ctx else quota_ctx
             # off：inner_ctx/media_ctx 为空串 → prompt 与改动前逐字节一致
             prompt = self._prompt(text or "我发了一张图片，请看看并回应我。", mems, pctx,
                                    variant, recent, st=st, lessons=lessons,
@@ -923,6 +940,13 @@ class SelfLearnAgent:
         if image_memory:
             new_memories = list(new_memories) + [image_memory]
         turn_id = _id("T-", user_id, time.time(), turn_reply)
+        # P19：记录本条被动回复是否带媒体（无媒体也记 used=0；失败不阻断）
+        if not crisis:
+            try:
+                from . import media_quota
+                media_quota.record(self.path, turn_id, reply_media, turn_reply)
+            except Exception:  # noqa: BLE001
+                pass
         # W3-A：延迟 = send 入口 → 写 turn（含模型调用），不含发送本身；毫秒、1 位小数
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
         con = db.connect(self.path)

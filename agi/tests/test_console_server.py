@@ -1824,3 +1824,85 @@ def test_console_engine_toggle_proxy_and_audit(tmp_path, write_env, monkeypatch)
     app_js = (static_dir / "app.js").read_text(encoding="utf-8")
     assert "renderEngineCard" in app_js and "engine-start" in app_js and "engine-stop" in app_js
     assert "bindEngineActions" in app_js and "toggleEngine" in app_js
+
+
+# ============================================================ P17 素材库 HTTP
+class _FakeLibraryStore:
+    calls = []
+
+    @staticmethod
+    def list_assets(type_="", tag="", q="", enabled="", limit=100, offset=0):
+        _FakeLibraryStore.calls.append(("list", type_, tag, q, enabled, limit, offset))
+        return {"ok": True, "items": [{"id": "MA-1", "name": "猫猫", "type": "sticker"}],
+                "total": 1}
+
+    @staticmethod
+    def get_asset(asset_id):
+        return {"ok": asset_id == "MA-1", "asset": {"id": asset_id}}
+
+    @staticmethod
+    def stats():
+        return {"ok": True, "total": 1, "enabled": 1, "soft_deleted": 0,
+                "by_type": {"sticker": 1, "image": 0, "gif": 0}}
+
+    @staticmethod
+    def create_asset(**kwargs):
+        _FakeLibraryStore.calls.append(("create", kwargs))
+        return {"ok": True, "duplicate": False, "asset": {"id": "MA-2"}}
+
+    @staticmethod
+    def update_asset(asset_id, updates):
+        _FakeLibraryStore.calls.append(("update", asset_id, updates))
+        return {"ok": True, "asset": {"id": asset_id}}
+
+    @staticmethod
+    def delete_asset(asset_id, hard=False, confirm=""):
+        _FakeLibraryStore.calls.append(("delete", asset_id, hard, confirm))
+        return {"ok": True, "mode": "hard" if hard else "soft"}
+
+    @staticmethod
+    def restore_asset(asset_id):
+        return {"ok": True, "asset": {"id": asset_id, "enabled": True}}
+
+
+def test_console_library_routes_and_static(tmp_path, write_env, monkeypatch):
+    _FakeLibraryStore.calls = []
+    monkeypatch.setattr(console, "_load_media_store", lambda: _FakeLibraryStore)
+    status, _ = _call("GET", "/api/library/list")
+    assert status == 401
+    status, data = _call("GET", "/api/library/list?type=sticker&q=猫", token="tok")
+    assert status == 200 and data["total"] == 1
+    assert _FakeLibraryStore.calls[-1] == ("list", "sticker", "", "猫", "", 100, 0)
+    status, data = _call("GET", "/api/library/asset?id=MA-1", token="tok")
+    assert status == 200 and data["asset"]["id"] == "MA-1"
+    status, data = _call("GET", "/api/library/stats", token="tok")
+    assert status == 200 and data["by_type"]["sticker"] == 1
+
+    status, data = _call("POST", "/api/library/create",
+                         {"data": "aGVsbG8=", "type": "sticker", "name": "新",
+                          "caption": "含义", "tags": ["a"]}, token="tok")
+    assert status == 200 and data["asset"]["id"] == "MA-2"
+    status, data = _call("POST", "/api/library/update",
+                         {"id": "MA-1", "name": "改名", "enabled": False}, token="tok")
+    assert status == 200
+    status, data = _call("POST", "/api/library/delete",
+                         {"id": "MA-1", "confirm": "删除素材"}, token="tok")
+    assert status == 200 and data["mode"] == "soft"
+    status, data = _call("POST", "/api/library/restore", {"id": "MA-1"}, token="tok")
+    assert status == 200 and data["asset"]["enabled"] is True
+    status, _ = _call("POST", "/api/library/create", {"name": "x"})
+    assert status == 401
+
+    audits = console.AUDIT_PATH.read_text(encoding="utf-8").splitlines()
+    actions = [json.loads(line)["action"] for line in audits]
+    for action in ("media_asset_create", "media_asset_update",
+                   "media_asset_delete", "media_asset_restore"):
+        assert action in actions
+
+    static_dir = Path(console.STATIC_DIR)
+    app_js = (static_dir / "app.js").read_text(encoding="utf-8")
+    index = (static_dir / "index.html").read_text(encoding="utf-8")
+    style = (static_dir / "style.css").read_text(encoding="utf-8")
+    assert 'data-page="library"' in index
+    assert "renderLibrary" in app_js and "openLibraryEdit" in app_js
+    assert ".library-grid" in style and ".library-card" in style

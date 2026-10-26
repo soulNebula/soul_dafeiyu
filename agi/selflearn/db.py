@@ -39,6 +39,19 @@ CREATE TABLE IF NOT EXISTS emoji_usage(
   id TEXT PRIMARY KEY, emoji_id TEXT NOT NULL, message_id TEXT,
   context TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS media_assets(
+  id TEXT PRIMARY KEY,
+  hash TEXT NOT NULL UNIQUE,
+  path TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'sticker',
+  name TEXT NOT NULL DEFAULT '',
+  caption TEXT NOT NULL DEFAULT '',
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  builtin INTEGER NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS score_records(
   id TEXT PRIMARY KEY, turn_id TEXT, bucket TEXT NOT NULL,
   raw REAL NOT NULL, score REAL NOT NULL, breakdown_json TEXT NOT NULL,
@@ -304,6 +317,7 @@ MEMORY_TABLES = frozenset({
     "messages", "user_memories", "claims", "summaries", "attachments",
     "media_understanding", "turns", "feedback", "pairs", "inner_states",
     "raw_events", "sessions", "session_segments", "emoji_archive", "emoji_usage",
+    "media_assets",
     "user_profile", "score_records", "weak_rechecks", "conflicts",
     "search_documents", "search_fts", "search_meta", "research_sources",
     "bili_impressions",

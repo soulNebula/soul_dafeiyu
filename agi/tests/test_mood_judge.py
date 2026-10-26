@@ -27,7 +27,7 @@ VALID = json.dumps({
     "moodDelta": -6,
     "dims": {"happy": 0, "calm": 0, "sweet": 0, "heartache": 5,
              "worry": 3, "sad": 2, "jealous": 0},
-    "reason": "对方说最近很累，我心里沉了一下，先问了一句要不要歇会儿",
+    "reason": "用户说最近很累，我心里沉了一下，先问了一句要不要歇会儿",
     "confidence": 82,
 }, ensure_ascii=False)
 
@@ -36,15 +36,20 @@ VALID = json.dumps({
 def _isolate_mood(monkeypatch, tmp_path):
     """不读生产 mood.json；清 MOOD_* 环境变量与 client 缓存。"""
     for name in ("MOOD_JUDGE_ENABLED", "MOOD_INJECT", "MOOD_JUDGE_ASYNC",
-                 "MOOD_JUDGE_CONFIDENCE_MIN", "MOOD_MIN", "MOOD_HALF_LIFE_H",
-                 "MOOD_DIM_HALF_LIFE_MIN", "MOOD_SOUL_URL", "MOOD_SOUL_TIMEOUT_S"):
+                 "MOOD_JUDGE_BACKEND", "MOOD_JUDGE_CONFIDENCE_MIN", "MOOD_MIN",
+                 "MOOD_HALF_LIFE_H", "MOOD_DIM_HALF_LIFE_MIN", "MOOD_SOUL_URL",
+                 "MOOD_SOUL_TIMEOUT_S"):
         monkeypatch.delenv(name, raising=False)
     # 判定默认异步（不拖慢主链）；单测强制同步以保证断言确定
     monkeypatch.setenv("MOOD_JUDGE_ASYNC", "0")
+    # 既有用例沿用 local 后端语义；后端选择用例自己覆盖
+    monkeypatch.setenv("MOOD_JUDGE_BACKEND", "local")
     monkeypatch.setenv("MOOD_CONFIG_PATH", str(tmp_path / "mood_missing.json"))
     mood_judge._CLIENTS.clear()
+    mood_judge._DEEPSEEK_CLIENTS.clear()
     yield
     mood_judge._CLIENTS.clear()
+    mood_judge._DEEPSEEK_CLIENTS.clear()
 
 
 def _path(tmp_path, name="mood"):
@@ -84,7 +89,7 @@ def test_parse_delta_tolerates_markdown_and_extra_text():
     assert parsed["moodDelta"] == -6
     assert parsed["dims"]["heartache"] == 5
     assert parsed["confidence"] == 82
-    assert parsed["reason"].startswith("对方说最近很累")
+    assert parsed["reason"].startswith("用户说最近很累")
     assert mood_judge.parse_delta("抱歉，我无法判断") is None
     assert mood_judge.parse_delta("") is None
 
@@ -125,7 +130,7 @@ def test_high_confidence_injects_exactly_once(monkeypatch, tmp_path):
 
     line = mood_judge.context_line(path, now=1001.0)
     assert "<mood_context>" in line
-    assert "（刚才）" in line and "对方说很累" in line
+    assert "（刚才）" in line and "用户说很累" in line
     assert "别把这段念出来" in line
     # 同一条变化只说一次
     assert mood_judge.context_line(path, now=1002.0) == ""
@@ -385,7 +390,7 @@ def test_chat_judges_mood_after_reply(monkeypatch, tmp_path):
     rows = _timeline(path)
     assert len(rows) == 1
     assert rows[0]["mode"] == "user" and rows[0]["confidence"] == 82
-    assert "对方说" in rows[0]["reason"]
+    assert "用户说" in rows[0]["reason"]
 
 
 def test_chat_does_not_judge_crisis(monkeypatch, tmp_path):
@@ -428,7 +433,7 @@ def test_chat_injects_mood_once_when_enabled(monkeypatch, tmp_path):
     assert agent.send("今天有点累")["ok"] is True
     first_system = _system_of(client)
     assert "<mood_context>" in first_system
-    assert "对方说很累" in first_system
+    assert "用户说很累" in first_system
 
     client2 = _ChatFakeClient()
     agent.client = client2
@@ -448,11 +453,12 @@ def test_snapshot_shape_for_console(monkeypatch, tmp_path):
     assert snap["mood"] == pytest.approx(68.0, abs=0.2)
     assert snap["mood_label"] in ("松快", "一般")
     assert set(snap["dims"]) == set(mood_judge.DIMS)
-    assert snap["timeline"] and snap["timeline"][0]["reason"].startswith("对方说很累")
+    assert snap["timeline"] and snap["timeline"][0]["reason"].startswith("用户说很累")
     assert snap["pending_inject"] is True
     assert "<mood_context>" in snap["injected_preview"]
     assert snap["settings"]["judge_enabled"] is False
     assert snap["settings"]["async"] is False
+    assert snap["settings"]["judge_backend"] == "local"
     assert snap["last_confidence"] == 88
 
 
@@ -478,3 +484,122 @@ def test_chat_async_judge_does_not_block_and_records(monkeypatch, tmp_path):
         time.sleep(0.05)
     assert rows, "后台判定应在 5s 内落库"
     assert rows[0]["mode"] == "user" and rows[0]["confidence"] == 82
+
+
+# --------------------------------------------------------------------------- #
+# 9. P9-b：判定后端选择（deepseek teacher / local / none）与回退链
+# --------------------------------------------------------------------------- #
+def test_settings_backend_default_env_and_file(monkeypatch, tmp_path):
+    for name in ("MOOD_JUDGE_BACKEND",):
+        monkeypatch.delenv(name, raising=False)
+    assert mood_judge.settings()["judge_backend"] == "deepseek"   # 默认 teacher
+    monkeypatch.setenv("MOOD_JUDGE_BACKEND", "local")
+    assert mood_judge.settings()["judge_backend"] == "local"
+    monkeypatch.setenv("MOOD_JUDGE_BACKEND", "乱写")
+    assert mood_judge.settings()["judge_backend"] == "deepseek"
+    # mood.json 读取
+    cfg = tmp_path / "mood.json"
+    cfg.write_text(json.dumps({"judge_backend": "none"}), encoding="utf-8")
+    monkeypatch.delenv("MOOD_JUDGE_BACKEND", raising=False)
+    monkeypatch.setenv("MOOD_CONFIG_PATH", str(cfg))
+    assert mood_judge.settings()["judge_backend"] == "none"
+
+
+def _judge_ready(monkeypatch):
+    monkeypatch.setenv("MOOD_JUDGE_ENABLED", "1")
+
+
+def test_judge_deepseek_backend_uses_teacher(monkeypatch, tmp_path):
+    _judge_ready(monkeypatch)
+    monkeypatch.setenv("MOOD_JUDGE_BACKEND", "deepseek")
+    teacher = _FakeMoodClient(VALID)
+    monkeypatch.setattr(mood_judge, "_deepseek_client", lambda cfg: teacher)
+    monkeypatch.setattr(mood_judge, "_default_client",
+                        lambda cfg: pytest.fail("teacher 成功时不该调 local"))
+
+    delta = mood_judge.judge(_path(tmp_path), mode="user",
+                             user_text="今天被老板骂了，有点难受",
+                             our_reply="被骂了确实憋屈，先缓一缓")
+    assert delta["source"] == "deepseek"
+    assert delta["moodDelta"] == -6
+    assert teacher.calls and teacher.calls[0]["kwargs"]["purpose"] == "mood_judge"
+    assert teacher.calls[0]["kwargs"]["max_tokens"] <= 200
+    assert teacher.calls[0]["kwargs"]["temperature"] <= 0.3
+    assert teacher.calls[0]["kwargs"]["json_mode"] is True
+
+
+def test_judge_deepseek_failure_falls_back_to_local(monkeypatch, tmp_path):
+    _judge_ready(monkeypatch)
+    monkeypatch.setenv("MOOD_JUDGE_BACKEND", "deepseek")
+    teacher = _FakeMoodClient(error="HTTPError: 500")
+    local = _FakeMoodClient(VALID)
+    monkeypatch.setattr(mood_judge, "_deepseek_client", lambda cfg: teacher)
+    monkeypatch.setattr(mood_judge, "_default_client", lambda cfg: local)
+
+    delta = mood_judge.judge(_path(tmp_path), mode="user", user_text="今天好累",
+                             our_reply="先歇会儿")
+    assert delta["source"] == "local"
+    assert teacher.calls and local.calls          # teacher 试过、local 兜住
+
+
+def test_judge_local_failure_falls_back_to_rule(monkeypatch, tmp_path):
+    _judge_ready(monkeypatch)
+    monkeypatch.setenv("MOOD_JUDGE_BACKEND", "local")
+    local = _FakeMoodClient(error="TimeoutError: timed out")
+    monkeypatch.setattr(mood_judge, "_default_client", lambda cfg: local)
+    delta = mood_judge.judge(_path(tmp_path), mode="user",
+                             user_text="今天被老板骂了，有点难受",
+                             our_reply="先缓一缓")
+    assert delta["source"] == "rule"
+    assert delta["moodDelta"] < 0
+
+
+def test_judge_backend_none_uses_rule_without_model(monkeypatch, tmp_path):
+    _judge_ready(monkeypatch)
+    monkeypatch.setenv("MOOD_JUDGE_BACKEND", "none")
+    local = _FakeMoodClient(VALID)
+    monkeypatch.setattr(mood_judge, "_default_client", lambda cfg: local)
+    delta = mood_judge.judge(_path(tmp_path), mode="user", user_text="今天好累",
+                             our_reply="先歇会儿")
+    assert delta["source"] == "rule"
+    assert local.calls == []
+
+
+def test_prompt_has_sign_and_pronoun_hard_constraints():
+    system = mood_judge.judge_messages("user", "被骂了", "先缓一缓")[0]["content"]
+    assert "符号硬约束" in system
+    assert "heartache" in system and "worry" in system and "sad" in system
+    assert "必须 > 0" in system
+    assert "正例" in system and "反例" in system
+    assert "不许出现「他 / 她 / 对方」" in system
+    assert "元叙述" in system and "我慢点答" in system
+    assert "心里揪了一下" in system
+
+
+def test_judge_deepseek_retries_with_bigger_budget(monkeypatch, tmp_path):
+    """deepseek-flash 的 reasoning 会占 max_tokens：200 预算偶发空正文 → 放宽一次重试。"""
+    _judge_ready(monkeypatch)
+    monkeypatch.setenv("MOOD_JUDGE_BACKEND", "deepseek")
+
+    class _FlakyTeacher:
+        def __init__(self):
+            self.calls = []
+
+        def available(self):
+            return True
+
+        def chat(self, messages, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return {"ok": False, "text": "", "error": "空正文（预算被 reasoning 吃光）"}
+            return {"ok": True, "text": VALID}
+
+    teacher = _FlakyTeacher()
+    monkeypatch.setattr(mood_judge, "_deepseek_client", lambda cfg: teacher)
+    delta = mood_judge.judge(_path(tmp_path), mode="user",
+                             user_text="今天被老板骂了，有点难受",
+                             our_reply="先缓一缓")
+    assert delta["source"] == "deepseek"
+    assert len(teacher.calls) == 2
+    assert teacher.calls[0]["max_tokens"] == 200
+    assert teacher.calls[1]["max_tokens"] > teacher.calls[0]["max_tokens"]

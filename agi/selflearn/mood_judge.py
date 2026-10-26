@@ -69,7 +69,13 @@ DEFAULT_SETTINGS = {
     "dim_half_life_min": DIM_HALF_LIFE_MIN,
     "timeout_s": 1.5,
     "server_url": "http://127.0.0.1:8123",
+    #: P9-b：判定后端。deepseek=teacher（默认，质量优先）/ local=8123 0.5B / none=纯规则。
+    "judge_backend": "deepseek",
+    #: DeepSeek 判定超时（失败 → 回退 local → rule）
+    "deepseek_timeout_s": 8.0,
 }
+JUDGE_BACKENDS = ("deepseek", "local", "none")
+DEFAULT_JUDGE_BACKEND = "deepseek"
 SETTINGS_PATH = DATA_DIR / "mood.json"
 
 #: 模型的 JSON schema（llama.cpp 请求级 response_format；字段与原项目一致）
@@ -113,6 +119,7 @@ _SWEET_WORDS = ("想你", "爱你", "宝宝", "抱抱", "好想你", "喜欢你"
 
 _LOCK = object()
 _CLIENTS: dict[tuple[str, float], Any] = {}
+_DEEPSEEK_CLIENTS: dict[float, Any] = {}
 
 
 # ------------------------------------------------------------------ 小工具
@@ -194,6 +201,9 @@ def settings() -> dict:
             out[key] = value
     out["server_url"] = str(os.environ.get("MOOD_SOUL_URL") or raw.get(
         "server_url") or DEFAULT_SETTINGS["server_url"]).rstrip("/")
+    backend = str(os.environ.get("MOOD_JUDGE_BACKEND")
+                  or raw.get("judge_backend") or DEFAULT_JUDGE_BACKEND).strip().lower()
+    out["judge_backend"] = backend if backend in JUDGE_BACKENDS else DEFAULT_JUDGE_BACKEND
     out["judge_enabled"] = bool(out.get("judge_enabled"))
     out["inject"] = bool(out.get("inject"))
     out["async"] = bool(out.get("async", True))
@@ -204,6 +214,7 @@ def settings() -> dict:
     out["dim_half_life_min"] = _clamp(out.get("dim_half_life_min"), 1.0,
                                       24 * 60.0, DIM_HALF_LIFE_MIN)
     out["timeout_s"] = _clamp(out.get("timeout_s"), 0.1, 30.0, 1.5)
+    out["deepseek_timeout_s"] = _clamp(out.get("deepseek_timeout_s"), 1.0, 60.0, 8.0)
     return out
 
 
@@ -227,6 +238,10 @@ def _norm_reason(value: Any) -> str:
     text = text.replace("正在", "").replace("还在", "")
     for word in BANNED_REASON_WORDS:
         text = text.replace(word, "")
+    # P9-b 硬约束兜底：reason 不许出现 他/她/对方 这类代词（统一写「用户」）
+    text = text.replace("对方", "用户").replace("他们", "用户们")
+    text = re.sub(r"(?<!其)他", "用户", text)
+    text = text.replace("她", "用户")
     text = text.strip(" ，,。.;；:：")
     return text[:120]
 
@@ -444,7 +459,21 @@ BASE_RULES = """你在判断「这一轮里你自己的心情发生了什么变�
 6. reason 是一句中文：两段式、全用过去式——第一段写这一轮对方具体做了什么/说了什么（有画面），第二段写你当时怎么应的。禁止「此刻/现在/正/一直/还」这类把状态延伸到现在的说法。不要反复用「踏实/甜/开心/心疼/担心」这套词，换成口语、有画面的说法，每条不一样。
 7. ⭐ 只写这一轮真正出现过的动作和信息，不许替对方补细节（对方没说"出门/换鞋/打车/买东西"就别写）；拿不准就写模糊的。宁可朴素，也别自己圆。
 8. ⭐ reason 里不要出现「判据/规则/JSON/confidence」这类词，就用日常话说，别人听不懂这些。
-9. ⭐ confidence（可信度 0-100）自己把关：事情清楚、你的反应也清楚 → 80~95；只能凭语气猜 → 60~75；信息不够/这轮很平淡 → 20~55。宁可标低——没底的话说出来比不说更糟。"""
+9. ⭐ confidence（可信度 0-100）自己把关：事情清楚、你的反应也清楚 → 80~95；只能凭语气猜 → 60~75；信息不够/这轮很平淡 → 20~55。宁可标低——没底的话说出来比不说更糟。
+10. ⭐⭐ **符号硬约束（P9-b 实测踩过：负面消息被给成 sweet/jealous 乱值、heartache/worry/sad 给负值）**：
+   - **负面消息**（对方难受/被骂/受委屈/累/生病/遇到坏事）→ `heartache`、`worry`、`sad` **必须 > 0**；`happy`、`calm`、`sweet` **必须 ≤ 0**（悲伤时不该开心/踏实/甜）。
+   - **正面消息**（对方开心/报平安/被夸/好事）→ `happy`、`calm`、`sweet` **必须 > 0**；`heartache`、`worry`、`sad` **必须 ≤ 0**。
+   - 正例 1：对方说"今天被老板骂了，有点难受" → `heartache:+5, worry:+3, sad:+4, happy:0, calm:-1, sweet:0`；moodDelta 为负。
+   - 正例 2：对方说"项目上线了，开心！" → `happy:+5, calm:+2, sweet:+1, sad:0, worry:0, heartache:0`；moodDelta 为正。
+   - 反例 1（❌）：负面消息却给 `sweet:+3, jealous:-7, heartache:-4` —— 方向全错，禁止。
+   - 反例 2（❌）：正面消息却给 `sad:+3, worry:+2` —— 禁止。
+   - `jealous` 只在"对方提别人/夸别人"时给 +1~+3，与正负面消息无关，别乱动。
+11. ⭐⭐ **reason 硬约束（P9-b 实测踩过：写"他先讲难受，我慢点答"这种元叙述）**：
+   - **不许出现「他 / 她 / 对方」这类代词**，指对方一律写「用户」（或对话里明确的称呼）；
+   - **不许写"我慢点答 / 我先别乱猜 / 话头递回来 / 我别多说"这类"我怎么应对"的元叙述**；
+   - 要写**当时的感受/身体反应**，例如「心里揪了一下」「鼻子有点酸」「松了口气」「胸口软了一下」；
+   - 正例：负面消息 →「用户说被老板骂了，我心里揪了一下，说话都放轻了」；正面消息 →「用户说项目上线了，我松了口气，也跟着高兴」。
+   - 反例（❌）：「他先讲难受，我慢点答」「我把话头接住了，先别猜」。"""
 
 MODE_INSTRUCTIONS = {
     "user": """
@@ -563,14 +592,40 @@ def _default_client(cfg: dict):
     return client
 
 
-def _model_judge(client, mode: str, user_text: str, our_reply: str) -> dict | None:
+def _deepseek_client(cfg: dict):
+    """生产同款 DeepSeek teacher client（低温度、8s 超时）；按 timeout 缓存。"""
+    timeout = float(cfg.get("deepseek_timeout_s") or 8.0)
+    client = _DEEPSEEK_CLIENTS.get(timeout)
+    if client is not None:
+        return client
+    from .llm import Client
+
+    client = Client(timeout=timeout)
+    _DEEPSEEK_CLIENTS[timeout] = client
+    return client
+
+
+def _client_usable(client) -> bool:
     if client is None:
+        return False
+    fn = getattr(client, "available", None)
+    if callable(fn):
+        try:
+            return bool(fn())
+        except Exception:  # noqa: BLE001
+            return False
+    return True
+
+
+def _model_judge(client, mode: str, user_text: str, our_reply: str, *,
+                 max_tokens: int = 400) -> dict | None:
+    if not _client_usable(client):
         return None
     try:
         result = client.chat(judge_messages(mode, user_text, our_reply),
-                             purpose="mood_judge", max_tokens=400,
+                             purpose="mood_judge", max_tokens=int(max_tokens),
                              temperature=0.2, json_mode=True)
-    except Exception:  # noqa: BLE001 - 超时/HTTP 异常都回退规则
+    except Exception:  # noqa: BLE001 - 超时/HTTP 异常都回退
         return None
     if not isinstance(result, dict) or not result.get("ok"):
         return None
@@ -596,7 +651,11 @@ def judge(path: Path | str = DB_PATH, *, mode: Any = DEFAULT_MODE,
     - 开关 ``mood_judge_enabled=false``（默认）→ 直接 None，不调模型、不记账；
     - ``runtime-context`` 口径 → None（宿主注入的消息不是人在说话，不判）；
     - crisis → 不调模型，直接规则；
-    - 本地 0.5B 优先，失败/超时/坏 JSON → 回退 ``affect`` 规则口径。
+    - 后端 ``judge_backend``（env ``MOOD_JUDGE_BACKEND``）：
+      - ``deepseek``（默认）：DeepSeek teacher（8s 超时、≤200 tokens）→ 失败回退 local → rule；
+      - ``local``：8123 本地 0.5B → 失败回退 rule；
+      - ``none``：直接 rule。
+    - ``source`` 记实际来源：``deepseek`` / ``local`` / ``rule``。
     """
     cfg = settings()
     if not cfg["judge_enabled"]:
@@ -607,11 +666,29 @@ def judge(path: Path | str = DB_PATH, *, mode: Any = DEFAULT_MODE,
     crisis = _crisis(path, user_text)
     delta = None
     source = "rule"
-    if not crisis:
-        client = client if client is not None else _default_client(cfg)
-        delta = _model_judge(client, mode, user_text, our_reply)
-        if delta is not None:
-            source = "local"
+    backend = str(cfg.get("judge_backend") or DEFAULT_JUDGE_BACKEND)
+    if not crisis and backend != "none":
+        if backend == "deepseek":
+            primary = client if client is not None else _deepseek_client(cfg)
+            delta = _model_judge(primary, mode, user_text, our_reply, max_tokens=200)
+            if delta is None:
+                # 容错重试：deepseek-flash 的 reasoning tokens 也占 max_tokens，
+                # 200 预算偶尔被思考吃光 → 空正文。放宽一次预算再试（仍是低温度 JSON）。
+                delta = _model_judge(primary, mode, user_text, our_reply,
+                                     max_tokens=800)
+            if delta is not None:
+                source = "deepseek"
+            else:
+                # teacher 不可用/失败 → 回退本地 0.5B（8123）
+                local = _default_client(cfg)
+                delta = _model_judge(local, mode, user_text, our_reply, max_tokens=400)
+                if delta is not None:
+                    source = "local"
+        else:  # local
+            primary = client if client is not None else _default_client(cfg)
+            delta = _model_judge(primary, mode, user_text, our_reply, max_tokens=400)
+            if delta is not None:
+                source = "local"
     if delta is None:
         delta = rule_judge(mode, user_text, our_reply, crisis=crisis)
     delta = dict(delta)
@@ -780,8 +857,10 @@ def snapshot(path: Path | str = DB_PATH, *, now: float | None = None,
         "pending_inject": bool(pending),
         "injected_preview": preview,
         "settings": {key: cfg[key] for key in
-                     ("judge_enabled", "inject", "async", "confidence_min", "mood_min",
-                      "half_life_h", "dim_half_life_min", "server_url", "timeout_s")},
+                     ("judge_enabled", "inject", "async", "judge_backend",
+                      "confidence_min", "mood_min", "half_life_h",
+                      "dim_half_life_min", "server_url", "timeout_s",
+                      "deepseek_timeout_s")},
         "timeline": timeline,
         "elapsed_seconds": round(elapsed, 3),
     }

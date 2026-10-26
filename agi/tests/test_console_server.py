@@ -2,6 +2,7 @@
 """P4-a 本地调试前端后端测试（全部 tmp_path，不碰真实库/不联网/不起端口）。"""
 from __future__ import annotations
 
+import base64
 import importlib.util
 import io
 import json
@@ -653,6 +654,7 @@ def test_media_assets_scan_and_thumbnail_endpoint(tmp_path, write_env, monkeypat
 
 
 def test_media_assets_from_emoji_archive(tmp_path, write_env, monkeypatch):
+    monkeypatch.setattr(console, "MEDIA_ASSET_DIRS", (tmp_path / "no_media",))
     db = tmp_path / "archive.sqlite3"
     con = sqlite3.connect(db)
     con.execute("CREATE TABLE emoji_archive(id TEXT PRIMARY KEY, name TEXT NOT NULL, "
@@ -1508,3 +1510,119 @@ def test_mood_toggles_write_whitelist_and_audit(tmp_path, write_env, monkeypatch
     assert illegal["ok"] is False
     assert any("not_allowed:mood" in error for error in illegal["errors"])
     assert json.loads(mood_json.read_text(encoding="utf-8"))["other_key"] == "keep-me"
+
+
+# ============================================================ P5-e-B 媒体本地导入
+def _tiny_png(color=(180, 60, 60)) -> bytes:
+    from io import BytesIO
+    from PIL import Image
+    buffer = BytesIO()
+    Image.new("RGB", (8, 8), color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _import_env(tmp_path, monkeypatch, write_env):
+    from agi import media_acquisition as acq
+    media = tmp_path / "media"
+    desktop = tmp_path / "desktop"
+    repo_media = tmp_path / "repo_media"
+    for directory in (media, desktop, repo_media):
+        directory.mkdir(parents=True, exist_ok=True)
+    wishes = tmp_path / "media_wishes.jsonl"
+    wishes.write_text(
+        json.dumps({"wish": "想发一只布偶猫的表情", "source": "model",
+                    "created_at": 1800000000.0}, ensure_ascii=False) + "\n"
+        + json.dumps({"wish": "想发「晚安」贴纸"}, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+    monkeypatch.setattr(acq, "IMPORT_DIR", media)
+    monkeypatch.setattr(acq, "MEDIA_SOURCES_PATH", tmp_path / "media_sources.json")
+    monkeypatch.setattr(acq, "WISH_STATUS_FILE", tmp_path / "media_wishes_status.json")
+    monkeypatch.setattr(acq, "IMPORT_INDEX_DB", tmp_path / "index.sqlite3")
+    monkeypatch.setattr(acq, "IMPORT_PATH_ROOTS", (media, desktop, repo_media))
+    monkeypatch.setattr(acq, "wishes_path", lambda: wishes)
+    monkeypatch.setattr(console, "MEDIA_WISHES_PATH", wishes)
+    contacts = tmp_path / "contacts"
+    contacts.mkdir()
+    contact_db = _make_db(contacts / "alice.sqlite3", message_rows=1, inner_rows=0)
+    monkeypatch.setattr(console, "CONTACTS_DIR", contacts)
+    monkeypatch.setattr(console, "DEFAULT_CONTACT_DB", contact_db)
+    monkeypatch.setattr(console, "MEDIA_ASSET_DIRS", (media,))
+    return {"media": media, "desktop": desktop, "wishes": wishes, "tmp": tmp_path,
+            "acq": acq, "contacts": contacts}
+
+
+def test_console_media_import_upload_duplicate_and_audit(tmp_path, write_env, monkeypatch):
+    env = _import_env(tmp_path, monkeypatch, write_env)
+    payload = base64.b64encode(_tiny_png()).decode("ascii")
+    body = {"files": [{"filename": "cat.png", "data": "data:image/png;base64," + payload,
+                       "name": "猫猫", "tags": ["可爱"]}]}
+    status, _ = _call("POST", "/api/media/import", body)
+    assert status == 401
+    status, data = _call("POST", "/api/media/import", body, token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["imported"] == 1 and data["results"][0]["status"] == "imported"
+    target = Path(data["results"][0]["path"])
+    assert target.is_file() and target.parent == env["media"].resolve()
+    audits = console.AUDIT_PATH.read_text(encoding="utf-8").splitlines()
+    assert any(json.loads(line)["action"] == "media_import" for line in audits)
+    status, library = _call("GET", "/api/media/library?limit=1000")
+    assert status == 200
+    imported = [item for item in library["items"] if str(item.get("path")) == str(target)]
+    assert imported and imported[0]["name"] == "猫猫"
+    assert imported[0]["source"] == "local_import"
+
+    status, data = _call("POST", "/api/media/import", body, token="tok")
+    assert status == 200 and data["duplicates"] == 1
+    assert len(list(env["media"].glob("*.png"))) == 1
+
+    bad = {"files": [{"filename": "evil.svg", "data": base64.b64encode(b"<svg/>").decode()},
+                     {"filename": "page.png", "data": base64.b64encode(b"<html/>").decode()}]}
+    status, data = _call("POST", "/api/media/import", bad, token="tok")
+    assert status == 200 and data["ok"] is False and data["failed"] == 2
+    reasons = {item["filename"]: item.get("reason") for item in data["results"]}
+    assert reasons["evil.svg"] == "suffix_not_allowed"
+    assert reasons["page.png"] == "not_an_image"
+
+
+def test_console_media_import_path_whitelist(tmp_path, write_env, monkeypatch):
+    env = _import_env(tmp_path, monkeypatch, write_env)
+    source = env["desktop"] / "cat.png"
+    source.write_bytes(_tiny_png((5, 6, 7)))
+    status, data = _call("POST", "/api/media/import-path",
+                         {"path": str(source), "name": "桌面猫"}, token="tok")
+    assert status == 200 and data["ok"] is True and data["status"] == "imported"
+
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(_tiny_png((8, 9, 10)))
+    status, data = _call("POST", "/api/media/import-path",
+                         {"path": str(outside)}, token="tok")
+    assert status == 400 and data["reason"] == "path_not_allowed"
+    status, _ = _call("POST", "/api/media/import-path", {"path": str(source)})
+    assert status == 401
+
+
+def test_console_media_wishes_status_and_fulfill(tmp_path, write_env, monkeypatch):
+    env = _import_env(tmp_path, monkeypatch, write_env)
+    status, data = _call("GET", "/api/media/wishes")
+    assert status == 200 and data["count"] == 2
+    assert all(item["status"] == "pending" for item in data["items"])
+    wish_id = data["items"][0]["wish_id"]
+    original = env["wishes"].read_text(encoding="utf-8")
+
+    status, data = _call("POST", "/api/media/wish/fulfill",
+                         {"wish_id": wish_id,
+                          "data": base64.b64encode(_tiny_png((30, 40, 50))).decode()},
+                         token="tok")
+    assert status == 200 and data["ok"] is True and data["wish"]["status"] == "fulfilled"
+    status, data = _call("GET", "/api/media/wishes")
+    items = {item["wish_id"]: item for item in data["items"]}
+    assert items[wish_id]["status"] == "fulfilled"
+    assert items[wish_id]["fulfilled_asset"]
+    assert env["wishes"].read_text(encoding="utf-8") == original
+
+    status, data = _call("POST", "/api/media/wish/fulfill",
+                         {"wish_id": wish_id,
+                          "data": base64.b64encode(_tiny_png()).decode()}, token="tok")
+    assert status == 400 and data["reason"] == "already_fulfilled"
+    status, _ = _call("POST", "/api/media/wish/fulfill", {"wish_id": wish_id})
+    assert status == 401

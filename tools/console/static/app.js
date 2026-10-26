@@ -1181,6 +1181,8 @@ async function renderMedia() {
     assetPath: prev.assetPath || '',
     assetFilter: prev.assetFilter || '',
     result: prev.result || null,
+    pendingWish: prev.pendingWish || null,
+    importResults: prev.importResults || null,
   };
   renderMediaPage(errors);
 }
@@ -1199,6 +1201,32 @@ function mediaCapabilityOptions(caps) {
     options.push([type, mediaKindLabel(type)]);
   }
   return options;
+}
+
+let mediaPendingFiles = [];
+
+function mediaImportPanelHtml(data) {
+  const pendingWish = data.pendingWish;
+  return card('本地导入素材（不联网）', `
+    <p class="hint">从本机选图导入素材库（<code>agi/data/selflearn/media</code>）：png/jpg/jpeg/gif/webp，≤2MB；
+      自动 SHA256 去重、剥离 EXIF，可作为贴纸（图片形式）发送。不做联网搜索/下载。</p>
+    ${pendingWish ? `<div class="row" style="margin-bottom:8px"><span class="pill info"><span class="dot"></span>正在满足愿望：${esc(pendingWish.wish || '')}</span>
+      <button class="btn small" id="media-import-cancel-wish">取消</button></div>` : ''}
+    <div class="row" style="align-items:flex-end">
+      <div class="field"><label>选择图片（可多选）</label>
+        <input type="file" id="media-files" multiple accept=".png,.jpg,.jpeg,.gif,.webp"></div>
+      <div class="field"><label>名称（可选）</label>
+        <input type="text" id="media-import-name" placeholder="名称" value="${esc(pendingWish ? '' : '')}" style="max-width:180px"></div>
+      <div class="field"><label>标签（逗号分隔）</label>
+        <input type="text" id="media-import-tags" placeholder="标签" value="${esc(pendingWish ? (pendingWish.wish || '') : '')}" style="max-width:240px"></div>
+      <button class="btn primary" id="media-import-submit">导入选中文件</button>
+    </div>
+    <div id="media-import-preview" class="asset-grid" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:8px">
+      <input type="text" id="media-import-path" placeholder="或从本地路径导入（Desktop / 素材库 / 仓库 media 白名单）" style="flex:1">
+      <button class="btn" id="media-import-path-btn">路径导入</button>
+    </div>
+    <div id="media-import-result" style="margin-top:8px">${renderMediaImportResults(data.importResults)}</div>`);
 }
 
 function renderMediaPage(errors) {
@@ -1260,17 +1288,24 @@ function renderMediaPage(errors) {
       ${(item.tags || []).length ? `<div class="asset-tags">${item.tags.slice(0, 3).map((tag) => `<span class="badge">${esc(tag)}</span>`).join('')}</div>` : ''}
     </div>`).join('')}</div>` : '<div class="empty">素材库为空</div>';
 
-  const wishesHtml = (wishes.items || []).length ? `<div class="list">${wishes.items.map((item) => `
-    <div class="list-item" style="cursor:default"><div class="grow">
+  const wishesHtml = (wishes.items || []).length ? `<div class="list">${wishes.items.map((item) => {
+    const fulfilled = item.status === 'fulfilled';
+    return `<div class="list-item" style="cursor:default"><div class="grow">
       <div class="title">「${esc(item.wish || '')}」</div>
-      <div class="hint">${esc(item.source || item.context || 'model')} · ${item.created_at ? fmtDateTime(item.created_at) : ''}</div>
-    </div><span class="badge orange">待获取</span></div>`).join('')}</div>`
+      <div class="hint">${esc(item.source || item.context || 'model')} · ${item.created_at ? fmtDateTime(item.created_at) : ''}
+        ${fulfilled && item.fulfilled_asset ? ' · 已满足：' + esc(item.fulfilled_asset) : ''}</div>
+    </div>
+    ${fulfilled ? '<span class="badge green">已满足</span>'
+      : `<button class="btn small" data-wish-fulfill="${esc(item.wish_id || '')}">导入一张满足它</button><span class="badge orange">待获取</span>`}
+    </div>`;
+  }).join('')}</div>`
     : `<div class="empty">还没有愿望（${esc(wishes.path || 'agi/data/media_wishes.jsonl')} 暂时为空）</div>`;
 
   $('#app').innerHTML = `${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
     ${statCards}
     ${card('能力矩阵', capTable)}
     ${card('测试发送（只发文件传输助手）', sendPanel)}
+    ${mediaImportPanelHtml(data)}
     ${card('素材库', `
       <div class="row between" style="margin-bottom:10px">
         <div class="row"><select id="media-filter">
@@ -1280,7 +1315,7 @@ function renderMediaPage(errors) {
         </select><span class="hint">${items.length} 个素材 · 来源 ${esc(assets.source || '—')}</span></div>
         <span class="hint">${esc(assets.note || '')}</span>
       </div>${assetGrid}`)}
-    ${card('愿望清单（获取管线预留，未实现下载）', `
+    ${card('愿望清单（本地导入满足 / 联网获取仍为预留）', `
       <p class="hint">${esc(wishes.note || '')}</p>${wishesHtml}`)}`;
 
   const typeSelect = $('#media-type');
@@ -1297,6 +1332,110 @@ function renderMediaPage(errors) {
   });
   const sendBtn = $('#btn-media-send');
   if (sendBtn) sendBtn.onclick = () => sendMediaTest(false);
+  const fileInput = $('#media-files');
+  if (fileInput) {
+    fileInput.onchange = () => {
+      mediaPendingFiles = Array.from(fileInput.files || []);
+      const preview = $('#media-import-preview');
+      if (!preview) return;
+      preview.innerHTML = mediaPendingFiles.map((file) => `<div class="asset-card">
+        <img src="${URL.createObjectURL(file)}" alt="${esc(file.name)}">
+        <div class="asset-name">${esc(file.name)}</div>
+        <div class="asset-meta"><span class="badge">${esc((file.size / 1024).toFixed(1))} KB</span></div>
+      </div>`).join('');
+    };
+  }
+  const submit = $('#media-import-submit');
+  if (submit) submit.onclick = submitMediaImport;
+  const pathBtn = $('#media-import-path-btn');
+  if (pathBtn) pathBtn.onclick = importMediaFromPath;
+  const cancelWish = $('#media-import-cancel-wish');
+  if (cancelWish) cancelWish.onclick = () => { data.pendingWish = null; renderMediaPage([]); };
+  $$('[data-wish-fulfill]').forEach((button) => {
+    button.onclick = () => {
+      const wish = ((data.wishes || {}).items || []).find((item) => item.wish_id === button.dataset.wishFulfill);
+      if (!wish) return;
+      data.pendingWish = { wish_id: wish.wish_id, wish: wish.wish };
+      renderMediaPage([]);
+      toast('选一张图导入即可满足这条愿望', 'ok');
+    };
+  });
+}
+
+function renderMediaImportResults(results) {
+  if (!results || !results.length) return '';
+  return '<div class="list">' + results.map((item) => `<div class="list-item" style="cursor:default">
+    <div class="grow"><div class="title">${esc(item.filename || item.name || '')}</div>
+      <div class="hint">${esc(item.path || '')}${item.reason ? ' · ' + esc(item.reason) : ''}</div></div>
+    ${item.ok ? (item.duplicate ? '<span class="badge blue">重复(已存在)</span>' : '<span class="badge green">已导入</span>')
+      : '<span class="badge red">被拒</span>'}
+  </div>`).join('') + '</div>';
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('读取文件失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function submitMediaImport() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  if (!mediaPendingFiles.length) { toast('先选择图片', 'err'); return; }
+  const data = state.media || {};
+  const name = ($('#media-import-name') || {}).value || '';
+  const tagsText = ($('#media-import-tags') || {}).value || '';
+  const tags = tagsText.split(',').map((item) => item.trim()).filter(Boolean);
+  try {
+    const files = [];
+    for (const file of mediaPendingFiles) {
+      files.push({ filename: file.name, data: await readFileAsDataURL(file), name, tags });
+    }
+    const result = await api('/api/media/import', { method: 'POST', body: { files } });
+    data.importResults = result.results || [];
+    toast(`导入完成：成功 ${result.imported || 0}，重复 ${result.duplicates || 0}，失败 ${result.failed || 0}`,
+      result.ok ? 'ok' : 'err');
+    await maybeFulfillWish(data.importResults.find((item) => item.ok && item.path));
+    await renderMedia();
+  } catch (err) {
+    toast(err.message, 'err');
+    data.importResults = [{ ok: false, filename: 'request', reason: err.message }];
+    renderMediaPage([]);
+  }
+}
+
+async function importMediaFromPath() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const data = state.media || {};
+  const pathInput = $('#media-import-path');
+  const path = pathInput ? pathInput.value.trim() : '';
+  if (!path) { toast('先填本地路径', 'err'); return; }
+  const name = ($('#media-import-name') || {}).value || '';
+  const tagsText = ($('#media-import-tags') || {}).value || '';
+  const tags = tagsText.split(',').map((item) => item.trim()).filter(Boolean);
+  try {
+    const result = await api('/api/media/import-path', { method: 'POST', body: { path, name, tags } });
+    data.importResults = [result];
+    toast(result.ok ? (result.duplicate ? '文件已存在（去重）' : '已导入素材库') : ('被拒：' + (result.reason || result.error)),
+      result.ok ? 'ok' : 'err');
+    await maybeFulfillWish(result.ok ? result : null);
+    await renderMedia();
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+async function maybeFulfillWish(asset) {
+  const data = state.media || {};
+  if (!data.pendingWish || !asset || !asset.path) return;
+  try {
+    await api('/api/media/wish/fulfill', {
+      method: 'POST',
+      body: { wish_id: data.pendingWish.wish_id, path: asset.path },
+    });
+    toast('愿望已满足：' + (data.pendingWish.wish || ''), 'ok');
+    data.pendingWish = null;
+  } catch (err) { toast('满足愿望失败：' + err.message, 'err'); }
 }
 
 function renderMediaResult(result) {

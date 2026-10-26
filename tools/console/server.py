@@ -1361,8 +1361,34 @@ def media_assets(limit: int = 200, kind: str = "") -> dict:
             })
         if items:
             source = "emoji_archive"
-    if not items:
-        items = _scan_media_files(limit)
+    scanned = _scan_media_files(limit)
+    acquisition = _media_acquisition()
+    sources_file = DATA_DIR / "media_sources.json"
+    if acquisition is not None and hasattr(acquisition, "sources_path"):
+        try:
+            sources_file = Path(acquisition.sources_path())
+        except Exception:  # noqa: BLE001
+            pass
+    import_sources = read_json(sources_file, {})
+    if not isinstance(import_sources, dict):
+        import_sources = {}
+    if items:
+        known = {str(Path(item.get("path") or "").resolve()).casefold()
+                 for item in items if item.get("path")}
+        for item in scanned:
+            path_key = str(Path(item.get("path") or "").resolve()).casefold()
+            if path_key not in known:
+                items.append(item)          # 本地导入的新文件也可在素材库看到
+                known.add(path_key)
+    else:
+        items = scanned
+    for item in items:
+        record = import_sources.get(Path(str(item.get("path") or "")).stem) or {}
+        if record:
+            item["name"] = record.get("name") or item.get("name")
+            item["tags"] = record.get("tags") or []
+            item["source"] = "local_import"
+            item["indexed"] = bool(record.get("indexed"))
     if kind:
         items = [item for item in items if item.get("kind") == kind]
     return {"ok": True, "source": source, "items": items, "total": len(items),
@@ -1380,14 +1406,16 @@ def media_library(limit: int = 100) -> dict:
             mtime = Path(path).stat().st_mtime if path else None
         except OSError:
             mtime = None
+        source_name = item.get("source") or (
+            "emoji_archive" if item.get("indexed") else "scan")
         items.append({
             "name": item.get("name"), "path": path,
             "ext": (Path(path).suffix.lower().lstrip(".") if path else ""),
             "usage_count": int(item.get("usage_count") or 0),
             "tags": item.get("tags") or [], "mtime": mtime,
-            "indexed": item.get("source") == "emoji_archive",
+            "indexed": bool(item.get("indexed")) or source_name == "emoji_archive",
             "kind": item.get("kind"), "thumb": item.get("thumb"),
-            "file_exists": bool(item.get("file_exists")),
+            "file_exists": bool(item.get("file_exists")), "source": source_name,
         })
     return {"ok": True, "items": items, "total": len(items),
             "source": data.get("source"), "note": data.get("note") or ""}
@@ -1423,7 +1451,10 @@ def media_wishes() -> dict:
     items: list[dict] = []
     try:
         from agi import media_acquisition
-        items = media_acquisition.search_wishes(MEDIA_WISHES_PATH)
+        if hasattr(media_acquisition, "list_wishes"):
+            items = media_acquisition.list_wishes(MEDIA_WISHES_PATH)
+        else:
+            items = media_acquisition.search_wishes(MEDIA_WISHES_PATH)
     except Exception:  # noqa: BLE001 - 降级直接读 JSONL
         try:
             if MEDIA_WISHES_PATH.is_file():
@@ -3065,6 +3096,111 @@ def mood_update(updates: dict, *, client: str = "") -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# P5-e-B：本地导入 / 愿望满足（不联网）
+# --------------------------------------------------------------------------- #
+def _media_acquisition():
+    try:
+        from agi import media_acquisition
+        return media_acquisition
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _decode_media_payload(raw: str) -> bytes:
+    text = str(raw or "").strip()
+    if text.startswith("data:") and "," in text:
+        text = text.split(",", 1)[1]
+    import base64
+    return base64.b64decode(text, validate=True)
+
+
+def media_import(body: dict, *, client: str = "") -> dict:
+    acquisition = _media_acquisition()
+    if acquisition is None:
+        return {"ok": False, "error": "media_import_unavailable",
+                "hint": "agi.media_acquisition 不可用"}
+    if not isinstance(body, dict):
+        return {"ok": False, "error": "body 必须是对象"}
+    files = body.get("files")
+    if files is None:
+        files = [{k: body.get(k) for k in ("filename", "name", "tags", "data")}]
+    if not isinstance(files, list) or not files:
+        return {"ok": False, "error": "files 必须是非空数组"}
+    default_name = str(body.get("name") or "")
+    default_tags = body.get("tags") if isinstance(body.get("tags"), list) else []
+    results: list[dict] = []
+    for index, item in enumerate(files[:20]):
+        entry = item if isinstance(item, dict) else {}
+        filename = str(entry.get("filename") or f"import_{index}.png")
+        try:
+            data = _decode_media_payload(entry.get("data") or "")
+        except Exception as exc:  # noqa: BLE001
+            results.append({"ok": False, "filename": filename,
+                            "status": "invalid", "reason": f"base64_invalid:{exc}"})
+            continue
+        tags = entry.get("tags") if isinstance(entry.get("tags"), list) else default_tags
+        result = acquisition.import_local(
+            data, filename, name=str(entry.get("name") or default_name),
+            tags=[str(tag) for tag in (tags or [])], source="console_upload")
+        result["filename"] = filename
+        results.append(result)
+    ok_count = sum(1 for item in results if item.get("ok"))
+    audit("media_import", {"count": len(results), "ok": ok_count,
+                           "duplicates": sum(1 for item in results
+                                             if item.get("duplicate"))},
+          ok=ok_count > 0, client=client)
+    return {"ok": ok_count > 0, "results": results, "count": len(results),
+            "imported": sum(1 for item in results
+                            if item.get("status") == "imported"),
+            "duplicates": sum(1 for item in results if item.get("duplicate")),
+            "failed": len(results) - ok_count,
+            "note": "本地导入（不联网）；图片会复制进素材库，可作为贴纸（图片形式）发送"}
+
+
+def media_import_path(body: dict, *, client: str = "") -> dict:
+    acquisition = _media_acquisition()
+    if acquisition is None:
+        return {"ok": False, "error": "media_import_unavailable"}
+    path = str(body.get("path") or "").strip()
+    if not path:
+        return {"ok": False, "error": "path 不能为空"}
+    tags = body.get("tags") if isinstance(body.get("tags"), list) else []
+    result = acquisition.import_local_file(
+        path, name=str(body.get("name") or ""),
+        tags=[str(tag) for tag in tags], source="console_path")
+    audit("media_import_path", {"path": path, "ok": bool(result.get("ok")),
+                                "reason": result.get("reason") or ""},
+          ok=bool(result.get("ok")), client=client)
+    return result
+
+
+def media_wish_fulfill(body: dict, *, client: str = "") -> dict:
+    acquisition = _media_acquisition()
+    if acquisition is None:
+        return {"ok": False, "error": "media_import_unavailable"}
+    wish_id = str(body.get("wish_id") or "").strip()
+    if not wish_id:
+        return {"ok": False, "error": "wish_id 不能为空"}
+    tags = body.get("tags") if isinstance(body.get("tags"), list) else []
+    kwargs = {"name": str(body.get("name") or ""),
+              "tags": [str(tag) for tag in tags]}
+    if body.get("path"):
+        result = acquisition.fulfill_wish(wish_id, path=str(body.get("path")), **kwargs)
+    elif body.get("data"):
+        try:
+            data = _decode_media_payload(body.get("data"))
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"base64_invalid:{exc}"}
+        result = acquisition.fulfill_wish(wish_id, data=data, **kwargs)
+    else:
+        return {"ok": False, "error": "需要 path 或 data"}
+    audit("media_wish_fulfill", {"wish_id": wish_id, "ok": bool(result.get("ok")),
+                                 "asset": result.get("path") or ""},
+          ok=bool(result.get("ok")), client=client)
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
 def host_ok(host: str) -> bool:
@@ -3135,7 +3271,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001
             return ""
 
-    def _read_body(self, limit: int = 262144) -> dict:
+    def _read_body(self, limit: int = 8 * 1024 * 1024) -> dict:
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except (TypeError, ValueError):
@@ -3431,6 +3567,14 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     code = 500
                 self._json(code, result); return
+            if path == "/api/media/import":
+                self._json(200, media_import(body, client=client)); return
+            if path == "/api/media/import-path":
+                result = media_import_path(body, client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/media/wish/fulfill":
+                result = media_wish_fulfill(body, client=client)
+                self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/prompts/reset":
                 raw_keys = body.get("keys") or []
                 if isinstance(raw_keys, str):

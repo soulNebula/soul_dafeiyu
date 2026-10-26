@@ -53,9 +53,12 @@ OK（同意）
 
 - 模型输出 `[[media:wish:...]]` → `record_wish()` 追加到
   `agi/data/media_wishes.jsonl`：`{ts, wish, context, source}`；**本次不发**。
-- 获取管线当前是 stub：`agi/media_acquisition.py` / `agi/media_acquisition/README.md`
-  - `search_wishes()` 读愿望；
-  - `try_acquire(wish)` 默认返回 `reserved`，**绝不发网络请求**；
+- 获取管线：**B 方案本地导入已实现**（联网部分仍是 stub）——`agi/media_acquisition.py`
+  - `list_wishes()` 读愿望 + pending/fulfilled 状态（旁路 `agi/data/media_wishes_status.json`，原记录不动）；
+  - `import_local(data, filename, ...)` / `import_local_file(path, ...)`：本地图片导入素材库
+    （白名单扩展名 + ≤2MB + SHA256 去重 + Pillow 校验 + 剥 EXIF + 索引）；
+  - `fulfill_wish(wish_id, data|path, ...)`：用一张本地图手动满足愿望并标记 fulfilled；
+  - `try_acquire(wish)` 仍默认返回 `reserved`，**绝不发网络请求**；
   - `add_to_library(path, name, tags)` 人工确认后加入 `media/stickers/`（白名单+大小校验）。
 - 配置 `media_acquisition_enabled=False`；即使打开也需人工审核；完整管线见 task-63。
 

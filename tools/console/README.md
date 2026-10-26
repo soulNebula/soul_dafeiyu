@@ -153,7 +153,15 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
   inner.log / prompt_override.log / regen_failed 计数；关键词+kind 过滤、时间倒序、错误行红色、点行看整条 JSON。
 - 顶部导航新增「对话测试 / 模型配置 / 日志」三项。
 
-## 媒体页（P5-d）
+## 媒体页（P5-d + P5-e-B 本地导入）
+
+本地导入面板：多选图片（png/jpg/jpeg/gif/webp、≤2MB）→ 预览/名称/标签 → 逐条显示结果
+（已导入/重复/被拒原因）；也支持白名单路径导入（Desktop / 素材库 / 仓库 media）。
+图片会复制进 `agi/data/selflearn/media/`、自动去重/剥 EXIF 并索引，可作为贴纸（图片形式）发送。
+愿望清单显示 pending/fulfilled，pending 可点「导入一张满足它」预填标签，导入成功后自动标记 fulfilled。
+接口：`POST /api/media/import`（base64 多文件）、`/api/media/import-path`、`POST /api/media/wish/fulfill`；
+联网获取/下载仍为预留（不实现）。
+
 
 - **能力矩阵**：text / unicode_emoji / image / gif / sticker_as_image / sticker_native / sticker_collect / mixed，
   每项 ✅支持 / ⚠️降级 / 🔒预留 / ❌不可用 + 说明。优先读 `agi/wechat_gateway/media.capabilities()`，

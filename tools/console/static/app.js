@@ -1854,6 +1854,10 @@ async function go(page, auto) {
   if (location.hash !== '#' + page && !auto) history.replaceState(null, '', '#' + page);
   try {
     await RENDERERS[page](auto);
+    // 切页后内容区回到顶部（否则从长页面跳转会停留在底部）
+    const appEl = $('#app');
+    if (appEl) appEl.scrollTop = 0;
+    window.scrollTo(0, 0);
     setLastRefresh();
   } catch (err) {
     $('#app').innerHTML = `<div class="card"><div class="error-text">页面渲染失败：${esc(err.message || err)}</div></div>`;

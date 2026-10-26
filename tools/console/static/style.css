@@ -18,7 +18,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+html, body { height: 100%; overflow: hidden; }
 body {
   margin: 0;
   background: var(--bg);
@@ -31,7 +31,7 @@ a { color: var(--primary); text-decoration: none; }
 button, input, select, textarea { font: inherit; color: inherit; }
 
 /* ---------------- layout ---------------- */
-.app { display: flex; min-height: 100vh; }
+.app { display: flex; height: 100vh; min-height: 0; overflow: hidden; }
 .sidebar {
   width: var(--sidebar);
   flex: 0 0 var(--sidebar);
@@ -40,6 +40,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   padding: 16px 12px;
   position: sticky; top: 0; height: 100vh;
   display: flex; flex-direction: column; gap: 6px;
+  overflow-y: auto; overflow-x: hidden; scrollbar-width: thin;
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 16px; }
 .brand .logo {
@@ -60,7 +61,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .nav-item .ico { width: 18px; text-align: center; color: var(--primary); }
 .sidebar-footer { margin-top: auto; color: var(--dim); font-size: 11px; padding: 8px; }
 
-.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .header {
   height: var(--header); flex: 0 0 var(--header);
   display: flex; align-items: center; gap: 12px;
@@ -71,7 +72,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .header h1 { font-size: 16px; margin: 0; font-weight: 600; }
 .header .spacer { flex: 1; }
 .pills { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-.content { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.content { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
 .grid { display: grid; gap: 16px; }
 .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }

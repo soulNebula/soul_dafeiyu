@@ -176,12 +176,16 @@ def test_safe_fallbacks_are_digital_life_with_feeling():
 
 
 def test_kind_prompt_has_persona_constraints_and_opener():
+    from agi.selflearn import prompt_store
+    effective_persona = prompt_store.get(
+        "proactive.persona_constraints", proactive.PERSONA_CONSTRAINTS)
     for kind in proactive.KINDS:
         prompt = proactive._kind_prompt(
             kind, {"kind": kind, "anchor": "周末去爬山了", "topic": "喜欢喝手冲咖啡"},
             0.55, 0.6, "用户:在吗", opener_mode="digital")
-        assert proactive.PERSONA_CONSTRAINTS in prompt, kind
-        assert "数字生活" in prompt and "禁止物理" in prompt, kind
+        # P21：安装人格后 prompt_store 有覆盖；默认与安装态都应把生效版拼进去
+        assert effective_persona in prompt, kind
+        assert "数字生活" in prompt and "禁止" in prompt, kind
         assert proactive._OPENER_INSTRUCTIONS["digital"] in prompt, kind
 
 

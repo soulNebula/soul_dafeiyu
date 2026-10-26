@@ -194,14 +194,14 @@ def test_oral_particle_at_most_one_and_no_repeat():
 # 5) prompt few-shot
 # --------------------------------------------------------------------------- #
 def test_voice_fewshot_in_prompt():
+    from agi.selflearn import prompt_store
     prompt = proactive._kind_prompt(
         "care", {"kind": "care"}, 0.55, 0.45, "用户:在吗")
-    assert "你平时说话的样子" in prompt
-    assert len(proactive.VOICE_FEWSHOT) == 20
-    assert proactive.VOICE_FEWSHOT[0] in prompt
-    for example in proactive.VOICE_FEWSHOT:
-        assert example in prompt, example
-    assert "不要照抄内容" in prompt
+    effective = prompt_store.get("proactive.voice_fewshot",
+                                 proactive.VOICE_FEWSHOT_SECTION)
+    # P21：安装态使用 prompt_store 覆盖版；默认/覆盖都必须在 prompt 中
+    assert effective in prompt
+    assert "参考" in prompt and "不要照抄内容" in prompt
     assert "句尾默认不加任何标点" in prompt
 
 

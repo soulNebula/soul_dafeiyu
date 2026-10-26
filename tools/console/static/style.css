@@ -378,3 +378,6 @@ table td input[type="number"], table td select { padding: 3px 6px; font-size: 12
 .bili-report { max-height: 360px; overflow: auto; background: #1b1c1e; border: 1px solid var(--border);
   border-radius: 8px; padding: 10px 12px; font-size: 12px; white-space: pre-wrap; }
 @media (max-width: 900px) { .bili-form { grid-template-columns: 1fr; } }
+
+.bili-avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: #2c2d2f; flex: 0 0 40px; }
+.bili-avatar-empty { display: grid; place-items: center; }

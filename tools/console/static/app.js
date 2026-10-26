@@ -2276,8 +2276,13 @@ function biliLoginCard(status, login) {
   const qr = login && login.qr;
   return card('B站登录', `
     ${loggedIn ? `<div class="row between">
-      <div>${pill('已登录', 'ok')} <b>${esc(status.uname || '（已写入凭证）')}</b>
-        <span class="hint">mid ${esc(status.mid ?? '—')} · 凭证 ${esc(status.credential_path || '')}</span></div>
+      <div class="row" style="gap:10px;align-items:center">
+        ${status.face ? `<img class="bili-avatar" src="/api/bili/avatar?ts=${Date.now()}" alt="B站头像">` : '<div class="bili-avatar bili-avatar-empty"></div>'}
+        <div>
+          <div>${pill('已登录', 'ok')} <b>${esc(status.uname || '（已写入凭证）')}</b></div>
+          <span class="hint">mid ${esc(status.mid ?? '—')} · 凭证 ${esc(status.credential_path || '')}</span>
+        </div>
+      </div>
       <button class="btn small" id="bili-relogin">重新登录</button></div>`
       : `<div class="row between">
         <div class="hint">手机 B站 → 我的 → 扫一扫。确认时选「记住我/长期」那张。</div>

@@ -3475,13 +3475,74 @@ def _bili_cookie_from_url(data_url: str) -> dict:
     return cookies
 
 
+_BILI_COOKIE_NAMES = {
+    "sessdata": "SESSDATA", "bili_jct": "bili_jct",
+    "dedeuserid": "DedeUserID", "buvid3": "buvid3",
+}
+
+
+def bili_profile_path() -> Path:
+    return DATA_DIR / "selflearn" / "bili_profile.json"
+
+
+def _bili_profile_save(nav: dict) -> None:
+    if not isinstance(nav, dict):
+        return
+    payload = {"uname": nav.get("uname") or "", "mid": nav.get("mid"),
+               "face": nav.get("face") or "", "ts": round(time.time(), 3)}
+    try:
+        write_json_atomic(bili_profile_path(), payload)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _bili_profile() -> dict:
+    payload = read_json(bili_profile_path(), {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def bili_avatar_bytes() -> tuple[bytes, str] | None:
+    """头像代理：用已存凭证取 nav 的 face 再下载图片（缓存到本地）。"""
+    profile = _bili_profile()
+    url = str(profile.get("face") or "")
+    if not url:
+        credential = _bili_credential()
+        nav = _bili_nav(credential, force=True) if credential else None
+        url = str((nav or {}).get("face") or "")
+    if not url:
+        return None
+    mid = str(profile.get("mid") or "self")
+    cache = DATA_DIR / "selflearn" / f"bili_avatar_{mid}.img"
+    if cache.is_file():
+        try:
+            return cache.read_bytes(), "image/jpeg"
+        except OSError:
+            pass
+    try:
+        request = urllib.request.Request(url)
+        request.add_header("User-Agent", BILI_USER_AGENT)
+        request.add_header("Referer", "https://www.bilibili.com/")
+        with urllib.request.urlopen(request, timeout=BILI_HTTP_TIMEOUT) as response:
+            raw = response.read()
+        content_type = response.headers.get("Content-Type") or "image/jpeg"
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        cache.write_bytes(raw)
+    except OSError:
+        pass
+    return raw, content_type
+
+
 def _bili_nav(cookies: dict, *, force: bool = False) -> dict | None:
     if not cookies:
         return None
     cached = _BILI_NAV_CACHE
     if not force and cached["data"] and time.time() - cached["ts"] < 60:
         return cached["data"]
-    cookie_header = "; ".join(f"{key}={value}" for key, value in cookies.items())
+    cookie_header = "; ".join(
+        f"{_BILI_COOKIE_NAMES.get(str(key).lower(), key)}={value}"
+        for key, value in cookies.items() if value)
     try:
         payload = _bili_http_json(BILI_NAV_URL, headers={"Cookie": cookie_header})
     except Exception:  # noqa: BLE001
@@ -3489,8 +3550,10 @@ def _bili_nav(cookies: dict, *, force: bool = False) -> dict | None:
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict) or not data.get("isLogin"):
         return None
-    result = {"uname": str(data.get("uname") or ""), "mid": data.get("mid")}
+    result = {"uname": str(data.get("uname") or ""), "mid": data.get("mid"),
+              "face": str(data.get("face") or "")}
     _BILI_NAV_CACHE.update(ts=time.time(), data=result)
+    _bili_profile_save(result)
     return result
 
 
@@ -3602,7 +3665,11 @@ def bili_status() -> dict:
     state = _bili_read_json(bili_state_path(), {})
     credential = _bili_credential()
     logged_in = bool(credential)
-    nav = _bili_nav(credential) if logged_in else None
+    nav = _bili_nav(credential, force=True) if logged_in else None
+    profile = _bili_profile() if logged_in else {}
+    if nav is None and profile:
+        nav = {"uname": profile.get("uname") or "", "mid": profile.get("mid"),
+               "face": profile.get("face") or ""}
     today = time.strftime("%Y-%m-%d")
     report_path = bili_home() / "out" / f"{today}.md"
     preview = ""
@@ -3617,6 +3684,7 @@ def bili_status() -> dict:
         "logged_in": logged_in,
         "uname": (nav or {}).get("uname") or "",
         "mid": (nav or {}).get("mid"),
+        "face": (nav or {}).get("face") or "",
         "credential_path": str(bili_credential_path()),
         "config": config_state["config"],
         "config_path": str(bili_config_path()),
@@ -3843,6 +3911,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, mood_snapshot(
                     str((query.get("contact") or [""])[0] or ""),
                     self._limit(query, 20))); return
+            if path == "/api/bili/avatar":
+                avatar = bili_avatar_bytes()
+                if not avatar:
+                    self._json(404, {"ok": False, "error": "no_avatar"}); return
+                raw, ctype = avatar
+                self._bytes(200, raw, ctype or "image/jpeg"); return
             if path == "/api/bili/login/qr/image":
                 png = Path(BILI_QR_PNG)
                 if not png.is_file():

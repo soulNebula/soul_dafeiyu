@@ -784,3 +784,196 @@ def test_media_library_acquisition_and_capability_contract(tmp_path, write_env, 
     assert status == 200
     assert captured["items"][0]["type"] == "native_emoji"
     assert captured["items"][0]["name"] == "微笑"
+
+
+# ============================================================ P7-b 对话测试 / 模型配置 / 日志
+class _FakeChatAgent:
+    calls = []
+
+    def __init__(self, path):
+        self.path = path
+
+    def send(self, text):
+        _FakeChatAgent.calls.append({"path": str(self.path), "text": text})
+        return {
+            "ok": True, "reply": "嗯 在", "bubbles": ["嗯 在"], "crisis": False,
+            "guard": {"level": "L0", "issues": []},
+            "generation": {"inner": {"mode": "model", "stance": "平静"},
+                           "media": {"bubbles": [{"type": "text"}]}},
+            "state": {"mood": 0.6},
+        }
+
+
+def _chat_env(tmp_path, monkeypatch):
+    selflearn = tmp_path / "selflearn"
+    selflearn.mkdir()
+    db = selflearn / "console_test.sqlite3"
+    monkeypatch.setattr(console, "SELFLEARN_DIR", selflearn)
+    monkeypatch.setattr(console, "CHAT_TEST_DB", db)
+    _FakeChatAgent.calls = []
+    monkeypatch.setattr(console, "_chat_agent_factory", lambda path: _FakeChatAgent(path))
+    return db
+
+
+def test_chat_test_requires_token_and_isolated_db(tmp_path, write_env, monkeypatch):
+    db = _chat_env(tmp_path, monkeypatch)
+    status, _ = _call("POST", "/api/chat-test", {"text": "在吗"})
+    assert status == 401
+    status, data = _call("POST", "/api/chat-test", {"text": "在吗"}, token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["reply"] == "嗯 在" and data["bubbles"] == ["嗯 在"]
+    assert data["inner"]["mode"] == "model"
+    assert data["media"]["bubbles"][0]["type"] == "text"
+    assert isinstance(data["latency_ms"], float) and data["latency_ms"] >= 0
+    assert data["isolation"].startswith("隔离测试库")
+    # 只落在隔离库路径，agent 收到的 path 也是隔离库
+    assert Path(data["db"]) == db.resolve()
+    assert Path(_FakeChatAgent.calls[-1]["path"]) == db.resolve()
+    assert _FakeChatAgent.calls[-1]["text"] == "在吗"
+    # 除隔离库外没有创建别的 sqlite
+    assert [p.name for p in db.parent.glob("*.sqlite3")
+            if p.name != "console_test.sqlite3"] == []
+
+
+def test_chat_test_reset_and_history(tmp_path, write_env, monkeypatch):
+    db = _chat_env(tmp_path, monkeypatch)
+    db.write_bytes(b"")
+    Path(str(db) + "-wal").write_bytes(b"")
+    status, data = _call("POST", "/api/chat-test", {"reset": True}, token="tok")
+    assert status == 200 and data["reset"] is True
+    assert not db.exists() and not Path(str(db) + "-wal").exists()
+    assert _FakeChatAgent.calls == []            # reset-only 不生成回复
+
+    # 造历史
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE messages(id TEXT PRIMARY KEY, role TEXT, text TEXT, ts REAL)")
+    con.executemany("INSERT INTO messages VALUES(?,?,?,?)",
+                    [("M1", "user", "第一句", 100.0), ("M2", "assistant", "第一答", 101.0),
+                     ("M3", "user", "第二句", 102.0), ("M4", "assistant", "第二答", 103.0)])
+    con.commit()
+    con.close()
+    history = console.chat_test_history(limit=10)
+    assert history["ok"] is True and len(history["items"]) == 4
+    assert [item["text"] for item in history["items"]] == ["第一句", "第一答", "第二句", "第二答"]
+    status, data = _call("GET", "/api/chat-test/history?limit=2")
+    assert status == 200 and len(data["items"]) == 2
+    assert data["items"][-1]["text"] == "第二答"
+
+
+def test_chat_test_timeout(tmp_path, write_env, monkeypatch):
+    db = _chat_env(tmp_path, monkeypatch)
+
+    class SlowAgent:
+        def __init__(self, path):
+            self.path = path
+
+        def send(self, text):
+            import time as _time
+            _time.sleep(0.2)
+            return {"ok": True, "reply": "太慢", "bubbles": ["太慢"], "generation": {}}
+
+    monkeypatch.setattr(console, "_chat_agent_factory", lambda path: SlowAgent(path))
+    monkeypatch.setattr(console, "CHAT_TEST_TIMEOUT_S", 0.05)
+    status, data = _call("POST", "/api/chat-test", {"text": "hi"}, token="tok")
+    assert status == 504
+    assert data["ok"] is False and data["status"] == "timeout"
+    assert "超时" in data["error"]
+
+
+def test_model_config_whitelist_and_key_masking(tmp_path, write_env, monkeypatch):
+    web_config = tmp_path / "web_config.json"
+    web_config.write_text(json.dumps({
+        "llm": {"api_key": "sk-SECRET-123", "model": "deepseek-chat",
+                "base_url": "https://api.deepseek.com"},
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(console, "WEB_CONFIG_PATH", web_config)
+
+    status, data = _call("GET", "/api/model-config")
+    assert status == 200 and data["ok"] is True
+    assert data["deepseek"]["configured"] is True
+    assert "web_config.json" in data["deepseek"]["source"]
+    assert "sk-SECRET-123" not in json.dumps(data, ensure_ascii=False)   # 不回传明文
+
+    status, _ = _call("POST", "/api/model-config", {"updates": {"llm_model": "x"}})
+    assert status == 401
+
+    updates = {"llm_model": "deepseek-flash", "llm_temperature": 0.3,
+               "llm_max_tokens": 1024, "soul_server_url": "http://127.0.0.1:8123/",
+               "soul_timeout_s": 3.5, "inner_schema": "full"}
+    status, data = _call("POST", "/api/model-config", {"updates": updates}, token="tok")
+    assert status == 200 and data["ok"] is True
+    status, data = _call("GET", "/api/model-config")
+    saved = data["config"]
+    assert saved["llm_temperature"] == 0.3
+    assert saved["llm_max_tokens"] == 1024
+    assert saved["soul_server_url"] == "http://127.0.0.1:8123"
+    assert saved["soul_timeout_s"] == 3.5
+    assert saved["inner_schema"] == "full"
+
+    status, data = _call("POST", "/api/model-config",
+                         {"updates": {"admin_token": "hacked"}}, token="tok")
+    assert status == 400 and data["ok"] is False
+    assert json.loads(write_env["config"].read_text(encoding="utf-8"))["admin_token"] == "tok"
+    status, data = _call("POST", "/api/model-config",
+                         {"updates": {"llm_temperature": 9}}, token="tok")
+    assert status == 400 and data["ok"] is False
+    audits = console.AUDIT_PATH.read_text(encoding="utf-8").splitlines()
+    assert any(json.loads(line)["action"] == "model_config_update" for line in audits)
+
+
+def _logs_env(tmp_path, monkeypatch):
+    gateway = tmp_path / "gateway.log"
+    gateway.write_text("\n".join([
+        json.dumps({"ts": 100.0, "kind": "inbound", "text": "你好"}, ensure_ascii=False),
+        "broken line",
+        json.dumps({"ts": 300.0, "kind": "send_blocked", "reason": "quiet_hours"},
+                   ensure_ascii=False),
+        json.dumps({"ts": 200.0, "kind": "outbound", "text": "好的"}, ensure_ascii=False),
+    ]) + "\n", encoding="utf-8")
+    inner = tmp_path / "inner.log"
+    inner.write_text(json.dumps({"ts": 400.0, "kind": "inner_fallback",
+                                 "reason": "bad_json"}, ensure_ascii=False) + "\n",
+                     encoding="utf-8")
+    prompt = tmp_path / "prompt_override.log"
+    prompt.write_text(json.dumps({"ts": 500.0, "kind": "prompt_override",
+                                  "version": 2}, ensure_ascii=False) + "\n",
+                      encoding="utf-8")
+    monkeypatch.setattr(console, "LOG_SOURCES", {
+        "gateway": [gateway], "inner": [inner], "prompt": [prompt]})
+    return {"gateway": gateway, "inner": inner, "prompt": prompt}
+
+
+def test_logs_filters_and_missing_sources(tmp_path, write_env, monkeypatch):
+    env = _logs_env(tmp_path, monkeypatch)
+    status, data = _call("GET", "/api/logs?source=gateway&limit=2")
+    assert status == 200 and data["total"] == 3           # broken 行被跳过
+    assert [item["kind"] for item in data["items"]] == ["send_blocked", "outbound"]
+    assert data["items"][0]["error"] is True              # 错误行可标红
+    assert data["items"][1]["error"] is False
+
+    status, data = _call("GET", "/api/logs?source=gateway&q=quiet")
+    assert status == 200 and data["total"] == 1
+    assert data["items"][0]["kind"] == "send_blocked"
+
+    status, data = _call("GET", "/api/logs?source=gateway&kind=outbound")
+    assert status == 200 and [item["kind"] for item in data["items"]] == ["outbound"]
+
+    status, data = _call("GET", "/api/logs?source=inner")
+    assert status == 200 and data["items"][0]["kind"] == "inner_fallback"
+    status, data = _call("GET", "/api/logs?source=prompt")
+    assert status == 200 and data["items"][0]["kind"] == "prompt_override"
+
+    status, data = _call("GET", "/api/logs?source=nope")
+    assert status == 200 and data["items"] == []
+    monkeypatch.setattr(console, "LOG_SOURCES", {"gateway": [tmp_path / "missing.log"]})
+    status, data = _call("GET", "/api/logs?source=gateway")
+    assert status == 200 and data["items"] == [] and data["note"].startswith("日志文件不存在")
+
+
+def test_logs_regen_source(write_env, monkeypatch):
+    monkeypatch.setattr(console, "_regen_entries", lambda: [
+        {"ts": None, "kind": "regen_failed", "key": "regen:too_long", "count": 2,
+         "error": True, "_source": "regen", "_file": "media_choice", "_line": 0}])
+    status, data = _call("GET", "/api/logs?source=regen")
+    assert status == 200 and data["total"] == 1
+    assert data["items"][0]["kind"] == "regen_failed"

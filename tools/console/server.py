@@ -1462,6 +1462,351 @@ def media_send(body: dict, *, client: str = "") -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# P7-b：对话测试（ChatUI）/ 模型配置（Providers）/ 日志（Trace）
+# --------------------------------------------------------------------------- #
+WEB_CONFIG_PATH = ROOT / "web_config.json"
+CHAT_TEST_DB = SELFLEARN_DIR / "console_test.sqlite3"
+CHAT_TEST_TIMEOUT_S = 60.0
+
+MODEL_CONFIG_DEFAULTS = {
+    "llm_model": "deepseek-flash",
+    "llm_temperature": 0.7,
+    "llm_max_tokens": 2048,
+    "soul_server_url": "http://127.0.0.1:8123",
+    "soul_timeout_s": 2.0,
+    "inner_schema": "slim",
+}
+
+LOG_SOURCES: dict[str, list[Path]] = {
+    "gateway": [Path(GATEWAY_LOG)],
+    "inner": [SELFLEARN_DIR / "inner.log"],
+    "prompt": [SELFLEARN_DIR / "prompts.log", SELFLEARN_DIR / "prompt_override.log"],
+}
+
+
+def _deepseek_status() -> dict:
+    """DeepSeek key 只暴露"已配置/未配置"和来源，绝不回传明文。"""
+    payload = read_json(WEB_CONFIG_PATH, {})
+    llm = payload.get("llm") if isinstance(payload, dict) else {}
+    llm = llm if isinstance(llm, dict) else {}
+    env_key = os.environ.get("DEEPSEEK_API_KEY") or ""
+    file_key = str(llm.get("api_key") or "")
+    source = "env:DEEPSEEK_API_KEY" if env_key else ("web_config.json:llm.api_key" if file_key else "")
+    return {"configured": bool(env_key or file_key), "source": source,
+            "env_var": "DEEPSEEK_API_KEY", "config_file": "web_config.json (llm.api_key)"}
+
+
+def model_config_state() -> dict:
+    raw = gateway_config()
+    config = {key: raw.get(key, default) for key, default in MODEL_CONFIG_DEFAULTS.items()}
+    llm = read_json(WEB_CONFIG_PATH, {})
+    llm = llm.get("llm") if isinstance(llm, dict) else {}
+    llm = llm if isinstance(llm, dict) else {}
+    return {
+        "ok": True, "config": config, "defaults": dict(MODEL_CONFIG_DEFAULTS),
+        "deepseek": _deepseek_status(),
+        "effective": {
+            "llm_model": llm.get("model") or "deepseek-flash",
+            "llm_base_url": llm.get("base_url") or "https://api.deepseek.com",
+        },
+        "path": str(GATEWAY_CONFIG),
+        "note": "保存写入网关 config（热加载）；DeepSeek key 只显示配置状态，不回传明文",
+    }
+
+
+def _validate_model_config(updates: dict) -> tuple[dict, list[str]]:
+    if not isinstance(updates, dict):
+        return {}, ["body 必须是对象"]
+    cleaned: dict = {}
+    errors: list[str] = []
+    for key, value in updates.items():
+        if key not in MODEL_CONFIG_DEFAULTS:
+            errors.append(f"not_allowed:{key}")
+            continue
+        try:
+            if key == "llm_model":
+                text = str(value or "").strip()
+                if not text or len(text) > 80:
+                    raise ValueError("llm_model 需 1–80 字符")
+                cleaned[key] = text
+            elif key == "llm_temperature":
+                number = float(value)
+                if not 0.0 <= number <= 2.0:
+                    raise ValueError("llm_temperature 取值 0–2")
+                cleaned[key] = round(number, 3)
+            elif key == "llm_max_tokens":
+                number = int(value)
+                if not 1 <= number <= 32000:
+                    raise ValueError("llm_max_tokens 取值 1–32000")
+                cleaned[key] = number
+            elif key == "soul_server_url":
+                text = str(value or "").strip()
+                if not text.startswith(("http://", "https://")) or len(text) > 200:
+                    raise ValueError("soul_server_url 需要 http(s) URL")
+                cleaned[key] = text.rstrip("/")
+            elif key == "soul_timeout_s":
+                number = float(value)
+                if not 0.1 <= number <= 60.0:
+                    raise ValueError("soul_timeout_s 取值 0.1–60")
+                cleaned[key] = round(number, 2)
+            elif key == "inner_schema":
+                text = str(value or "").strip().lower()
+                if text not in ("slim", "full"):
+                    raise ValueError("inner_schema 只能是 slim/full")
+                cleaned[key] = text
+        except (TypeError, ValueError) as exc:
+            errors.append(f"{key}: {exc}")
+    return cleaned, errors
+
+
+def apply_model_config(updates: dict, *, client: str = "") -> dict:
+    cleaned, errors = _validate_model_config(updates)
+    if errors:
+        audit("model_config_update", {"keys": sorted(updates or {})}, ok=False,
+              note=";".join(errors)[:200], client=client)
+        return {"ok": False, "errors": errors, "config": model_config_state()["config"]}
+    raw = gateway_config()
+    before = {key: raw.get(key) for key in cleaned}
+    raw.update(cleaned)
+    try:
+        write_json_atomic(GATEWAY_CONFIG, raw)
+    except OSError as exc:
+        audit("model_config_update", {"keys": sorted(cleaned)}, ok=False,
+              note=str(exc), client=client)
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    audit("model_config_update", {"keys": sorted(cleaned), "before": before,
+                                  "after": cleaned}, ok=True, client=client)
+    state = model_config_state()
+    state["note"] = "已保存；网关热加载，下一条消息 / 下一次 proactive 生效"
+    return state
+
+
+# --------------------------------------------------------------------------- #
+# 对话测试（隔离库）
+# --------------------------------------------------------------------------- #
+def _chat_agent_factory(path: Path):
+    """测试可 monkeypatch；生产用真实 SelfLearnAgent（进程内、隔离库）。"""
+    from agi.selflearn.chat import SelfLearnAgent
+    return SelfLearnAgent(path=Path(path))
+
+
+def chat_test_db() -> Path:
+    return Path(CHAT_TEST_DB)
+
+
+def _safe_chat_test_db() -> Path:
+    target = Path(CHAT_TEST_DB).resolve()
+    target.relative_to(Path(SELFLEARN_DIR).resolve())      # 白名单
+    if target.name != "console_test.sqlite3":
+        raise ValueError("chat-test db must be console_test.sqlite3")
+    return target
+
+
+def chat_test_reset() -> dict:
+    try:
+        target = _safe_chat_test_db()
+    except (ValueError, OSError) as exc:
+        return {"ok": False, "error": f"unsafe_chat_test_db: {exc}"}
+    removed = []
+    for suffix in ("", "-wal", "-shm"):
+        path = Path(str(target) + suffix)
+        try:
+            if path.exists():
+                path.unlink()
+                removed.append(path.name)
+        except OSError as exc:
+            return {"ok": False, "error": f"{path.name}: {exc}", "removed": removed}
+    return {"ok": True, "reset": True, "removed": removed,
+            "db": str(target), "note": "隔离测试库已清空（真实联系人库不受影响）"}
+
+
+def chat_test(text: str, *, reset: bool = False, client: str = "") -> dict:
+    if reset:
+        result = chat_test_reset()
+        if result.get("ok") and not str(text or "").strip():
+            result["skipped"] = True
+            return result
+        if not result.get("ok"):
+            return result
+    text = str(text or "").strip()
+    if not text:
+        return {"ok": False, "status": "invalid", "error": "text 不能为空"}
+    try:
+        target = _safe_chat_test_db()
+    except (ValueError, OSError) as exc:
+        return {"ok": False, "status": "invalid", "error": f"unsafe_chat_test_db: {exc}"}
+    target.parent.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
+    executor = None
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import TimeoutError as FutureTimeout
+        agent = _chat_agent_factory(target)
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(agent.send, text)
+        try:
+            result = future.result(timeout=CHAT_TEST_TIMEOUT_S)
+        except FutureTimeout:
+            future.cancel()
+            audit("chat_test", {"chars": len(text), "timeout": True}, ok=False,
+                  note="timeout", client=client)
+            return {"ok": False, "status": "timeout",
+                    "error": f"chat-test 超时（{int(CHAT_TEST_TIMEOUT_S)}s），已放弃本次回复",
+                    "db": str(target)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "status": "error", "error": f"{type(exc).__name__}: {exc}",
+                "db": str(target)}
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=False)
+    latency_ms = round((time.perf_counter() - started) * 1000, 1)
+    if not isinstance(result, dict):
+        return {"ok": False, "status": "error", "error": "agent 返回非 dict",
+                "db": str(target)}
+    generation = result.get("generation") if isinstance(result.get("generation"), dict) else {}
+    inner = generation.get("inner") or result.get("state") or {}
+    media = (result.get("media") or result.get("reply_media")
+             or generation.get("media") or {})
+    bubbles = result.get("bubbles") or []
+    reply = result.get("reply") or (bubbles[0] if bubbles else "")
+    payload = {
+        "ok": True, "reply": str(reply or ""),
+        "bubbles": [str(item) if not isinstance(item, dict) else item for item in bubbles],
+        "skipped": bool(result.get("skipped")),
+        "skip_reason": result.get("skip_reason") or "",
+        "crisis": bool(result.get("crisis")),
+        "guard": result.get("guard") or {},
+        "inner": inner, "media": media, "gen_meta": generation,
+        "latency_ms": latency_ms, "turn_id": result.get("turn_id"),
+        "db": str(target),
+        "isolation": "隔离测试库 console_test.sqlite3（不影响真实联系人记忆）",
+    }
+    audit("chat_test", {"chars": len(text), "skipped": payload["skipped"],
+                        "latency_ms": latency_ms}, ok=True, client=client)
+    return payload
+
+
+def chat_test_history(limit: int = 50) -> dict:
+    try:
+        target = _safe_chat_test_db()
+    except (ValueError, OSError) as exc:
+        return {"ok": False, "error": f"unsafe_chat_test_db: {exc}", "items": []}
+    if not target.is_file():
+        return {"ok": True, "items": [], "db": str(target)}
+    try:
+        limit = max(1, min(500, int(limit)))
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        con = sqlite3.connect(f"file:{target}?mode=ro", uri=True, timeout=3)
+        con.row_factory = sqlite3.Row
+        try:
+            rows = con.execute(
+                "SELECT id, role, text, ts FROM messages ORDER BY ts DESC, rowid DESC LIMIT ?",
+                (limit,)).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return {"ok": True, "items": [], "db": str(target)}
+    return {"ok": True, "db": str(target),
+            "items": [dict(row) for row in reversed(rows)]}
+
+
+# --------------------------------------------------------------------------- #
+# 日志（Trace）
+# --------------------------------------------------------------------------- #
+def _log_is_error(entry: dict) -> bool:
+    kind = str(entry.get("kind") or "").lower()
+    if any(word in kind for word in ("error", "fail", "blocked", "stale", "crisis")):
+        return True
+    level = str(entry.get("level") or "").lower()
+    return level in ("error", "critical", "fatal")
+
+
+def _parse_log_line(line: str, source: str, file_path: Path, line_no: int) -> dict | None:
+    text = line.rstrip("\n")
+    if not text.strip():
+        return None
+    try:
+        value = json.loads(text)
+    except ValueError:
+        value = None
+    if not isinstance(value, dict):
+        return None                      # P7-b：坏行/非 JSON 跳过
+    entry = dict(value)
+    entry["_source"] = source
+    entry["_file"] = Path(file_path).name
+    entry["_line"] = line_no
+    if entry.get("ts") is None:
+        entry["ts"] = None
+    entry["error"] = bool(_log_is_error(entry))
+    return entry
+
+
+def _regen_entries() -> list[dict]:
+    entries: list[dict] = []
+    try:
+        from agi.selflearn import media_choice
+        snapshot = media_choice.regen_failed_snapshot()
+        for key, count in (snapshot or {}).items():
+            entries.append({"ts": None, "kind": "regen_failed", "key": key,
+                            "count": int(count or 0), "error": True,
+                            "_source": "regen", "_file": "media_choice", "_line": 0})
+    except Exception:  # noqa: BLE001
+        pass
+    return entries
+
+
+def read_logs(source: str = "gateway", limit: int = 200, q: str = "",
+              kind: str = "") -> dict:
+    source = str(source or "gateway").strip().lower()
+    try:
+        limit = max(1, min(1000, int(limit)))
+    except (TypeError, ValueError):
+        limit = 200
+    needle = str(q or "").strip().casefold()
+    kind_needle = str(kind or "").strip().lower()
+    entries: list[dict] = []
+    files: list[str] = []
+    if source == "regen":
+        entries = [entry for entry in _regen_entries()
+                   if not kind_needle or kind_needle in str(entry.get("kind") or "")]
+        if needle:
+            entries = [entry for entry in entries
+                       if needle in json.dumps(entry, ensure_ascii=False).casefold()]
+        return {"ok": True, "source": source, "items": entries[:limit],
+                "total": len(entries), "files": [], "note": "进程内 regen_failed 计数快照"}
+    if source not in LOG_SOURCES:
+        return {"ok": True, "source": source, "items": [], "total": 0,
+                "files": [], "note": f"未知来源: {source}"}
+    for file_path in LOG_SOURCES[source]:
+        path = Path(file_path)
+        if not path.is_file():
+            continue
+        files.append(str(path))
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                for line_no, line in enumerate(handle, 1):
+                    entry = _parse_log_line(line, source, path, line_no)
+                    if entry is None:
+                        continue
+                    if kind_needle and kind_needle not in str(entry.get("kind") or "").lower():
+                        continue
+                    if needle:
+                        blob = json.dumps(entry, ensure_ascii=False).casefold()
+                        if needle not in blob:
+                            continue
+                    entries.append(entry)
+        except OSError:
+            continue
+    entries.sort(key=lambda item: (float(item.get("ts") or 0), int(item.get("_line") or 0)),
+                 reverse=True)
+    return {"ok": True, "source": source, "items": entries[:limit],
+            "total": len(entries), "files": files,
+            "note": "" if files else "日志文件不存在或为空"}
+
+
+# --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
 def host_ok(host: str) -> bool:
@@ -1624,6 +1969,16 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(404, {"ok": False, "error": "file not in media dirs"}); return
                 content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
                 self._bytes(200, target.read_bytes(), content_type); return
+            if path == "/api/model-config":
+                self._json(200, model_config_state()); return
+            if path == "/api/chat-test/history":
+                self._json(200, chat_test_history(self._limit(query, 50))); return
+            if path == "/api/logs":
+                self._json(200, read_logs(
+                    str((query.get("source") or ["gateway"])[0] or "gateway"),
+                    self._limit(query, 200),
+                    str((query.get("q") or [""])[0] or ""),
+                    str((query.get("kind") or [""])[0] or ""))); return
             if path == "/api/prompts":
                 self._json(200, prompts_state()); return
         except Exception as exc:  # noqa: BLE001 - 页面要有错误态而不是空白
@@ -1679,6 +2034,24 @@ class Handler(BaseHTTPRequestHandler):
                     code = 502
                 else:
                     code = 400
+                self._json(code, result); return
+            if path == "/api/model-config":
+                updates = body.get("updates", body)
+                result = apply_model_config(updates if isinstance(updates, dict) else {},
+                                            client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/chat-test":
+                result = chat_test(str(body.get("text") or ""),
+                                   reset=bool(body.get("reset", False)),
+                                   client=client)
+                if result.get("ok"):
+                    code = 200
+                elif result.get("status") == "timeout":
+                    code = 504
+                elif result.get("status") == "invalid":
+                    code = 400
+                else:
+                    code = 500
                 self._json(code, result); return
             if path == "/api/prompts/reset":
                 raw_keys = body.get("keys") or []

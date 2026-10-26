@@ -19,6 +19,10 @@ const state = {
   models: null,
   memory: null,
   media: null,
+  chatMsgs: null,
+  chatBusy: false,
+  modelConfig: null,
+  logsState: null,
   status: null,
   inner: null,
   tone: null,
@@ -27,11 +31,14 @@ const state = {
 const PAGES = {
   overview: '总览',
   feed: '对话流',
+  chat: '对话测试',
   inner: '内状态',
   media: '媒体',
   memory: '记忆',
   prompts: '提示词',
   models: '模型',
+  providers: '模型配置',
+  logs: '日志',
   settings: '设置',
 };
 
@@ -1205,15 +1212,287 @@ async function sendMediaTest(silent) {
   }
 }
 
+/* ---------------- 对话测试（P7-b ChatUI） ---------------- */
+function chatDetailHtml(detail) {
+  if (!detail) return '';
+  const inner = detail.inner || {};
+  const media = detail.media || {};
+  const summary = [];
+  if (detail.latency_ms !== undefined && detail.latency_ms !== null) summary.push(detail.latency_ms + 'ms');
+  if (inner && (inner.stance || inner.intent)) summary.push('内状态');
+  if (media && Object.keys(media).length) summary.push('媒体');
+  if (detail.skipped) summary.push('本条未回复');
+  if (!summary.length) return '';
+  return `<details class="chat-detail"><summary>${esc(summary.join(' · '))}</summary>
+    <pre class="json">${esc(JSON.stringify({
+      inner: detail.inner || null, media: detail.media || null,
+      guard: detail.guard || null, latency_ms: detail.latency_ms,
+      skipped: detail.skipped || false, skip_reason: detail.skip_reason || '',
+    }, null, 2))}</pre></details>`;
+}
+
+function chatBubblesHtml() {
+  const messages = state.chatMsgs || [];
+  if (!messages.length) {
+    return '<div class="empty">还没有消息。发一句试试提示词/模型的效果（不会影响真实联系人）。</div>';
+  }
+  return '<div class="chat-log" id="chat-log">' + messages.map((message) => {
+    const mine = message.role === 'user';
+    const error = message.error ? ' error' : '';
+    return `<div class="chat-msg ${mine ? 'user' : 'ai'}">
+      <div class="chat-bubble${error}">
+        <div class="chat-meta">${mine ? '你' : 'TA'}${message.ts ? ' · ' + fmtTime(message.ts) : ''}</div>
+        <div class="chat-text">${esc(message.text || '')}</div>
+        ${chatDetailHtml(message.detail)}
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+async function renderChatTest() {
+  if (!state.chatMsgs) {
+    state.chatMsgs = [];
+    try {
+      const history = await api('/api/chat-test/history?limit=50');
+      state.chatMsgs = (history.items || []).map((item) => ({
+        role: item.role === 'user' ? 'user' : 'assistant',
+        text: item.text, ts: item.ts,
+      }));
+    } catch (err) { /* 历史读不到不阻塞 */ }
+  }
+  renderChatPage();
+}
+
+function renderChatPage() {
+  const busy = !!state.chatBusy;
+  $('#app').innerHTML = `
+    <div class="card chat-note">
+      <div class="row between">
+        <span>🧪 <b>隔离测试库</b>：<code>agi/data/selflearn/console_test.sqlite3</code>，不影响真实联系人记忆；不会发微信消息。</span>
+        <div class="row">
+          <button class="btn" id="chat-clear">清空会话</button>
+          <button class="btn primary" id="chat-send" ${busy ? 'disabled' : ''}>${busy ? 'TA 正在想…' : '发送'}</button>
+        </div>
+      </div>
+    </div>
+    ${card('对话测试', `
+      ${chatBubblesHtml()}
+      <div class="chat-input-row">
+        <input type="text" id="chat-input" placeholder="输入消息，回车发送（使用当前提示词/模型配置）" ${busy ? 'disabled' : ''}>
+        <span class="hint">${busy ? '生成中，最多等 60s…' : 'Enter 发送'}</span>
+      </div>`)}`;
+  const input = $('#chat-input');
+  if (input) {
+    input.focus();
+    input.onkeydown = (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendChatMessage(); }
+    };
+  }
+  const send = $('#chat-send');
+  if (send) send.onclick = sendChatMessage;
+  const clear = $('#chat-clear');
+  if (clear) clear.onclick = clearChatTest;
+  const log = $('#chat-log');
+  if (log) log.scrollTop = log.scrollHeight;
+}
+
+async function sendChatMessage() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  if (state.chatBusy) return;
+  const input = $('#chat-input');
+  const text = input ? input.value.trim() : '';
+  if (!text) return;
+  state.chatMsgs = state.chatMsgs || [];
+  state.chatMsgs.push({ role: 'user', text, ts: Date.now() / 1000 });
+  state.chatBusy = true;
+  renderChatPage();
+  try {
+    const result = await api('/api/chat-test', { method: 'POST', body: { text } });
+    const replyText = result.reply || (result.skipped ? '（TA 这条选择先不回）' : '');
+    state.chatMsgs.push({
+      role: 'assistant', text: replyText, ts: Date.now() / 1000,
+      detail: {
+        inner: result.inner, media: result.media, guard: result.guard,
+        latency_ms: result.latency_ms, skipped: result.skipped,
+        skip_reason: result.skip_reason,
+      },
+    });
+  } catch (err) {
+    state.chatMsgs.push({
+      role: 'assistant', text: '发送失败：' + err.message,
+      ts: Date.now() / 1000, error: true,
+    });
+    toast(err.message, 'err');
+  } finally {
+    state.chatBusy = false;
+    renderChatPage();
+  }
+}
+
+async function clearChatTest() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  if (!confirm('清空隔离测试会话（删除 console_test.sqlite3）？不影响真实联系人。')) return;
+  try {
+    await api('/api/chat-test', { method: 'POST', body: { reset: true } });
+    state.chatMsgs = [];
+    toast('测试会话已清空', 'ok');
+  } catch (err) { toast(err.message, 'err'); }
+  renderChatPage();
+}
+
+/* ---------------- 模型配置（P7-b Providers） ---------------- */
+const MODEL_FIELDS = [
+  ['llm_model', 'LLM 模型名', 'text'],
+  ['llm_temperature', '温度 temperature（0–2）', 'number'],
+  ['llm_max_tokens', '最大 tokens（1–32000）', 'number'],
+  ['soul_server_url', '内状态服务地址 soul_server_url', 'text'],
+  ['soul_timeout_s', '内状态超时 soul_timeout_s（秒）', 'number'],
+];
+
+async function renderProviders() {
+  $('#app').innerHTML = '<div class="empty">加载模型配置…</div>';
+  let data = null;
+  try { data = await api('/api/model-config'); }
+  catch (err) {
+    $('#app').innerHTML = card('模型配置', `<div class="error-text">${esc(err.message)}</div>`);
+    return;
+  }
+  state.modelConfig = data;
+  const cfg = data.config || {};
+  const deepseek = data.deepseek || {};
+  const effective = data.effective || {};
+  const keyPill = deepseek.configured ? pill('DeepSeek key 已配置', 'ok') : pill('DeepSeek key 未配置', 'err');
+  $('#app').innerHTML = `
+    <div class="card">
+      <div class="row between">
+        <div class="row">${keyPill}<span class="hint">来源：${esc(deepseek.source || '未配置')}</span></div>
+        <span class="hint">当前生效模型：<b>${esc(effective.llm_model || '—')}</b> · base_url ${esc(effective.llm_base_url || '—')}</span>
+      </div>
+      <p class="hint" style="margin-top:8px">DeepSeek key 不在这里编辑也不回传明文：在 <code>web_config.json</code> 的 <code>llm.api_key</code>，或环境变量 <code>DEEPSEEK_API_KEY</code> 配置。</p>
+    </div>
+    ${card('网关模型/内状态配置（保存后热加载生效）', `
+      <div class="grid cols-2 provider-form">
+        ${MODEL_FIELDS.map(([key, label, type]) => `<div class="field">
+          <label>${esc(label)}</label>
+          <input type="${type}" id="mc-${esc(key)}" value="${esc(cfg[key] ?? '')}"
+                 ${type === 'number' ? 'step="any"' : ''}>
+          <span class="hint mono">${esc(key)}</span>
+        </div>`).join('')}
+        <div class="field"><label>inner_schema</label>
+          <select id="mc-inner_schema">
+            <option value="slim" ${cfg.inner_schema === 'slim' ? 'selected' : ''}>slim（4 字段省 token）</option>
+            <option value="full" ${cfg.inner_schema === 'full' ? 'selected' : ''}>full（对照）</option>
+          </select><span class="hint mono">inner_schema</span></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" id="mc-save">保存配置</button>
+        <span class="hint">网关热加载：保存后下一条消息 / 下一次 proactive tick 生效，无需重启。</span>
+      </div>
+      <div id="mc-result" style="margin-top:8px"></div>`)}
+    ${card('配置位置', `<div class="kv">
+      <span class="k">网关配置</span><span class="v mono">${esc(data.path || '')}</span>
+      <span class="k">默认值</span><span class="v mono">${esc(JSON.stringify(data.defaults || {}))}</span>
+    </div>`)}`;
+  const save = $('#mc-save');
+  if (save) save.onclick = saveModelConfig;
+}
+
+async function saveModelConfig() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const updates = {};
+  for (const [key, , type] of MODEL_FIELDS) {
+    const node = $('#mc-' + key);
+    if (!node) continue;
+    updates[key] = type === 'number' ? Number(node.value) : node.value;
+  }
+  updates.inner_schema = $('#mc-inner_schema').value;
+  try {
+    const result = await api('/api/model-config', { method: 'POST', body: { updates } });
+    toast('已保存：' + (result.note || '热加载生效'), 'ok');
+    $('#mc-result').innerHTML = '<span class="pill ok"><span class="dot"></span>已保存，下一条消息生效</span>';
+    state.modelConfig = result;
+  } catch (err) {
+    $('#mc-result').innerHTML = `<div class="error-text">${esc(err.message)}</div>`;
+    toast(err.message, 'err');
+  }
+}
+
+/* ---------------- 日志（P7-b Trace） ---------------- */
+const LOG_SOURCE_OPTIONS = [
+  ['gateway', '网关事件 gateway.log'], ['inner', '内状态 inner.log'],
+  ['prompt', '提示词 prompt_override.log'], ['regen', '重生成失败 regen_failed'],
+];
+
+async function renderLogs() {
+  const prev = state.logsState || {};
+  state.logsState = { source: prev.source || 'gateway', q: prev.q || '', kind: prev.kind || '' };
+  await loadLogs();
+}
+
+async function loadLogs() {
+  const params = state.logsState || { source: 'gateway', q: '', kind: '' };
+  $('#app').innerHTML = '<div class="empty">加载日志…</div>';
+  let data = null;
+  try {
+    data = await api('/api/logs?source=' + encodeURIComponent(params.source)
+      + '&limit=200&q=' + encodeURIComponent(params.q)
+      + '&kind=' + encodeURIComponent(params.kind));
+  } catch (err) {
+    $('#app').innerHTML = card('日志', `<div class="error-text">${esc(err.message)}</div>`);
+    return;
+  }
+  const items = data.items || [];
+  const rows = items.length ? items.map((entry) => {
+    const ts = entry.ts ? fmtDateTime(entry.ts) : '—';
+    const summary = entry.text || entry.raw || entry.reason || entry.key
+      || (entry.kind ? '' : '');
+    return `<div class="log-row ${entry.error ? 'err' : ''}" data-json='${esc(JSON.stringify(entry))}'>
+      <span class="time">${esc(ts)}</span>
+      <span class="badge ${entry.error ? 'red' : ''}">${esc(entry.kind || 'log')}</span>
+      <span class="log-text">${esc(String(summary).slice(0, 240))}</span>
+      <span class="hint mono">${esc(entry._file || '')}:${esc(entry._line || '')}</span>
+    </div>`;
+  }).join('') : '<div class="empty">没有匹配的日志</div>';
+  $('#app').innerHTML = `
+    ${card('日志检索', `
+      <div class="row">
+        <select id="log-source">${LOG_SOURCE_OPTIONS.map(([value, label]) =>
+          `<option value="${value}" ${value === params.source ? 'selected' : ''}>${label}</option>`).join('')}</select>
+        <input type="text" id="log-q" placeholder="关键词（JSON 内容搜索）" value="${esc(params.q)}" style="max-width:280px">
+        <input type="text" id="log-kind" placeholder="kind 过滤" value="${esc(params.kind)}" style="max-width:160px">
+        <button class="btn primary" id="log-search">搜索</button>
+        <span class="hint">${items.length} 条 · 按时间倒序 · 点一行看 JSON</span>
+      </div>
+      <div class="hint" style="margin-top:6px">文件：${esc((data.files || []).join(' · ') || data.note || '—')}</div>
+      <div class="log-list" style="margin-top:10px">${rows}</div>`)}`;
+  const search = $('#log-search');
+  if (search) search.onclick = () => {
+    state.logsState.source = $('#log-source').value;
+    state.logsState.q = $('#log-q').value.trim();
+    state.logsState.kind = $('#log-kind').value.trim();
+    loadLogs();
+  };
+  const q = $('#log-q');
+  if (q) q.onkeydown = (event) => { if (event.key === 'Enter') search.click(); };
+  const source = $('#log-source');
+  if (source) source.onchange = () => {
+    state.logsState = { source: source.value, q: '', kind: '' };
+    loadLogs();
+  };
+}
+
 /* ---------------- 路由 ---------------- */
 const RENDERERS = {
   overview: renderOverview,
   feed: renderFeed,
+  chat: renderChatTest,
   inner: renderInner,
   media: renderMedia,
   memory: renderMemory,
   prompts: renderPrompts,
   models: renderModels,
+  providers: renderProviders,
+  logs: renderLogs,
   settings: renderSettings,
 };
 

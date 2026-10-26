@@ -40,10 +40,13 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | 总览 | `/api/status`（网关 801 代理）+ `/api/feed` + `/api/config` + `/api/models` |
 | 对话流 | `agi/data/wechat/gateway.log`（JSONL 事件，只读 tail，3s 自动刷新） |
 | 内状态 | 联系人库 `inner_states`（只读 URI 连接；mode/injected/state_json/block/延迟/fallback） |
+| 对话测试 | 隔离库 `agi/data/selflearn/console_test.sqlite3` → 进程内 `SelfLearnAgent.send()`，可试提示词/模型效果，不影响真实联系人 |
 | 媒体 | `agi/wechat_gateway/media.capabilities()`（import 失败降级静态矩阵）+ `emoji_archive`/目录扫描 + `agi/data/media_wishes.jsonl`；测试发送只允许文件传输助手 |
 | 记忆 | `agi/selflearn/memory.metrics()` + `user_memories` 最近 50 条 + `/api/tone`（AI 语气 vs `agi/eval_data/human_tone/profile.md` 真人基线） |
 | 提示词 | `agi/selflearn/prompt_store`（11 个内置键的 defaults/overrides/effective；降级时直读 `agi/data/prompts.json`）。左列选键 → 右侧大文本框编辑 → 保存/恢复默认/全部恢复默认 |
+| 模型配置 | 网关 `config.json` 的白名单键（llm_model/llm_temperature/llm_max_tokens/soul_server_url/soul_timeout_s/inner_schema）+ DeepSeek key 仅显示已配置/未配置 |
 | 模型 | `agi/selflearn/model_registry`（list/health/start/stop；`soul-05b` 可启停，`qwen15` reserved 拒绝；含 inner mode 开关，写回网关 config 热加载） |
+| 日志 | `gateway.log`(JSONL)/`inner.log`/`prompt_override.log`/regen_failed；搜索+时间倒序+错误标红 |
 | 设置 | `/api/config`（主动开关/概率/间隔/静默时段）+ STOP/恢复 |
 
 ## 接口
@@ -51,6 +54,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 只读（GET，Host 回环校验）：
 `/api/health` `/api/status` `/api/feed?limit=&kind=` `/api/inner?limit=` `/api/messages?limit=`
 `/api/memory` `/api/tone?limit=` `/api/models` `/api/config` `/api/prompts`
+`/api/model-config` `/api/chat-test/history?limit=` `/api/logs?source=&limit=&q=&kind=`
 `/api/media/capabilities` `/api/media/library?limit=` `/api/media/assets?limit=&kind=` `/api/media/stats` `/api/media/wishes` `/api/media/acquisition` `/api/media/file?path=`
 
 写（POST，`X-Admin-Token`，全部写 `agi/data/console_audit.log`）：
@@ -63,6 +67,8 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | `/api/models/start` `/api/models/stop` | `{"name":"soul-05b"}` | 只允许 `soul-05b`；qwen15 reserved / 未知模型拒绝 |
 | `/api/prompts` | `{"prompts":{key:text}}` | 优先 `prompt_store.set_many`（11 键白名单、单条 ≤4000 字、原子写）；import 失败降级直写 `prompts.json` |
 | `/api/prompts/reset` | `{"keys":[...]}` 或 `{"all":true}` | 恢复默认（`prompt_store.delete/delete_all`，降级时删 JSON 键/文件） |
+| `/api/chat-test` | `{"text":"..."}` 或 `{"reset":true}` | 隔离库对话测试（60s 超时；reset 删除 console_test.sqlite3）；不会发微信 |
+| `/api/model-config` | `{"updates":{...}}` | 保存模型/内状态白名单键（DeepSeek key 不回传明文） |
 | `/api/media/send`（别名 `/api/media/test-send`） | `{"type":"text|emoji_text|image|gif|sticker|native_emoji","text?":"...","path?":"...","name?":"..."}` | 测试发送；**联系人强制覆盖为「文件传输助手」**；网关暂无媒体接口时返回 501（等 P5-a） |
 
 ## 界面结构（AstrBot 风格深色）
@@ -86,6 +92,19 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
   warning `#faad14`、error `#ff4d4f`、text `#e8eaed`、border `#333`、气泡 `#2d2e30`。
 - 侧边栏 240px + 顶部 header 56px + 圆角 10px 卡片；JSON 用等宽字体。
 - 所有页面右上角显示「刷新于 HH:MM:SS」；接口失败显示红色原因而不是空白。
+
+## 对话测试 / 模型配置 / 日志（P7-b）
+
+- **对话测试**：气泡对话，`POST /api/chat-test` 在**隔离库** `agi/data/selflearn/console_test.sqlite3` 里进程内调
+  `SelfLearnAgent.send()`，返回 reply/bubbles/inner/media/latency；右上角 token 必填。
+  支持「清空会话」（删隔离库）、历史回读（`GET /api/chat-test/history`）、每条 AI 回复折叠查看内状态/媒体/延迟。
+  **不会发微信，也不读写真实联系人库**。
+- **模型配置**：读写网关 config 白名单 `llm_model / llm_temperature / llm_max_tokens / soul_server_url /
+  soul_timeout_s / inner_schema`，保存即热加载；DeepSeek key 只显示"已配置/未配置"与来源
+  （`web_config.json:llm.api_key` 或环境变量 `DEEPSEEK_API_KEY`），**不回传明文**。
+- **日志**：`GET /api/logs?source=gateway|inner|prompt|regen&limit=200&q=&kind=`，读 gateway.log(JSONL) /
+  inner.log / prompt_override.log / regen_failed 计数；关键词+kind 过滤、时间倒序、错误行红色、点行看整条 JSON。
+- 顶部导航新增「对话测试 / 模型配置 / 日志」三项。
 
 ## 媒体页（P5-d）
 

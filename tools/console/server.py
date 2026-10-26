@@ -251,8 +251,27 @@ def feed_events(limit: int = 200, kind_filter: str = "") -> list[dict]:
 DEFAULT_CONTACT_DB: Path | None = None
 
 
+def _preferred_contact_stems() -> list[str]:
+    """真实联系人优先：按 config 里 allowed/proactive/monitored 顺序算 sha1(alias)[:14]。"""
+    try:
+        import hashlib
+        cfg = json.loads(Path(GATEWAY_CONFIG).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return []
+    ordered = []
+    for key in ("proactive_contacts", "monitored_contacts", "allowed_contacts"):
+        for alias in (cfg.get(key) or []):
+            if alias and alias not in ordered:
+                ordered.append(alias)
+    return [hashlib.sha1(str(alias).encode()).hexdigest()[:14] for alias in ordered]
+
+
 def contact_db_path() -> Path | None:
-    """默认数据 DB：优先新拆分库的 memory 部分，其次未迁移的单库，最后 legacy。"""
+    """默认数据 DB：优先新拆分库的 memory 部分，其次未迁移的单库，最后 legacy。
+
+    选择顺序：配置里的真实联系人（proactive/monitored/allowed）优先，
+    其次"最近有新消息的库"；避免默认落到「文件传输助手」这类测试会话。
+    """
     if DEFAULT_CONTACT_DB:
         target = Path(DEFAULT_CONTACT_DB)
         if target.is_file():
@@ -264,6 +283,22 @@ def contact_db_path() -> Path | None:
                 return sibling
         return target
     try:
+        # 1) 配置里的真实联系人优先（有消息才用）
+        for stem in _preferred_contact_stems():
+            for suffix in (".memory.sqlite3", ".sqlite3", ".legacy.sqlite3"):
+                candidate = Path(CONTACTS_DIR) / (stem + suffix)
+                if not candidate.is_file():
+                    continue
+                try:
+                    con = sqlite3.connect(f"file:{candidate}?mode=ro", uri=True, timeout=2)
+                    try:
+                        count = con.execute("SELECT count(*) FROM messages").fetchone()[0]
+                    finally:
+                        con.close()
+                except sqlite3.Error:
+                    continue
+                if count:
+                    return candidate
         memory = sorted(Path(CONTACTS_DIR).glob("*.memory.sqlite3"),
                         key=lambda p: p.stat().st_mtime, reverse=True)
         singles = [p for p in sorted(Path(CONTACTS_DIR).glob("*.sqlite3"),

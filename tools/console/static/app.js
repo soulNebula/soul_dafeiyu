@@ -2505,26 +2505,17 @@ function bindGlobal() {
   });
   const tokenInput = $('#token-input');
   tokenInput.value = state.token;
-  // 本机便利：没填 token 时自动从 /api/token 拉（后端只允许回环地址）
-  if (!state.token) {
-    api('/api/token').then((data) => {
-      if (data && data.ok && data.token) {
-        state.token = data.token;
-        tokenInput.value = state.token;
-        sessionStorage.setItem('console_token', state.token);
-        go(state.page);
-      }
-    }).catch(() => {});
-  }
-  tokenInput.oninput = () => {
-    state.token = tokenInput.value.trim();
-    sessionStorage.setItem('console_token', state.token);
-  };
-  document.addEventListener('click', (event) => {
-    const node = event.target.closest('[data-json]');
-    if (!node) return;
-    try { showModal('事件详情', JSON.parse(node.dataset.json)); } catch (err) { toast('JSON 解析失败', 'err'); }
-  });
+  // 本机便利：自动同步本机 token（后端只允许回环地址）。
+  // 注意：即便 sessionStorage 里已有旧 token 也要比对——token 改过后旧值会 401，
+  // 这里自动换成新的，避免用户手动清缓存。
+  api('/api/token').then((data) => {
+    if (data && data.ok && data.token && data.token !== state.token) {
+      state.token = data.token;
+      tokenInput.value = state.token;
+      sessionStorage.setItem('console_token', state.token);
+      go(state.page);
+    }
+  }).catch(() => {});
   state.timer = setInterval(() => {
     if (document.hidden) return;
     if (state.page === 'feed' && state.feedAuto) renderFeed(true).then(setLastRefresh).catch(() => {});

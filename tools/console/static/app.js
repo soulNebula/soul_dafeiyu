@@ -157,10 +157,9 @@ function setLastRefresh() {
 async function api(path, options) {
   const opts = options || {};
   const headers = { 'Accept': 'application/json' };
-  if (opts.method === 'POST') {
-    headers['Content-Type'] = 'application/json';
-    if (state.token) headers['X-Admin-Token'] = state.token;
-  }
+  if (opts.method === 'POST') headers['Content-Type'] = 'application/json';
+  // 注意：GET 也要带 token（有些只读接口也要求 admin token，之前只有 POST 带过）
+  if (state.token) headers['X-Admin-Token'] = state.token;
   let response;
   try {
     response = await fetch(path, {
@@ -2505,6 +2504,26 @@ function bindGlobal() {
   });
   const tokenInput = $('#token-input');
   tokenInput.value = state.token;
+  const connect = async () => {
+    const value = tokenInput.value.trim();
+    if (!value) { toast('请先填 admin token（本机默认 8888）', 'err'); return; }
+    state.token = value;
+    sessionStorage.setItem('console_token', state.token);
+    try {
+      const st = await api('/api/status');
+      if (st && st.ok) {
+        toast('已连接', 'ok');
+        await go(state.page);
+      } else {
+        toast('连接失败：token 可能无效', 'err');
+      }
+    } catch (err) {
+      toast('连接失败：' + (err && err.message ? err.message : err), 'err');
+    }
+  };
+  const connectBtn = $('#btn-connect');
+  if (connectBtn) connectBtn.onclick = connect;
+  tokenInput.onkeydown = (event) => { if (event.key === 'Enter') connect(); };
   // 本机便利：自动同步本机 token（后端只允许回环地址）。
   // 注意：即便 sessionStorage 里已有旧 token 也要比对——token 改过后旧值会 401，
   // 这里自动换成新的，避免用户手动清缓存。

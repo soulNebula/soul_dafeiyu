@@ -3554,13 +3554,18 @@ def bili_login_poll(key: str, *, client: str = "") -> dict:
         return {"ok": False, "error": "network", "status": "expired",
                 "hint": f"未知状态码: {code}"}
     cookies = _bili_cookie_from_url(str(data.get("url") or ""))
-    # B站的 buvid3 常常不在 url 里，而是在 generate/poll 的 Set-Cookie 里
-    if not cookies.get("buvid3"):
-        for cookie in _BILI_JAR:
-            if cookie.name.lower() == "buvid3" and cookie.value:
-                cookies["buvid3"] = cookie.value
-                break
+    # 2026 版 B站接口：登录成功后 data.url 是跨域跳转（gourl/ticket），
+    # 真正的凭证（SESSDATA/bili_jct/DedeUserID/buvid3）在 Set-Cookie 里。
+    # 因此 url 里缺的字段一律从共享 cookie jar 补。
+    jar_cookies = {}
+    for cookie in _BILI_JAR:
+        if cookie.name and cookie.value:
+            jar_cookies.setdefault(cookie.name.lower(), cookie.value)
+    for field in ("sessdata", "bili_jct", "dedeuserid", "buvid3"):
+        if not cookies.get(field) and jar_cookies.get(field):
+            cookies[field] = jar_cookies[field]
     _bili_login_debug("poll_ok", {"have": sorted(cookies.keys()),
+                                  "jar_keys": sorted(jar_cookies.keys()),
                                   "url_keys": sorted(urllib.parse.parse_qs(
                                       urllib.parse.urlsplit(str(data.get("url") or "")).query).keys())})
     written = _bili_write_credential(cookies)

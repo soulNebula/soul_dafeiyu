@@ -234,6 +234,87 @@ TOPIC_CONSTRAINTS = (
 )
 
 #: 每类意图的生成约束（同一 LLM 调用里按 kind 选指令，禁止多类共用）
+
+# P0-15：用户待办/进度追问
+PROGRESS_CHECK_PROB = 0.25
+PROGRESS_ASK_WINDOW_DAYS = 7
+_PLAN_CUES = re.compile(
+    r"要|打算|准备|想|计划|明天|后天|下周|下个月|这周|周末|过几天|月底|"
+    r"在准备|在弄|马上|快要|即将")
+_TODO_ANCHORS = (
+    "面试", "搬家", "考试", "考证", "答辩", "入职", "体检", "手术", "看病",
+    "出差", "旅行", "装修", "买房", "买车", "换工作", "减肥", "健身", "项目",
+    "论文", "签证", "落户", "结婚", "生日", "转正", "答辩", "开学", "毕业",
+)
+
+
+def _todo_anchor(text: Any) -> str:
+    value = str(text or "")
+    positions = [(value.find(word), word) for word in _TODO_ANCHORS if word in value]
+    if positions:
+        return min(positions)[1]
+    match = _PLAN_CUES.search(value)
+    if not match:
+        return ""
+    tail = value[match.end():]
+    tail = re.split(r"[，,。！!？?；;\n]", tail, maxsplit=1)[0]
+    tail = re.sub(r"^(?:去|把|在|要|打算|准备|想|计划|要去做|得)", "", tail.strip())
+    return tail.strip()[:12]
+
+
+def find_user_todos(path: Path | str = DB_PATH, now: float | None = None, *,
+                    max_age_days: int = 30, limit: int = 5) -> list[dict]:
+    """从记忆/最近用户消息捞“用户说过要做的事”，按 anchor 7 天去重。"""
+    now = time.time() if now is None else float(now)
+    since = now - max(1, int(max_age_days)) * 86400
+    todos: list[dict] = []
+    seen_anchor: set[str] = set()
+    try:
+        con = db.connect(path)
+        try:
+            asked = {str(row[0] or "") for row in con.execute(
+                "SELECT text FROM proactive WHERE created_at>=? AND kind IN "
+                "('progress_check','followup')", (now - PROGRESS_ASK_WINDOW_DAYS * 86400,)).fetchall()}
+            rows = con.execute(
+                "SELECT id,content,created_at FROM user_memories WHERE status='active' "
+                "AND lower(kind) IN ('plan','value') AND created_at>=? "
+                "ORDER BY created_at DESC LIMIT 20", (since,)).fetchall()
+            for row in rows:
+                text = str(row[1] or "").strip()
+                if not _PLAN_CUES.search(text):
+                    continue
+                anchor = _todo_anchor(text)
+                if not anchor or anchor in seen_anchor:
+                    continue
+                if any(anchor in item for item in asked):
+                    continue
+                seen_anchor.add(anchor)
+                todos.append({"text": text[:120], "source": "memory",
+                              "msg_id": str(row[0] or ""), "ts": float(row[2] or 0),
+                              "anchor": anchor})
+            msgs = con.execute(
+                "SELECT id,text,ts FROM messages WHERE role='user' AND ts>=? "
+                "ORDER BY ts DESC LIMIT 40", (since,)).fetchall()
+            for row in msgs:
+                text = str(row[1] or "").strip()
+                if not _PLAN_CUES.search(text):
+                    continue
+                anchor = _todo_anchor(text)
+                if not anchor or anchor in seen_anchor:
+                    continue
+                if any(anchor in item for item in asked):
+                    continue
+                seen_anchor.add(anchor)
+                todos.append({"text": text[:120], "source": "message",
+                              "msg_id": str(row[0] or ""), "ts": float(row[2] or 0),
+                              "anchor": anchor})
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001
+        return []
+    todos.sort(key=lambda item: item["ts"], reverse=True)
+    return todos[:max(0, int(limit))]
+
 KIND_INSTRUCTION = {
     "care": "意图=关心近况：问一句具体的近况（工作/身体/心情里挑一个），"
             "不要泛泛说「最近怎么样」，不要查岗式连问。",
@@ -243,6 +324,8 @@ KIND_INSTRUCTION = {
                 "围绕它问一句或接一句，不要换成泛泛的近况。",
     "light": "意图=轻松一下：接个梗/调侃一句/讲件小趣事，短句，不查岗、不讲道理。",
     "silence_ack": "意图=久未联系后的轻打招呼：只说一句轻的，不追问、不解释、不查岗。",
+    "progress_check": "意图=问用户自己说过要做的事的进度：必须引用用户原话里的具体锚点"
+                      "（例如面试/搬家），问一句进度或结果；禁止泛泛「最近怎么样」，禁止编造。",
 }
 
 #: 每类意图的兜底句（LLM 不可用/跳过/跑题时使用；彼此不同，不允许多类共用）
@@ -253,6 +336,7 @@ _KIND_FALLBACK = {
     "followup": "上次你说「{anchor}」，我一直惦记着",
     "light": "看到一个段子，笑死",
     "silence_ack": "翻到以前存的一篇文章，有点感慨",
+    "progress_check": "想起你说「{anchor}」，现在进展怎么样了？",
 }
 
 #: 后处理兜底用的**数字生活/自我感受**安全句（P0-14：无物理细节、
@@ -263,6 +347,7 @@ _SAFE_FALLBACK = {
     "followup": "想起以前的一个笔记，有点感慨",
     "light": "看到一个段子，笑死",
     "silence_ack": "翻到一篇文章，有点感慨",
+    "progress_check": "想起你说「{anchor}」，现在进展怎么样了？",
 }
 
 #: P6-c：兜底池（≥8 句，避免每次落同一句）；按最近 5 条/7 天去重选择
@@ -318,6 +403,12 @@ def _proactive_recent_texts(path: Path | str | None = None,
     finally:
         if con is not None:
             con.close()
+
+
+def _final_safe(kind: str, anchor: str = "") -> str:
+    if kind == "progress_check" and anchor:
+        return _safe_fallback("progress_check", anchor=anchor)
+    return _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
 
 
 def _pick_safe_fallback() -> str:
@@ -689,6 +780,22 @@ def build_candidates(path: Path | str = DB_PATH, now: float | None = None) -> li
             "kind": "followup", "text": _safe_fallback("followup", anchor=anchor),
             "reason": f"上次聊到「{anchor}」", "base": 0.52, "anchor": anchor,
         })
+    # progress_check：只在捞到用户待办时出现，且低概率（≤25%）
+    try:
+        todos = find_user_todos(path, now, limit=3)
+    except Exception:  # noqa: BLE001
+        todos = []
+    if todos:
+        import random as _random
+        roll = _random.Random(f"{path}|{int(now // 1800)}").random()
+        if roll < PROGRESS_CHECK_PROB:
+            todo = todos[0]
+            candidates.append({
+                "kind": "progress_check",
+                "text": _safe_fallback("progress_check", anchor=todo["anchor"]),
+                "reason": f"用户说过「{todo['anchor']}」，可问进度",
+                "base": 0.42, "anchor": todo["anchor"], "todo": todo,
+            })
     # light：仅白天且关系 ≥ 熟悉
     if LIGHT_HOURS[0] <= hour < LIGHT_HOURS[1] and _STAGE_RANK.get(stage, 0) >= 2:
         candidates.append({
@@ -2230,6 +2337,11 @@ def _kind_prompt(kind: str, candidate: dict, mood: float, share_drive: float,
     if kind == "followup" and anchor:
         prompt += f"必须提到这个具体内容：「{anchor}」，不要换成泛泛的近况。"
         prompt += f"（例外：可以引用这条真实锚点「{anchor}」，其他共同经历一律不许编造。）"
+    elif kind == "progress_check" and anchor:
+        prompt += (f"用户自己说过要做「{anchor}」。必须引用这个真实锚点，"
+                   f"这次必须是一句直接问进度的问句，结尾用问号"
+                   f"（例如「{anchor}准备得怎么样了？」「{anchor}定下来了吗？」）；"
+                   f"不要只表达紧张/感慨，不要写「最近怎么样」，不要编造其他共同经历。")
     elif kind == "share" and topic:
         prompt += f"可以从对方之前说过的「{topic}」自然引到你自己的想法。"
     if force_statement:
@@ -2450,6 +2562,19 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
         text = parsed_body
     action = action or infer_action(text, previous_text)
     text = _normalize_content(text, kind, best, force_statement=force_statement)
+    # P0-15：progress_check 必须引用用户真实待办 anchor；无 anchor 重生成一次，仍不行走锚点兜底
+    progress_anchor = str(best.get("anchor") or "") if kind == "progress_check" else ""
+    if progress_anchor and progress_anchor not in text:
+        progress_prompt = _kind_prompt(kind, best, mood, share_drive, dialog,
+                                       force_statement=False)
+        progress_text, progress_answered = _ask_llm(client, progress_prompt)
+        if progress_answered and progress_text and not progress_text.upper().startswith("SKIP"):
+            candidate_text = _normalize_content(progress_text, kind, best,
+                                                force_statement=False)
+            if progress_anchor in candidate_text:
+                text = candidate_text
+        if progress_anchor not in text:
+            text = _safe_fallback("progress_check", anchor=progress_anchor)
     # P0-9 反编造：命中共同经历断言但 anchors 里没有依据 → 重生成 1 次（只讲自己），
     # 仍不过 → 该 kind 的安全兜底句（只讲自己的事）。
     if not grounding_ok(text, anchors):
@@ -2460,7 +2585,10 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
             text = _normalize_content(own_text, kind, best,
                                       force_statement=force_statement)
         if not grounding_ok(text, anchors):
-            text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
+            if kind == "progress_check" and progress_anchor:
+                text = _safe_fallback("progress_check", anchor=progress_anchor)
+            else:
+                text = _final_safe(kind, progress_anchor if kind == "progress_check" else "")
     # P0-10 run-on：无标点粘连句（连续 ≥12 汉字后接你/您/我）→ 重生成 1 次
     # （prompt：两层意思用句号分开）→ 仍粘连 → 确定性插入「。」（不丢内容、不换兜底句）。
     if find_runon(text) is not None:
@@ -2496,7 +2624,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     text = _insert_runon_periods(text)
     # P0-9 最后一道：主题兜底句也不能编造共同经历
     if not grounding_ok(text, anchors):
-        text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
+        text = _final_safe(kind, progress_anchor if kind == "progress_check" else "")
     # P0-17 叙事/情绪连续性：断裂先重生成 1 次（明确承接上条），再做确定性收口
     if _continuity_problem(text, action, continuity_history, previous_polarity, mood):
         hint = (f"上一条你自己说的是：{previous_text[:80]}" if previous_text else "")
@@ -2633,7 +2761,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     text = strip_trailing_period(text)
     text = _insert_runon_periods(text)
     if not grounding_ok(text, anchors):
-        text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
+        text = _final_safe(kind, progress_anchor if kind == "progress_check" else "")
     # P0-23 最终兜底：只有被判定必须补事由时才补；单条纯情绪不拦
     if not has_concrete_subject(text) and (
             force_concrete or consecutive_bare_emotion(continuity_history) >= 2
@@ -2659,7 +2787,7 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     text = polish_outbound(text)
     text, voice_info = apply_voice_polish(text, kind, anchors, max_chars=voice_max)
     if not grounding_ok(text, anchors):
-        text = _SAFE_FALLBACK.get(kind) or _SAFE_FALLBACK["care"]
+        text = _final_safe(kind, progress_anchor if kind == "progress_check" else "")
     if not advice_allowed:
         text = strip_advice(text, kind)
     text = limit_voice_length(text, 200 if kind == "followup" else voice_max)
@@ -2727,7 +2855,8 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
                 text = _media.sanitize_text_media(text, media_plan,
                                                   anchors=coherence_context)
                 if not text:
-                    text = _safe_fallback(kind)
+                    text = _safe_fallback(kind, anchor=progress_anchor
+                                          if kind == "progress_check" else "")
                 media_plan = _media.sync_plan_text(media_plan, text)
         text_media_check["final_issues"] = _media.text_media_issues(
             text, media_plan, anchors=coherence_context)
@@ -2781,6 +2910,9 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
             "kind": best["kind"], "action": action, "score": best["score"],
             "inner": inner_info, "voice_polished": voice_info,
             "media": media_plan, "text_media_check": text_media_check,
+            "progress_check": ({"anchor": best.get("anchor"),
+                                "msg_id": str((best.get("todo") or {}).get("msg_id") or "")}
+                               if kind == "progress_check" else None),
             "reason": best["reason"], "mood": mood, "sharing": share_drive,
             "initiative": {k: init_info.get(k) for k in
                             ("available", "score", "reason", "max_bubbles", "bubble_count",

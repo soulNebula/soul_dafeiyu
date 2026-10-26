@@ -25,6 +25,8 @@ from typing import Any
 
 from agi.selflearn import db as _selflearn_db
 
+from . import sendclass
+
 #: 主动消息收到"负反馈"后冷却多久（秒）；连续两次负反馈再拉长
 NEGATIVE_COOLDOWN_S = 24 * 3600
 NEGATIVE_REPEAT_COOLDOWN_S = 7 * 24 * 3600
@@ -159,27 +161,16 @@ BREAKER_COOLDOWN_S = 1800.0
 BREAKER_STATE_ATTR = "_proactive_breaker"
 _ADDR_RE = re.compile(r"0x[0-9a-fA-F]+")
 _WS_RE = re.compile(r"\s+")
-#: 不算"发送失败"的状态（被闸门拦截不是故障；draft 要另有 send_failed 才算，见下）
-_NON_FAILURE_STATUS = ("draft", "blocked")
-#: 真正"送达对方"的状态（P0-7：必须 ok=True 且 status 属于此集合）。
-#: 注意 ``clipboard`` 不在这里——剪贴板兜底只是把内容复制到剪贴板等人工粘贴，
-#: **内容已保留但没送达**，既不能计 ``out.sent``，也不能重置熔断。
-_DELIVERED_STATUS = frozenset({"sent", "ok"})
-#: 内容已保留、未送达的人工协助类兜底状态（单列统计，不进 sent/失败）
-_UNDELIVERED_COVERED_STATUS = frozenset({"clipboard"})
-#
-# 失败率统计口径（P0-6/P0-7，2026-10-25 与 P0-4 对齐）：
-#   - status == "failed"  → 失败；
-#   - status == "draft"   → **只有 send_failed=True 才算失败**（P0-4 把真实
-#     发送失败落成草稿并打这个标记；内容不丢、不重复发）；
-#   - status == "draft" 且无 send_failed → confirm 模式的人工草稿，非故障；
-#   - status == "blocked" → 内容/静音/限流闸门拦截，非故障；
-#   - status == "clipboard"（ok=True）→ 内容已进剪贴板等人工粘贴：**未送达**，
-#     不计 sent、不重置熔断、单列 ``out.clipboard``（P0-7）；
-#   - 其余未知 status / 非 dict → 保守视为失败。
-# 所以「失败率 = failed + draft(send_failed) + clipboard」，其中 sent 只统计
-# ``is_delivered()``；真正失败证据是 send_failed 字段（draft 只是落盘形态）；
-# 熔断一律按 error_key（P0-4 已写入，缺省回退 normalize_error 前 60 字）计数。
+# P7-b/backlog：发送结果统一口径在 :mod:`agi.wechat_gateway.sendclass`（唯一真源）。
+# 计数口径（与 /status 一致）：
+#   delivered  → out.sent +1，重置熔断；
+#   failed     → 参与熔断计数，draft 落盘另计 out.drafts；
+#   draft      → out.drafts（confirm 人工草稿，非故障）；
+#   clipboard  → out.clipboard（内容保留、未送达，不计 sent、不重置熔断）；
+#   unverified → out.unverified（ok=True 但无送达证据，如窗口兜底 verified=False：
+#                不计 sent、不重置熔断）；
+#   planned    → out.planned（dry-run 未发生，单列）；
+#   blocked    → 非故障、非送达，不计数（send_blocked 日志已记）。
 
 
 def _cfg_float(gateway, key: str, default: float) -> float:
@@ -261,45 +252,23 @@ def error_key(status: Any) -> str:
 
 
 def is_send_failure(status: Any) -> bool:
-    """发送是否算失败（参与熔断计数）。
-
-    P0-6 口径（与 P0-4 的 draft 兜底对齐）：``status == "failed"`` → 失败；
-    ``status == "draft"`` 只有 ``send_failed`` 为真才算失败（真失败落草稿）；
-    无 ``send_failed`` 的旧 draft（confirm 人工草稿）与 ``blocked`` 属非故障。
-    """
-    if not isinstance(status, dict):
-        return True
-    if status.get("ok") is True:
-        return False
-    state = str(status.get("status") or "")
-    if state == "failed":
-        return True
-    if state == "draft":
-        # P0-4：真失败被落成草稿并打 send_failed=True；旧 confirm 草稿没有该键
-        return bool(status.get("send_failed"))
-    return state not in _NON_FAILURE_STATUS
+    """发送是否算失败（参与熔断计数）——委托 sendclass 统一口径。"""
+    return sendclass.is_failure(status)
 
 
 def send_status(status: Any) -> str:
     """取发送结果的 status 字符串（小写归一）；非 dict 返回空串。"""
-    if not isinstance(status, dict):
-        return ""
-    return str(status.get("status") or "").strip().lower()
+    return sendclass.send_status(status)
 
 
 def is_delivered(status: Any) -> bool:
-    """是否**真正送达对方**（P0-7：ok=True 且 status ∈ {sent, ok}）。
-
-    draft / clipboard / planned / failed 都不算送达。
-    """
-    return (isinstance(status, dict) and status.get("ok") is True
-            and send_status(status) in _DELIVERED_STATUS)
+    """是否**真正送达对方**（sendclass.delivered：ok=True + verified 不为 False）。"""
+    return sendclass.is_delivered(status)
 
 
 def is_clipboard(status: Any) -> bool:
     """是否剪贴板兜底（内容已复制、等人手动粘贴，**未送达**）。"""
-    return (isinstance(status, dict) and status.get("ok") is True
-            and send_status(status) in _UNDELIVERED_COVERED_STATUS)
+    return sendclass.classify_send_result(status) == sendclass.CLIPBOARD
 
 
 def _breaker_state(gateway) -> dict:
@@ -472,7 +441,8 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     client = client if client is not None else default_client()
     out: dict[str, Any] = {"ok": True, "ran": True, "contacts": len(contact_list),
                            "sent": 0, "drafts": 0, "deduped": 0,
-                           "clipboard": 0, "media_sent": 0,
+                           "clipboard": 0, "unverified": 0, "planned": 0,
+                           "media_sent": 0,
                            "breaker_open": False, "skipped": []}
     idle_gap = float(gateway.cfg.get("proactive_idle_s") or 0)
     media_sent = 0
@@ -589,6 +559,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 "discard_reason": pro.get("discard_reason"),
                 "regen_reason": pro.get("regen_reason"),
                 "topic_seed": pro.get("topic_seed"),
+                "progress_check": pro.get("progress_check"),
                 "status": status.get("status"), "draft_id": status.get("draft_id"),
                 # P0-6：失败率统计口径 status∈{failed,draft}，真正失败证据看 send_failed
                 "send_failed": bool(status.get("send_failed")),
@@ -597,13 +568,24 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 # P0-7：clipboard（未送达）也带 warning，统计时单列
                 "warning": str(status.get("warning") or "")[:120],
                 "error": str(status.get("error") or "")[:120]})
+            if kind == "progress_check":
+                pc = pro.get("progress_check") or {}
+                try:
+                    gateway._record("proactive_progress_check", {
+                        "friend": contact, "anchor": str(pc.get("anchor") or "")[:30],
+                        "msg_id": str(pc.get("msg_id") or "")[:80],
+                        "status": status.get("status")})
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 record_event(db_path, contact, text, status.get("status") or "unknown",
                              now, kind=kind)
             except Exception:  # noqa: BLE001
                 pass
-            # P0-7：clipboard 兜底 = 内容进剪贴板、没送达：不计 sent、不重置熔断，单列统计。
-            if is_clipboard(status):
+            # P7-b：统一口径（sendclass 是唯一真源），按 7 类分发计数
+            classification = sendclass.classify_send_result(status)
+            if classification == sendclass.CLIPBOARD:
+                # 剪贴板兜底：内容已保留但未送达 → 不计 sent、不重置熔断
                 out["clipboard"] += 1
                 try:
                     gateway._record("proactive_clipboard", {
@@ -614,22 +596,35 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                         "warning": str(status.get("warning") or "")[:200]})
                 except Exception:  # noqa: BLE001
                     pass
-            # P0-6 顺序很重要：draft+send_failed 先按「失败」处理（参与熔断），
-            # 再顺便记一次 drafts（内容已落草稿）；否则永远进不了熔断分支。
-            elif is_send_failure(status):
+            elif classification == sendclass.UNVERIFIED:
+                # 窗口兜底 verified=False / 未知成功状态：发了但无法确认 → 不计 sent、不重置熔断
+                out["unverified"] += 1
+                try:
+                    gateway._record("proactive_unverified", {
+                        "friend": contact, "text": text[:120], "intent_kind": kind,
+                        "status": status.get("status"),
+                        "method": str(status.get("method") or "")[:40],
+                        "verified": bool(status.get("verified", False)),
+                        "warning": str(status.get("warning") or "")[:200]})
+                except Exception:  # noqa: BLE001
+                    pass
+            elif classification == sendclass.PLANNED:
+                out["planned"] += 1      # dry-run：未发生，单列
+            elif classification == sendclass.FAILED:
                 if status.get("status") == "draft":
-                    out["drafts"] += 1  # 真失败落草稿：内容保住但仍算失败
+                    out["drafts"] += 1   # 真失败落草稿：内容保住但仍算失败
                 if _note_send_failure(gateway, status, now=now,
                                       threshold=breaker_threshold,
                                       cooldown_s=breaker_cooldown):
                     out["breaker_open"] = True
-                    break  # 熔断后本轮不再发剩余气泡/联系人
-            elif is_delivered(status):
+                    break                # 熔断后本轮不再发剩余气泡/联系人
+            elif classification == sendclass.DELIVERED:
                 out["sent"] += 1
                 sent_any = True
                 _note_send_success(gateway)  # 只有真正送达才清零
-            elif status.get("status") == "draft":
-                out["drafts"] += 1  # confirm 人工草稿（非故障，不影响熔断）
+            elif classification == sendclass.DRAFT:
+                out["drafts"] += 1       # confirm 人工草稿（非故障，不影响熔断）
+            # BLOCKED：闸门拦截，非故障非送达，不计数（send_blocked 日志已记）
         # P5-b：文本已发送后，媒体作为额外气泡发；失败不影响文本结果
         if sent_any and media_items and gateway.cfg.get("media_enabled"):
             sender = getattr(gateway, "send_bubbles", None)
@@ -653,6 +648,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     outcome = {"ts": now, "contacts": out["contacts"],
                "sent": out["sent"], "drafts": out["drafts"],
                "deduped": out["deduped"], "clipboard": out["clipboard"],
+               "unverified": out["unverified"], "planned": out["planned"],
                "media_sent": media_sent,
                "breaker": breaker_snapshot(gateway, now),
                "skipped": len(out["skipped"])}
@@ -664,6 +660,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     probability_skips = [s for s in out["skipped"] if s.get("reason") == "probability"]
     if (probability_skips and out["skipped"] and not out["sent"] and not out["drafts"]
             and not out["deduped"] and not out["clipboard"]
+            and not out["unverified"] and not out["planned"]
             and all(s.get("reason") == "probability" for s in out["skipped"])):
         last_skip = probability_skips[-1]
         out.update({"ran": False, "reason": "probability_skip",

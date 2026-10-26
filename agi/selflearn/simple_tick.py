@@ -68,7 +68,7 @@ def _recent_texts(path, limit: int = 5) -> list[str]:
 
 
 def _violations(text: str, media: dict | None, anchors: list[str],
-                recent: list[str]) -> list[str]:
+                recent: list[str], *, kind: str = "", anchor: str = "") -> list[str]:
     """simple 硬检查；只返回原因，不做任何改写。"""
     from . import media_choice, proactive
     value = str(text or "").strip()
@@ -96,11 +96,17 @@ def _violations(text: str, media: dict | None, anchors: list[str],
         reasons.append("bracket_action")
     if SILENCE_RE.search(value):
         reasons.append("silence_comment")
+    if kind == "progress_check" and anchor and anchor not in value:
+        reasons.append("progress_anchor_missing")
+    if kind == "progress_check" and not re.search(
+            r"[?？]|怎么样|如何|顺利|进展|结果|定下来|弄完|完成|成功", value):
+        reasons.append("progress_question_missing")
     return reasons
 
 
 def _simple_prompt(kind: str, dialog: str, media_ctx: str,
-                   fix_reason: str = "", topic_ctx: str = "") -> str:
+                   fix_reason: str = "", topic_ctx: str = "",
+                   anchor: str = "") -> str:
     from . import proactive
     prompt = (proactive.PERSONA_CONSTRAINTS + "\n" + proactive.GROUNDING_CONSTRAINTS +
               "\n像真人微信聊天：短句、口语、不加句号；只说一句，不写作文/独白。"
@@ -119,7 +125,7 @@ def _simple_prompt(kind: str, dialog: str, media_ctx: str,
     return prompt
 
 
-def _ask_simple(client, prompt: str) -> tuple[str, bool]:
+def _ask_simple(client, prompt: str, temperature: float = 0.8) -> tuple[str, bool]:
     """simple 独立生成：给足 tokens，避免 legacy 150 token 把自然句截断。"""
     if client is None or not getattr(client, "available", lambda: False)():
         return "", False
@@ -127,7 +133,8 @@ def _ask_simple(client, prompt: str) -> tuple[str, bool]:
         result = client.chat(
             [{"role": "system", "content": "你说话像普通人，短句。"},
              {"role": "user", "content": prompt}],
-            purpose="selflearn_proactive_simple", max_tokens=300, temperature=0.8)
+            purpose="selflearn_proactive_simple", max_tokens=300,
+            temperature=temperature)
     except Exception:  # noqa: BLE001
         return "", False
     if not isinstance(result, dict) or not result.get("ok"):
@@ -260,8 +267,12 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
         except Exception:  # noqa: BLE001
             topic = {"picked": "", "candidates": [], "reason": "error"}
             topic_ctx = ""
-    prompt = _simple_prompt(kind, dialog, media_ctx, topic_ctx=topic_ctx)
-    raw, answered = _ask_simple(client, prompt)
+    progress_anchor = str(best.get("anchor") or "") if kind == "progress_check" else ""
+    prompt = _simple_prompt(kind, dialog, media_ctx,
+                            topic_ctx="" if kind == "progress_check" else topic_ctx,
+                            anchor=progress_anchor)
+    raw, answered = _ask_simple(client, prompt,
+                                 temperature=0.35 if kind == "progress_check" else 0.8)
     if not answered or not raw or raw.upper().startswith("SKIP"):
         return {"ok": True, "available": False, "reason": "llm_skip",
                 "style": "simple", "topic_seed": topic}
@@ -278,12 +289,16 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
                                   allow_sticker=True, now=now)
     except Exception:  # noqa: BLE001
         media = None
-    reasons = _violations(text, media, anchors, recent_texts)
+    reasons = _violations(text, media, anchors, recent_texts,
+                          kind=kind, anchor=str(best.get("anchor") or ""))
     regen_reason = ",".join(reasons)
     if reasons:
         fix_prompt = _simple_prompt(kind, dialog, media_ctx,
-                                    fix_reason=regen_reason, topic_ctx=topic_ctx)
-        fix_raw, fix_answered = _ask_simple(client, fix_prompt)
+                                    fix_reason=regen_reason,
+                                    topic_ctx="" if kind == "progress_check" else topic_ctx,
+                                    anchor=str(best.get("anchor") or ""))
+        fix_raw, fix_answered = _ask_simple(
+            client, fix_prompt, temperature=0.35 if kind == "progress_check" else 0.8)
         if fix_answered and fix_raw and not fix_raw.upper().startswith("SKIP"):
             fix_text, fix_directives = _parse_generated(fix_raw)
             fix_text = _light_polish(fix_text)
@@ -295,10 +310,22 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
                     allow_sticker=True, now=now) if media_choice else None
             except Exception:  # noqa: BLE001
                 fix_media = None
-            fix_reasons = _violations(fix_text, fix_media, anchors, recent_texts)
+            fix_reasons = _violations(fix_text, fix_media, anchors, recent_texts,
+                                      kind=kind,
+                                      anchor=str(best.get("anchor") or ""))
             if not fix_reasons:
                 text, media = fix_text, fix_media
                 reasons = []
+    # P0-15：进度追问是确定性任务；模型两次都没写出问句时，用真实 anchor 的
+    # 安全问句兜底（不编造、无 anchor 不乱问），而不是把这条好待办丢掉。
+    if reasons and kind == "progress_check" and progress_anchor:
+        fallback_text = f"想起你说「{progress_anchor}」，现在进展怎么样了？"
+        fallback_reasons = _violations(fallback_text, None, anchors, recent_texts,
+                                       kind=kind, anchor=progress_anchor)
+        if not fallback_reasons:
+            text = fallback_text
+            reasons = []
+            media = None
     if reasons:
         return {"ok": True, "available": False, "reason": "discarded",
                 "discard_reason": ",".join(reasons), "regen_reason": regen_reason,
@@ -313,5 +340,8 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
     return {"ok": True, "available": True, "style": "simple",
             "regen_reason": regen_reason, "discard_reason": "",
             "topic_seed": topic,
+            "progress_check": ({"anchor": best.get("anchor"),
+                                "msg_id": str((best.get("todo") or {}).get("msg_id") or "")}
+                               if kind == "progress_check" else None),
             "kind": kind, "action": "simple", "score": best.get("score"),
             "reason": best.get("reason"), **recorded}

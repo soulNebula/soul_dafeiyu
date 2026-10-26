@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import config as cfg
-from . import control, drafts, media as media_mod, policy
+from . import control, drafts, media as media_mod, policy, sendclass
 from .receiver import WeChatReceiver
 from .sender import WxAutoSender
 from .. import textguard
@@ -100,8 +100,11 @@ class Gateway:
         self.recent = deque(maxlen=50)
         self.ready = False
         self.start_error = ""
-        self.sent = 0
-        self.failed = 0
+        self.sent = 0          # 只统计 delivered（sendclass）
+        self.failed = 0        # 只统计 failed
+        self.unverified = 0    # ok=True 但无送达证据（如窗口兜底 verified=False）
+        self.clipboard = 0     # 内容进剪贴板、未送达
+        self.planned = 0       # dry-run 计划发送
         self.last_turns = {}
         self.last_proactive = {}
         self.proactive_thread = None
@@ -643,12 +646,21 @@ class Gateway:
             if not bubble:
                 continue
             out = self._send(contact, bubble, reactive=True)
+            classification = sendclass.classify_send_result(out)
             entry = {"friend": contact, "text": bubble, "status": out.get("status"),
+                     "classification": classification,
                      "dry_run": bool(self.cfg.get("dry_run", True)), "result": out}
             self._record("outbound", entry)
-            if out.get("ok"):
+            # P7-b：/status 的 sent 只统计 delivered；其余非送达单列，不再虚高
+            if classification == sendclass.DELIVERED:
                 self.sent += 1
-            else:
+            elif classification == sendclass.UNVERIFIED:
+                self.unverified += 1
+            elif classification == sendclass.CLIPBOARD:
+                self.clipboard += 1
+            elif classification == sendclass.PLANNED:
+                self.planned += 1
+            elif classification == sendclass.FAILED:
                 self.failed += 1
             if not self.cfg.get("dry_run", True):
                 time.sleep(float(self.cfg.get("reply_delay") or 0))
@@ -745,15 +757,20 @@ class Gateway:
                 return self._on_send_failure(
                     contact, text, (proc.stderr or "send_cli 无输出")[-500:])
             out = json.loads(line)
-            if out.get("ok"):
+            classification = sendclass.classify_send_result(out)
+            if classification == sendclass.DELIVERED:
                 self.send_times.append(time.time())
                 self.sent_today += 1
-            else:
+            elif classification == sendclass.FAILED:
                 return self._on_send_failure(
                     contact, text,
                     str(out.get("error") or out.get("status") or "failed"),
                     error_key=str(out.get("error_key") or ""),
                     stage=str(out.get("stage") or ""))
+            else:
+                # unverified / planned / clipboard / blocked：不计 sent_today，
+                # 原样交给调用方按统一口径计数（窗口兜底在 _on_send_failure 里）
+                out["classification"] = classification
             return out
         except Exception as exc:  # noqa: BLE001
             return self._on_send_failure(contact, text, f"{type(exc).__name__}: {exc}")
@@ -1018,21 +1035,39 @@ class Gateway:
         等人工决定（不再只返回一个丢失上下文的 failed）。
         """
         fallback = self._fallback_send(contact, text, error)
-        if fallback and fallback.get("ok") and fallback.get("status") == "sent":
-            now = time.time()
-            self.send_times.append(now)
-            self.sent_today += 1
-            fallback["trigger_error"] = str(error)[:200]
-            fallback["error_key"] = error_key or self._normalize_error_key(error)
-            return fallback
-        if fallback and fallback.get("ok") and fallback.get("status") == "clipboard":
-            # P0-7：clipboard 原样透传给调用方（ok=True 但**未送达**，等人手动粘贴）。
-            # 这里只归档草稿，绝不能改写成 sent/draft —— 主动链据此不计 sent、不重置熔断。
-            self._archive_failed_draft(
-                contact, text,
-                "fallback_clipboard: " + str(fallback.get("warning") or ""),
-                reason="fallback_clipboard")
-            return fallback
+        if fallback:
+            classification = sendclass.classify_send_result(fallback)
+            if classification == sendclass.DELIVERED:
+                # 真正送达（verify 通过）：计 sent / 计入今日发送
+                now = time.time()
+                self.send_times.append(now)
+                self.sent_today += 1
+                fallback["trigger_error"] = str(error)[:200]
+                fallback["error_key"] = error_key or self._normalize_error_key(error)
+                fallback["classification"] = classification
+                return fallback
+            if classification == sendclass.UNVERIFIED:
+                # P7-b：窗口兜底已模拟粘贴+回车，但 verified=False（无法校验会话）
+                # → **不计 sent、不重置熔断**，只把证据标签带上给调用方单列 unverified。
+                fallback["trigger_error"] = str(error)[:200]
+                fallback["error_key"] = error_key or self._normalize_error_key(error)
+                fallback["classification"] = classification
+                self._record("fallback_unverified", {
+                    "friend": contact,
+                    "status": fallback.get("status"),
+                    "method": str(fallback.get("method") or ""),
+                    "warning": str(fallback.get("warning") or "")[:200],
+                    "trigger": str(error)[:120]})
+                return fallback
+            if classification == sendclass.CLIPBOARD:
+                # P0-7：clipboard 原样透传给调用方（ok=True 但**未送达**，等人手动粘贴）。
+                # 这里只归档草稿，绝不能改写成 sent/draft —— 主动链据此不计 sent、不重置熔断。
+                fallback["classification"] = classification
+                self._archive_failed_draft(
+                    contact, text,
+                    "fallback_clipboard: " + str(fallback.get("warning") or ""),
+                    reason="fallback_clipboard")
+                return fallback
         key = error_key or self._normalize_error_key(error)
         item = self._archive_failed_draft(contact, text, error,
                                           error_key=key, stage=stage)
@@ -1124,8 +1159,13 @@ class Gateway:
             "allowed_contacts": self.cfg.get("allowed_contacts") or [],
             "monitored_contacts": self.cfg.get("monitored_contacts") or [],
             "queue": self.queue.qsize(),
+            # P7-b：sent 只统计 delivered（真正送达）；
+            # unverified/clipboard/planned 单列，方便和 proactive 的 out.* 对账。
             "sent": self.sent,
             "failed": self.failed,
+            "unverified": self.unverified,
+            "clipboard": self.clipboard,
+            "planned": self.planned,
             "send_mode": control.send_mode(self.cfg),
             "drafts_pending": len(drafts.list_all(path=self.draft_path, limit=200)),
             "admin_token_set": bool(self.cfg.get("admin_token")),

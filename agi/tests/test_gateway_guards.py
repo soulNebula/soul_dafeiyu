@@ -75,12 +75,15 @@ def test_fallback_clipboard_archives_draft(tmp_path, monkeypatch):
     assert rows[0]["reason"].startswith("fallback_clipboard")
 
 
-def test_fallback_sent_counts_as_sent(tmp_path, monkeypatch):
+def test_fallback_unverified_not_counted_as_sent(tmp_path, monkeypatch):
+    """P7-b：窗口兜底 verified=False → unverified：不计 sent/sent_today、不重置熔断。"""
     g = _gw(tmp_path, dry_run=False, fallback_enabled=True, fallback_mode="auto")
     monkeypatch.setattr(win_send, "send_via_window",
                         lambda text, cfg: {"ok": True, "status": "sent",
                                            "verified": False, "warning": "人工抽查"})
     out = g._on_send_failure("好友A", "窗口发出去的一句", "wxauto boom")
     assert out["ok"] is True and out["status"] == "sent"
-    assert g.sent_today == 1 and len(g.send_times) == 1
+    assert out["classification"] == "unverified"
+    assert g.sent_today == 0 and len(g.send_times) == 0
     assert drafts.list_all(path=g.draft_path) == []
+    assert any(e.get("kind") == "fallback_unverified" for e in g.recent)

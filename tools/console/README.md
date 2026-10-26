@@ -46,6 +46,8 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | 提示词 | `agi/selflearn/prompt_store`（11 个内置键的 defaults/overrides/effective；降级时直读 `agi/data/prompts.json`）。左列选键 → 右侧大文本框编辑 → 保存/恢复默认/全部恢复默认 |
 | 模型配置 | 网关 `config.json` 的白名单键（llm_model/llm_temperature/llm_max_tokens/soul_server_url/soul_timeout_s/inner_schema）+ DeepSeek key 仅显示已配置/未配置 |
 | 模型 | `agi/selflearn/model_registry`（list/health/start/stop；`soul-05b` 可启停，`qwen15` reserved 拒绝；含 inner mode 开关，写回网关 config 热加载） |
+| 数据管理 | `/api/data/*`：体量/备份/导出/导入（写操作 token+审计）；按记忆库/人格库分栏，含 legacy 旧库 |
+| 记忆编辑 | `/api/memory/*`：列表/搜索/claims/行内改重要性/标记/软删除/合并（token+审计） |
 | 日志 | `gateway.log`(JSONL)/`inner.log`/`prompt_override.log`/regen_failed；搜索+时间倒序+错误标红 |
 | 设置 | `/api/config`（主动开关/概率/间隔/静默时段）+ STOP/恢复 |
 
@@ -55,6 +57,8 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 `/api/health` `/api/status` `/api/feed?limit=&kind=` `/api/inner?limit=` `/api/messages?limit=`
 `/api/memory` `/api/tone?limit=` `/api/models` `/api/config` `/api/prompts`
 `/api/model-config` `/api/chat-test/history?limit=` `/api/logs?source=&limit=&q=&kind=`
+`/api/data/info` `/api/data/export` `/api/data/export-memories` `/api/data/backup/download`
+`/api/memory/list` `/api/memory/claims`
 `/api/media/capabilities` `/api/media/library?limit=` `/api/media/assets?limit=&kind=` `/api/media/stats` `/api/media/wishes` `/api/media/acquisition` `/api/media/file?path=`
 
 写（POST，`X-Admin-Token`，全部写 `agi/data/console_audit.log`）：
@@ -69,6 +73,10 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | `/api/prompts/reset` | `{"keys":[...]}` 或 `{"all":true}` | 恢复默认（`prompt_store.delete/delete_all`，降级时删 JSON 键/文件） |
 | `/api/chat-test` | `{"text":"..."}` 或 `{"reset":true}` | 隔离库对话测试（60s 超时；reset 删除 console_test.sqlite3）；不会发微信 |
 | `/api/model-config` | `{"updates":{...}}` | 保存模型/内状态白名单键（DeepSeek key 不回传明文） |
+| `/api/data/backup` | `{}` | 打包运行数据到 `E:gentackups\manual_<ts>.zip`（不改数据） |
+| `/api/data/import` | `{zip_path, confirm:"导入备份", mode, overwrite_confirm?}` | 只允许备份目录 zip；merge 不覆盖，overwrite 需双短语 |
+| `/api/data/backup/delete` | `{name, confirm:"删除备份"}` | 删除备份 zip |
+| `/api/memory/update` `/delete` `/mark` `/merge` | `{id,...}` | 记忆编辑；delete=软删除（status=invalid），需 `确认:"删除记忆"` |
 | `/api/media/send`（别名 `/api/media/test-send`） | `{"type":"text|emoji_text|image|gif|sticker|native_emoji","text?":"...","path?":"...","name?":"..."}` | 测试发送；**联系人强制覆盖为「文件传输助手」**；网关暂无媒体接口时返回 501（等 P5-a） |
 
 ## 界面结构（AstrBot 风格深色）
@@ -92,6 +100,21 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
   warning `#faad14`、error `#ff4d4f`、text `#e8eaed`、border `#333`、气泡 `#2d2e30`。
 - 侧边栏 240px + 顶部 header 56px + 圆角 10px 卡片；JSON 用等宽字体。
 - 所有页面右上角显示「刷新于 HH:MM:SS」；接口失败显示红色原因而不是空白。
+
+## 数据管理 / 记忆编辑（P7-c）
+
+- **数据管理**：`/api/data/info` 展示 selflearn 体积、联系人库、消息/记忆/claim 总数、日志行数、媒体文件数、
+  备份列表；按 **记忆库 `*.memory.sqlite3` / 人格库 `*.persona.sqlite3`** 分两栏（含各联系人路径、大小、
+  消息/记忆行数 vs persona 行数），并标出迁移前的 `*.legacy.sqlite3`（可删除/可回滚，不计入统计）；
+  未迁移的单库 `.sqlite3` 也兼容显示。
+  - 备份：`POST /api/data/backup` → `E:gentackups\manual_<ts>.zip`，整目录打包（自然包含两种库），不改数据
+  - 导出：`GET /api/data/export?contact=&format=jsonl|md&limit=` 聊天记录下载流；`/api/data/export-memories` 记忆 JSON
+  - 导入：`POST /api/data/import`，仅备份目录 zip，解压临时目录校验结构后复制联系人库；merge 同名跳过，
+    overwrite 需 `confirm:"导入备份"` + `overwrite_confirm:"覆盖现有库"`；旧版单库 zip 也接受
+  - 备份列表可下载/删除（删除需输入「删除备份」）；审计入口跳「日志→audit」
+- **记忆编辑**：搜索/状态筛选/分页表格；行内改 content（≤500）/importance（0–1）/status、标重要、软删除
+  （status=invalid，不物理删，需输入「删除记忆」）、选两条合并（保留较早、另一条 invalid、evidence 合并）；
+  claims 只读；顶部显示 memory.metrics 摘要。
 
 ## 对话测试 / 模型配置 / 日志（P7-b）
 

@@ -977,3 +977,322 @@ def test_logs_regen_source(write_env, monkeypatch):
     status, data = _call("GET", "/api/logs?source=regen")
     assert status == 200 and data["total"] == 1
     assert data["items"][0]["kind"] == "regen_failed"
+
+
+# ============================================================ P7-c 数据管理 / 记忆编辑
+def _make_memory_db(path, *, messages=3, memories=2, claims=1):
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE messages(id TEXT PRIMARY KEY, role TEXT, text TEXT, ts REAL, "
+                "proactive INTEGER DEFAULT 0)")
+    con.execute("CREATE TABLE user_memories(id TEXT PRIMARY KEY, scope TEXT, kind TEXT, "
+                "content TEXT, evidence TEXT, evidence_history TEXT, confidence REAL, "
+                "status TEXT, created_at REAL, importance REAL)")
+    con.execute("CREATE TABLE claims(id TEXT PRIMARY KEY, subject TEXT, predicate TEXT, "
+                "object TEXT, confidence REAL, status TEXT, created_at REAL)")
+    for index in range(messages):
+        con.execute("INSERT INTO messages VALUES(?,?,?,?,0)",
+                    (f"M{index}", "user" if index % 2 else "assistant",
+                     f"消息{index}", 1000.0 + index))
+    for index in range(memories):
+        con.execute("INSERT INTO user_memories VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (f"UM{index}", "user", "preference" if index % 2 else "fact",
+                     f"记忆内容{index}", f"证据{index}", "[]", 0.8, "active",
+                     2000.0 + index, 0.5 + index * 0.1))
+    for index in range(claims):
+        con.execute("INSERT INTO claims VALUES(?,?,?,?,?,?,?)",
+                    (f"C{index}", "用户", "喜欢", f"东西{index}", 0.7, "active", 3000.0))
+    con.commit()
+    con.close()
+    return path
+
+
+def _data_env(tmp_path, monkeypatch, write_env):
+    data_dir = tmp_path / "data"
+    selflearn = data_dir / "selflearn"
+    contacts = selflearn / "wechat_contacts"
+    gateway = data_dir / "wechat"
+    log_dir = tmp_path / "log"
+    backups = tmp_path / "backups"
+    for directory in (contacts, gateway, log_dir, backups):
+        directory.mkdir(parents=True, exist_ok=True)
+    _make_memory_db(contacts / "alice.sqlite3", messages=3, memories=2, claims=1)
+    _make_memory_db(contacts / "bob.sqlite3", messages=1, memories=0, claims=0)
+    (gateway / "gateway.log").write_text(
+        json.dumps({"ts": 1.0, "kind": "inbound", "text": "hi"}) + "\n", encoding="utf-8")
+    (gateway / "drafts.jsonl").write_text("{}\n", encoding="utf-8")
+    (data_dir / "prompts.json").write_text(json.dumps({"version": 1, "prompts": {}}),
+                                           encoding="utf-8")
+    (log_dir / "messages.jsonl").write_text("x\n", encoding="utf-8")
+    (log_dir / "聊天记录.txt").write_text("x\n", encoding="utf-8")
+    (backups / "manual_seed.zip").write_bytes(b"PK-seed")
+    monkeypatch.setattr(console, "DATA_DIR", data_dir)
+    monkeypatch.setattr(console, "SELFLEARN_DIR", selflearn)
+    monkeypatch.setattr(console, "CONTACTS_DIR", contacts)
+    monkeypatch.setattr(console, "DEFAULT_CONTACT_DB", contacts / "alice.sqlite3")
+    monkeypatch.setattr(console, "GATEWAY_LOG", gateway / "gateway.log")
+    monkeypatch.setattr(console, "DRAFTS_PATH", gateway / "drafts.jsonl")
+    monkeypatch.setattr(console, "PROMPTS_PATH", data_dir / "prompts.json")
+    monkeypatch.setattr(console, "LOG_DIR", log_dir)
+    monkeypatch.setattr(console, "LOG_MESSAGES", log_dir / "messages.jsonl")
+    monkeypatch.setattr(console, "LOG_CHAT", log_dir / "聊天记录.txt")
+    monkeypatch.setattr(console, "BACKUP_DIR", backups)
+    monkeypatch.setattr(console, "MEDIA_ASSET_DIRS", (tmp_path / "no_media",))
+    return {"data": data_dir, "contacts": contacts, "backups": backups,
+            "gateway_log": gateway / "gateway.log", "tmp": tmp_path}
+
+
+def test_data_info_counts_and_backups(tmp_path, write_env, monkeypatch):
+    env = _data_env(tmp_path, monkeypatch, write_env)
+    status, _ = _call("GET", "/api/data/info")
+    assert status == 401
+    status, data = _call("GET", "/api/data/info", token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["contacts"] == 2
+    assert data["messages"] == 4 and data["memories"] == 2 and data["claims"] == 1
+    assert data["gateway_log_lines"] == 1
+    assert any(row["name"] == "manual_seed.zip" for row in data["backups"])
+
+
+def test_data_backup_creates_zip_without_changing_data(tmp_path, write_env, monkeypatch):
+    env = _data_env(tmp_path, monkeypatch, write_env)
+    before = (env["contacts"] / "alice.sqlite3").read_bytes()
+    status, data = _call("POST", "/api/data/backup", {}, token="tok")
+    assert status == 200 and data["ok"] is True
+    backup = Path(data["backup_path"])
+    assert backup.exists() and backup.parent == env["backups"].resolve()
+    assert backup.name.startswith("manual_")
+    with zipfile.ZipFile(backup) as archive:
+        assert archive.testzip() is None
+        names = archive.namelist()
+    assert any(name.endswith("alice.sqlite3") for name in names)
+    assert (env["contacts"] / "alice.sqlite3").read_bytes() == before
+    assert console.data_info()["messages"] == 4
+
+
+def test_data_export_jsonl_md_and_memories(tmp_path, write_env, monkeypatch):
+    _data_env(tmp_path, monkeypatch, write_env)
+    status, body = _call("GET", "/api/data/export?format=jsonl&limit=10", token="tok")
+    assert status == 200
+    rows = [json.loads(line) for line in body.splitlines() if line.strip()]
+    assert len(rows) == 4
+    assert {"contact", "ts", "role", "text", "proactive"} <= set(rows[0])
+    assert any(row["contact"] == "alice" for row in rows)
+
+    status, body = _call("GET", "/api/data/export?contact=alice&format=jsonl", token="tok")
+    assert status == 200
+    rows = [json.loads(line) for line in body.splitlines() if line.strip()]
+    assert len(rows) == 3 and all(row["contact"] == "alice" for row in rows)
+
+    status, body = _call("GET", "/api/data/export?contact=alice&format=md", token="tok")
+    assert status == 200 and "# 聊天记录导出" in body and "**我**" in body or "对方" in body
+    status, _ = _call("GET", "/api/data/export?format=jsonl")
+    assert status == 401
+
+    status, body = _call("GET", "/api/data/export-memories?contact=alice", token="tok")
+    assert status == 200
+    memories = body if isinstance(body, list) else json.loads(body)
+    assert len(memories) == 2 and memories[0]["contact"] == "alice"
+    assert "content" in memories[0] and "importance" in memories[0]
+
+
+def _make_import_zip(path, *, entry="selflearn/wechat_contacts/new.sqlite3",
+                     payload=b"new-db"):
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(entry, payload)
+
+
+def test_data_import_merge_and_guards(tmp_path, write_env, monkeypatch):
+    env = _data_env(tmp_path, monkeypatch, write_env)
+    zip_path = env["backups"] / "manual_import.zip"
+    _make_import_zip(zip_path)
+    status, data = _call("POST", "/api/data/import",
+                         {"zip_path": "manual_import.zip", "confirm": "导入备份",
+                          "mode": "merge"}, token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["imported"] == ["new.sqlite3"]
+    assert (env["contacts"] / "new.sqlite3").exists()
+
+    status, data = _call("POST", "/api/data/import",
+                         {"zip_path": "manual_import.zip", "confirm": "导入备份",
+                          "mode": "merge"}, token="tok")
+    assert status == 200 and data["skipped"] == ["new.sqlite3"] and data["imported"] == []
+
+    outside = tmp_path / "outside.zip"
+    _make_import_zip(outside)
+    status, data = _call("POST", "/api/data/import",
+                         {"zip_path": str(outside), "confirm": "导入备份",
+                          "mode": "merge"}, token="tok")
+    assert status == 400 and data["error"] == "unsafe_or_missing_zip"
+    status, data = _call("POST", "/api/data/import",
+                         {"zip_path": "manual_import.zip", "mode": "merge"}, token="tok")
+    assert status == 400 and data["error"] == "confirm_phrase_mismatch"
+
+    unsafe = env["backups"] / "manual_unsafe.zip"
+    _make_import_zip(unsafe, entry="../evil.sqlite3")
+    status, data = _call("POST", "/api/data/import",
+                         {"zip_path": "manual_unsafe.zip", "confirm": "导入备份",
+                          "mode": "merge"}, token="tok")
+    assert status == 400 and "unsafe_zip_entry" in data["error"]
+
+    status, _ = _call("POST", "/api/data/import",
+                      {"zip_path": "manual_import.zip", "confirm": "导入备份",
+                       "mode": "bogus"}, token="tok")
+    assert status == 400
+
+
+def test_data_import_overwrite_requires_double_confirm(tmp_path, write_env, monkeypatch):
+    env = _data_env(tmp_path, monkeypatch, write_env)
+    zip_path = env["backups"] / "manual_overwrite.zip"
+    _make_import_zip(zip_path, entry="selflearn/wechat_contacts/alice.sqlite3",
+                     payload=b"overwritten-db")
+    status, data = _call("POST", "/api/data/import",
+                         {"zip_path": "manual_overwrite.zip", "confirm": "导入备份",
+                          "mode": "overwrite"}, token="tok")
+    assert status == 400 and data["error"] == "overwrite_confirm_required"
+    assert (env["contacts"] / "alice.sqlite3").read_bytes().startswith(b"SQLite")
+
+    status, data = _call("POST", "/api/data/import",
+                         {"zip_path": "manual_overwrite.zip", "confirm": "导入备份",
+                          "mode": "overwrite", "overwrite_confirm": "覆盖现有库"},
+                         token="tok")
+    assert status == 200 and data["ok"] is True
+    assert (env["contacts"] / "alice.sqlite3").read_bytes() == b"overwritten-db"
+
+
+def test_memory_list_search_status_and_claims(tmp_path, write_env, monkeypatch):
+    _data_env(tmp_path, monkeypatch, write_env)
+    status, _ = _call("GET", "/api/memory/list")
+    assert status == 401
+    status, data = _call("GET", "/api/memory/list?limit=1&offset=0", token="tok")
+    assert status == 200 and data["total"] == 2 and len(data["items"]) == 1
+    status, data = _call("GET", "/api/memory/list?q=记忆内容1", token="tok")
+    assert status == 200 and data["total"] == 1
+    status, data = _call("GET", "/api/memory/list?status=invalid", token="tok")
+    assert status == 200 and data["total"] == 0
+    status, data = _call("GET", "/api/memory/list?status=bogus", token="tok")
+    assert status == 400
+
+    status, data = _call("GET", "/api/memory/claims", token="tok")
+    assert status == 200 and len(data["items"]) == 1
+    assert data["items"][0]["subject"] == "用户"
+    status, _ = _call("GET", "/api/memory/claims")
+    assert status == 401
+
+
+def test_memory_update_validation_and_audit(tmp_path, write_env, monkeypatch):
+    _data_env(tmp_path, monkeypatch, write_env)
+    status, data = _call("POST", "/api/memory/update",
+                         {"id": "UM0", "content": "改过的内容", "importance": 0.9,
+                          "status": "dormant"}, token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["item"]["content"] == "改过的内容"
+    assert data["item"]["importance"] == 0.9
+    assert data["item"]["status"] == "dormant"
+    assert "manual_edit" in str(data["item"].get("evidence") or "")
+    audits = console.AUDIT_PATH.read_text(encoding="utf-8").splitlines()
+    assert any(json.loads(line)["action"] == "memory_edit" for line in audits)
+
+    for body in ({"id": "UM0", "content": ""},
+                 {"id": "UM0", "content": "x" * 501},
+                 {"id": "UM0", "importance": 1.5},
+                 {"id": "UM0", "status": "deleted"},
+                 {"id": "nope", "content": "x"},
+                 {}):
+        status, data = _call("POST", "/api/memory/update", body, token="tok")
+        assert status == 400 and data["ok"] is False
+
+
+def test_memory_delete_is_soft_and_mark(tmp_path, write_env, monkeypatch):
+    _data_env(tmp_path, monkeypatch, write_env)
+    db = console.DEFAULT_CONTACT_DB
+    status, data = _call("POST", "/api/memory/delete",
+                         {"id": "UM1", "confirm": "错误"}, token="tok")
+    assert status == 400
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT status FROM user_memories WHERE id='UM1'").fetchone()[0] == "active"
+    con.close()
+
+    status, data = _call("POST", "/api/memory/delete",
+                         {"id": "UM1", "confirm": "删除记忆"}, token="tok")
+    assert status == 200 and data["ok"] is True
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT count(*) FROM user_memories WHERE id='UM1'").fetchone()[0] == 1
+    assert con.execute("SELECT status FROM user_memories WHERE id='UM1'").fetchone()[0] == "invalid"
+    con.close()
+
+    status, data = _call("POST", "/api/memory/mark",
+                         {"id": "UM0", "important": True}, token="tok")
+    assert status == 200 and data["item"]["importance"] == 1.0
+    status, data = _call("POST", "/api/memory/mark",
+                         {"id": "UM0", "important": False}, token="tok")
+    assert status == 200 and data["item"]["importance"] == 0.5
+
+
+def test_memory_merge_keeps_earlier_and_invalidates_other(tmp_path, write_env, monkeypatch):
+    _data_env(tmp_path, monkeypatch, write_env)
+    status, data = _call("POST", "/api/memory/merge", {"ids": ["UM1", "UM0"]}, token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["kept"] == "UM0" and data["invalidated"] == "UM1"
+    con = sqlite3.connect(console.DEFAULT_CONTACT_DB)
+    rows = {row[0]: row for row in con.execute(
+        "SELECT id, status, evidence FROM user_memories").fetchall()}
+    con.close()
+    assert rows["UM0"][1] == "active" and rows["UM1"][1] == "invalid"
+    assert "证据0" in rows["UM0"][2] and "证据1" in rows["UM0"][2]
+    status, data = _call("POST", "/api/memory/merge", {"ids": ["UM0"]}, token="tok")
+    assert status == 400
+    status, data = _call("POST", "/api/memory/merge", {"ids": ["UM0", "nope"]}, token="tok")
+    assert status == 400
+
+
+def test_data_split_memory_persona_layout(tmp_path, write_env, monkeypatch):
+    env = _data_env(tmp_path, monkeypatch, write_env)
+    contacts = env["contacts"]
+    _make_memory_db(contacts / "abc.memory.sqlite3", messages=2, memories=1, claims=1)
+    con = sqlite3.connect(contacts / "abc.persona.sqlite3")
+    con.execute("CREATE TABLE persona(id TEXT PRIMARY KEY, name TEXT)")
+    con.execute("CREATE TABLE state(key TEXT PRIMARY KEY, value TEXT)")
+    con.executemany("INSERT INTO persona VALUES(?,?)", [("P1", "a"), ("P2", "b"), ("P3", "c")])
+    con.execute("INSERT INTO state VALUES('trust','0.8')")
+    con.commit()
+    con.close()
+    (contacts / "abc.legacy.sqlite3").write_bytes(b"legacy-old")
+    _make_memory_db(contacts / "def.sqlite3", messages=1, memories=0, claims=0)
+
+    info = console.data_info()
+    assert info["contacts"] == 4                       # abc/alice/bob/def
+    assert info["memory_dbs"] == 1 and info["persona_dbs"] == 1
+    assert info["legacy_dbs"] == 1
+    assert info["split_layout"] is True
+    assert info["messages"] == 7 and info["memories"] == 3 and info["claims"] == 2
+    detail = {row["stem"]: row for row in info["contacts_detail"]}
+    abc = detail["abc"]
+    assert abc["migrated"] is True
+    assert abc["memory"]["messages"] == 2 and abc["memory"]["memories"] == 1
+    assert abc["persona"]["rows"] == 4                 # 3 persona + 1 state
+    assert abc["legacy"]["name"] == "abc.legacy.sqlite3"
+    assert detail["def"]["single"] is True and detail["def"]["persona"] is None
+
+    exported = console.data_export(contact="abc", fmt="jsonl")
+    assert exported["ok"] is True and exported["count"] == 2
+    listed = console.memory_list(contact="abc")
+    assert listed["ok"] is True and listed["total"] == 1
+
+    # 备份 zip 包含拆分后的两种库
+    backup = console.data_backup()
+    assert backup["ok"] is True
+    with zipfile.ZipFile(backup["backup_path"]) as archive:
+        names = archive.namelist()
+    assert any(name.endswith("abc.memory.sqlite3") for name in names)
+    assert any(name.endswith("abc.persona.sqlite3") for name in names)
+
+    # 导入新版拆分 zip（memory/persona 两个文件都复制）
+    zip_path = env["backups"] / "manual_split.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("selflearn/wechat_contacts/xyz.memory.sqlite3", b"mem")
+        archive.writestr("selflearn/wechat_contacts/xyz.persona.sqlite3", b"per")
+    result = console.data_import("manual_split.zip", "导入备份", "merge")
+    assert result["ok"] is True
+    assert set(result["imported"]) == {"xyz.memory.sqlite3", "xyz.persona.sqlite3"}
+    assert (contacts / "xyz.memory.sqlite3").exists()
+    assert (contacts / "xyz.persona.sqlite3").exists()

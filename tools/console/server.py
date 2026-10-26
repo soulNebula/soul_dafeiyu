@@ -21,6 +21,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -251,11 +252,26 @@ DEFAULT_CONTACT_DB: Path | None = None
 
 
 def contact_db_path() -> Path | None:
+    """默认数据 DB：优先新拆分库的 memory 部分，其次未迁移的单库，最后 legacy。"""
     if DEFAULT_CONTACT_DB:
-        return Path(DEFAULT_CONTACT_DB)
+        target = Path(DEFAULT_CONTACT_DB)
+        if target.is_file():
+            return target
+        # w2-inner 拆库后旧单库会被改名为 *.legacy.sqlite3，数据在 *.memory.sqlite3
+        for suffix in (".memory.sqlite3", ".legacy.sqlite3"):
+            sibling = target.with_name(target.stem + suffix)
+            if Path(sibling).is_file():
+                return sibling
+        return target
     try:
-        candidates = sorted(Path(CONTACTS_DIR).glob("*.sqlite3"),
-                            key=lambda p: p.stat().st_mtime, reverse=True)
+        memory = sorted(Path(CONTACTS_DIR).glob("*.memory.sqlite3"),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+        singles = [p for p in sorted(Path(CONTACTS_DIR).glob("*.sqlite3"),
+                                     key=lambda p: p.stat().st_mtime, reverse=True)
+                   if _db_kind(p) == "single"]
+        legacy = sorted(Path(CONTACTS_DIR).glob("*.legacy.sqlite3"),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+        candidates = memory + singles + legacy
     except OSError:
         return None
     for candidate in candidates:
@@ -354,11 +370,7 @@ def memory_snapshot() -> dict:
                 "recent": []}
     metrics: dict = {}
     recent: list[dict] = []
-    try:
-        from agi.selflearn import memory as memory_mod
-        metrics = memory_mod.metrics(path)
-    except Exception as exc:  # noqa: BLE001 - 指标失败不影响页面
-        metrics = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    # 先读最近记忆：metrics 可能触发 db 拆库迁移（旧单库改名 + 新 memory/persona 库）
     try:
         con = _ro_connect(path)
         try:
@@ -374,6 +386,11 @@ def memory_snapshot() -> dict:
             con.close()
     except sqlite3.Error:
         recent = []
+    try:
+        from agi.selflearn import memory as memory_mod
+        metrics = memory_mod.metrics(path)
+    except Exception as exc:  # noqa: BLE001 - 指标失败不影响页面
+        metrics = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     return {"ok": True, "db": str(path), "metrics": metrics, "recent": recent}
 
 
@@ -966,13 +983,13 @@ def factory_preview() -> dict:
     }
 
 
-def create_backup(now: float | None = None) -> dict:
+def create_backup(now: float | None = None, *, prefix: str = "factory_reset") -> dict:
     """把重置范围内所有文件打包成 zip；失败抛异常（调用方必须中止）。"""
     now = time.time() if now is None else float(now)
     stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime(now))
     target_dir = Path(BACKUP_DIR)
     target_dir.mkdir(parents=True, exist_ok=True)
-    backup_path = target_dir / f"factory_reset_{stamp}.zip"
+    backup_path = target_dir / f"{prefix}_{stamp}.zip"
     dirs, files, _roots = _safe_targets()
     written = 0
     try:
@@ -1481,6 +1498,7 @@ LOG_SOURCES: dict[str, list[Path]] = {
     "gateway": [Path(GATEWAY_LOG)],
     "inner": [SELFLEARN_DIR / "inner.log"],
     "prompt": [SELFLEARN_DIR / "prompts.log", SELFLEARN_DIR / "prompt_override.log"],
+    "audit": [Path(AUDIT_PATH)],
 }
 
 
@@ -1807,6 +1825,803 @@ def read_logs(source: str = "gateway", limit: int = 200, q: str = "",
 
 
 # --------------------------------------------------------------------------- #
+# P7-c：数据管理（备份/导出/导入）+ 记忆编辑（改/删/标记/合并）
+# --------------------------------------------------------------------------- #
+IMPORT_CONFIRM = "导入备份"
+IMPORT_OVERWRITE_CONFIRM = "覆盖现有库"
+BACKUP_DELETE_CONFIRM = "删除备份"
+MEMORY_DELETE_CONFIRM = "删除记忆"
+MEMORY_STATUSES = ("active", "invalid", "dormant")
+MEMORY_MAX_CONTENT = 500
+
+
+_SPLIT_SUFFIXES = (".memory.sqlite3", ".persona.sqlite3", ".legacy.sqlite3")
+
+
+def _db_kind(path: Path) -> str:
+    name = Path(path).name
+    if name.endswith(".memory.sqlite3"):
+        return "memory"
+    if name.endswith(".persona.sqlite3"):
+        return "persona"
+    if name.endswith(".legacy.sqlite3"):
+        return "legacy"
+    return "single"
+
+
+def _profile_stem(path: Path) -> str:
+    name = Path(path).name
+    for suffix in _SPLIT_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name[:-len(".sqlite3")]
+
+
+def _contact_groups() -> dict[str, dict[str, Path]]:
+    """联系人 stem → {memory/persona/legacy/single: 路径}（兼容未迁移旧库）。"""
+    groups: dict[str, dict[str, Path]] = {}
+    try:
+        paths = sorted(Path(CONTACTS_DIR).glob("*.sqlite3"))
+    except OSError:
+        return groups
+    for path in paths:
+        groups.setdefault(_profile_stem(path), {})[_db_kind(path)] = path
+    return groups
+
+
+def _split_helpers():
+    """优先用 agi.selflearn.db.memory_path/persona_path（w2-inner 提供）；没有就自己 glob。"""
+    try:
+        from agi.selflearn import db as db_mod
+        if hasattr(db_mod, "memory_path") and hasattr(db_mod, "persona_path"):
+            return db_mod
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _data_db_candidates() -> list[Path]:
+    """所有含 messages/user_memories/claims 的库（memory + 未迁移单库；legacy 只做展示）。"""
+    try:
+        memory = sorted(Path(CONTACTS_DIR).glob("*.memory.sqlite3"))
+        singles = [p for p in sorted(Path(CONTACTS_DIR).glob("*.sqlite3"))
+                   if _db_kind(p) == "single"]
+    except OSError:
+        return []
+    return memory + singles
+
+
+def _all_contact_dbs() -> list[Path]:
+    return _data_db_candidates()
+
+
+def _alias_for_stem(stem: str) -> str:
+    raw = gateway_config()
+    names: list[str] = []
+    for key in ("allowed_contacts", "proactive_contacts", "monitored_contacts"):
+        for name in raw.get(key) or []:
+            text = str(name or "").strip()
+            if text and text not in names:
+                names.append(text)
+    for name in names:
+        for algo in ("sha1", "md5"):
+            digest = hashlib.new(algo, name.encode("utf-8")).hexdigest()[:16]
+            if digest == stem:
+                return name
+    return stem
+
+
+def _contact_paths(alias_or_stem: str) -> dict[str, Path]:
+    raw = str(alias_or_stem or "").strip()
+    if not raw:
+        return {}
+    safe = re.sub(r"[^\w\u4e00-\u9fff-]", "", raw)[:60]
+    stems = [safe]
+    for algo in ("sha1", "md5"):
+        stems.append(hashlib.new(algo, raw.encode("utf-8")).hexdigest()[:16])
+    helper = _split_helpers()
+    for stem in stems:
+        found: dict[str, Path] = {}
+        if helper is not None:
+            base = Path(CONTACTS_DIR) / (stem + ".sqlite3")
+            for kind, resolver in (("memory", helper.memory_path),
+                                   ("persona", helper.persona_path)):
+                try:
+                    resolved = Path(resolver(base))
+                    if resolved.is_file():
+                        found[kind] = resolved
+                except Exception:  # noqa: BLE001 - helper 签名不同/文件不存在都回退
+                    continue
+        for suffix, kind in ((".memory.sqlite3", "memory"),
+                             (".persona.sqlite3", "persona"),
+                             (".legacy.sqlite3", "legacy"),
+                             (".sqlite3", "single")):
+            candidate = Path(CONTACTS_DIR) / (stem + suffix)
+            try:
+                if candidate.is_file():
+                    found[kind] = candidate
+            except OSError:
+                continue
+        if found:
+            return found
+    groups = _contact_groups()
+    for stem in stems:
+        if stem in groups:
+            return dict(groups[stem])
+    for group_stem, files in groups.items():
+        if group_stem == safe or group_stem.startswith(safe):
+            return dict(files)
+    return {}
+
+
+def _contact_db_by_alias(contact: str) -> Path | None:
+    """联系人 alias → 数据（记忆/对话）库：memory > 未迁移单库 > legacy。"""
+    files = _contact_paths(contact)
+    for kind in ("memory", "single", "legacy"):
+        if files.get(kind):
+            return files[kind]
+    return None
+
+
+def _contact_aliases() -> list[dict]:
+    """配置里的联系人 alias → 库文件（用于前端下拉）。"""
+    raw = gateway_config()
+    names: list[str] = []
+    for key in ("allowed_contacts", "proactive_contacts", "monitored_contacts"):
+        for name in raw.get(key) or []:
+            text = str(name or "").strip()
+            if text and text not in names:
+                names.append(text)
+    out = []
+    for name in names:
+        files = _contact_paths(name)
+        db_path = None
+        for kind in ("memory", "single", "legacy"):
+            if files.get(kind):
+                db_path = files[kind]
+                break
+        out.append({"alias": name, "db": db_path.name if db_path else None,
+                    "exists": bool(db_path)})
+    return out
+
+
+def _dir_size(path: Path) -> int:
+    total = 0
+    try:
+        for item in Path(path).rglob("*"):
+            try:
+                if item.is_file():
+                    total += item.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return total
+    return total
+
+
+def _db_counts(path: Path, table: str) -> int:
+    try:
+        con = _ro_connect(path)
+        try:
+            return int(con.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return 0
+
+
+def _file_bytes(path: Path | None) -> int:
+    try:
+        return Path(path).stat().st_size if path and Path(path).is_file() else 0
+    except OSError:
+        return 0
+
+
+_PERSONA_TABLES = ("persona", "persona_layers", "skills", "state", "trust",
+                   "lessons", "proactive", "goals", "user_profile")
+
+
+def _persona_rows(path: Path | None) -> int:
+    if path is None:
+        return 0
+    total = 0
+    for table in _PERSONA_TABLES:
+        total += _db_counts(path, table)
+    return total
+
+
+def data_info() -> dict:
+    groups = _contact_groups()
+    details: list[dict] = []
+    messages = memories = claims = 0
+    for stem, files in sorted(groups.items()):
+        data_db = files.get("memory") or files.get("single")
+        memory_detail = None
+        if data_db is not None:
+            count_messages = _db_counts(data_db, "messages")
+            count_memories = _db_counts(data_db, "user_memories")
+            count_claims = _db_counts(data_db, "claims")
+            messages += count_messages
+            memories += count_memories
+            claims += count_claims
+            memory_detail = {
+                "name": data_db.name, "path": str(data_db),
+                "bytes": _file_bytes(data_db), "kind": _db_kind(data_db),
+                "messages": count_messages, "memories": count_memories,
+                "claims": count_claims,
+            }
+        persona = files.get("persona")
+        persona_detail = None
+        if persona is not None:
+            persona_detail = {"name": persona.name, "path": str(persona),
+                              "bytes": _file_bytes(persona),
+                              "rows": _persona_rows(persona)}
+        legacy = files.get("legacy")
+        legacy_detail = None
+        if legacy is not None:
+            legacy_detail = {"name": legacy.name, "path": str(legacy),
+                             "bytes": _file_bytes(legacy),
+                             "note": "迁移前的旧库（可删除/可回滚，不参与统计）"}
+        details.append({
+            "stem": stem, "alias": _alias_for_stem(stem),
+            "memory": memory_detail, "persona": persona_detail,
+            "legacy": legacy_detail,
+            "single": bool(files.get("single")) and "memory" not in files,
+            "migrated": bool(files.get("memory") and files.get("persona")),
+        })
+    media_files = 0
+    for directory in MEDIA_ASSET_DIRS:
+        try:
+            media_files += sum(1 for item in Path(directory).rglob("*") if item.is_file())
+        except OSError:
+            continue
+    backups = []
+    try:
+        for item in Path(BACKUP_DIR).glob("*.zip"):
+            try:
+                stat = item.stat()
+            except OSError:
+                continue
+            backups.append({"name": item.name, "bytes": stat.st_size,
+                            "mtime": stat.st_mtime, "path": str(item)})
+    except OSError:
+        backups = []
+    backups.sort(key=lambda row: row["mtime"], reverse=True)
+    try:
+        memory_count = len(list(Path(CONTACTS_DIR).glob("*.memory.sqlite3")))
+        persona_count = len(list(Path(CONTACTS_DIR).glob("*.persona.sqlite3")))
+        legacy_count = len(list(Path(CONTACTS_DIR).glob("*.legacy.sqlite3")))
+    except OSError:
+        memory_count = persona_count = legacy_count = 0
+    return {
+        "ok": True,
+        "selflearn_bytes": _dir_size(Path(SELFLEARN_DIR)),
+        "contacts": len(groups),
+        "messages": messages,
+        "memories": memories,
+        "claims": claims,
+        "memory_dbs": memory_count,
+        "persona_dbs": persona_count,
+        "legacy_dbs": legacy_count,
+        "split_layout": bool(memory_count or persona_count),
+        "contacts_detail": details,
+        "gateway_log_bytes": Path(GATEWAY_LOG).stat().st_size if Path(GATEWAY_LOG).is_file() else 0,
+        "gateway_log_lines": _count_file_lines(GATEWAY_LOG),
+        "media_files": media_files,
+        "backup_dir": str(BACKUP_DIR),
+        "backups": backups[:30],
+        "aliases": _contact_aliases(),
+        "note": "只读统计；备份不会修改任何数据。记忆库=对话/记忆，人格库=人格/状态；legacy 为迁移前旧库",
+    }
+def data_backup(*, client: str = "") -> dict:
+    try:
+        info = create_backup(prefix="manual")
+    except Exception as exc:  # noqa: BLE001
+        audit("data_backup", {}, ok=False, note=str(exc), client=client)
+        return {"ok": False, "error": f"backup_failed:{type(exc).__name__}: {exc}"}
+    audit("data_backup", {"path": info["path"], "files": info["files"],
+                          "bytes": info["bytes"]}, ok=True, client=client)
+    return {"ok": True, "backup_path": info["path"], "files": info["files"],
+            "bytes": info["bytes"],
+            "note": "已打包运行数据（未改动任何数据）；zip 在备份目录"}
+
+
+def _backup_zip_path(name: str) -> Path | None:
+    """只允许备份目录下的 *.zip。"""
+    raw = str(name or "").strip()
+    if not raw or raw != Path(raw).name:
+        return None
+    target = (Path(BACKUP_DIR) / raw).resolve()
+    try:
+        target.relative_to(Path(BACKUP_DIR).resolve())
+    except ValueError:
+        return None
+    if target.suffix.lower() != ".zip" or not target.is_file():
+        return None
+    return target
+
+
+def data_backup_delete(name: str, confirm: str = "", *, client: str = "") -> dict:
+    if str(confirm or "").strip() != BACKUP_DELETE_CONFIRM:
+        return {"ok": False, "error": "confirm_phrase_mismatch",
+                "hint": f"必须输入：{BACKUP_DELETE_CONFIRM}"}
+    target = _backup_zip_path(name)
+    if target is None:
+        audit("data_backup_delete", {"name": name}, ok=False, note="unsafe_path",
+              client=client)
+        return {"ok": False, "error": "unsafe_backup_path"}
+    try:
+        target.unlink()
+    except OSError as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    audit("data_backup_delete", {"name": target.name}, ok=True, client=client)
+    return {"ok": True, "deleted": target.name}
+
+
+def data_backup_path(name: str) -> Path | None:
+    return _backup_zip_path(name)
+
+
+def _collect_messages(db_path: Path, limit: int) -> list[dict]:
+    try:
+        con = _ro_connect(db_path)
+        try:
+            columns = _columns(con, "messages")
+            wanted = [name for name in ("id", "role", "text", "ts", "proactive")
+                      if name in columns]
+            if not wanted:
+                return []
+            rows = con.execute(
+                f"SELECT {','.join(wanted)} FROM messages ORDER BY ts ASC, rowid ASC LIMIT ?",
+                (limit,)).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return []
+    return [dict(row) for row in rows]
+
+
+def _contact_for_db(db_path: Path) -> str:
+    for row in _contact_aliases():
+        if row.get("db") == db_path.name:
+            return str(row["alias"])
+    return db_path.stem
+
+
+def data_export(contact: str = "", fmt: str = "jsonl", limit: int = 1000) -> dict:
+    fmt = str(fmt or "jsonl").strip().lower()
+    if fmt not in ("jsonl", "md"):
+        return {"ok": False, "error": "format 只能是 jsonl/md"}
+    try:
+        limit = max(1, min(5000, int(limit)))
+    except (TypeError, ValueError):
+        limit = 1000
+    if contact:
+        db_path = _contact_db_by_alias(contact)
+        if db_path is None:
+            return {"ok": False, "error": f"contact_not_found: {contact}"}
+        dbs = [db_path]
+    else:
+        dbs = _all_contact_dbs()
+    rows: list[dict] = []
+    for db_path in dbs:
+        alias = _contact_for_db(db_path)
+        for item in _collect_messages(db_path, limit):
+            rows.append({"contact": alias, "db": db_path.name,
+                         "ts": item.get("ts"), "role": item.get("role"),
+                         "text": item.get("text"),
+                         "proactive": bool(item.get("proactive") or 0)})
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    safe_contact = re.sub(r"[^\w\u4e00-\u9fff-]", "", contact or "all")[:40] or "all"
+    if fmt == "md":
+        lines = [f"# 聊天记录导出（{contact or '全部联系人'}）", ""]
+        current = None
+        for row in rows:
+            if row["contact"] != current:
+                current = row["contact"]
+                lines.append(f"## {current}")
+                lines.append("")
+            when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(row.get("ts") or 0)))
+            role = "我" if row.get("role") == "assistant" else "对方"
+            tag = "（主动）" if row.get("proactive") else ""
+            lines.append(f"- **{when} {role}{tag}**：{row.get('text') or ''}")
+        body = "\n".join(lines) + "\n"
+        content_type = "text/markdown; charset=utf-8"
+        filename = f"export_{safe_contact}_{stamp}.md"
+    else:
+        body = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + ("\n" if rows else "")
+        content_type = "application/x-ndjson; charset=utf-8"
+        filename = f"export_{safe_contact}_{stamp}.jsonl"
+    return {"ok": True, "body": body.encode("utf-8"), "content_type": content_type,
+            "filename": filename, "count": len(rows),
+            "note": f"导出 {len(rows)} 条消息（{len(dbs)} 个联系人库）"}
+
+
+def data_export_memories(contact: str = "", limit: int = 5000) -> dict:
+    try:
+        limit = max(1, min(5000, int(limit)))
+    except (TypeError, ValueError):
+        limit = 5000
+    if contact:
+        db_path = _contact_db_by_alias(contact)
+        if db_path is None:
+            return {"ok": False, "error": f"contact_not_found: {contact}"}
+        dbs = [db_path]
+    else:
+        dbs = _all_contact_dbs()
+    rows: list[dict] = []
+    for db_path in dbs:
+        try:
+            con = _ro_connect(db_path)
+            try:
+                columns = _columns(con, "user_memories")
+                if not columns:
+                    continue
+                selected = [name for name in
+                            ("id", "kind", "content", "evidence", "confidence",
+                             "status", "created_at", "importance", "access_count",
+                             "last_accessed", "evidence_history") if name in columns]
+                data = [dict(row) for row in con.execute(
+                    f"SELECT {','.join(selected)} FROM user_memories LIMIT ?",
+                    (limit,)).fetchall()]
+            finally:
+                con.close()
+        except sqlite3.Error:
+            continue
+        for row in data:
+            row["contact"] = _contact_for_db(db_path)
+            row["db"] = db_path.name
+            rows.append(row)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    return {"ok": True,
+            "body": json.dumps(rows, ensure_ascii=False, indent=2).encode("utf-8"),
+            "content_type": "application/json; charset=utf-8",
+            "filename": f"memories_{contact or 'all'}_{stamp}.json",
+            "count": len(rows)}
+
+
+def _validate_zip_entries(names: list[str]) -> tuple[bool, str]:
+    for name in names:
+        normalized = str(name).replace("\\", "/")
+        if normalized.startswith("/") or ".." in normalized.split("/"):
+            return False, f"unsafe_zip_entry:{name}"
+    has_selflearn = any(str(name).replace("\\", "/").startswith("selflearn/") for name in names)
+    has_prompts = any(str(name).replace("\\", "/") == "prompts.json" for name in names)
+    if not (has_selflearn or has_prompts):
+        return False, "zip_missing_selflearn_or_prompts"
+    return True, ""
+
+
+def data_import(zip_path: str, confirm: str = "", mode: str = "merge", *,
+                overwrite_confirm: str = "", client: str = "") -> dict:
+    target = _backup_zip_path(zip_path)
+    if target is None:
+        audit("data_import", {"zip": zip_path}, ok=False, note="unsafe_or_missing_zip",
+              client=client)
+        return {"ok": False, "error": "unsafe_or_missing_zip",
+                "hint": "只允许导入 E:\\agent\\backups\\ 下的 .zip"}
+    if str(confirm or "").strip() != IMPORT_CONFIRM:
+        return {"ok": False, "error": "confirm_phrase_mismatch",
+                "hint": f"必须输入：{IMPORT_CONFIRM}"}
+    mode = str(mode or "merge").strip().lower()
+    if mode not in ("merge", "overwrite"):
+        return {"ok": False, "error": "mode 只能是 merge/overwrite"}
+    if mode == "overwrite" and str(overwrite_confirm or "").strip() != IMPORT_OVERWRITE_CONFIRM:
+        return {"ok": False, "error": "overwrite_confirm_required",
+                "hint": f"overwrite 必须再输入：{IMPORT_OVERWRITE_CONFIRM}"}
+    temp_dir = None
+    try:
+        with zipfile.ZipFile(target) as archive:
+            names = archive.namelist()
+            ok_zip, reason = _validate_zip_entries(names)
+            if not ok_zip:
+                return {"ok": False, "error": reason}
+            temp_dir = tempfile.mkdtemp(prefix="console_import_")
+            archive.extractall(temp_dir)
+    except (zipfile.BadZipFile, OSError) as exc:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        audit("data_import", {"zip": target.name, "mode": mode}, ok=False,
+              note=str(exc), client=client)
+        return {"ok": False, "error": f"bad_zip:{type(exc).__name__}: {exc}"}
+    imported: list[str] = []
+    skipped: list[str] = []
+    try:
+        source_dir = Path(temp_dir) / "selflearn" / "wechat_contacts"
+        target_dir = Path(CONTACTS_DIR)
+        if source_dir.is_dir():
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for source in sorted(source_dir.glob("*.sqlite3")):
+                destination = target_dir / source.name
+                if destination.exists() and mode != "overwrite":
+                    skipped.append(source.name)
+                    continue
+                shutil.copy2(source, destination)
+                imported.append(source.name)
+    except OSError as exc:
+        return {"ok": False, "error": f"import_failed:{type(exc).__name__}: {exc}",
+                "imported": imported, "skipped": skipped}
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+    audit("data_import", {"zip": target.name, "mode": mode,
+                          "imported": imported, "skipped": skipped}, ok=True,
+          client=client)
+    return {"ok": True, "mode": mode, "imported": imported, "skipped": skipped,
+            "note": f"导入完成：新增 {len(imported)}，跳过 {len(skipped)}（不覆盖）"
+                    if mode == "merge" else f"已覆盖导入 {len(imported)} 个库"}
+
+
+# --------------------------------------------------------------------------- #
+# 记忆编辑
+# --------------------------------------------------------------------------- #
+def _memory_db(contact: str = "") -> tuple[Path | None, dict | None]:
+    if contact:
+        db_path = _contact_db_by_alias(contact)
+    else:
+        db_path = contact_db_path()
+    if db_path is None or not Path(db_path).is_file():
+        return None, {"ok": False, "error": "contact_db_not_found",
+                      "hint": f"找不到联系人库: {contact or 'default'}"}
+    return Path(db_path), None
+
+
+def _memory_cols(con: sqlite3.Connection) -> set[str]:
+    return _columns(con, "user_memories")
+
+
+def _memory_row(con: sqlite3.Connection, mem_id: str) -> dict | None:
+    try:
+        columns = _memory_cols(con)
+        if not columns:
+            return None
+        row = con.execute("SELECT * FROM user_memories WHERE id = ?", (mem_id,)).fetchone()
+        return dict(row) if row is not None else None
+    except sqlite3.Error:
+        return None
+
+
+def memory_list(contact: str = "", q: str = "", status: str = "",
+                limit: int = 100, offset: int = 0) -> dict:
+    db_path, error = _memory_db(contact)
+    if error:
+        return {**error, "items": [], "total": 0}
+    try:
+        limit = max(1, min(500, int(limit)))
+    except (TypeError, ValueError):
+        limit = 100
+    try:
+        offset = max(0, int(offset))
+    except (TypeError, ValueError):
+        offset = 0
+    where = []
+    params: list = []
+    q = str(q or "").strip()
+    if q:
+        where.append("(content LIKE ? OR kind LIKE ? OR evidence LIKE ?)")
+        like = f"%{q}%"
+        params.extend([like, like, like])
+    status = str(status or "").strip().lower()
+    if status:
+        if status not in MEMORY_STATUSES:
+            return {"ok": False, "error": f"status 非法: {status}", "items": [], "total": 0}
+        where.append("status = ?")
+        params.append(status)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    try:
+        con = _ro_connect(db_path)
+        try:
+            columns = _memory_cols(con)
+            if not columns:
+                return {"ok": True, "items": [], "total": 0, "db": str(db_path)}
+            selected = [name for name in
+                        ("id", "kind", "content", "importance", "confidence", "status",
+                         "created_at", "evidence", "evidence_history") if name in columns]
+            total = int(con.execute(
+                f"SELECT count(*) FROM user_memories{clause}", params).fetchone()[0])
+            rows = con.execute(
+                f"SELECT {','.join(selected)} FROM user_memories{clause} "
+                "ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+                (*params, limit, offset)).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "items": [], "total": 0}
+    items = []
+    for row in rows:
+        item = dict(row)
+        history = item.get("evidence_history")
+        if isinstance(history, str) and len(history) > 300:
+            item["evidence_history"] = history[:300] + "…"
+        items.append(item)
+    return {"ok": True, "items": items, "total": total, "limit": limit,
+            "offset": offset, "db": str(db_path)}
+
+
+def memory_claims(contact: str = "", limit: int = 100) -> dict:
+    db_path, error = _memory_db(contact)
+    if error:
+        return {**error, "items": []}
+    try:
+        limit = max(1, min(500, int(limit)))
+    except (TypeError, ValueError):
+        limit = 100
+    try:
+        con = _ro_connect(db_path)
+        try:
+            columns = _columns(con, "claims")
+            if not columns:
+                return {"ok": True, "items": []}
+            selected = [name for name in
+                        ("id", "subject", "predicate", "object", "confidence", "status",
+                         "created_at") if name in columns]
+            rows = con.execute(
+                f"SELECT {','.join(selected)} FROM claims "
+                "ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "items": []}
+    return {"ok": True, "items": [dict(row) for row in rows]}
+
+
+def _memory_write(contact: str, mem_id: str, mutate) -> dict:
+    """打开可写连接执行 mutate(con, row, cols)，返回更新后的行。"""
+    db_path, error = _memory_db(contact)
+    if error:
+        return error
+    try:
+        con = sqlite3.connect(str(db_path), timeout=5)
+        con.row_factory = sqlite3.Row
+    except sqlite3.Error as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        columns = _memory_cols(con)
+        row = _memory_row(con, mem_id)
+        if row is None:
+            return {"ok": False, "error": f"memory_not_found: {mem_id}"}
+        updates = mutate(con, row, columns)
+        sets = ", ".join(f"{key} = ?" for key in updates)
+        with con:
+            con.execute(f"UPDATE user_memories SET {sets} WHERE id = ?",
+                        (*updates.values(), mem_id))
+        updated = _memory_row(con, mem_id)
+        return {"ok": True, "item": updated, "db": str(db_path)}
+    except sqlite3.Error as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        con.close()
+
+
+def memory_update(contact: str = "", mem_id: str = "", *, content: str | None = None,
+                  importance=None, status: str | None = None,
+                  client: str = "") -> dict:
+    mem_id = str(mem_id or "").strip()
+    if not mem_id:
+        return {"ok": False, "error": "id 不能为空"}
+    updates: dict = {}
+    if content is not None:
+        text = str(content).strip()
+        if not text:
+            return {"ok": False, "error": "content 不能为空"}
+        if len(text) > MEMORY_MAX_CONTENT:
+            return {"ok": False, "error": f"content 超过 {MEMORY_MAX_CONTENT} 字"}
+        updates["content"] = text
+    if importance is not None:
+        try:
+            number = float(importance)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "importance 必须是数字"}
+        if not 0.0 <= number <= 1.0:
+            return {"ok": False, "error": "importance 取值 0–1"}
+        updates["importance"] = round(number, 3)
+    if status is not None:
+        status_value = str(status).strip().lower()
+        if status_value not in MEMORY_STATUSES:
+            return {"ok": False, "error": "status 只能是 active/invalid/dormant"}
+        updates["status"] = status_value
+    if not updates:
+        return {"ok": False, "error": "没有要修改的字段"}
+
+    def mutate(con, row, columns):
+        payload = dict(updates)
+        if "content" in payload and "evidence" in columns:
+            evidence = str(row.get("evidence") or "").strip()
+            payload["evidence"] = ((evidence + " | ") if evidence else "") + "manual_edit"
+        if "updated_at" in columns:
+            payload["updated_at"] = time.time()
+        return payload
+
+    result = _memory_write(contact, mem_id, mutate)
+    audit("memory_edit", {"id": mem_id, "action": "update", "fields": sorted(updates)},
+          ok=bool(result.get("ok")), client=client)
+    return result
+
+
+def memory_delete(contact: str = "", mem_id: str = "", confirm: str = "",
+                  *, client: str = "") -> dict:
+    if str(confirm or "").strip() != MEMORY_DELETE_CONFIRM:
+        return {"ok": False, "error": "confirm_phrase_mismatch",
+                "hint": f"必须输入：{MEMORY_DELETE_CONFIRM}"}
+    result = _memory_write(contact, str(mem_id or "").strip(),
+                           lambda con, row, columns: {"status": "invalid"})
+    audit("memory_edit", {"id": mem_id, "action": "soft_delete"},
+          ok=bool(result.get("ok")), client=client)
+    if result.get("ok"):
+        result["note"] = "已软删除（status=invalid，不物理删除）"
+    return result
+
+
+def memory_mark(contact: str = "", mem_id: str = "", important: bool = True,
+                *, client: str = "") -> dict:
+    value = 1.0 if bool(important) else 0.5
+    result = _memory_write(contact, str(mem_id or "").strip(),
+                           lambda con, row, columns: {"importance": value})
+    audit("memory_edit", {"id": mem_id, "action": "mark", "important": bool(important)},
+          ok=bool(result.get("ok")), client=client)
+    return result
+
+
+def memory_merge(contact: str = "", ids: list | None = None, *, client: str = "") -> dict:
+    try:
+        left_id, right_id = [str(item).strip() for item in (ids or [])][:2]
+    except ValueError:
+        left_id = right_id = ""
+    if not left_id or not right_id or left_id == right_id:
+        return {"ok": False, "error": "需要两条不同的记忆 id"}
+    db_path, error = _memory_db(contact)
+    if error:
+        return error
+    try:
+        con = sqlite3.connect(str(db_path), timeout=5)
+        con.row_factory = sqlite3.Row
+    except sqlite3.Error as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        columns = _memory_cols(con)
+        left = _memory_row(con, left_id)
+        right = _memory_row(con, right_id)
+        if left is None or right is None:
+            return {"ok": False, "error": "其中一条记忆不存在"}
+        keep, drop = ((left, right)
+                      if float(left.get("created_at") or 0) <= float(right.get("created_at") or 0)
+                      else (right, left))
+        updates: dict = {"status": "active"}
+        if "evidence" in columns:
+            evidence = [str(item.get("evidence") or "").strip()
+                        for item in (keep, drop) if str(item.get("evidence") or "").strip()]
+            updates["evidence"] = " | ".join(evidence)[:1000]
+        if "evidence_history" in columns:
+            history = []
+            try:
+                history = json.loads(str(keep.get("evidence_history") or "[]"))
+            except (TypeError, ValueError):
+                history = []
+            if not isinstance(history, list):
+                history = []
+            history.append({"kind": "manual_merge", "from": drop.get("id"),
+                            "at": round(time.time(), 3)})
+            updates["evidence_history"] = json.dumps(history, ensure_ascii=False)
+        if "history" in columns:
+            pass
+        with con:
+            con.execute("UPDATE user_memories SET status='invalid' WHERE id = ?",
+                        (drop["id"],))
+            sets = ", ".join(f"{key} = ?" for key in updates)
+            con.execute(f"UPDATE user_memories SET {sets} WHERE id = ?",
+                        (*updates.values(), keep["id"]))
+        merged = _memory_row(con, keep["id"])
+    except sqlite3.Error as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        con.close()
+    audit("memory_edit", {"action": "merge", "keep": keep["id"], "drop": drop["id"]},
+          ok=True, client=client)
+    return {"ok": True, "item": merged, "kept": keep["id"], "invalidated": drop["id"],
+            "note": "保留较早的记忆，另一条标记 invalid（可恢复）"}
+
+
+# --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
 def host_ok(host: str) -> bool:
@@ -1846,6 +2661,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _download(self, body: bytes, content_type: str, filename: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition",
+                         f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -1969,6 +2794,54 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(404, {"ok": False, "error": "file not in media dirs"}); return
                 content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
                 self._bytes(200, target.read_bytes(), content_type); return
+            if path == "/api/data/info":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, data_info()); return
+            if path == "/api/data/export":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                result = data_export(
+                    str((query.get("contact") or [""])[0] or ""),
+                    str((query.get("format") or ["jsonl"])[0] or "jsonl"),
+                    self._limit(query, 1000))
+                if not result.get("ok"):
+                    self._json(400, result); return
+                self._download(result["body"], result["content_type"],
+                               result["filename"]); return
+            if path == "/api/data/export-memories":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                result = data_export_memories(
+                    str((query.get("contact") or [""])[0] or ""),
+                    self._limit(query, 5000))
+                if not result.get("ok"):
+                    self._json(400, result); return
+                self._download(result["body"], result["content_type"],
+                               result["filename"]); return
+            if path == "/api/data/backup/download":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                backup = data_backup_path(str((query.get("name") or [""])[0] or ""))
+                if backup is None:
+                    self._json(404, {"ok": False, "error": "backup_not_found"}); return
+                self._download(backup.read_bytes(), "application/zip", backup.name); return
+            if path == "/api/memory/list":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                result = memory_list(
+                    str((query.get("contact") or [""])[0] or ""),
+                    str((query.get("q") or [""])[0] or ""),
+                    str((query.get("status") or [""])[0] or ""),
+                    self._limit(query, 100),
+                    int((query.get("offset") or ["0"])[0] or 0))
+                self._json(200 if result.get("ok", True) else 400, result); return
+            if path == "/api/memory/claims":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, memory_claims(
+                    str((query.get("contact") or [""])[0] or ""),
+                    self._limit(query, 100))); return
             if path == "/api/model-config":
                 self._json(200, model_config_state()); return
             if path == "/api/chat-test/history":
@@ -2035,6 +2908,45 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     code = 400
                 self._json(code, result); return
+            if path == "/api/data/backup":
+                result = data_backup(client=client)
+                self._json(200 if result.get("ok") else 500, result); return
+            if path == "/api/data/backup/delete":
+                result = data_backup_delete(
+                    str(body.get("name") or ""), str(body.get("confirm") or ""),
+                    client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/data/import":
+                result = data_import(
+                    str(body.get("zip_path") or body.get("name") or ""),
+                    str(body.get("confirm") or ""),
+                    str(body.get("mode") or "merge"),
+                    overwrite_confirm=str(body.get("overwrite_confirm") or ""),
+                    client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/memory/update":
+                result = memory_update(
+                    str(body.get("contact") or ""), str(body.get("id") or ""),
+                    content=body.get("content") if "content" in body else None,
+                    importance=body.get("importance") if "importance" in body else None,
+                    status=body.get("status") if "status" in body else None,
+                    client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/memory/delete":
+                result = memory_delete(
+                    str(body.get("contact") or ""), str(body.get("id") or ""),
+                    str(body.get("confirm") or ""), client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/memory/mark":
+                result = memory_mark(
+                    str(body.get("contact") or ""), str(body.get("id") or ""),
+                    bool(body.get("important", True)), client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/memory/merge":
+                result = memory_merge(
+                    str(body.get("contact") or ""), body.get("ids") or [],
+                    client=client)
+                self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/model-config":
                 updates = body.get("updates", body)
                 result = apply_model_config(updates if isinstance(updates, dict) else {},

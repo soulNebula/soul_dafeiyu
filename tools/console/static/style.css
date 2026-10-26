@@ -332,3 +332,9 @@ td.num { text-align: right; font-family: "Cascadia Mono", Consolas, monospace; }
 .log-row:hover { border-color: #3d4045; }
 .log-row.err { border-color: #5a2b2c; background: #2b2224; }
 .log-row .log-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+/* ---------------- P7-c 数据管理 / 记忆编辑 ---------------- */
+.memory-content { min-width: 260px; }
+table td input[type="text"] { padding: 4px 6px; font-size: 12px; }
+table td input[type="number"], table td select { padding: 3px 6px; font-size: 12px; }
+.data-export-row, .data-import-row { gap: 10px; }

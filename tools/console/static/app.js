@@ -23,6 +23,8 @@ const state = {
   chatBusy: false,
   modelConfig: null,
   logsState: null,
+  dataInfo: null,
+  memoryEdit: null,
   status: null,
   inner: null,
   tone: null,
@@ -34,6 +36,8 @@ const PAGES = {
   chat: '对话测试',
   inner: '内状态',
   media: '媒体',
+  data: '数据管理',
+  knowledge: '记忆编辑',
   memory: '记忆',
   prompts: '提示词',
   models: '模型',
@@ -1421,6 +1425,7 @@ async function saveModelConfig() {
 const LOG_SOURCE_OPTIONS = [
   ['gateway', '网关事件 gateway.log'], ['inner', '内状态 inner.log'],
   ['prompt', '提示词 prompt_override.log'], ['regen', '重生成失败 regen_failed'],
+  ['audit', '审计日志 console_audit.log'],
 ];
 
 async function renderLogs() {
@@ -1481,6 +1486,349 @@ async function loadLogs() {
   };
 }
 
+/* ---------------- 数据管理（P7-c DataPage） ---------------- */
+function fmtBytes(value) {
+  const number = Number(value || 0);
+  if (number < 1024) return number + ' B';
+  if (number < 1024 * 1024) return (number / 1024).toFixed(1) + ' KB';
+  if (number < 1024 * 1024 * 1024) return (number / 1024 / 1024).toFixed(1) + ' MB';
+  return (number / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+async function downloadWithToken(path, fallbackName) {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  try {
+    const response = await fetch(path, { headers: { 'X-Admin-Token': state.token } });
+    if (!response.ok) {
+      let message = 'HTTP ' + response.status;
+      try { const payload = await response.json(); message = payload.error || message; } catch (err) { /* ignore */ }
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const name = match ? match[1] : (fallbackName || 'download.bin');
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = name;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast('已开始下载：' + name, 'ok');
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+async function renderData() {
+  $('#app').innerHTML = '<div class="empty">加载数据信息…</div>';
+  if (!state.token) {
+    $('#app').innerHTML = card('数据管理', '<div class="error-text">数据管理需要 admin token：请在右上角填写。</div>');
+    return;
+  }
+  let info = null;
+  try { info = await api('/api/data/info'); }
+  catch (err) {
+    $('#app').innerHTML = card('数据管理', `<div class="error-text">${esc(err.message)}</div>`);
+    return;
+  }
+  state.dataInfo = info;
+  const backups = info.backups || [];
+  const aliases = (info.aliases || []);
+  const cards = `<div class="grid cols-4">
+    ${card('运行数据体积', `<div class="big">${esc(fmtBytes(info.selflearn_bytes))}</div><div class="muted">agi/data/selflearn/</div>`)}
+    ${card('联系人库', `<div class="big">${num(info.contacts)}</div><div class="muted">${num(info.messages)} 条消息 · ${num(info.memories)} 条记忆 · ${num(info.claims)} 条 claim</div>`)}
+    ${card('网关日志', `<div class="big">${num(info.gateway_log_lines)}</div><div class="muted">行 · ${esc(fmtBytes(info.gateway_log_bytes))}</div>`)}
+    ${card('媒体素材', `<div class="big">${num(info.media_files)}</div><div class="muted">本地图片/GIF 文件</div>`)}
+  </div>`;
+
+  const backupRows = backups.length ? `<table><thead><tr><th>名称</th><th>大小</th><th>时间</th><th>操作</th></tr></thead><tbody>
+    ${backups.slice(0, 20).map((item) => `<tr>
+      <td class="mono">${esc(item.name)}</td><td class="num">${esc(fmtBytes(item.bytes))}</td>
+      <td>${fmtDateTime(item.mtime)}</td>
+      <td class="row"><button class="btn small" data-backup-download="${esc(item.name)}">下载</button>
+        <button class="btn small danger" data-backup-delete="${esc(item.name)}">删除</button></td>
+    </tr>`).join('')}</tbody></table>` : '<div class="empty">备份目录里还没有 zip</div>';
+
+  const aliasOptions = aliases.length
+    ? aliases.map((row) => `<option value="${esc(row.alias)}" ${row.exists ? '' : 'disabled'}>${esc(row.alias)}${row.exists ? '' : '（无库）'}</option>`).join('')
+    : '';
+
+  const splitRows = (info.contacts_detail || []).map((row) => {
+    const memory = row.memory || {};
+    const persona = row.persona || {};
+    return `<tr>
+      <td><b>${esc(row.alias || row.stem)}</b><br><span class="mono hint">${esc(row.stem)}</span>
+        ${row.migrated ? badge('已拆分', 'green') : badge(row.single ? '旧版单库' : '待迁移', 'orange')}</td>
+      <td>${memory.name ? `<span class="mono hint">${esc(memory.name)}</span><br>${esc(fmtBytes(memory.bytes))} · ${num(memory.messages)} 消息 / ${num(memory.memories)} 记忆 / ${num(memory.claims)} claim` : '<span class="hint">—</span>'}</td>
+      <td>${persona.name ? `<span class="mono hint">${esc(persona.name)}</span><br>${esc(fmtBytes(persona.bytes))} · ${num(persona.rows)} 行（人格/状态）` : '<span class="hint">—</span>'}</td>
+      <td>${row.legacy ? `<span class="badge orange">legacy</span><br><span class="mono hint">${esc(row.legacy.name)}</span><br>${esc(fmtBytes(row.legacy.bytes))}<br><span class="hint">可删除/可回滚</span>` : '<span class="hint">无</span>'}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" class="empty">还没有联系人库</td></tr>';
+  const splitCard = card('库文件（记忆库 / 人格库）', `
+    <p class="hint">记忆库=<code>*.memory.sqlite3</code>（对话/记忆/claims），人格库=<code>*.persona.sqlite3</code>（人格/状态）；
+      未迁移旧库显示为单库，迁移后旧库改名 <code>*.legacy.sqlite3</code>（可删除/可回滚，不计入统计）。</p>
+    <div style="overflow:auto"><table><thead><tr><th>联系人</th><th>记忆库（对话/记忆）</th><th>人格库（人格/状态）</th><th>旧库 legacy</th></tr></thead>
+      <tbody>${splitRows}</tbody></table></div>`);
+  $('#app').innerHTML = `
+    ${cards}
+    ${splitCard}
+    ${card('备份', `
+      <div class="row between">
+        <div class="row"><button class="btn primary" id="data-backup-btn">立即备份运行数据</button>
+          <span class="hint">打包到 <code>${esc(info.backup_dir)}</code> 的 manual_&lt;时间&gt;.zip；不改动任何数据</span></div>
+        <button class="btn small" id="data-audit-link">查看审计日志</button>
+      </div>
+      <div style="margin-top:10px">${backupRows}</div>`)}
+    ${card('导出', `
+      <div class="row" style="align-items:flex-end">
+        <div class="field"><label>联系人</label><select id="data-export-contact">
+          <option value="">全部联系人</option>${aliasOptions}</select></div>
+        <div class="field"><label>格式</label><select id="data-export-format">
+          <option value="jsonl">JSONL</option><option value="md">Markdown</option></select></div>
+        <div class="field"><label>每个库条数</label><input type="number" id="data-export-limit" value="1000" min="1" max="5000" style="width:110px"></div>
+        <button class="btn" id="data-export-btn">导出聊天记录</button>
+        <button class="btn" id="data-export-mem-btn">导出记忆 JSON</button>
+      </div>
+      <p class="hint" style="margin-top:8px">直接以下载流返回，不落盘到仓库；消息含时间/角色/文本/proactive 标记。</p>`)}
+    ${card('导入备份（危险）', `
+      <div class="row" style="align-items:flex-end">
+        <div class="field"><label>备份 zip</label><select id="data-import-zip">
+          <option value="">— 选择备份 —</option>${backups.map((item) => `<option value="${esc(item.name)}">${esc(item.name)}</option>`).join('')}
+        </select></div>
+        <div class="field"><label>模式</label><select id="data-import-mode">
+          <option value="merge">merge（同名跳过，不覆盖）</option>
+          <option value="overwrite">overwrite（覆盖现有库）</option></select></div>
+        <div class="field"><label>确认短语</label><input type="text" id="data-import-confirm" placeholder="导入备份" style="width:170px"></div>
+        <div class="field"><label>覆盖再确认</label><input type="text" id="data-import-overwrite" placeholder="仅 overwrite 填：覆盖现有库" style="width:220px"></div>
+        <button class="btn factory" id="data-import-btn">导入</button>
+      </div>
+      <p class="hint" style="margin-top:8px">只允许 <code>E:\\agent\\backups\\</code> 下的 zip；解压到临时目录校验后把联系人库复制进 <code>agi/data/selflearn/wechat_contacts/</code>。
+        merge 不覆盖；overwrite 需额外短语。</p>
+      <div id="data-import-result" style="margin-top:8px"></div>`)}`;
+
+  $('#data-backup-btn').onclick = async () => {
+    if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+    const button = $('#data-backup-btn');
+    button.disabled = true; button.textContent = '备份中…';
+    try {
+      const result = await api('/api/data/backup', { method: 'POST', body: {} });
+      toast(`已备份 ${result.files} 个文件 → ${result.backup_path}`, 'ok');
+      renderData();
+    } catch (err) { toast(err.message, 'err'); button.disabled = false; button.textContent = '立即备份运行数据'; }
+  };
+  $('#data-audit-link').onclick = () => {
+    state.logsState = { source: 'audit', q: '', kind: '' };
+    go('logs');
+  };
+  $$('[data-backup-download]').forEach((button) => {
+    button.onclick = () => downloadWithToken('/api/data/backup/download?name=' +
+      encodeURIComponent(button.dataset.backupDownload), button.dataset.backupDownload);
+  });
+  $$('[data-backup-delete]').forEach((button) => {
+    button.onclick = async () => {
+      const confirmText = window.prompt('输入「删除备份」确认删除 ' + button.dataset.backupDelete + '：');
+      if (confirmText === null) return;
+      try {
+        await api('/api/data/backup/delete', {
+          method: 'POST', body: { name: button.dataset.backupDelete, confirm: confirmText },
+        });
+        toast('备份已删除', 'ok'); renderData();
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  });
+  $('#data-export-btn').onclick = () => {
+    const contact = $('#data-export-contact').value;
+    const format = $('#data-export-format').value;
+    const limit = $('#data-export-limit').value || 1000;
+    downloadWithToken(`/api/data/export?contact=${encodeURIComponent(contact)}&format=${format}&limit=${limit}`,
+      'export.' + format);
+  };
+  $('#data-export-mem-btn').onclick = () => {
+    const contact = $('#data-export-contact').value;
+    downloadWithToken('/api/data/export-memories?contact=' + encodeURIComponent(contact),
+      'memories.json');
+  };
+  $('#data-import-btn').onclick = doDataImport;
+}
+
+async function doDataImport() {
+  const zipName = $('#data-import-zip').value;
+  if (!zipName) { toast('先选一个备份 zip', 'err'); return; }
+  const mode = $('#data-import-mode').value;
+  const confirmText = $('#data-import-confirm').value.trim();
+  if (confirmText !== '导入备份') { toast('确认短语必须是「导入备份」', 'err'); return; }
+  if (mode === 'overwrite' && !window.confirm('overwrite 会覆盖现有联系人库，确定继续？')) return;
+  const button = $('#data-import-btn');
+  button.disabled = true;
+  try {
+    const result = await api('/api/data/import', {
+      method: 'POST', body: {
+        zip_path: zipName, confirm: confirmText, mode,
+        overwrite_confirm: ($('#data-import-overwrite').value || '').trim(),
+      },
+    });
+    $('#data-import-result').innerHTML = `<div class="row"><span class="pill ok">导入完成</span>
+      <span class="hint">新增 ${(result.imported || []).length} · 跳过 ${(result.skipped || []).length}</span></div>
+      <div class="hint mono">imported: ${esc((result.imported || []).join(', ') || '—')}<br>skipped: ${esc((result.skipped || []).join(', ') || '—')}</div>`;
+    toast(result.note || '导入完成', 'ok');
+    renderData();
+  } catch (err) {
+    $('#data-import-result').innerHTML = `<div class="error-text">${esc(err.message)}</div>`;
+    toast(err.message, 'err');
+  } finally { button.disabled = false; }
+}
+
+/* ---------------- 记忆编辑（P7-c KnowledgePage 写操作） ---------------- */
+const MEMORY_STATUS_OPTIONS = [['active', 'active'], ['dormant', 'dormant'], ['invalid', 'invalid']];
+
+async function renderMemoryEdit() {
+  const prev = state.memoryEdit || {};
+  state.memoryEdit = {
+    q: prev.q || '', status: prev.status || '', offset: prev.offset || 0,
+    limit: prev.limit || 100, selected: prev.selected || [],
+  };
+  await loadMemoryEdit();
+}
+
+async function loadMemoryEdit() {
+  const edit = state.memoryEdit;
+  $('#app').innerHTML = '<div class="empty">加载记忆…</div>';
+  if (!state.token) {
+    $('#app').innerHTML = card('记忆编辑', '<div class="error-text">记忆编辑需要 admin token：请在右上角填写。</div>');
+    return;
+  }
+  const params = `contact=${encodeURIComponent(edit.contact || '')}&q=${encodeURIComponent(edit.q)}`
+    + `&status=${encodeURIComponent(edit.status)}&limit=${edit.limit}&offset=${edit.offset}`;
+  let data = null, claims = null, metrics = null;
+  const errors = [];
+  try { data = await api('/api/memory/list?' + params); } catch (err) { errors.push('记忆: ' + err.message); }
+  try { claims = await api('/api/memory/claims?limit=100'); } catch (err) { errors.push('claims: ' + err.message); }
+  try { metrics = await api('/api/memory'); } catch (err) { metrics = null; }
+  const items = (data && data.items) || [];
+  const total = (data && data.total) || 0;
+  const memMetrics = (metrics && metrics.metrics && metrics.metrics.memories) || {};
+  const summary = `<div class="grid cols-4">
+    ${card('记忆总数', `<div class="big">${num(memMetrics.total)}</div><div class="muted">active ${num((memMetrics.by_status || {}).active)} · dormant ${num((memMetrics.by_status || {}).dormant)}</div>`)}
+    ${card('休眠率', `<div class="big">${pct(memMetrics.dormant_rate)}</div><div class="muted">阈值 >40% 告警</div>`)}
+    ${card('检索命中', `<div class="big">${pct((metrics && metrics.metrics && metrics.metrics.retrieval || {}).hit_rate)}</div><div class="muted">调用 ${num(((metrics || {}).metrics || {}).retrieval ? metrics.metrics.retrieval.calls : null)}</div>`)}
+    ${card('当前筛选', `<div class="big">${num(total)}</div><div class="muted">条匹配</div>`)}
+  </div>`;
+
+  const rows = items.length ? items.map((item) => `<tr data-memory-id="${esc(item.id)}">
+    <td><input type="checkbox" data-merge-pick="${esc(item.id)}" ${(edit.selected || []).includes(item.id) ? 'checked' : ''}></td>
+    <td class="mono hint">${esc(item.id)}</td>
+    <td>${badge(item.kind || '')}</td>
+    <td><input type="text" class="memory-content" data-memory-content="${esc(item.id)}" value="${esc(item.content || '')}" maxlength="500"></td>
+    <td><input type="number" class="memory-importance" data-memory-importance="${esc(item.id)}" value="${esc(item.importance ?? '')}" min="0" max="1" step="0.05" style="width:80px"></td>
+    <td><select data-memory-status="${esc(item.id)}">${MEMORY_STATUS_OPTIONS.map(([value, label]) =>
+      `<option value="${value}" ${item.status === value ? 'selected' : ''}>${label}</option>`).join('')}</select></td>
+    <td class="hint">${fmtDateTime(item.created_at)}</td>
+    <td class="row">
+      <button class="btn small primary" data-memory-save="${esc(item.id)}">保存</button>
+      <button class="btn small" data-memory-mark="${esc(item.id)}">${Number(item.importance || 0) >= 1 ? '取消重要' : '标重要'}</button>
+      <button class="btn small danger" data-memory-delete="${esc(item.id)}">删除</button>
+    </td>
+  </tr>`).join('') : '<tr><td colspan="8" class="empty">没有匹配的记忆</td></tr>';
+
+  const claimRows = ((claims && claims.items) || []).length ? (claims.items || []).map((item) => `<tr>
+    <td>${esc(item.subject || '')}</td><td>${esc(item.predicate || '')}</td><td>${esc(item.object || '')}</td>
+    <td class="num">${num(item.confidence)}</td><td>${badge(item.status || '')}</td></tr>`).join('')
+    : '<tr><td colspan="5" class="empty">暂无 claims</td></tr>';
+
+  const page = Math.floor(edit.offset / edit.limit) + 1;
+  const pages = Math.max(1, Math.ceil(total / edit.limit));
+  $('#app').innerHTML = `${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
+    ${summary}
+    ${card('记忆列表', `
+      <div class="row between" style="margin-bottom:10px">
+        <div class="row">
+          <input type="text" id="mem-q" placeholder="搜索内容/kind/evidence" value="${esc(edit.q)}" style="max-width:260px">
+          <select id="mem-status"><option value="">全部状态</option>
+            ${MEMORY_STATUS_OPTIONS.map(([value, label]) => `<option value="${value}" ${edit.status === value ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+          <button class="btn" id="mem-search">搜索</button>
+        </div>
+        <div class="row">
+          <button class="btn factory small" id="mem-merge" ${(edit.selected || []).length === 2 ? '' : 'disabled'}>合并选中的两条</button>
+          <span class="hint">第 ${page}/${pages} 页 · 共 ${total} 条</span>
+          <button class="btn small" id="mem-prev" ${edit.offset <= 0 ? 'disabled' : ''}>上一页</button>
+          <button class="btn small" id="mem-next" ${edit.offset + edit.limit >= total ? 'disabled' : ''}>下一页</button>
+        </div>
+      </div>
+      <div style="overflow:auto"><table><thead><tr><th></th><th>id</th><th>kind</th><th>content（行内编辑，≤500）</th>
+        <th>importance</th><th>status</th><th>创建</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="hint" style="margin-top:8px">删除=软删除（status=invalid，不物理删除）；合并会保留较早的一条、另一条标 invalid。</p>`)}
+    ${card('claims（只读）', `<div style="overflow:auto"><table><thead><tr><th>subject</th><th>predicate</th><th>object</th>
+      <th>confidence</th><th>status</th></tr></thead><tbody>${claimRows}</tbody></table></div>`)}`;
+
+  $('#mem-search').onclick = () => {
+    edit.q = $('#mem-q').value.trim(); edit.status = $('#mem-status').value;
+    edit.offset = 0; edit.selected = []; loadMemoryEdit();
+  };
+  $('#mem-prev').onclick = () => { edit.offset = Math.max(0, edit.offset - edit.limit); edit.selected = []; loadMemoryEdit(); };
+  $('#mem-next').onclick = () => { edit.offset += edit.limit; edit.selected = []; loadMemoryEdit(); };
+  $$('[data-merge-pick]').forEach((box) => {
+    box.onchange = () => {
+      const id = box.dataset.mergePick;
+      let selected = edit.selected || [];
+      if (box.checked) {
+        selected = selected.filter((item) => item !== id);
+        if (selected.length >= 2) selected.shift();
+        selected.push(id);
+      } else {
+        selected = selected.filter((item) => item !== id);
+      }
+      edit.selected = selected;
+      loadMemoryEdit();
+    };
+  });
+  $$('[data-memory-save]').forEach((button) => {
+    button.onclick = async () => {
+      const id = button.dataset.memorySave;
+      const content = $(`[data-memory-content="${CSS.escape(id)}"]`).value;
+      const importance = $(`[data-memory-importance="${CSS.escape(id)}"]`).value;
+      const status = $(`[data-memory-status="${CSS.escape(id)}"]`).value;
+      try {
+        await api('/api/memory/update', {
+          method: 'POST', body: { id, content, importance: Number(importance), status },
+        });
+        toast('记忆已更新', 'ok'); loadMemoryEdit();
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  });
+  $$('[data-memory-mark]').forEach((button) => {
+    button.onclick = async () => {
+      const id = button.dataset.memoryMark;
+      const important = button.textContent.indexOf('取消') < 0;
+      try {
+        const result = await api('/api/memory/mark', { method: 'POST', body: { id, important } });
+        toast(important ? '已标记为重要' : '已取消重要', 'ok'); loadMemoryEdit();
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  });
+  $$('[data-memory-delete]').forEach((button) => {
+    button.onclick = async () => {
+      const confirmText = window.prompt('软删除这条记忆（status=invalid，不物理删除）。输入「删除记忆」确认：');
+      if (confirmText === null) return;
+      try {
+        await api('/api/memory/delete', {
+          method: 'POST', body: { id: button.dataset.memoryDelete, confirm: confirmText },
+        });
+        toast('已软删除', 'ok'); loadMemoryEdit();
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  });
+  const merge = $('#mem-merge');
+  if (merge) merge.onclick = async () => {
+    const ids = edit.selected || [];
+    if (ids.length !== 2) return;
+    if (!window.confirm('合并这两条记忆？保留较早的一条，另一条标记 invalid。')) return;
+    try {
+      const result = await api('/api/memory/merge', { method: 'POST', body: { ids } });
+      toast('已合并：保留 ' + result.kept, 'ok');
+      edit.selected = []; loadMemoryEdit();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
 /* ---------------- 路由 ---------------- */
 const RENDERERS = {
   overview: renderOverview,
@@ -1489,6 +1837,8 @@ const RENDERERS = {
   inner: renderInner,
   media: renderMedia,
   memory: renderMemory,
+  data: renderData,
+  knowledge: renderMemoryEdit,
   prompts: renderPrompts,
   models: renderModels,
   providers: renderProviders,

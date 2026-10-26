@@ -28,3 +28,6 @@ MEDIA_ACQUISITION_ENABLED = False
 
 # P8-b：simple 主动链路话题种子（默认开启；legacy 不受影响）
 PROACTIVE_TOPIC_SEED = True
+
+# P10：B站日报话题候选源（默认开启）
+PROACTIVE_TOPIC_BILI = True

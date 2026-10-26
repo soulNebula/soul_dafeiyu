@@ -19,6 +19,7 @@ MAX_CANDIDATES = 3
 MAX_CHARS = 30
 RECENT_DAYS = 7
 _NEGATIVE = ("密码", "银行卡", "身份证", "详细住址", "家庭住址", "验证码")
+BILI_MAX = 2
 
 
 def enabled() -> bool:
@@ -29,6 +30,20 @@ def enabled() -> bool:
         raw = json.loads(WECHAT_CONFIG.read_text(encoding="utf-8"))
         if "proactive_topic_seed" in raw:
             return bool(raw.get("proactive_topic_seed"))
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+def bili_enabled() -> bool:
+    """P10：B站日报候选源开关（默认开启）。"""
+    env = os.environ.get("PROACTIVE_TOPIC_BILI")
+    if env is not None:
+        return str(env).strip().lower() in ("1", "true", "yes", "on")
+    try:
+        raw = json.loads(WECHAT_CONFIG.read_text(encoding="utf-8"))
+        if "proactive_topic_bili" in raw:
+            return bool(raw.get("proactive_topic_bili"))
     except Exception:  # noqa: BLE001
         pass
     return True
@@ -98,6 +113,7 @@ def build(path: Path | str = "", now: float | None = None) -> dict:
         if acceptable(value):
             candidates.append({"text": value, "source": source, "label": label})
 
+    sources = {"bili": False, "report_date": ""}
     # 1) 用户记忆：active，近 30 天优先，importance*confidence 排序
     try:
         con = db.connect(path)
@@ -154,11 +170,39 @@ def build(path: Path | str = "", now: float | None = None) -> dict:
         except Exception:  # noqa: BLE001
             pass
 
+    # 4) P10：B站日报（记忆类之后；最多 2 条，标题清洗；why 只作可聊方向）
+    if len(candidates) < MAX_CANDIDATES and bili_enabled():
+        try:
+            from agi.integrations import bili_digest
+            latest = bili_digest.latest_topics(days=2, limit=3, now=now)
+            sources["report_date"] = str(latest.get("report_date") or "")
+            for topic in latest.get("topics") or []:
+                title = bili_digest.clean_title(topic.get("title"), MAX_CHARS)
+                if not title:
+                    continue
+                value = _clean(title)
+                if not acceptable(value):
+                    continue
+                candidates.append({
+                    "text": value, "source": "bili",
+                    "label": "最近刷到一条视频",
+                    "direction": _clean(topic.get("why")),
+                    "bv": str(topic.get("bv") or ""),
+                    "date": str(topic.get("date") or ""),
+                })
+                sources["bili"] = True
+                bili_count = sum(1 for item in candidates
+                                 if item.get("source") == "bili")
+                if len(candidates) >= MAX_CANDIDATES or bili_count >= BILI_MAX:
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+
     picked = candidates[0]["text"] if candidates else ""
     reason = ("no_candidates" if not candidates
               else "selected:" + ",".join(item["source"] for item in candidates))
     return {"picked": picked, "candidates": candidates[:MAX_CANDIDATES],
-            "reason": reason}
+            "reason": reason, "sources": sources}
 
 
 def prompt_block(seed: dict | None) -> str:
@@ -167,6 +211,9 @@ def prompt_block(seed: dict | None) -> str:
         return ""
     lines = ["可自然提起的旧话题（可选，不必都用；用就具体，不要复述记忆原文）："]
     for item in candidates[:MAX_CANDIDATES]:
-        lines.append(f"- {item['label']}「{item['text']}」")
+        if item.get("source") == "bili":
+            lines.append(f"- 最近刷到「{item['text']}」（视频，可聊）")
+        else:
+            lines.append(f"- {item.get('label') or '用户之前提过'}「{item['text']}」")
     lines.append("最多提 1 个；不要每条都提；不要写“我记得你说过…”这种复述腔。")
     return "\n".join(lines)

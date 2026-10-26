@@ -96,6 +96,8 @@ MIXED_TEXTS = (
 # 1) 20 tick 语气统计
 # --------------------------------------------------------------------------- #
 def test_twenty_ticks_voice_stats(tmp_path, monkeypatch):
+    import random as _random
+    _random.seed(1234)   # 去随机 flake：口语元素覆盖率为概率性断言
     _force_kind(monkeypatch, "care")
     path = _seed(tmp_path)
     client = FakeClient()

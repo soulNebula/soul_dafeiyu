@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import config as cfg
 from . import control, drafts, media as media_mod, policy, sendclass
-from .receiver import WeChatReceiver, is_mention
+from .receiver import WeChatReceiver, is_mention, looks_like_pat
 from .sender import WxAutoSender
 from .. import textguard
 
@@ -60,6 +60,39 @@ def format_pat_message(text: str) -> str:
     if left:  # 两边都是昵称：好友拍了对方，保留对象名
         return f"[拍一拍] 对方（{left}）拍了拍你"
     return "[拍一拍] 对方拍了拍你"
+
+
+def normalize_inbound_text(text: str, kind: str = "text", *,
+                           mention_name: str = "",
+                           mention: bool = False) -> str:
+    """P29：入站文本统一转写（纯函数，供 `_reply` 与诊断脚本共用）。
+
+    - 撤回 → ``[对方撤回了一条消息]``
+    - 引用 → ``[引用] 对方引用了这条消息：…``
+    - 拍一拍（system 或真机 kind=text 的短文案，带「」/双引号均可）→ ``[拍一拍] …``
+    - @昵称 → ``[对方@了你] `` 前缀（幂等，不重复加）
+    """
+    value = str(text or "")
+    state = str(kind or "text").strip().lower()
+    if state == "system":
+        if "撤回" in value:
+            value = "[对方撤回了一条消息]"
+        elif "引用消息" in value:
+            quoted = value.replace("[引用消息]", "对方引用了这条消息：", 1).strip()
+            quoted = quoted.replace("： ", "：")
+            value = "[引用] " + quoted
+        elif "拍了拍" in value:
+            # system 事件只要含「拍了拍」就是拍一拍（system 一定是事件，不是用户说的话）
+            value = format_pat_message(value)
+    elif looks_like_pat(value):
+        # P29：真机（2026-10-27 15:08）wx_core 把拍一拍 OCR 成 kind=text：
+        # 原文 `"白云一片去悠悠" 拍了拍我` 若只按 system 处理会漏进生成链。
+        value = format_pat_message(value)
+    message = value
+    if message and (mention or is_mention(message, mention_name)) \
+            and not message.startswith("[对方@了你]"):
+        message = "[对方@了你] " + message
+    return message
 
 _REACTION_WORDS = {
     "good": "good", "好": "good", "好评": "good", "不错": "good", "赞": "good", "满意": "good",
@@ -839,26 +872,27 @@ class Gateway:
         from agi.selflearn.chat import SelfLearnAgent
 
         contact = str(msg.get("friend") or "")
-        text = str(msg.get("text") or "")
+        raw_text = str(msg.get("text") or "")
         # 上行也消毒：引用内容里可能是内部 ID（上游已按类型解析，这里兜底）
-        text = textguard.strip_internal_ids(text)
+        text = textguard.strip_internal_ids(raw_text)
         kind = str(msg.get("kind") or "text")
+        mention_name = str(self.cfg.get("mention_name") or "").strip()
+        pat_detected = bool(msg.get("pat")) or looks_like_pat(text)
+        # P29：统一转写（撤回/引用/拍一拍【含真机 kind=text 变体】/@前缀）
+        text = normalize_inbound_text(
+            text, kind, mention_name=mention_name,
+            mention=bool(msg.get("mention")))
+        if pat_detected:
+            # 真机核对用：raw text / kind / 转换结果（2026-10-27 15:08 事故复现点）
+            try:
+                self._record("pat_detected", {
+                    "friend": contact, "msg_kind": kind,
+                    "raw": raw_text[:200], "text": text[:200],
+                    "stripped": str(raw_text).strip()[:200]})
+            except Exception:  # noqa: BLE001 - 审计失败不影响回复
+                pass
         db_path = cfg.contact_db(contact)
         agent = SelfLearnAgent(db_path)
-        if kind == "system":
-            if "撤回" in text:
-                text = "[对方撤回了一条消息]"
-            elif "拍了拍" in text:
-                text = format_pat_message(text)
-            elif "引用消息" in text:
-                quoted = text.replace("[引用消息]", "对方引用了这条消息：", 1).strip()
-                quoted = quoted.replace("： ", "：")
-                text = "[引用] " + quoted
-        # P22：@提及（receiver 已标 mention；这里也防御性识别一次，幂等不重复加前缀）
-        mention_name = str(self.cfg.get("mention_name") or "").strip()
-        if (msg.get("mention") or is_mention(text, mention_name)) \
-                and not text.startswith("[对方@了你]"):
-            text = "[对方@了你] " + text
         image_data = ""
         if kind in ("image", "emoji"):
             image_data = self._image_data_url(str(msg.get("media_path") or ""))

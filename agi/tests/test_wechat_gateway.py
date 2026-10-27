@@ -209,3 +209,63 @@ def test_chat_pat_returns_one_char_not_normal_reply(tmp_path, monkeypatch):
     out = agent.send("[拍一拍] 对方拍了拍你")
     assert out["reply"] == "干嘛？" and len(out["reply"]) <= 4
     assert captured["reply"] == "干嘛？"
+
+
+# --------------------------------------------------------------------------- #
+# P29：真机拍一拍（kind=text + 引号/「」文案）识别修复
+# --------------------------------------------------------------------------- #
+def test_receiver_marks_pat_text_variants():
+    backend = FakeBackend()
+    got: list[dict] = []
+    receiver = WeChatReceiver(backend, ["文件传输助手"], got.append)
+    variants = [
+        '"白云一片去悠悠" 拍了拍我',
+        '"白云一片去悠悠"拍了拍我',
+        "「白云一片去悠悠」拍了拍我",
+        "拍了拍你",
+        "我拍了拍你",
+    ]
+    for i, text in enumerate(variants):
+        receiver.handle_event(_message({
+            "friend": "文件传输助手", "sender": "friend", "kind": "text",
+            "text": text, "id": f"pat-text-{i}"}))
+    assert [m.get("pat") for m in got] == [True] * len(variants)
+
+    # 正常聊天里含「拍了拍」的句子不能误判（"今天拍了拍照" 的字面包含"拍了拍"）
+    receiver.handle_event(_message({
+        "friend": "文件传输助手", "sender": "friend", "kind": "text",
+        "text": "今天拍了拍照，光线不错", "id": "not-pat"}))
+    assert got[-1].get("pat") is None
+
+
+def test_server_text_pat_variants_convert_and_log(tmp_path, monkeypatch):
+    monkeypatch.setattr("agi.selflearn.chat.SelfLearnAgent", _CapturingAgent)
+    _CapturingAgent.texts = []
+    g = _pat_gateway(tmp_path)
+
+    raws = [
+        '"白云一片去悠悠" 拍了拍我',     # 2026-10-27 15:08 真机原文
+        '"白云一片去悠悠"拍了拍我',
+        "「白云一片去悠悠」拍了拍我",
+        "拍了拍你",
+        "我拍了拍你",
+    ]
+    for raw in raws:
+        g._reply({"friend": "好友A", "kind": "text", "text": raw})
+    assert _CapturingAgent.texts == [
+        "[拍一拍] 对方拍了拍你",
+        "[拍一拍] 对方拍了拍你",
+        "[拍一拍] 对方拍了拍你",
+        "[拍一拍] 对方拍了拍你",
+        "[拍一拍] 你拍了拍对方",
+    ]
+    events = [e for e in g.recent if e.get("kind") == "pat_detected"]
+    assert len(events) == len(raws)
+    assert events[0]["raw"] == '"白云一片去悠悠" 拍了拍我'
+    assert events[0]["msg_kind"] == "text"
+    assert events[0]["text"].startswith("[拍一拍]")
+
+    # 普通文本不转写、不记 pat_detected
+    g._reply({"friend": "好友A", "kind": "text", "text": "今天拍了拍照，光线不错"})
+    assert _CapturingAgent.texts[-1] == "今天拍了拍照，光线不错"
+    assert len([e for e in g.recent if e.get("kind") == "pat_detected"]) == len(raws)

@@ -28,6 +28,10 @@
 P22：文本里出现 ``@配置昵称``（``mention_name``）时，在回调的 data 上打
 ``mention=True`` 标记（不改原文），网关 server 据此加 ``[对方@了你]`` 前缀。
 
+P29：真机拍一拍不一定以 ``kind=system`` 送达——wx_core 可能把它 OCR 成
+``kind=text``（原文如 ``"白云一片去悠悠" 拍了拍我``）。短文本含「拍了拍」时在
+回调 data 上打 ``pat=True``，server 按 ``[拍一拍] …`` 统一转写并记 ``pat_detected``。
+
 线程模型
 --------
 ``start()`` 起一个 daemon 后台线程，阻塞读 ``backend.events``（带 timeout 以便感知停止）；
@@ -68,6 +72,26 @@ def is_mention(text: object, mention_name: object) -> bool:
     if not value or not name or "@" not in value:
         return False
     return f"@{name}" in value
+
+
+def looks_like_pat(text: object) -> bool:
+    """P29：拍一拍事件识别（真机可能以 ``kind=text`` 送达）。
+
+    微信/OCR 原文样例（2026-10-27 15:08 真机）：``"白云一片去悠悠" 拍了拍我``
+    （ASCII 双引号 + 空格）、``「白云一片去悠悠」拍了拍我``、``我拍了拍你``。
+
+    必须满足以下之一才认（避免把「今天拍了拍照」这类正常句子误判）：
+    - ``拍了拍`` 后面紧跟人称（我/你/他/她/它/对方/咱/俺）；
+    - 带引号/「」包裹的名字（``"X" 拍了拍我``、``「X」拍了拍我``）。
+    文本长度限制 120，避免长段聊天里偶然出现「拍了拍」被当事件。
+    """
+    value = _clean(text)
+    if not value or "拍了拍" not in value or len(value) > 120:
+        return False
+    after = value.split("拍了拍", 1)[1].lstrip(" 　")
+    if after[:1] in ("我", "你", "他", "她", "它", "对", "咱", "俺"):
+        return True
+    return any(mark in value for mark in ("「", "」", '"', "“", "”"))
 
 
 class WeChatReceiver:
@@ -364,6 +388,9 @@ class WeChatReceiver:
                 data.get("text"), self.mention_name):
             data["mention"] = True
             data["mention_name"] = self.mention_name
+        # P29：真机拍一拍可能以 kind=text 送达（带引号/「」的短文案）→ 打 pat 标记
+        if looks_like_pat(data.get("text")):
+            data["pat"] = True
         return data
 
     def _reject_reason(self, data: dict) -> str:

@@ -128,12 +128,53 @@ def _violations(text: str, media: dict | None, anchors: list[str],
     if kind == "progress_check" and not re.search(
             r"[?？]|怎么样|如何|顺利|进展|结果|定下来|弄完|完成|成功", value):
         reasons.append("progress_question_missing")
+    try:
+        from . import guard as _guard
+        if _guard.false_failure_check(value).get("hit"):
+            reasons.append("false_failure")
+    except Exception:  # noqa: BLE001
+        pass
     return reasons
+
+
+def today_activity_context(now: float | None = None) -> str:
+    """P36：主动消息注入真实的今日 B站/冲浪状态，避免用网络故障解释没分享。"""
+    now = time.time() if now is None else float(now)
+    day = time.strftime("%Y-%m-%d", time.localtime(now))
+    ran, picked, report_date = 0, 0, ""
+    try:
+        state_path = Path(os.environ.get("BILI_DUTY_STATE")
+                          or (Path.home() / ".dsh" / "bili-duty" / "state.json"))
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
+        if str(raw.get("day") or "") == day:
+            ran = int(raw.get("count") or 0)
+            picked = int(raw.get("picked") or 0)
+            report_date = str(raw.get("day") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    sessions, items = 0, 0
+    try:
+        from . import surf
+        status = surf.status()
+        today = status.get("today") or {}
+        sessions = int(today.get("executed") or today.get("sessions") or 0)
+        for session in status.get("recent_sessions") or []:
+            if time.strftime("%Y-%m-%d", time.localtime(
+                    float(session.get("started_at") or 0))) == day:
+                items += int(session.get("items_seen") or 0)
+    except Exception:  # noqa: BLE001
+        pass
+    return (
+        f"\n今天真实后台状态（不是借口，不要拿它编故障）："
+        f"bili_today: ran={ran}, picked={picked}, report_date={report_date or day}; "
+        f"surf_today: sessions={sessions}, items={items}。"
+        "如果今天没刷到可分享的内容，就说没看到什么；"
+        "不要说网络坏了/页面打不开/刷不了B站；被问就老实说后台刷到的东西还没整理好。")
 
 
 def _simple_prompt(kind: str, dialog: str, media_ctx: str,
                    fix_reason: str = "", topic_ctx: str = "",
-                   anchor: str = "") -> str:
+                   anchor: str = "", activity_ctx: str = "") -> str:
     from . import proactive
     time_line = ""
     try:
@@ -149,6 +190,8 @@ def _simple_prompt(kind: str, dialog: str, media_ctx: str,
               "不要问对方为什么不回。"
               "\n正文禁止出现：表情包/素材/清单/表情库/系统/指令/记忆库/记忆/[[media："
               "想发贴纸就单独输出 [[media:...]] 指令行，不要用文字描述。")
+    if activity_ctx:
+        prompt += activity_ctx
     if topic_ctx:
         prompt += "\n" + topic_ctx
     if media_ctx:
@@ -614,9 +657,10 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
             topic = {"picked": "", "candidates": [], "reason": "error"}
             topic_ctx = ""
     progress_anchor = str(best.get("anchor") or "") if kind == "progress_check" else ""
+    activity_ctx = today_activity_context(now)
     prompt = _simple_prompt(kind, dialog, media_ctx,
                             topic_ctx="" if kind == "progress_check" else topic_ctx,
-                            anchor=progress_anchor)
+                            anchor=progress_anchor, activity_ctx=activity_ctx)
     raw, answered = _ask_simple(client, prompt,
                                  temperature=0.35 if kind == "progress_check" else 0.8)
     if not answered or not raw or raw.upper().startswith("SKIP"):
@@ -642,7 +686,8 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
         fix_prompt = _simple_prompt(kind, dialog, media_ctx,
                                     fix_reason=regen_reason,
                                     topic_ctx="" if kind == "progress_check" else topic_ctx,
-                                    anchor=str(best.get("anchor") or ""))
+                                    anchor=str(best.get("anchor") or ""),
+                                    activity_ctx=activity_ctx)
         fix_raw, fix_answered = _ask_simple(
             client, fix_prompt, temperature=0.35 if kind == "progress_check" else 0.8)
         if fix_answered and fix_raw and not fix_raw.upper().startswith("SKIP"):

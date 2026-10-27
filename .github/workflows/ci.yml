@@ -1,0 +1,60 @@
+name: CI
+
+# 开源基线 CI：密钥扫描 + 离线测试。
+# 说明：项目本体跑在 Windows（真实微信窗口），CI 用 ubuntu 只验证「纯逻辑 + 离线测试」。
+# Python 版本：本地开发用 3.14；GitHub Actions 的 setup-python 若暂无 3.14 稳定轮子，
+# 按任务约定退到 3.12（代码保持 3.12+ 兼容）。
+
+on:
+  push:
+    branches: ["main", "master", "w4-soul"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: secrets scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Scan git-tracked files for credentials
+        run: python tools/check_secrets.py
+
+  test:
+    name: test (py3.12, ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+      # 让测试知道自己在 CI（不依赖微信窗口/真实后端/本机数据目录）
+      SOULAGENT_CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # 只装 requirements 里的运行时依赖；wxauto / 微信窗口 / 本机 Hook 属于
+          # Windows-only 外部依赖，不在 requirements.txt 里，CI 不安装。
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+      - name: Run offline test suite
+        run: |
+          python -m pytest agi/tests tests -q --ignore=tests/test_webui.py

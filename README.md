@@ -1,5 +1,9 @@
 # 小鱼 · 会聊天的本地伴侣
 
+[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-blue.svg)](.github/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](https://www.python.org/)
+
 > 微信里真实收发消息的 AI 伴侣：有长期记忆、自己的心情、会主动找你、有内驱力、会写日记、会自己上网冲浪，也会被你的反馈一点点改变。
 >
 > **大模型负责「会说」，这个项目负责「是谁」**——记忆、情绪、人格、关系、欲望都在模型外面，一层层注入、一层层约束。

@@ -201,3 +201,15 @@ def test_structure_varies_after_three_same_shapes():
     assert out != "在听播客，觉得挺舒服。"
     assert len(out) > len("在听播客，觉得挺舒服。")
     assert proactive.has_self_feeling(out)
+
+
+def test_split_bubbles_comma_makes_two_bubbles():
+    """2026-10-27：她不用句号，高心情时应能按逗号切成两条（微信连发感）。"""
+    from agi.selflearn.style_profile import split_bubbles
+    parts = split_bubbles("买份麻辣烫加盒青菜，或者半只白切鸡配凉拌菜", 2)
+    assert len(parts) == 2
+    assert parts[0] and parts[1]
+    # max_bubbles=1 时不切
+    assert split_bubbles("买份麻辣烫加盒青菜，或者半只白切鸡配凉拌菜", 1) == ["买份麻辣烫加盒青菜，或者半只白切鸡配凉拌菜"]
+    # 短句不切
+    assert split_bubbles("累就歇着", 2) == ["累就歇着"]

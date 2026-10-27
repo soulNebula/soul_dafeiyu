@@ -69,7 +69,21 @@ def split_bubbles(text: str, max_bubbles: int = 1) -> list[str]:
     text = str(text or "").strip()
     if not text or max_bubbles <= 1:
         return [text] if text else []
-    parts = [p.strip() for p in re.split(r"(?<=[。！？!?])", text) if p.strip()]
+    # 2026-10-27：允许模型用换行主动"连发两条"（微信连发的自然形态）。
+    # 先按换行切；只有一行时再按句末标点切（旧行为）。
+    parts = [p.strip() for p in re.split("[" + chr(10) + "]+", text) if p.strip()]
+    if len(parts) <= 1:
+        parts = [p.strip() for p in re.split(r"(?<=[。！？!?])", text) if p.strip()]
+    if len(parts) <= 1 and int(max_bubbles) >= 2 and len(text) >= 12:
+        # 2026-10-27：她平时不用句号，导致永远只发一条。
+        # 高心情/高分享欲时按逗号在中间偏后处切成两条，做出"微信连发"的感觉。
+        cuts = [m.start() for m in re.finditer("[，,]", text)]
+        if cuts:
+            mid = len(text) / 2
+            cut = min(cuts, key=lambda i: abs(i - mid))
+            tail = text[cut + 1:].strip()
+            if 4 <= cut and len(tail) >= 3:
+                parts = [text[:cut].rstrip("，,"), tail]
     if len(parts) <= 1:
         return [text]
     return parts[:max(1, int(max_bubbles))]

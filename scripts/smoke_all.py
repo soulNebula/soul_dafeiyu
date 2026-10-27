@@ -15,14 +15,34 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
+from pathlib import Path
 from dataclasses import dataclass
 
 import httpx
 
 DEFAULT_TOKEN = os.environ.get("IDEA_TOKEN", "8888")
+
+
+def _gateway_token() -> str:
+    """网关 token 从 SoulAgent 生产配置读（F3 轮换后不再是 8888）。"""
+    env = os.environ.get("GATEWAY_TOKEN")
+    if env:
+        return env
+    try:
+        home = Path(os.environ.get("SOULAGENT_HOME",
+                                   r"C:\Users\Administrator\Desktop\SoulAgent"))
+        cfg = json.loads((home / "agi" / "data" / "wechat" / "config.json")
+                         .read_text(encoding="utf-8"))
+        return str(cfg.get("admin_token") or DEFAULT_TOKEN)
+    except Exception:  # noqa: BLE001
+        return DEFAULT_TOKEN
+
+
+GATEWAY_TOKEN = _gateway_token()
 
 
 @dataclass
@@ -32,6 +52,7 @@ class Check:
     url: str
     token: bool = False
     require_ok: bool = True
+    gateway: bool = False
 
 
 def _checks() -> list[Check]:
@@ -54,7 +75,8 @@ def _checks() -> list[Check]:
     out = [Check("workbench", "GET", wb + path, token) for _name, path, token in paths]
     out.extend([
         Check("gateway", "GET", gw + "/health", False),
-        Check("gateway", "GET", gw + "/status", True, require_ok=False),
+        Check("gateway", "GET", gw + "/status", True, require_ok=False,
+              gateway=True),
         Check("console", "GET", console + "/api/health", True),
         Check("llama8123", "GET", "http://127.0.0.1:8123/v1/models", False),
         Check("local3b8125", "GET", "http://127.0.0.1:8125/v1/models", False),
@@ -70,17 +92,21 @@ def _label(check: Check) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="IDEA 全服务冒烟")
     parser.add_argument("--token", default=DEFAULT_TOKEN)
+    parser.add_argument("--gateway-token", default=GATEWAY_TOKEN)
     parser.add_argument("--timeout", type=float, default=8.0)
     args = parser.parse_args(argv)
     token = str(args.token or "")
+    gw_token = str(args.gateway_token or GATEWAY_TOKEN)
     headers = {"X-Admin-Token": token, "Accept": "application/json"}
+    gw_headers = {"X-Admin-Token": gw_token, "Accept": "application/json"}
     rows: list[tuple[str, bool, str]] = []
     client = httpx.Client(timeout=args.timeout, trust_env=False)
     try:
         for check in _checks():
+            hdrs = gw_headers if check.gateway else headers
             started = time.perf_counter()
             try:
-                response = client.get(check.url, headers=headers if check.token else None)
+                response = client.get(check.url, headers=hdrs if check.token else None)
                 elapsed = (time.perf_counter() - started) * 1000
                 payload = None
                 try:

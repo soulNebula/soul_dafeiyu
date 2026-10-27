@@ -54,6 +54,24 @@ WB = "http://127.0.0.1:803"          # 工作台
 GW = "http://127.0.0.1:801"          # 微信网关
 CONSOLE = "http://127.0.0.1:802"     # 控制台
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
+
+
+def _gateway_token() -> str:
+    """网关 token 从 SoulAgent 配置读（F3 轮换后不是 8888）。"""
+    env = os.environ.get("GATEWAY_TOKEN")
+    if env:
+        return env
+    try:
+        home = Path(os.environ.get("SOULAGENT_HOME",
+                                   "C:/Users/Administrator/Desktop/SoulAgent"))
+        raw = json.loads((home / "agi" / "data" / "wechat" / "config.json")
+                         .read_text(encoding="utf-8"))
+        return str(raw.get("admin_token") or TOKEN)
+    except Exception:  # noqa: BLE001
+        return TOKEN
+
+
+GATEWAY_TOKEN = _gateway_token()
 VIEWS = ("welcome", "train", "models", "chat", "moments", "drafts")
 SCREEN_MIN_BYTES = 20 * 1024
 PYTEST_TIMEOUT_S = 1800              # 单组 pytest 上限 30min
@@ -246,8 +264,9 @@ def step_smoke(matrix: Matrix, args: argparse.Namespace) -> None:
 def _http_get(client: httpx.Client, name: str, url: str, *,
               token: bool, matrix: Matrix, group: str = "功能 E2E",
               expect_ok: bool = True, allow_404_skip: bool = False,
-              timeout: float = 20.0) -> bool:
-    headers = {"X-Admin-Token": str(TOKEN), "Accept": "application/json"} if token else None
+              timeout: float = 20.0, gateway: bool = False) -> bool:
+    tok = GATEWAY_TOKEN if gateway else TOKEN
+    headers = {"X-Admin-Token": str(tok), "Accept": "application/json"} if token else None
     started = time.perf_counter()
     try:
         response = client.get(url, headers=headers, timeout=timeout)
@@ -296,7 +315,7 @@ def step_e2e(matrix: Matrix, args: argparse.Namespace) -> None:
         # 网关
         _http_get(client, "网关 /health", GW + "/health", token=False, matrix=matrix)
         _http_get(client, "网关 /status（X-Admin-Token）", GW + "/status",
-                  token=True, matrix=matrix)
+                  token=True, matrix=matrix, gateway=True)
 
         # 对话试跑（dry，不发微信）
         url = WB + "/api/wb/chat/test"

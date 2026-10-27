@@ -96,6 +96,13 @@ class MemPurgeBody(BaseModel):
 
 
 # ------------------------------------------------------------------ 基础
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """静默 204：避免浏览器反复 404 干扰日志。"""
+    from fastapi.responses import Response as _Resp
+    return _Resp(status_code=204)
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "idea-workbench", "version": "0.1.0",

@@ -68,9 +68,14 @@ def _int_or(value: Any, default: int) -> int:
 
 
 def day_start(now: float | None = None) -> float:
-    """本地时区当天 0 点的时间戳（日上限用）。"""
+    """本地时区当天 0 点的时间戳（日上限用）。
+
+    用「now - 当天已过秒数」而不是 mktime：Windows 对 1970 附近时间戳会
+    OverflowError（测试常用 now=100 这类小值）。
+    """
     now = time.time() if now is None else float(now)
-    return time.mktime(time.localtime(now)[:3] + (0, 0, 0, 0, 0, -1))
+    tm = time.localtime(now)
+    return now - (tm.tm_hour * 3600 + tm.tm_min * 60 + tm.tm_sec)
 
 
 def _prob_range(config: dict[str, Any]) -> tuple[float, float]:

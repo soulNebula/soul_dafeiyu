@@ -66,12 +66,17 @@ DEFAULTS = {
     "proactive_probability_max": 0.9,
     # P16-B：主动节奏对等（按近 7 天用户主动量自适应；只影响本轮调度，不改写配置文件）
     #   pacing_enabled：总开关；pacing_target_ratio：目标 agent/user；容差 ±tolerance
-    #   pacing_daily_cap：每天主动条数硬上限；pacing_min_interval_s：间隔下限（秒）
+    #   pacing_daily_cap：旧固定上限（兼容）；P33 起日上限按当天聊天量动态算：
+    #   pacing_daily_cap_min/max = 动态 cap 的下/上界（默认 12/100）
     "pacing_enabled": True,
     "pacing_target_ratio": 1.0,
     "pacing_tolerance": 0.25,
     "pacing_daily_cap": 12,
+    "pacing_daily_cap_min": 12,
+    "pacing_daily_cap_max": 100,
     "pacing_min_interval_s": 1200,
+    # P33：主动度（关系熟悉度×心情×信任 → 概率↑/间隔↓/分享偏好）；默认开
+    "initiative_enabled": True,
     "proactive_until_ts": 0,
     "reply_debounce_ms": 2000,
     # 对方多久之前还在说话就不主动（秒）：15 分钟，对齐 qq-bridge 的静默要求

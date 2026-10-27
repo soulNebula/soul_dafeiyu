@@ -887,54 +887,76 @@ class SelfLearnAgent:
                 except Exception:  # noqa: BLE001
                     pass
             reply = guard_info["reply"][:800]
-            # P27：网络梗/比赛比喻守卫：命中 → 追加 system 规则重写一次；
-            # 仍命中 → 删掉命中分句（保底）。开关默认开。
+            # P27/P28：网络腔 + 金句腔/主动收尾守卫：命中 → 同预算重写一次；
+            # 仍命中 → 删命中分句（保底）。开关默认开。
             slang_enabled = True
+            canned_enabled = True
             try:
                 from . import config as _config
                 slang_enabled = bool(getattr(_config, "SLANG_GUARD_ENABLED", True))
+                canned_enabled = bool(getattr(_config, "CANNED_GUARD_ENABLED", True))
                 env = os.environ.get("SLANG_GUARD_ENABLED")
                 if env is not None:
                     slang_enabled = str(env).strip().lower() in ("1", "true", "yes", "on")
+                env = os.environ.get("CANNED_GUARD_ENABLED")
+                if env is not None:
+                    canned_enabled = str(env).strip().lower() in ("1", "true", "yes", "on")
             except Exception:  # noqa: BLE001
                 pass
-            if slang_enabled:
-                slang = guard.slang_check(reply)
-                if slang.get("hit"):
-                    original = reply
+            slang = guard.slang_check(reply) if slang_enabled else {"hit": False, "issues": []}
+            canned = (guard.canned_check(reply, text) if canned_enabled
+                      else {"hit": False, "issues": []})
+            if slang.get("hit") or canned.get("hit"):
+                original = reply
+                rewritten = ""
+                try:
+                    if self.client.available():
+                        rule = ("\n【重写要求】刚才回复里出现了网络梗/游戏腔/比赛比喻、"
+                                "金句腔/总结式评价，或在不该收尾时主动结束话题；"
+                                "换成普通人日常说话：不用赢了/输了/这波/拿捏/绝了/笑死/666/血压；"
+                                "不写“但耐看/挺稳的/买完就踏实了/这默契先存着/我接住了/收下了/接住了/存着/记下了”；"
+                                "除非对方明说要去忙/要睡/再见，否则不要用那先这样/忙你的去/你先忙/回聊收尾。")
+                        regen_prompt = (prompt + "\n上次回复：" + original[:160]
+                                        + "\n请按重写要求重写这一条，只输出正文。")
+                        regen, _regen_meta = generation.generate(
+                            self.client, system_text + rule, regen_prompt, mems,
+                            purpose="selflearn_chat", max_tokens=500,
+                            temperature=0.6)
+                        if regen.get("ok"):
+                            candidate = str(regen.get("text") or "").strip()
+                            bad = False
+                            if candidate and slang_enabled:
+                                bad = bad or guard.slang_check(candidate).get("hit")
+                            if candidate and canned_enabled:
+                                bad = bad or guard.canned_check(candidate, text).get("hit")
+                            if candidate and not bad:
+                                rewritten = candidate
+                except Exception:  # noqa: BLE001
                     rewritten = ""
-                    try:
-                        if self.client.available():
-                            rule = ("\n【重写要求】刚才回复里出现了网络梗/游戏腔/比赛比喻或总结式评价"
-                                    "（赢了/输了/这波/拿捏/绝了/笑死/栓Q/666/开摆/绷不住/血压/算是…）；"
-                                    "把这几处换成普通人日常说话，别用这些词，别拿对方的事做输赢评判。")
-                            regen_prompt = (prompt + "\n上次回复：" + original[:160]
-                                            + "\n请按重写要求重写这一条，只输出正文。")
-                            regen, _regen_meta = generation.generate(
-                                self.client, system_text + rule, regen_prompt, mems,
-                                purpose="selflearn_chat", max_tokens=500,
-                                temperature=0.6)
-                            if regen.get("ok"):
-                                candidate = str(regen.get("text") or "").strip()
-                                if candidate and not guard.slang_check(candidate).get("hit"):
-                                    rewritten = candidate
-                    except Exception:  # noqa: BLE001
-                        rewritten = ""
-                    if rewritten:
-                        reply = rewritten
-                        method = "regenerated"
+                if rewritten:
+                    reply = rewritten
+                    method = "regenerated"
+                else:
+                    cleaned = reply
+                    if slang.get("hit"):
+                        cleaned = guard.strip_slang_clauses(cleaned)
+                    if canned.get("hit"):
+                        cleaned = guard.strip_canned_clauses(cleaned, text)
+                    if cleaned:
+                        reply = cleaned
+                        method = "clause_removed"
                     else:
-                        cleaned = guard.strip_slang_clauses(reply)
-                        if cleaned:
-                            reply = cleaned
-                            method = "clause_removed"
-                        else:
-                            reply = self._fallback(text or "")
-                            method = "fallback"
+                        reply = self._fallback(text or "")
+                        method = "fallback"
+                if slang.get("hit"):
                     guard_info["slang_regenerated"] = {
                         "before": original[:300], "after": reply[:300],
                         "issues": slang.get("issues") or [], "method": method}
-                    guard_info["reply"] = reply
+                if canned.get("hit"):
+                    guard_info["canned_regenerated"] = {
+                        "before": original[:300], "after": reply[:300],
+                        "issues": canned.get("issues") or [], "method": method}
+                guard_info["reply"] = reply
             if not image:
                 reply = style_profile.tune_reply(text, reply)
             if any(term in reply for term in INTERNAL_LEAK_TERMS):

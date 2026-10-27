@@ -10,7 +10,8 @@ from typing import Any
 from . import autonomy, proactive
 
 
-def run_once(path: Path | str, client=None, *, now: float | None = None) -> dict[str, Any]:
+def run_once(path: Path | str, client=None, *, now: float | None = None,
+             drive: float | None = None) -> dict[str, Any]:
     gate = autonomy.gate(path, now)
     if not gate.get("allowed"):
         return {"ok": True, "ran": False, "reason": gate.get("reason"), "gate": gate}
@@ -21,6 +22,7 @@ def run_once(path: Path | str, client=None, *, now: float | None = None) -> dict
         cooldown=float(cfg.get("cooldown_seconds", 900)),
         min_score=cfg.get("min_score"),
         respect_state=bool(cfg.get("respect_state", True)),
+        drive=drive,
     )
     return {"ok": True, "ran": True, "gate": gate, "proactive": result}
 

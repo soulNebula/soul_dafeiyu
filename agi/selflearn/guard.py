@@ -25,6 +25,13 @@ FORBIDDEN = ("保证收益", "包治", "百分之百治好", "你必须", "你�
 SLANG_RE = re.compile(
     r"赢了|输了|这波|拿捏|绝了|笑死|栓Q|666|开摆|绷不住|"
     r"血压(?:飙升|升高)?|算是.{0,6}(?:赢|输)|只能算")
+#: P28：金句腔/伪深刻短评（命中后重写或删分句）
+CANNED_RE = re.compile(
+    r"不高级.{0,8}耐看|耐看|挺稳|蛮稳|不会出错|默契|收下了|接住了|记下了|存着|"
+    r"踏实了|心里舒坦|花在刀刃上|这波不亏|值了|算下来")
+#: P28：主动结束话题；用户明确说要走/忙/睡/再见时例外
+CLOSING_RE = re.compile(r"那先这样|忙你的去|你先忙|回聊|改天聊|不打扰了")
+_CLOSING_ALLOW_RE = re.compile(r"忙|睡|晚安|再见|bye|出门|上班|下班|走")
 
 
 def slang_check(text: Any) -> dict:
@@ -50,6 +57,36 @@ def strip_slang_clauses(text: Any) -> str:
             kept.append(clause + sep)
     result = "".join(kept).strip("，,。；; ")
     return result
+
+
+def canned_check(text: Any, user_text: Any = "") -> dict:
+    """返回 {hit, issues, canned_hits, closing_hits, closing_allowed}。"""
+    value = str(text or "")
+    value = re.sub(r"\[\[media:[^\]]*\]\]", "", value)
+    canned_hits = list(dict.fromkeys(CANNED_RE.findall(value)))
+    allowed = bool(_CLOSING_ALLOW_RE.search(str(user_text or "")))
+    closing_hits = [] if allowed else list(dict.fromkeys(CLOSING_RE.findall(value)))
+    issues = [f"canned:{x}" for x in canned_hits] + [f"closing:{x}" for x in closing_hits]
+    return {"hit": bool(issues), "issues": issues, "canned_hits": canned_hits,
+            "closing_hits": closing_hits, "closing_allowed": allowed}
+
+
+def strip_canned_clauses(text: Any, user_text: Any = "") -> str:
+    """保底：删掉金句/不被允许的收尾分句；删空返回空串。"""
+    value = str(text or "")
+    allowed = bool(_CLOSING_ALLOW_RE.search(str(user_text or "")))
+    parts = re.split(r"([，,。！!？?；;])", value)
+    kept: list[str] = []
+    for index in range(0, len(parts), 2):
+        clause = parts[index]
+        sep = parts[index + 1] if index + 1 < len(parts) else ""
+        bad = bool(CANNED_RE.search(clause)) or (
+            not allowed and CLOSING_RE.search(clause))
+        if bad:
+            continue
+        if clause or sep:
+            kept.append(clause + sep)
+    return "".join(kept).strip("，,。；; ")
 
 
 def _rewrite(reply: str) -> tuple[str, list[str]]:

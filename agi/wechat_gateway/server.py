@@ -186,6 +186,8 @@ class Gateway:
         self.proactive_thread = None
         # P25：网上冲浪调度线程（与 proactive 独立；默认不主动发消息）
         self.surf_thread = None
+        # P31：日记线程（每晚 23:00 后写今天；engine 停也允许写）
+        self.diary_thread = None
         self.pending: dict[str, dict] = {}
         self.last_inbound: dict[str, float] = {}
         self.send_times = deque()
@@ -251,6 +253,16 @@ class Gateway:
                 self.surf_thread.start()
             except Exception as exc:  # noqa: BLE001
                 self._record("surf_start_failed",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
+        # P31：日记线程（引擎停了也允许写——写日记不打扰用户）
+        if self.cfg.get("diary_enabled", True) and not (
+                self.diary_thread and self.diary_thread.is_alive()):
+            try:
+                self.diary_thread = threading.Thread(
+                    target=self._diary_loop, name="gateway-diary", daemon=True)
+                self.diary_thread.start()
+            except Exception as exc:  # noqa: BLE001
+                self._record("diary_start_failed",
                              {"error": f"{type(exc).__name__}: {exc}"[:200]})
         self.ready = True
         self._record("gateway_started", {"allowed": allowed, "monitored": monitored,
@@ -613,6 +625,50 @@ class Gateway:
         return {"ok": True, "queued": True, "reason": str(reason or "user"),
                 "engine_enabled": bool(self.engine_enabled)}
 
+    # ------------------------------------------------------------ P31 小鱼的日记
+    def diary_latest(self) -> dict:
+        """``GET /api/diary/latest``：最新一篇日记。"""
+        try:
+            from agi.selflearn import diary
+            return diary.latest()
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def diary_days(self, limit: int = 30) -> dict:
+        """``GET /api/diary/list``：日期列表。"""
+        try:
+            from agi.selflearn import diary
+            return {"ok": True, "days": diary.list_days(limit)}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def diary_get(self, date: str = "") -> dict:
+        """``GET /api/diary/get``：按日期取正文。"""
+        try:
+            from agi.selflearn import diary
+            return diary.get(date or None)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def diary_write(self, *, force: bool = False) -> dict:
+        """``POST /api/diary/write``：立即补写今天（幂等；force 重写）。"""
+        try:
+            from agi.selflearn import diary
+            result = diary.write(force=bool(force))
+        except Exception as exc:  # noqa: BLE001
+            self._record("diary_error", {"error": f"{type(exc).__name__}: {exc}"[:200]})
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        try:
+            kind = ("diary_written" if result.get("ok") and not result.get("skipped")
+                    else "diary_write_skipped")
+            self._record(kind, {"date": result.get("date"),
+                                "chars": result.get("chars"),
+                                "fallback": bool(result.get("fallback")),
+                                "source": "api"})
+        except Exception:  # noqa: BLE001
+            pass
+        return result
+
     def _quiet_hours_value(self) -> list[int]:
         """夜间静默配置：``quiet_hours=[]`` 视为非法 → 回退默认 [23,8] 并告警一次。"""
         raw = self.cfg.get("quiet_hours")
@@ -741,6 +797,45 @@ class Gateway:
         except Exception as exc:  # noqa: BLE001 - 冲浪挂了不影响网关
             self._record("surf_error",
                          {"error": f"{type(exc).__name__}: {exc}"[:200]})
+
+    def _diary_tick(self, now: float, retry_at: float = 0.0) -> float:
+        """P31：单次日记检查（返回下次允许重试的时间戳；便于测试/诊断）。
+
+        - ``diary_enabled`` 独立开关；``diary_hour`` 默认 23；
+        - 幂等：当天已写过 → ``diary.write`` 返回 skipped，不重复调 API；
+        - 失败退避 30 分钟再试，避免 API 故障时每分钟重试刷量；
+        - **不看 engine_enabled**：引擎停了也照写（写日记不打扰用户）。
+        """
+        if not bool(self.cfg.get("diary_enabled", True)) or now < retry_at:
+            return retry_at
+        try:
+            from agi.selflearn import diary
+            hour = int(self.cfg.get("diary_hour", 23) or 23)
+            if not diary.is_due(now=now, hour=hour):
+                return retry_at
+            result = diary.write(force=False)
+            if result.get("ok") and not result.get("skipped"):
+                self._record("diary_written", {
+                    "date": result.get("date"), "chars": result.get("chars"),
+                    "fallback": bool(result.get("fallback")), "reason": "scheduled"})
+                return now + 1800
+            if result.get("skipped"):
+                return now + 1800
+            self._record("diary_failed", {
+                "date": result.get("date"),
+                "error": str(result.get("error") or "")[:200], "reason": "scheduled"})
+            return now + 1800
+        except Exception as exc:  # noqa: BLE001 - 日记挂了不影响网关
+            self._record("diary_error",
+                         {"error": f"{type(exc).__name__}: {exc}"[:200]})
+            return now + 1800
+
+    def _diary_loop(self) -> None:
+        """P31：每晚到点写一篇日记（每 60s 看一次；engine 停也照写）。"""
+        retry_at = 0.0
+        while not self.stop_event.is_set():
+            retry_at = self._diary_tick(time.time(), retry_at)
+            self.stop_event.wait(60.0)
 
     def _work(self) -> None:
         while not self.stop_event.is_set():
@@ -1504,6 +1599,13 @@ def make_handler(gateway: Gateway):
             except Exception:  # noqa: BLE001
                 return ""
 
+        def _query_param(self, name: str, default: str = "") -> str:
+            """查询串取一个参数（P31 日记接口用：date/limit）。"""
+            try:
+                return (parse_qs(urlsplit(self.path).query).get(name) or [default])[-1]
+            except Exception:  # noqa: BLE001
+                return default
+
         def _guard(self) -> bool:
             """Host 回环校验 + token 鉴权；任一不过直接回错误。"""
             if not control.host_ok(self.headers.get("Host") or "", self._port()):
@@ -1554,6 +1656,12 @@ def make_handler(gateway: Gateway):
             if path == "/api/surf/trigger":
                 self._json(202, gateway.trigger_surf(
                     reason=str(body.get("reason") or "user")))
+                return
+
+            # P31：立即补写今天日记（幂等；body.force=true 才重写）
+            if path == "/api/diary/write":
+                result = gateway.diary_write(force=bool(body.get("force")))
+                self._json(200 if result.get("ok") else 500, result)
                 return
 
             if path == "/api/approve":
@@ -1653,6 +1761,22 @@ def make_handler(gateway: Gateway):
             # P25：网上冲浪状态（因子/今日投骰/下次时刻/最近 session）
             if path == "/api/surf/status":
                 self._json(200, gateway.surf_status())
+                return
+            # P31：小鱼的日记（只读；/api/diary/write 走 POST）
+            if path == "/api/diary/latest":
+                self._json(200, gateway.diary_latest())
+                return
+            if path == "/api/diary/list":
+                try:
+                    limit = int(self._query_param("limit", "30") or 30)
+                except (TypeError, ValueError):
+                    limit = 30
+                self._json(200, gateway.diary_days(limit))
+                return
+            if path == "/api/diary/get":
+                date = self._query_param("date", "")
+                result = gateway.diary_get(date)
+                self._json(200 if result.get("ok") else 404, result)
                 return
             if path == "/api/drafts":
                 self._json(200, {"ok": True,

@@ -823,7 +823,8 @@ def build_candidates(path: Path | str = DB_PATH, now: float | None = None) -> li
 
 
 def choose_candidate(candidates: list[dict], path: Path | str = DB_PATH,
-                     now: float | None = None) -> dict | None:
+                     now: float | None = None, *,
+                     drive: float | None = None) -> dict | None:
     """加权反重复选 kind：窗口内计数少的优先、同计数比分数，超 50% 硬排除。
 
     - 反重复：最近 ``KIND_WINDOW`` 条里该 kind 出现次数最少的优先（并列才比分数），
@@ -831,6 +832,25 @@ def choose_candidate(candidates: list[dict], path: Path | str = DB_PATH,
     - 同类不连发：上一轮刚发过的 kind 在并列时排到最后（silence_ack 因此不会连续出现）；
     - 选择是确定性的（同状态同历史落在同一 kind），避免测试随机抖动；文本仍由 LLM 生成。
     """
+    if not candidates:
+        return None
+    # P33：drive 透传（worker 传入）→ 低 drive 只留 light/progress_check，
+    # 高 drive 分享类权重 ×1.5、light ×0.7；不传 drive 时行为与旧版完全一致。
+    weights: dict[str, float] = {}
+    if drive is not None:
+        try:
+            from . import initiative as _initiative
+            allowed = _initiative.allowed_kinds(drive)
+            if allowed is not None:
+                filtered = [c for c in candidates
+                            if str(c.get("kind") or "") in allowed]
+                if filtered:
+                    candidates = filtered
+            weights = {str(c.get("kind") or ""):
+                       _initiative.kind_weight(c.get("kind"), drive)
+                       for c in candidates}
+        except Exception:  # noqa: BLE001 - 权重失败退回原行为
+            weights = {}
     if not candidates:
         return None
     if len(candidates) == 1:
@@ -857,7 +877,8 @@ def choose_candidate(candidates: list[dict], path: Path | str = DB_PATH,
     ordered = list(pool[offset:]) + list(pool[:offset])
     # 上一轮同 kind 在并列时排后面（不连发）
     ordered.sort(key=lambda c: 0 if str(c.get("kind") or "") != last_kind else 1)
-    return max(ordered, key=lambda c: float(c.get("score") or 0.0))
+    return max(ordered, key=lambda c: float(c.get("score") or 0.0)
+               * (weights.get(str(c.get("kind") or ""), 1.0) if weights else 1.0))
 
 
 def _find_runon_feeling(value: str) -> int | None:
@@ -2444,7 +2465,7 @@ def record_proactive_turn(path: Path | str, assistant_message_id: str, reply: st
 def _tick_impl(path: Path | str = DB_PATH, client=None, now: float | None = None,
                idle_seconds: float = 30, cooldown: float = 900,
                min_score: float | None = None, respect_state: bool = True,
-               inner_client=None) -> dict[str, Any]:
+               inner_client=None, drive: float | None = None) -> dict[str, Any]:
     """网页轮询：由它自己的心情/分享欲决定说不说，可一次说 1-2 条。"""
     now = time.time() if now is None else float(now)
     # P6-e：可回滚分流；默认 legacy，运行期 wechat config 可切 simple
@@ -2453,7 +2474,7 @@ def _tick_impl(path: Path | str = DB_PATH, client=None, now: float | None = None
         return tick_simple(path, client=client, now=now,
                            idle_seconds=idle_seconds, cooldown=cooldown,
                            min_score=min_score, respect_state=respect_state,
-                           inner_client=inner_client)
+                           inner_client=inner_client, drive=drive)
     own = state.load(path)["self"]
     mood = float(own.get("mood", 0.55))
     share_drive = float(own.get("sharing", 0.45))
@@ -2496,7 +2517,10 @@ def _tick_impl(path: Path | str = DB_PATH, client=None, now: float | None = None
         share_info = sharing.choose_level(path)
     except Exception:  # noqa: BLE001
         share_info = {}
-    best = choose_candidate(candidates, path, now)
+    if drive is None:
+        best = choose_candidate(candidates, path, now)   # 兼容旧 monkeypatch（3 参数）
+    else:
+        best = choose_candidate(candidates, path, now, drive=drive)
     quadrant = str(init_info.get("quadrant") or "")
     if quadrant == "skip" or (quadrant == "hold" and int(init_info.get("confidence_n") or 0) >= 3):
         return {"ok": True, "available": False,
@@ -2920,7 +2944,8 @@ def _tick_impl(path: Path | str = DB_PATH, client=None, now: float | None = None
             "sharing_level": share_info}
 
 
-def propose(path: Path | str = DB_PATH, now: float | None = None) -> dict[str, Any]:
+def propose(path: Path | str = DB_PATH, now: float | None = None,
+            *, drive: float | None = None) -> dict[str, Any]:
     now = time.time() if now is None else float(now)
     if not _cooldown_ok(path, now):
         return {"ok": True, "available": False, "reason": "主动表达冷却中"}
@@ -2935,7 +2960,10 @@ def propose(path: Path | str = DB_PATH, now: float | None = None) -> dict[str, A
         share_info = sharing.choose_level(path)
     except Exception:  # noqa: BLE001
         share_info = {}
-    best = choose_candidate(candidates, path, now)
+    if drive is None:
+        best = choose_candidate(candidates, path, now)   # 兼容旧 monkeypatch（3 参数）
+    else:
+        best = choose_candidate(candidates, path, now, drive=drive)
     quadrant = str(init_info.get("quadrant") or "")
     if quadrant == "skip" or (quadrant == "hold" and int(init_info.get("confidence_n") or 0) >= 3):
         return {"ok": True, "available": False,
@@ -2995,7 +3023,7 @@ from .simple_tick import proactive_style, tick_simple as _tick_simple  # noqa: E
 def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
          idle_seconds: float = 30, cooldown: float = 900,
          min_score: float | None = None, respect_state: bool = True,
-         inner_client=None) -> dict[str, Any]:
+         inner_client=None, drive: float | None = None) -> dict[str, Any]:
     """P15-A：主动消息对外入口（原逻辑在 ``_tick_impl``）。
 
     与原来行为逐字节一致；额外**只读**记一条 ``turn_traces(mode=proactive)``
@@ -3003,7 +3031,8 @@ def tick(path: Path | str = DB_PATH, client=None, now: float | None = None,
     """
     result = _tick_impl(path, client=client, now=now, idle_seconds=idle_seconds,
                         cooldown=cooldown, min_score=min_score,
-                        respect_state=respect_state, inner_client=inner_client)
+                        respect_state=respect_state, inner_client=inner_client,
+                        drive=drive)
     try:
         from . import trace
         trace.record_proactive(path, result, now=now)

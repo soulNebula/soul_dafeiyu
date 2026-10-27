@@ -34,6 +34,9 @@ MEDIA_ACQUISITION_ENABLED = False
 # P27：网络腔/比赛比喻守卫（默认开启）
 SLANG_GUARD_ENABLED = True
 
+# P28：金句腔/主动收尾守卫（默认开启）
+CANNED_GUARD_ENABLED = True
+
 # P16-A：时间感知（被动回复 + simple 主动消息注入当前时间）
 INJECT_TIME_CONTEXT = True
 _WECHAT_CONFIG = ROOT / "agi" / "data" / "wechat" / "config.json"
@@ -110,3 +113,13 @@ SURF_ROLL_INTERVAL_S = 1800
 SURF_MAX_ITEMS = 20
 #: 状态文件（factor / last_roll_ts / next_roll_ts / 今日计数）
 SURF_STATE_PATH = DATA_DIR / "surf_state.json"
+
+# P31：小鱼的日记（每晚 23:00 自动写今天的情感与经过；只存本机）
+#: 总开关（gateway config.json 的 diary_enabled 优先，env DIARY_ENABLED 可覆盖）
+DIARY_ENABLED = True
+#: 每天几点后允许写（默认 23:00）
+DIARY_HOUR = 23
+#: 日记目录（用户要的「本机文本文档」）
+DIARY_DIR = DATA_DIR.parent / "diary"
+#: 索引一行一篇：date/path/chars/mood_avg/generated_at/fallback
+DIARY_INDEX = DIARY_DIR / "index.jsonl"

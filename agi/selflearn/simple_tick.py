@@ -525,7 +525,7 @@ def _tick_video_share(path, impression: dict, *, client, now: float,
 def tick_simple(path: Path | str, client=None, *, now: float | None = None,
                 idle_seconds: float = 30, cooldown: float = 900,
                 min_score: float | None = None, respect_state: bool = True,
-                inner_client=None) -> dict:
+                inner_client=None, drive: float | None = None) -> dict:
     from . import db, initiative, memory, proactive, sharing, state
 
     now = time.time() if now is None else float(now)
@@ -572,7 +572,10 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
         share_info = sharing.choose_level(path)
     except Exception:  # noqa: BLE001
         share_info = {}
-    best = proactive.choose_candidate(candidates, path, now)
+    if drive is None:
+        best = proactive.choose_candidate(candidates, path, now)
+    else:
+        best = proactive.choose_candidate(candidates, path, now, drive=drive)
     quadrant = str(init_info.get("quadrant") or "")
     if quadrant == "skip" or (quadrant == "hold"
                               and int(init_info.get("confidence_n") or 0) >= 3):

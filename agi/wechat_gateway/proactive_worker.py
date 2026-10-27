@@ -25,6 +25,7 @@ from typing import Any
 
 from agi.selflearn import db as _selflearn_db
 from agi.selflearn import pacing
+from agi.selflearn import initiative
 
 from . import sendclass
 
@@ -471,28 +472,54 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                            "sent": 0, "drafts": 0, "deduped": 0,
                            "clipboard": 0, "unverified": 0, "planned": 0,
                            "media_sent": 0,
+                           "initiative": None, "daily_cap": None,
+                           "today_sent": 0, "initiative_suppressed": False,
+                           "failed_any": False,
                            "breaker_open": False, "skipped": []}
     idle_gap = float(gateway.cfg.get("proactive_idle_s") or 0)
     media_sent = 0
+    # P33：上一轮发送失败 → 本轮 drive 不叠加（回退 pacing/固定概率）
+    suppress_drive = bool(getattr(gateway, "_initiative_prev_fail", False))
+    out["initiative_suppressed"] = suppress_drive
     for contact in contact_list:
         db_path = gw_cfg.contact_db(contact)
+        # P33-补：按当天 user 消息数动态算日上限（旧 pacing_daily_cap 兼容成下限）
+        cap_info = initiative.daily_cap(db_path, now, config=gateway.cfg)
+        daily_cap = int(cap_info["daily_cap"])
+        today_sent = int(initiative.today_sent(db_path, now))
+        out["daily_cap"] = daily_cap
+        out["today_sent"] = today_sent
+        if daily_cap > 0 and today_sent >= daily_cap:
+            out["skipped"].append({
+                "contact": contact, "reason": "daily_cap_dynamic",
+                "cap": daily_cap, "used": today_sent})
+            try:
+                gateway._record("daily_cap_hit", {
+                    "contact": contact, "cap": daily_cap, "used": today_sent,
+                    "user_msgs_today": cap_info.get("user_msgs_today")})
+            except Exception:  # noqa: BLE001
+                pass
+            continue
+        round_cfg = dict(gateway.cfg)
+        round_cfg["pacing_daily_cap"] = daily_cap      # pacing.adjust 用动态上限
         # P16-B：按近 7 天「用户主动 vs 它主动」对等度调整本轮调度（不写 config 文件）。
-        # pacing 未启用/出错时回退旧的固定概率闸门。
         pacing_adjustment: dict[str, Any] | None = None
+        balance_result: dict[str, Any] | None = None
         if pacing.enabled(gateway.cfg):
             try:
                 balance_result = pacing.balance(
                     db_path, now, contact=contact,
                     log_path=getattr(gateway, "log_path", None))
                 pacing_adjustment = pacing.adjust(
-                    gateway.cfg, balance_result, now=now,
+                    round_cfg, balance_result, now=now,
                     stopped=bool(gateway.cfg.get("stop")))
                 out["pacing"] = dict(pacing.summary(balance_result, pacing_adjustment),
                                      contact=contact)
                 try:
                     gateway._record("pacing_adjusted", {
                         "contact": contact, **out["pacing"],
-                        "target_ratio": pacing_adjustment.get("target_ratio")})
+                        "target_ratio": pacing_adjustment.get("target_ratio"),
+                        "daily_cap": daily_cap, "today_sent": today_sent})
                 except Exception:  # noqa: BLE001
                     pass
                 if not pacing_adjustment.get("send", True):
@@ -500,15 +527,75 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                         "contact": contact,
                         "reason": "pacing:" + str(pacing_adjustment.get("reason") or "hold")})
                     continue
-                out["pacing_suggested"] = {
-                    "probability": pacing_adjustment.get("probability"),
-                    "interval_min_s": pacing_adjustment.get("interval_min_s"),
-                    "interval_max_s": pacing_adjustment.get("interval_max_s")}
-                probability = float(pacing_adjustment.get("probability") or 0.0)
             except Exception:  # noqa: BLE001 - pacing 失败不影响主链，回退旧概率
                 pacing_adjustment = None
-        if pacing_adjustment is None:
+        # P33：主动度（关系熟悉度×心情×信任）→ 概率↑/间隔↓；与 pacing 取更保守
+        drive_info: dict[str, Any] | None = None
+        init_adjustment: dict[str, Any] | None = None
+        if "initiative_enabled" in gateway.cfg and initiative.enabled(gateway.cfg) \
+                and not suppress_drive:
+            try:
+                drive_info = initiative.drive(db_path, now)
+                init_adjustment = initiative.adjust(
+                    round_cfg,
+                    {**drive_info,
+                     "today_sent": today_sent, "daily_cap": daily_cap,
+                     "unanswered_streak": int((balance_result or {}).get(
+                         "unanswered_streak") or 0)},
+                    now=now, stopped=bool(gateway.cfg.get("stop")))
+                if not init_adjustment.get("send", True):
+                    out["skipped"].append({
+                        "contact": contact,
+                        "reason": "initiative:" + str(init_adjustment.get("reason") or "hold")})
+                    try:
+                        gateway._record("initiative_hold", {
+                            "contact": contact,
+                            "reason": init_adjustment.get("reason"),
+                            "drive": init_adjustment.get("drive"),
+                            "daily_cap": daily_cap, "today_sent": today_sent})
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
+            except Exception:  # noqa: BLE001 - drive 失败不影响主链
+                drive_info = None
+                init_adjustment = None
+        adjustments = [item for item in (pacing_adjustment, init_adjustment) if item]
+        if adjustments:
+            probability = min(float(item.get("probability") or 1.0)
+                              for item in adjustments)
+            lo = max(float(item.get("interval_min_s") or 0.0) for item in adjustments)
+            hi = max(float(item.get("interval_max_s") or 0.0) for item in adjustments)
+            lo = max(60.0, lo)
+            hi = max(lo, hi)
+            final_source = "pacing+initiative" if len(adjustments) == 2 else (
+                "pacing" if pacing_adjustment else "initiative")
+            out["pacing_suggested"] = {"probability": round(probability, 4),
+                                       "interval_min_s": int(round(lo)),
+                                       "interval_max_s": int(round(hi))}
+        else:
             probability = _probability(gateway)
+            final_source = "legacy"
+        if init_adjustment is not None:
+            out["initiative"] = {
+                "contact": contact,
+                "familiarity": init_adjustment.get("familiarity"),
+                "mood": init_adjustment.get("mood"),
+                "trust": init_adjustment.get("trust"),
+                "drive": init_adjustment.get("drive"),
+                "drive_level": initiative.drive_level(init_adjustment.get("drive")),
+                "reason": init_adjustment.get("reason"),
+                "conservative": init_adjustment.get("conservative"),
+                "probability": init_adjustment.get("probability"),
+                "interval_min_s": init_adjustment.get("interval_min_s"),
+                "interval_max_s": init_adjustment.get("interval_max_s"),
+                "daily_cap": daily_cap, "today_sent": today_sent,
+                "final_source": final_source,
+                "combined_probability": round(float(probability), 4),
+                "suppressed": bool(suppress_drive)}
+            try:
+                gateway._record("initiative_adjusted", dict(out["initiative"]))
+            except Exception:  # noqa: BLE001
+                pass
         roll = random.random()
         if roll >= probability:
             # 跳过时不查库、不调 LLM，只记一条带 contact 和本次 p 的日志
@@ -537,7 +624,9 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             out["skipped"].append({"contact": contact, "reason": cooldown})
             continue
         try:
-            tick = ticker.run_once(db_path, client, now=now) or {}
+            tick = ticker.run_once(db_path, client, now=now,
+                                   drive=(float(drive_info.get("drive"))
+                                          if drive_info else None)) or {}
         except Exception as exc:  # noqa: BLE001 - 单个联系人失败不影响其他人
             out["skipped"].append({"contact": contact,
                                    "reason": f"{type(exc).__name__}: {str(exc)[:120]}"})
@@ -562,6 +651,20 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             continue
         bubbles = pro.get("messages") or ([pro.get("message")] if pro.get("message") else [])
         kind = str(pro.get("kind") or "").strip()
+        # P33 行为联动：drive≤0.35 只允许 light/progress_check（不发分享/关心/追问）
+        if drive_info is not None and kind \
+                and not initiative.kind_allowed(kind, drive_info.get("drive")):
+            out["skipped"].append({"contact": contact,
+                                   "reason": "initiative_kind_gate", "kind": kind,
+                                   "drive": drive_info.get("drive")})
+            try:
+                gateway._record("initiative_kind_blocked", {
+                    "contact": contact, "kind": kind,
+                    "drive": drive_info.get("drive"),
+                    "allowed": list(initiative.LOW_DRIVE_ALLOWED)})
+            except Exception:  # noqa: BLE001
+                pass
+            continue
         turn_id = str(pro.get("turn_id") or "")
         # P0-3 出站文本质检：补句末标点/合并空白/超长按标点切分（带 kind 的新主动消息才处理，
         # 无 kind 的旧 payload 原样透传，保持向后兼容）。
@@ -671,6 +774,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             elif classification == sendclass.PLANNED:
                 out["planned"] += 1      # dry-run：未发生，单列
             elif classification == sendclass.FAILED:
+                out["failed_any"] = True
                 if status.get("status") == "draft":
                     out["drafts"] += 1   # 真失败落草稿：内容保住但仍算失败
                 if _note_send_failure(gateway, status, now=now,
@@ -712,6 +816,10 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             gateway.last_turns[contact] = turn_id
         if out["breaker_open"]:
             break
+    try:
+        gateway._initiative_prev_fail = bool(out.get("failed_any"))
+    except Exception:  # noqa: BLE001
+        pass
     outcome = {"ts": now, "contacts": out["contacts"],
                "sent": out["sent"], "drafts": out["drafts"],
                "deduped": out["deduped"], "clipboard": out["clipboard"],

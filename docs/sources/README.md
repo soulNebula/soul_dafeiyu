@@ -9,7 +9,6 @@
 
 | 来源 | 位置 | 内容 |
 |---|---|---|
-| QQ 落地包 | `qq-bot/路线三落地包/` | 6 份 md |
 | wx_box 文档 | `wx_box/docs/` | 20 份（设计/审计/接口/风控） |
 | wx_box 代码 | `wx_box/code/` | `selflearn` 73 模块 15,238 行 + `tests` 67 文件 9,416 行 + `wechat_gateway` + `wx_core` + `tools` |
 | wx_box 评测证据 | `wx_box/recon/` | 11 份报告 |
@@ -23,7 +22,6 @@
 ```
 sources/
 ├── README.md                     # 本文件（导入脚本在 ../tools/import_sources.sh）
-├── qq-bot/
 │   ├── README-说明.md            # 逐份说明
 │   └── 路线三落地包/              # 6 份原文
 └── wx_box/
@@ -42,7 +40,7 @@ sources/
 
 ## 三、使用规则（重要）
 
-1. **只读。** 需要改，回 `wx_box` / `qq-bot` 上游改；本项目要加功能就新建 `agi/` 模块。
+1. **只读。** 需要改，回上游改；本项目要加功能就新建 `agi/` 模块。
 2. **不要 import `sources/` 里的代码。** 它们缺 `data/`、`config.json`、包上下文，**不能直接跑**；用途是阅读、对照、移植。
 3. **同步方式**：上游更新后重跑 `bash tools/import_sources.sh`。脚本会先删 `sources/` 再复制，避免半新半旧。
 4. **有意不导入**：`data/`（真实聊天库与隐私）、`media/`（大文件）、`.venv`、`__pycache__`、`recon` 截图、`WechatMoments/`、`_refs/`、`_tmp_npm/`。
@@ -54,7 +52,6 @@ sources/
 
 | 材料 | 支撑 | 结论 |
 |---|---|---|
-| QQ 落地包 | 17 | 复用清单 + 三条可吸收经验 + 两处不要照抄 |
 | wx_box 混合路线评估 | 18 | 实测事实（6GB/6.0s/1 天数据）、P0、6 周基线 |
 | wx_box selflearn 代码 | 19 的施工对象 | **直接改，不重写** |
 | wx_box 审计 | 18/19 的现状基线 | 357 项里 ✅45（12.6%） |

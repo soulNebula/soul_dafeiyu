@@ -1647,6 +1647,24 @@ class Gateway:
                           "error": error or "missing_result", "fallback_used": [], "used": None}
             result = dict(result)
             result.setdefault("type", str(item.get("type") or ""))
+            # ⑨a 窗口级兜底：wxauto4 失败时用剪贴板粘贴图片/文字（默认开启才走）
+            if not result.get("ok") and self.cfg.get("fallback_enabled") and                     str(self.cfg.get("fallback_mode") or "").strip().lower() == "auto":
+                try:
+                    from . import win_send as _win_send
+                    fb = _win_send.send_media_via_window(contact_name, item, self.cfg)
+                    if isinstance(fb, dict) and fb.get("ok"):
+                        result = {**result, **fb}
+                        result["error"] = ""
+                        result["error_key"] = ""
+                        self._record("fallback", {
+                            "friend": contact_name,
+                            "status": fb.get("status"),
+                            "ok": True,
+                            "method": "window_media",
+                            "type": item.get("type"),
+                            "trigger": str(error)[:120]})
+                except Exception as _exc:  # noqa: BLE001
+                    pass
             results[index] = result
             self._record("send_media", {
                 "friend": contact_name, "type": str(result.get("type") or ""),

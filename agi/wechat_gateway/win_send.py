@@ -152,7 +152,10 @@ def send_to_contact(contact: str, text: str, cfg: dict[str, Any], *,
         time.sleep(1.0)
         # ② 输入框（比例坐标，默认 0.68w / 0.93h）
         ib = cfg.get("fallback_input_box") or [0.68, 0.93]
-        win.post_click(info, int(w * float(ib[0])), int(h * float(ib[1])))
+        try:
+            win.real_click(info, int(w * float(ib[0])), int(h * float(ib[1])))
+        except Exception:  # noqa: BLE001
+            win.post_click(info, int(w * float(ib[0])), int(h * float(ib[1])))
         time.sleep(0.4)
         if not clipboard.set_text(value):
             return _result(False, "failed", error="写剪贴板失败")
@@ -171,3 +174,153 @@ def send_to_contact(contact: str, text: str, cfg: dict[str, Any], *,
         pass
     return _result(True, "sent",
                    warning="窗口级发送（搜索打开会话）无法校验会话，请人工抽查")
+
+def _copy_image_to_clipboard(path: str) -> bool:
+    """把图片文件放进 Windows 剪贴板（CF_DIB），供微信输入框 Ctrl+V 粘贴发送。"""
+    try:
+        from PIL import Image
+        import io
+        import win32clipboard
+        import win32con
+        img = Image.open(path)
+        if img.mode not in ("RGB",):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, "BMP")
+        data = buf.getvalue()[14:]  # 去掉 BMP 文件头，留 DIB
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32con.CF_DIB, data)
+        finally:
+            win32clipboard.CloseClipboard()
+        return True
+    except Exception:
+        return False
+
+
+
+def _verify_chat_open(win, info, contact: str) -> str:
+    """OCR 校验当前会话标题是否包含 contact。
+
+    返回 ``"ok"`` / ``"mismatch"`` / ``"unknown"``（OCR 不可用或识别为空）。
+    """
+    try:
+        img = win.capture(info)
+        if img is None:
+            return "unknown"
+        w, h = img.size
+        from wx_core.ocr import OCRWorker
+        with OCRWorker() as worker:
+            lines = worker.ocr(img)
+        # 只取窗口顶部 12% 且 x>28% 的文本 = 聊天标题区
+        parts = []
+        for ln in lines:
+            box = getattr(ln, "box", None) or (0, 0, 0, 0)
+            if box[1] < h * 0.12 and box[0] >= w * 0.28:
+                parts.append(str(getattr(ln, "text", "") or ""))
+        text = "".join(parts).replace(" ", "")
+        target = str(contact).replace(" ", "")
+        if not text:
+            return "unknown"
+        return "ok" if target and target in text else "mismatch"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+def _open_chat(win, info, contact: str, cfg: dict, settle: float = 0.5) -> tuple[bool, str]:
+    """把微信切前台并打开 ``contact`` 会话（搜索框 → 粘贴 → 回车）。"""
+    loaded, _err = _load()
+    if loaded is None:
+        return False, f"wx_core 不可用：{_err}"
+    _win_mod, clipboard = loaded
+    if not win.bring_to_front(info) and not win.is_foreground(info):
+        return False, "前台不是微信窗口（切换到前台失败）"
+    time.sleep(settle)
+    if not win.is_foreground(info):
+        return False, "前台不是微信窗口"
+    img = win.capture(info)
+    w, h = (img.size if img else (960, 900))
+    sb = cfg.get("window_search_box") or [0.17, 0.066]
+    try:
+        win.real_click(info, int(w * float(sb[0])), int(h * float(sb[1])))
+    except Exception:  # noqa: BLE001
+        win.post_click(info, int(w * float(sb[0])), int(h * float(sb[1])))
+    time.sleep(0.4)
+    if not clipboard.set_text(str(contact)):
+        return False, "写剪贴板失败"
+    time.sleep(0.15)
+    _ctrl_v()
+    time.sleep(0.5)
+    win.press_key(VK_RETURN)
+    time.sleep(1.0)
+    # 校验会话标题，防止搜索失败把消息发到别的聊天
+    for _attempt in range(2):
+        state = _verify_chat_open(win, info, contact)
+        if state == "ok":
+            return True, ""
+        if state == "unknown":
+            return True, ""   # OCR 不可用：保持原行为（结果仍标 verified=false）
+        # mismatch：重试一次搜索
+        try:
+            win.real_click(info, int(w * float(sb[0])), int(h * float(sb[1])))
+        except Exception:  # noqa: BLE001
+            win.post_click(info, int(w * float(sb[0])), int(h * float(sb[1])))
+        time.sleep(0.4)
+        if not clipboard.set_text(str(contact)):
+            break
+        time.sleep(0.15)
+        _ctrl_v()
+        time.sleep(0.5)
+        win.press_key(VK_RETURN)
+        time.sleep(1.0)
+    state = _verify_chat_open(win, info, contact)
+    if state == "mismatch":
+        return False, "当前会话与联系人名不匹配（已中止发送）"
+    return True, ""
+
+
+def send_media_via_window(contact: str, item: dict, cfg: dict, *,
+                          settle: float = 0.5) -> dict[str, Any]:
+    """窗口级发送单个媒体气泡（image/gif/sticker 走剪贴板图片，文本走粘贴文字）。"""
+    kind = str(item.get("type") or "").strip().lower()
+    path = str(item.get("path") or "")
+    text = str(item.get("text") or "")
+    if kind in ("text", "emoji_text"):
+        out = send_to_contact(contact, text, cfg, settle=settle)
+        out["type"] = kind
+        return out
+    if not path:
+        return {"ok": False, "status": "failed", "type": kind, "verified": False,
+                "error": "缺少媒体文件路径"}
+    loaded, err = _load()
+    if loaded is None:
+        return {"ok": False, "status": "failed", "type": kind, "error": f"wx_core 不可用：{err}"}
+    win, _clip = loaded
+    info = win.find_wechat_window()
+    if info is None:
+        return {"ok": False, "status": "failed", "type": kind, "error": "没找到微信窗口"}
+    try:
+        ok, why = _open_chat(win, info, contact, cfg, settle)
+        if not ok:
+            return {"ok": False, "status": "failed", "type": kind, "error": why}
+        img = win.capture(info)
+        w, h = (img.size if img else (960, 900))
+        ib = cfg.get("fallback_input_box") or [0.68, 0.93]
+        try:
+            win.real_click(info, int(w * float(ib[0])), int(h * float(ib[1])))
+        except Exception:  # noqa: BLE001
+            win.post_click(info, int(w * float(ib[0])), int(h * float(ib[1])))
+        time.sleep(0.4)
+        if not _copy_image_to_clipboard(path):
+            return {"ok": False, "status": "failed", "type": kind,
+                    "error": "图片复制到剪贴板失败（PIL/pywin32 不可用或格式不支持）"}
+        time.sleep(0.2)
+        _ctrl_v()
+        time.sleep(0.8)
+        win.press_key(VK_RETURN)
+        time.sleep(0.8)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "status": "failed", "type": kind,
+                "error": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "status": "sent", "type": kind, "verified": False,
+            "warning": "窗口级图片发送未校验会话，请人工抽查"}

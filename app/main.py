@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audit, config_store, gitstudio, paths, services
+from . import audit, config_store, files_api, gitstudio, paths, services
 
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
 
@@ -38,12 +38,52 @@ class GitCommitBody(BaseModel):
     push: bool = False
 
 
+class FileWriteBody(BaseModel):
+    root: str = "soulagent"
+    rel: str
+    text: str
+
+
+class FileRunBody(BaseModel):
+    root: str = "soulagent"
+    rel: str
+    args: list[str] = []
+    timeout: int = 600
+    python: str | None = None
+
+
+class BranchBody(BaseModel):
+    name: str
+    create: bool = False
+
+
+class StageBody(BaseModel):
+    paths: list[str] = []
+
+
 # ------------------------------------------------------------------ 基础
 @app.get("/health")
 def health():
     return {"ok": True, "service": "idea-workbench", "version": "0.1.0",
             "soulagent": str(paths.soulagent_home()),
             "agent_home": str(paths.agent_home())}
+
+
+@app.get("/api/wb/env", dependencies=[Depends(require_token)])
+def env_info():
+    import platform
+    import sys
+    info = {"python": sys.version.split()[0], "platform": platform.platform(),
+            "executable": sys.executable}
+    try:
+        import torch
+        info["torch"] = torch.__version__
+        info["cuda"] = bool(torch.cuda.is_available())
+        if info["cuda"]:
+            info["gpu"] = torch.cuda.get_device_name(0)
+    except Exception:  # noqa: BLE001
+        info["torch"] = None
+    return {"ok": True, **info}
 
 
 @app.get("/api/wb/overview", dependencies=[Depends(require_token)])
@@ -149,6 +189,80 @@ def git_push():
     result = gitstudio.push_default()
     audit.record("git.push", "repository", actor="workbench", meta=result)
     return result
+
+
+# ------------------------------------------------------------------ 代码工作区
+@app.get("/api/wb/files/roots", dependencies=[Depends(require_token)])
+def files_roots():
+    return {"ok": True, "items": [{"name": k, "path": v} for k, v in files_api.roots().items()]}
+
+
+@app.get("/api/wb/files/tree", dependencies=[Depends(require_token)])
+def files_tree(root: str = "soulagent", rel: str = "", depth: int = Query(default=3, ge=1, le=6)):
+    return files_api.tree(root, rel, depth)
+
+
+@app.get("/api/wb/files/read", dependencies=[Depends(require_token)])
+def files_read(root: str = "soulagent", rel: str = ""):
+    return files_api.read_file(root, rel)
+
+
+@app.post("/api/wb/files/write", dependencies=[Depends(require_token)])
+def files_write(body: FileWriteBody):
+    result = files_api.write_file(body.root, body.rel, body.text)
+    if result.get("ok"):
+        audit.record("file.write", result["path"], actor="workbench", meta={"rel": body.rel})
+    return result
+
+
+@app.post("/api/wb/files/run", dependencies=[Depends(require_token)])
+def files_run(body: FileRunBody):
+    return files_api.run_python(body.root, body.rel, body.args, timeout=body.timeout,
+                                python=body.python)
+
+
+@app.get("/api/wb/files/job", dependencies=[Depends(require_token)])
+def files_job(id: str, offset: int = 0):
+    return files_api.job_status(id, offset=offset)
+
+
+@app.get("/api/wb/files/jobs", dependencies=[Depends(require_token)])
+def files_jobs():
+    return {"ok": True, "items": files_api.jobs()}
+
+
+@app.get("/api/wb/files/interpreters", dependencies=[Depends(require_token)])
+def files_interpreters():
+    return {"ok": True, "items": files_api.interpreters()}
+
+
+@app.get("/api/wb/files/templates", dependencies=[Depends(require_token)])
+def files_templates():
+    return {"ok": True, "items": files_api.templates()}
+
+
+# ------------------------------------------------------------------ Git 分支/暂存
+@app.get("/api/wb/git/branches", dependencies=[Depends(require_token)])
+def git_branches():
+    return gitstudio.branches()
+
+
+@app.post("/api/wb/git/checkout", dependencies=[Depends(require_token)])
+def git_checkout(body: BranchBody):
+    result = gitstudio.checkout(body.name, create=body.create)
+    if result.get("ok"):
+        audit.record("git.checkout", body.name, actor="workbench", meta=result)
+    return result
+
+
+@app.post("/api/wb/git/stage", dependencies=[Depends(require_token)])
+def git_stage(body: StageBody):
+    return gitstudio.stage(body.paths)
+
+
+@app.post("/api/wb/git/unstage", dependencies=[Depends(require_token)])
+def git_unstage(body: StageBody):
+    return gitstudio.unstage(body.paths)
 
 
 # ------------------------------------------------------------------ 审计

@@ -118,3 +118,45 @@ def auto_commit(module: str, action: str, summary: str, *, actor: str = "workben
     """工作台写操作后的自动提交（同一次操作内由调用方合并）。"""
     msg = f"wb({module}): {action} — {summary}\n\nactor: {actor}\ntime: {time.strftime('%Y-%m-%d %H:%M:%S')}"
     return commit(msg, add_all=True, push=False)
+
+
+# ---------------------------------------------------------------- 分支与暂存
+def branches() -> dict:
+    """本地+远程分支列表，标记当前分支。"""
+    cur = _run(["rev-parse", "--abbrev-ref", "HEAD"])
+    current = (cur["stdout"] or "").strip() if cur["ok"] else ""
+    fmt = _run(["branch", "-a", "--format=%(refname:short)|%(objectname:short)|%(committerdate:short)|%(subject)"])
+    items = []
+    for line in (fmt["stdout"] or "").splitlines():
+        parts = line.split("|", 3)
+        if len(parts) < 4:
+            continue
+        name = parts[0]
+        if name.endswith("/HEAD"):
+            continue
+        items.append({"name": name, "sha": parts[1], "date": parts[2],
+                      "subject": parts[3], "current": name == current})
+    return {"ok": True, "current": current, "items": items}
+
+
+def checkout(name: str, *, create: bool = False) -> dict:
+    if not name.strip():
+        return {"ok": False, "error": "empty_branch"}
+    args = ["checkout", "-b", name] if create else ["checkout", name]
+    r = _run(args)
+    return {"ok": r["ok"], "branch": name, "detail": (r["stderr"] or r["stdout"]).strip()}
+
+
+def stage(patterns: list[str]) -> dict:
+    r = _run(["add", "--"] + list(patterns or ["-A"]))
+    return {"ok": r["ok"], "detail": (r["stderr"] or r["stdout"]).strip()}
+
+
+def unstage(patterns: list[str]) -> dict:
+    r = _run(["reset", "HEAD", "--"] + list(patterns or ["."]))
+    return {"ok": r["ok"], "detail": (r["stderr"] or r["stdout"]).strip()}
+
+
+def staged() -> dict:
+    r = _run(["diff", "--cached", "--name-only"])
+    return {"ok": r["ok"], "items": [x for x in (r["stdout"] or "").splitlines() if x]}

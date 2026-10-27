@@ -3,86 +3,737 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IDEA · SoulAgent 工作台</title>
+<title>IDEA · SoulAgent Workbench</title>
 <link rel="stylesheet" href="/web/style.css">
 </head>
 <body>
-<header class="top">
-  <div class="brand">IDEA <span>· SoulAgent 工作台</span></div>
-  <div class="right">
-    <input id="token" type="password" placeholder="管理令牌" autocomplete="off">
-    <button id="connect" class="btn primary">连接</button>
-    <span id="statusDot" class="dot"></span>
+<!-- ================= 标题栏 ================= -->
+<div id="titlebar">
+  <div class="tb-left">
+    <span class="logo">◈</span>
+    <span class="tb-title">IDEA · SoulAgent Workbench</span>
+    <span class="tb-sub">M0</span>
   </div>
-</header>
-
-<nav class="tabs">
-  <button class="tab active" data-tab="overview">总览</button>
-  <button class="tab" data-tab="services">服务</button>
-  <button class="tab" data-tab="config">配置</button>
-  <button class="tab" data-tab="git">Git</button>
-  <button class="tab" data-tab="audit">审计</button>
-</nav>
-
-<main>
-  <section id="tab-overview" class="panel active">
-    <div class="grid" id="overview-cards"></div>
-    <pre id="overview-raw" class="muted"></pre>
-  </section>
-
-  <section id="tab-services" class="panel">
-    <div class="grid" id="services"></div>
-  </section>
-
-  <section id="tab-config" class="panel">
-    <div class="row">
-      <input id="config-filter" placeholder="搜索配置项…" style="flex:1">
-      <button id="config-save" class="btn primary">保存改动</button>
-      <button id="config-reset" class="btn">还原</button>
-    </div>
-    <div id="config-form"></div>
-    <div class="card">
-      <div class="card-title">配置备份（保存前自动留档）</div>
-      <div id="config-backups" class="muted small"></div>
-    </div>
-  </section>
-
-  <section id="tab-git" class="panel">
-    <div class="grid" id="git-cards"></div>
-    <div class="card">
-      <div class="card-title">提交</div>
-      <div class="row">
-        <input id="git-message" placeholder="提交信息（留空自动生成）" style="flex:1">
-        <label class="check"><input id="git-push" type="checkbox"> 提交后推送</label>
-        <button id="git-commit" class="btn primary">提交</button>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title">最近提交</div>
-      <div id="git-log" class="muted small"></div>
-    </div>
-    <div class="card">
-      <div class="card-title">Diff</div>
-      <pre id="git-diff" class="diff"></pre>
-    </div>
-  </section>
-
-  <section id="tab-audit" class="panel">
-    <div class="row">
-      <button id="audit-refresh" class="btn">刷新</button>
-    </div>
-    <div id="audit" class="muted small"></div>
-  </section>
-</main>
-
-<div id="toast" class="toast"></div>
-<div id="modal" class="modal hidden">
-  <div class="modal-box">
-    <div class="modal-title"><span id="modal-title">日志</span><button id="modal-close" class="btn small">关闭</button></div>
-    <pre id="modal-body" class="logs"></pre>
+  <div class="tb-center"><input id="cmd-input" placeholder="搜索/命令（Ctrl+P 文件，Ctrl+Shift+P 命令）" autocomplete="off"></div>
+  <div class="tb-right">
+    <input id="token" type="password" placeholder="令牌 8888">
+    <button id="connect" class="tb-btn">连接</button>
+    <span id="conn-dot" class="dot"></span>
   </div>
 </div>
 
-<script src="/web/app.js"></script>
+<div id="main">
+  <!-- ================= 活动栏 ================= -->
+  <div id="activitybar">
+    <button class="ab-item active" data-view="explorer" title="资源管理器">🗂</button>
+    <button class="ab-item" data-view="git" title="源代码管理">⑂</button>
+    <button class="ab-item" data-view="run" title="运行/调试">▶</button>
+    <button class="ab-item" data-view="services" title="服务">⚙</button>
+    <button class="ab-item" data-view="config" title="设置">🎛</button>
+    <button class="ab-item" data-view="overview" title="总览">🏠</button>
+    <button class="ab-item" data-view="train" title="训练工厂（M3）">🧪</button>
+    <button class="ab-item" data-view="data" title="数据工作室（M1）">🗄</button>
+    <div class="ab-spacer"></div>
+    <button class="ab-item" id="ab-settings" title="令牌/连接">🔑</button>
+  </div>
+
+  <!-- ================= 侧栏 ================= -->
+  <div id="sidebar">
+    <div id="side-explorer" class="side-view active">
+      <div class="side-title">资源管理器</div>
+      <div class="side-sub">
+        <select id="root-select">
+          <option value="soulagent">SoulAgent</option>
+          <option value="idea">idea（工作台自身）</option>
+        </select>
+        <button class="mini-btn" id="tree-refresh" title="刷新">⟳</button>
+      </div>
+      <div id="file-tree" class="tree"></div>
+    </div>
+
+    <div id="side-git" class="side-view">
+      <div class="side-title">源代码管理</div>
+      <div class="side-sub">
+        <select id="branch-select" title="切换分支"></select>
+        <button class="mini-btn" id="branch-new" title="新建分支">＋</button>
+      </div>
+      <div id="git-changes" class="tree"></div>
+      <div class="commit-box">
+        <textarea id="commit-msg" placeholder="提交信息（Ctrl+Enter 提交）" rows="3"></textarea>
+        <label class="check small"><input id="commit-push" type="checkbox"> 提交后推送</label>
+        <button class="btn primary full" id="commit-btn">提交</button>
+      </div>
+    </div>
+
+    <div id="side-run" class="side-view">
+      <div class="side-title">运行</div>
+      <div class="side-sub muted small">当前文件：<span id="run-file">-</span></div>
+      <div class="run-actions">
+        <select id="run-python" title="选择解释器"></select>
+        <button class="btn primary full" id="run-btn">▶ 运行当前 Python 文件</button>
+        <button class="btn full" id="run-template">＋ 新建训练脚本（模板）</button>
+      </div>
+      <div class="side-title" style="margin-top:12px">最近任务</div>
+      <div id="run-jobs" class="muted small"></div>
+    </div>
+
+    <div id="side-services" class="side-view">
+      <div class="side-title">服务</div>
+      <div id="svc-list"></div>
+    </div>
+
+    <div id="side-config" class="side-view">
+      <div class="side-title">设置</div>
+      <input id="config-filter" placeholder="过滤设置…">
+      <div id="config-groups" class="tree"></div>
+    </div>
+
+    <div id="side-overview" class="side-view">
+      <div class="side-title">总览</div>
+      <div id="overview-mini" class="muted small"></div>
+    </div>
+
+    <div id="side-train" class="side-view">
+      <div class="side-title">训练工厂</div>
+      <div class="muted small">M3 里程碑：数据→清洗→标注→蒸馏→训练→评测→导出。<br>现在可先用「资源管理器」打开 <code>tools/train/</code> 里的脚本，点运行。</div>
+    </div>
+
+    <div id="side-data" class="side-view">
+      <div class="side-title">数据工作室</div>
+      <div class="muted small">M1 里程碑：SQLite 浏览/编辑/SQL/备份。<br>当前可在「终端」里跑 <code>python</code> 脚本。</div>
+    </div>
+  </div>
+
+  <!-- ================= 编辑区 ================= -->
+  <div id="editor-wrap">
+    <div id="tabs"></div>
+    <div id="editors">
+      <div id="welcome" class="welcome">
+        <div class="welcome-inner">
+          <div class="welcome-logo">◈ IDEA</div>
+          <div class="welcome-sub">SoulAgent 工作台 · VS Code 风格</div>
+          <div class="welcome-grid">
+            <div class="wc" data-cmd="explorer"><b>资源管理器</b><span>浏览/编辑项目文件</span></div>
+            <div class="wc" data-cmd="git"><b>源代码管理</b><span>暂存/提交/分支/推送</span></div>
+            <div class="wc" data-cmd="run"><b>运行</b><span>运行 Python/PyTorch 脚本</span></div>
+            <div class="wc" data-cmd="config"><b>设置</b><span>按域分页编辑配置</span></div>
+            <div class="wc" data-cmd="services"><b>服务</b><span>启停网关/控制台/模型</span></div>
+            <div class="wc" data-cmd="overview"><b>总览</b><span>项目/环境/状态</span></div>
+          </div>
+          <div class="welcome-tip muted small">Ctrl+P 快速打开文件 · Ctrl+Shift+P 命令 · Ctrl+S 保存 · Ctrl+Enter 提交</div>
+        </div>
+      </div>
+    </div>
+    <div id="panel-wrap">
+      <div id="panel-tabs">
+        <button class="ptab active" data-panel="terminal">终端</button>
+        <button class="ptab" data-panel="output">输出</button>
+        <button class="ptab" data-panel="audit">审计</button>
+        <span class="grow"></span>
+        <button class="mini-btn" id="panel-clear" title="清空">✕</button>
+        <button class="mini-btn" id="panel-close" title="收起/展开">▾</button>
+      </div>
+      <div id="panel-terminal" class="panel-view active"><pre id="terminal"></pre></div>
+      <div id="panel-output" class="panel-view"><pre id="output"></pre></div>
+      <div id="panel-audit" class="panel-view"><div id="audit-list" class="muted small"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 状态栏 ================= -->
+<div id="statusbar">
+  <span id="sb-git">⑂ -</span>
+  <span id="sb-services">服务 -</span>
+  <span id="sb-env">python -</span>
+  <span class="grow"></span>
+  <span id="sb-msg">M0 · IDEA</span>
+  <span id="sb-token">未连接</span>
+</div>
+
+<div id="toast"></div>
+<script>
+
+/* ================= 状态 ================= */
+const S = {
+  interpreters: [],
+  token: localStorage.getItem('idea_token') || '',
+  roots: {}, root: 'soulagent',
+  tabs: [],          // {rel, root, name, text, dirty, path}
+  activeTab: null,
+  editor: null,      // monaco editor
+  env: null,
+  services: [],
+  config: null,
+  git: null,
+  terminalText: '',
+  currentRunFile: null,
+  monacoReady: false,
+};
+
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
+
+async function api(path, {method='GET', body}={}) {
+  const res = await fetch(path, {
+    method,
+    headers: {'Content-Type':'application/json','X-Admin-Token':S.token},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let data; try { data = await res.json(); } catch { data = {ok:false,error:'bad_json'}; }
+  if (!res.ok) { const e = new Error(data.detail||data.error||('HTTP '+res.status)); e.payload=data; throw e; }
+  return data;
+}
+
+function toast(msg, kind='') {
+  const t = $('#toast'); t.textContent = msg; t.className = 'show '+kind;
+  clearTimeout(t._t); t._t = setTimeout(()=>{t.className='';}, 2600);
+}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+/* ================= 连接 ================= */
+async function connect() {
+  S.token = $('#token').value.trim() || S.token;
+  if (!S.token) { toast('先填令牌','err'); return; }
+  try {
+    const env = await api('/api/wb/env');
+    S.env = env;
+    localStorage.setItem('idea_token', S.token);
+    $('#conn-dot').className='dot ok';
+    $('#sb-token').textContent = '已连接';
+    $('#sb-env').textContent = `python ${env.python}${env.torch? ' · torch '+env.torch+(env.cuda?' (cuda)':''):''}`;
+    await Promise.all([loadRoots(), loadServices(), loadGit(), loadConfig(), loadInterpreters()]);
+    toast('已连接','ok');
+  } catch(e) {
+    $('#conn-dot').className='dot err';
+    toast('连接失败：'+e.message,'err');
+  }
+}
+
+/* ================= 活动栏 / 侧栏 ================= */
+const VIEWS = ['explorer','git','run','services','config','overview','train','data'];
+function showView(name) {
+  $$('#activitybar .ab-item').forEach(b=>b.classList.toggle('active', b.dataset.view===name));
+  $$('.side-view').forEach(v=>v.classList.toggle('active', v.id==='side-'+name));
+  if (name==='git') loadGit();
+  if (name==='services') loadServices();
+  if (name==='config') loadConfig();
+  if (name==='overview') loadOverview();
+  if (name==='run') loadJobs();
+}
+$$('#activitybar .ab-item[data-view]').forEach(b=> b.onclick = ()=> showView(b.dataset.view));
+$('#ab-settings').onclick = ()=> { $('#token').focus(); };
+
+/* ================= 解释器 ================= */
+async function loadInterpreters() {
+  try {
+    const r = await api('/api/wb/files/interpreters');
+    S.interpreters = r.items||[];
+    $('#run-python').innerHTML = S.interpreters.map(it=>
+      `<option value="${esc(it.path)}">${esc(it.label)} · ${esc(it.path)}</option>`).join('');
+  } catch {}
+}
+
+/* ================= 文件树 ================= */
+async function loadRoots() {
+  const r = await api('/api/wb/files/roots');
+  S.roots = {}; for (const it of r.items||[]) S.roots[it.name]=it.path;
+  $('#root-select').value = S.root;
+  await loadTree();
+}
+async function loadTree() {
+  const r = await api(`/api/wb/files/tree?root=${S.root}&depth=4`);
+  if (!r.ok) { $('#file-tree').innerHTML = `<div class="muted">${esc(r.error)}</div>`; return; }
+  $('#file-tree').innerHTML = renderTree(r.items);
+  bindTree();
+}
+function renderTree(items) {
+  return `<ul>${items.map(it=>{
+    if (it.type==='dir') return `<li><div class="tree-row dir" data-dir="1">▸ ${esc(it.name)}</div><ul class="hidden">${renderTree(it.children||[])}</ul></li>`;
+    return `<li><div class="tree-row file" data-rel="${esc(it.rel)}">${esc(it.name)}</div></li>`;
+  }).join('')}</ul>`;
+}
+function bindTree() {
+  $$('#file-tree .tree-row').forEach(row=>{
+    if (row.dataset.dir) {
+      row.onclick = ()=> { const ul=row.nextElementSibling; if(!ul) return;
+        ul.classList.toggle('hidden'); row.textContent = (ul.classList.contains('hidden')?'▸ ':'▾ ')+row.textContent.slice(2); };
+    } else {
+      row.onclick = ()=> openFile(row.dataset.rel);
+    }
+  });
+}
+$('#root-select').onchange = e=> { S.root=e.target.value; loadTree(); };
+$('#tree-refresh').onclick = loadTree;
+
+/* ================= 编辑器（Monaco） ================= */
+function initMonaco() {
+  if (S.monacoReady) return;
+  // 用 CDN 的 AMD loader
+  const loaderScript = document.createElement('script');
+  loaderScript.src = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js';
+  loaderScript.onload = () => {
+    window.require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs' }});
+    window.require(['vs/editor/editor.main'], () => {
+      S.monacoReady = true;
+      createEditor();
+      if (S.activeTab) openEditorForTab(S.activeTab);
+    });
+  };
+  loaderScript.onerror = () => {
+    // 离线兜底：用 textarea
+    const wrap = document.createElement('div');
+    wrap.id = 'fallback-editor';
+    wrap.innerHTML = '<textarea></textarea>';
+    $('#editors').appendChild(wrap);
+    S.monacoReady = 'fallback';
+    createEditor();
+  };
+  document.head.appendChild(loaderScript);
+}
+
+function createEditor() {
+  const tabsEl = $('#tabs'); // 保持在页面里
+  if (S.monacoReady === 'fallback') return;
+  const container = document.createElement('div');
+  container.id = 'monaco';
+  $('#editors').appendChild(container);
+  S.editor = monaco.editor.create(container, {
+    value: '', language: 'python', theme: 'vs-dark', automaticLayout: true,
+    fontSize: 13, minimap: { enabled: false }, scrollBeyondLastLine: false,
+    tabSize: 4, renderWhitespace: 'selection',
+  });
+  S.editor.onDidChangeModelContent(()=>{
+    const tab = S.tabs.find(t=>t.rel===S.activeTab);
+    if (tab && S.editor.getValue() !== tab.text) { tab.dirty = true; renderTabs(); }
+  });
+  S.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveActive);
+}
+
+function langOf(rel) {
+  const ext = rel.split('.').pop().toLowerCase();
+  return ({py:'python',js:'javascript',json:'json',md:'markdown',html:'html',
+    css:'css',yml:'yaml',yaml:'yaml',sh:'shell',bat:'bat',ps1:'powershell',
+    sql:'sql',toml:'ini',ini:'ini',mmd:'markdown'})[ext] || 'plaintext';
+}
+
+async function openFile(rel) {
+  const existing = S.tabs.find(t=>t.rel===rel && t.root===S.root);
+  if (!existing) {
+    const r = await api(`/api/wb/files/read?root=${S.root}&rel=${encodeURIComponent(rel)}`);
+    if (!r.ok) { toast('打开失败：'+r.error,'err'); return; }
+    S.tabs.push({rel, root:S.root, name:rel.split('/').pop(), text:r.text, dirty:false});
+  }
+  S.activeTab = rel;
+  S.currentRunFile = {root:S.root, rel};
+  $('#run-file').textContent = rel;
+  showView('explorer');
+  openEditorForTab(rel);
+}
+
+function openEditorForTab(rel) {
+  const tab = S.tabs.find(t=>t.rel===rel);
+  if (!tab) return;
+  if (S.monacoReady === true && S.editor) {
+    const model = monaco.editor.createModel(tab.text, langOf(rel));
+    const old = S.editor.getModel();
+    S.editor.setModel(model);
+    if (old) old.dispose();
+    S.editor.setScrollTop(0);
+  } else if (S.monacoReady === 'fallback') {
+    const ta = $('#fallback-editor textarea');
+    if (ta) {
+      ta.value = tab.text;
+      ta.oninput = ()=>{ tab.text = ta.value; tab.dirty = true; renderTabs(); };
+    }
+  }
+  $('#welcome').style.display = 'none';
+  renderTabs();
+}
+
+function renderTabs() {
+  $('#tabs').innerHTML = S.tabs.map(t=>
+    `<div class="etab ${t.rel===S.activeTab?'active':''}" data-rel="${esc(t.rel)}">
+       <span>${esc(t.name)}${t.dirty?' ●':''}</span><span class="x" data-close="${esc(t.rel)}">✕</span></div>`).join('');
+  $$('#tabs .etab').forEach(el=>{
+    el.onclick = e=> { if (e.target.classList.contains('x')) return; S.activeTab=el.dataset.rel; openEditorForTab(el.dataset.rel); };
+  });
+  $$('#tabs .x').forEach(x=>{
+    x.onclick = e=> { e.stopPropagation(); closeTab(x.dataset.close); };
+  });
+}
+function closeTab(rel) {
+  const idx = S.tabs.findIndex(t=>t.rel===rel);
+  if (idx<0) return;
+  S.tabs.splice(idx,1);
+  S.activeTab = S.tabs.length? S.tabs[Math.max(0,idx-1)].rel : null;
+  if (S.activeTab) openEditorForTab(S.activeTab);
+  else { if (S.editor) S.editor.setModel(monaco.editor.createModel('', 'plaintext')); $('#welcome').style.display='flex'; renderTabs(); }
+}
+
+async function saveActive() {
+  const tab = S.tabs.find(t=>t.rel===S.activeTab);
+  if (!tab) return;
+  tab.text = S.editor ? S.editor.getValue() : ($('#fallback-editor textarea')?.value ?? tab.text);
+  const r = await api('/api/wb/files/write', {method:'POST', body:{root:tab.root, rel:tab.rel, text:tab.text}});
+  if (r.ok) { tab.dirty=false; renderTabs(); toast('已保存 '+tab.name,'ok'); }
+  else toast('保存失败：'+r.error,'err');
+}
+
+/* ================= Git ================= */
+async function loadGit() {
+  try {
+    const st = await api('/api/wb/git/status');
+    S.git = st;
+    $('#sb-git').textContent = `⑂ ${st.branch||'-'}${st.dirty?` (${st.changes.length})`:''}`;
+    const br = await api('/api/wb/git/branches');
+    $('#branch-select').innerHTML = (br.items||[]).map(b=>
+      `<option value="${esc(b.name)}" ${b.current?'selected':''}>${esc(b.name)}</option>`).join('');
+    $('#git-changes').innerHTML = (st.changes||[]).map(c=>
+      `<div class="tree-row file" data-path="${esc(c.path)}"><span class="gcode">${esc(c.code)}</span> ${esc(c.path)}</div>`).join('') || '<div class="muted small">没有变更</div>';
+    $$('#git-changes .tree-row').forEach(row=>{
+      row.onclick = ()=> openDiff(row.dataset.path);
+    });
+  } catch(e) { toast(e.message,'err'); }
+}
+async function openDiff(path) {
+  const d = await api(`/api/wb/git/diff?path=${encodeURIComponent(path)}`);
+  const name = 'diff:'+path;
+  let tab = S.tabs.find(t=>t.rel===name);
+  if (!tab) { tab = {rel:name, root:'git', name:path.split('/').pop()+' (diff)', text:'', dirty:false}; S.tabs.push(tab); }
+  tab.text = (d.stat||'')+'\n'+(d.diff||'');
+  S.activeTab = name;
+  if (S.monacoReady===true && S.editor) {
+    S.editor.setModel(monaco.editor.createModel(tab.text,'diff'));
+  }
+  $('#welcome').style.display='none';
+  renderTabs();
+}
+$('#branch-select').onchange = async e=>{
+  if (!confirm(`切换到分支 ${e.target.value} ?`)) { loadGit(); return; }
+  const r = await api('/api/wb/git/checkout',{method:'POST',body:{name:e.target.value}});
+  toast(r.ok? '已切换 '+(r.branch||''):'切换失败：'+(r.detail||r.error), r.ok?'ok':'err');
+  loadGit();
+};
+$('#branch-new').onclick = async ()=>{
+  const name = prompt('新分支名（如 wb/2026-10-28）'); if (!name) return;
+  const r = await api('/api/wb/git/checkout',{method:'POST',body:{name, create:true}});
+  toast(r.ok? '已创建 '+name : '失败：'+(r.detail||r.error), r.ok?'ok':'err'); loadGit();
+};
+$('#commit-btn').onclick = doCommit;
+$('#commit-msg').onkeydown = e=>{ if (e.ctrlKey && e.key==='Enter') doCommit(); };
+async function doCommit() {
+  const msg = $('#commit-msg').value.trim();
+  if (!msg) { toast('先写提交信息','err'); return; }
+  const r = await api('/api/wb/git/commit',{method:'POST',body:{message:msg, push:$('#commit-push').checked}});
+  if (r.ok) { toast(r.noop? '没有变更可提交' : '已提交 '+(r.sha||''), 'ok'); $('#commit-msg').value=''; }
+  else toast('提交失败：'+(r.error||r.detail||''),'err');
+  loadGit();
+}
+
+/* ================= 服务 ================= */
+async function loadServices() {
+  const data = await api('/api/wb/services');
+  S.services = data.items||[];
+  const running = S.services.filter(s=>s.running).length;
+  $('#sb-services').textContent = `服务 ${running}/${S.services.length}`;
+  $('#svc-list').innerHTML = S.services.map(s=>`
+    <div class="svc">
+      <div class="svc-row"><b>${esc(s.label)}</b><span class="badge ${s.running?'on':''}">${s.running?'运行':'停止'}</span></div>
+      <div class="muted small">:${s.port} · PID ${s.pid??'-'}</div>
+      <div class="svc-btns">
+        <button class="mini-btn" data-svc="${s.name}" data-act="start" ${s.running?'disabled':''}>启动</button>
+        <button class="mini-btn danger" data-svc="${s.name}" data-act="stop" ${s.running?'':'disabled'}>停止</button>
+        <button class="mini-btn" data-svc="${s.name}" data-act="restart">重启</button>
+        <button class="mini-btn" data-svc="${s.name}" data-act="logs">日志</button>
+      </div>
+    </div>`).join('');
+  $$('#svc-list .mini-btn').forEach(b=> b.onclick = async ()=>{
+    const {svc, act} = b.dataset;
+    if (act==='logs') return openServiceLogs(svc);
+    b.disabled = true;
+    try {
+      const r = await api(`/api/wb/services/${svc}/${act}`,{method:'POST'});
+      toast(r.ok? `${svc} ${act} 成功` : `${svc} ${act} 失败：${r.error||''}`, r.ok?'ok':'err');
+    } catch(e){ toast(e.message,'err'); }
+    loadServices(); loadOverview();
+  });
+}
+async function openServiceLogs(name) {
+  const r = await api(`/api/wb/services/${name}/logs?lines=400`);
+  openTextTab(`log:${name}`, name+' 日志', r.text||'(空)');
+}
+
+/* ================= 配置（按域分页） ================= */
+async function loadConfig(force=false) {
+  if (S.config && !force) { renderConfigGroups(); return; }
+  S.config = await api('/api/wb/config');
+  renderConfigGroups();
+}
+function renderConfigGroups() {
+  const q = ($('#config-filter').value||'').toLowerCase();
+  const groups = new Map();
+  for (const it of S.config.items||[]) {
+    if (q && !(`${it.key} ${it.label} ${it.desc}`.toLowerCase().includes(q))) continue;
+    if (!groups.has(it.group)) groups.set(it.group, []);
+    groups.get(it.group).push(it);
+  }
+  $('#config-groups').innerHTML = Array.from(groups.keys()).map(g=>
+    `<div class="tree-row file" data-group="${esc(g)}">⚙ ${esc(g)} <span class="muted small">(${groups.get(g).length})</span></div>`).join('')
+    || '<div class="muted small">没有匹配项</div>';
+  $$('#config-groups .tree-row').forEach(row=> row.onclick = ()=> openSettingsPage(row.dataset.group));
+}
+$('#config-filter').oninput = renderConfigGroups;
+
+const CHANGED = {};           // group -> {key: value}
+function openSettingsPage(group) {
+  const items = (S.config.items||[]).filter(i=>i.group===group);
+  if (!items.length) return;
+  const key = 'settings:'+group;
+  let tab = S.tabs.find(t=>t.rel===key);
+  if (!tab) { tab = {rel:key, root:'config', name:'设置 · '+group, text:'', dirty:false, group}; S.tabs.push(tab); }
+  tab.html = renderSettingsHtml(group, items);
+  S.activeTab = key;
+  showHtmlTab(tab);
+  renderTabs();
+}
+
+function renderSettingsHtml(group, items) {
+  const changed = CHANGED[group] || {};
+  return `<div class="settings-page">
+    <h2>${esc(group)}</h2>
+    ${items.map(it=>{
+      const v = Object.prototype.hasOwnProperty.call(changed, it.key)? changed[it.key] : it.value;
+      const isChanged = Object.prototype.hasOwnProperty.call(changed, it.key);
+      return `<div class="setting-row ${isChanged?'changed':''}" data-key="${esc(it.key)}" data-group="${esc(group)}">
+        <div class="setting-label">
+          <div><b>${esc(it.label)}</b> <span class="muted small">${esc(it.key)}</span></div>
+          <div class="muted small">${esc(it.desc||'')}${it.restart?' <span class="warn">需重启</span>':''}</div>
+        </div>
+        <div class="setting-input">${settingsInput(it, v)}</div>
+      </div>`;
+    }).join('')}
+    <div class="settings-actions">
+      <button class="btn primary" data-save-group="${esc(group)}">保存本页</button>
+      <button class="btn" data-reset-group="${esc(group)}">还原</button>
+    </div>
+    <div class="muted small" style="margin-top:8px">保存后自动备份并写入审计；配置改动会尝试自动提交 git。</div>
+  </div>`;
+}
+
+function settingsInput(it, v) {
+  const k = esc(it.key), g = esc(it.group);
+  if (it.type==='bool') return `<input type="checkbox" data-k="${k}" data-g="${g}" ${v?'checked':''}>`;
+  if (it.type==='str_list') return `<textarea rows="2" data-k="${k}" data-g="${g}">${esc(Array.isArray(v)?v.join('\n'):'')}</textarea>`;
+  if (it.type==='hour_range') {
+    const arr = Array.isArray(v)?v:[0,0];
+    return `<input type="number" min="0" max="23" data-k="${k}" data-g="${g}" data-part="0" value="${arr[0]}">
+            <span class="muted">→</span>
+            <input type="number" min="0" max="23" data-k="${k}" data-g="${g}" data-part="1" value="${arr[1]}">`;
+  }
+  if (it.type==='int'||it.type==='float') {
+    return `<input type="number" ${it.type==='float'?'step="any"':''} data-k="${k}" data-g="${g}" value="${esc(v??'')}">`;
+  }
+  if (it.enum) return `<select data-k="${k}" data-g="${g}">${it.enum.map(x=>`<option ${x===v?'selected':''}>${esc(x)}</option>`).join('')}</select>`;
+  return `<input type="text" data-k="${k}" data-g="${g}" value="${esc(v??'')}" ${it.secret?'placeholder="******"':''}>`;
+}
+
+function bindSettingsInputs(scope) {
+  $$('.settings-input [data-k]', scope).forEach(el=>{
+    el.onchange = ()=>{
+      const g = el.dataset.g, k = el.dataset.k;
+      const it = S.config.items.find(i=>i.key===k);
+      let val;
+      if (it.type==='bool') val = el.checked;
+      else if (it.type==='str_list') val = el.value.split('\n').map(s=>s.trim()).filter(Boolean);
+      else if (it.type==='int') val = parseInt(el.value,10);
+      else if (it.type==='float') val = parseFloat(el.value);
+      else if (it.type==='hour_range') {
+        const arr = (CHANGED[g]?.[k] ?? it.value ?? [0,0]).slice();
+        arr[parseInt(el.dataset.part,10)] = parseInt(el.value,10); val = arr;
+      } else val = el.value;
+      CHANGED[g] = CHANGED[g] || {}; CHANGED[g][k] = val;
+      showHtmlTab(S.tabs.find(t=>t.rel==='settings:'+g));
+    };
+  });
+}
+async function saveGroup(group) {
+  const patch = CHANGED[group] || {};
+  if (!Object.keys(patch).length) { toast('本页没有改动'); return; }
+  try {
+    const v = await api('/api/wb/config/validate',{method:'POST',body:{patch}});
+    if (!v.ok) { toast('校验失败：'+v.errors.map(e=>`${e.key}: ${e.message}`).join('; '),'err'); return; }
+    const r = await api('/api/wb/config/save',{method:'POST',body:{patch, auto_commit:true}});
+    if (!r.ok) { toast('保存失败：'+(r.error||''),'err'); return; }
+    delete CHANGED[group];
+    toast(`已保存 ${r.changed.length} 项`+(r.git?.sha?`，提交 ${r.git.sha}`:'')+
+      (r.restart_required?.length?`（需重启：${r.restart_required.join(',')}）`:''),'ok');
+    S.config = null; await loadConfig(true);
+    openSettingsPage(group);
+  } catch(e){ toast(e.message,'err'); }
+}
+
+/* ================= 总览 ================= */
+async function loadOverview() {
+  const d = await api('/api/wb/overview');
+  const running = (d.services||[]).filter(s=>s.running).length;
+  $('#overview-mini').innerHTML = `
+    <div>项目：${esc(d.soulagent)}</div>
+    <div>服务：${running}/${(d.services||[]).length}</div>
+    <div>Git：${esc(d.git.branch||'-')} ${d.git.dirty?'(有变更)':'(干净)'}</div>
+    <div>配置：${esc(d.config_path||'')}</div>`;
+  const key = 'overview:home';
+  let tab = S.tabs.find(t=>t.rel===key);
+  if (!tab) { tab={rel:key,root:'overview',name:'总览',text:'',dirty:false}; S.tabs.push(tab); }
+  tab.html = `<div class="overview-page">
+    <h2>总览</h2>
+    <div class="ov-grid">
+      <div class="ov-card"><div class="muted small">项目目录</div><div>${esc(d.soulagent)}</div></div>
+      <div class="ov-card"><div class="muted small">服务</div><div>${running}/${(d.services||[]).length} 运行中</div></div>
+      <div class="ov-card"><div class="muted small">Git</div><div>${esc(d.git.branch||'-')}</div></div>
+      <div class="ov-card"><div class="muted small">环境</div><div>python ${esc(S.env?.python||'?')}${S.env?.torch? ' · torch '+esc(S.env.torch):''}</div></div>
+    </div>
+    <h3>服务</h3>
+    <div class="ov-grid">${(d.services||[]).map(s=>`<div class="ov-card"><b>${esc(s.label)}</b><div class="muted small">:${s.port} ${s.running?'运行':'停止'}</div></div>`).join('')}</div>
+  </div>`;
+  if (S.activeTab === null) { S.activeTab = key; showHtmlTab(tab); renderTabs(); }
+}
+
+/* ================= 通用：HTML 标签页 / 文本标签页 ================= */
+function showHtmlTab(tab) {
+  if (!tab) return;
+  if (!tab._htmlEl) {
+    tab._htmlEl = document.createElement('div');
+    tab._htmlEl.className = 'html-tab';
+    $('#editors').appendChild(tab._htmlEl);
+  }
+  $$('#editors > .html-tab').forEach(el=> el.style.display='none');
+  if (S.monacoReady === true && $('#monaco')) $('#monaco').style.display='none';
+  if ($('#fallback-editor')) $('#fallback-editor').style.display='none';
+  tab._htmlEl.style.display='block';
+  tab._htmlEl.innerHTML = tab.html || '';
+  bindHtmlActions(tab);
+  $('#welcome').style.display='none';
+}
+function bindHtmlActions(tab) {
+  if (!tab._htmlEl) return;
+  $$('[data-save-group]', tab._htmlEl).forEach(b=> b.onclick=()=> saveGroup(b.dataset.saveGroup));
+  $$('[data-reset-group]', tab._htmlEl).forEach(b=> b.onclick=()=>{ delete CHANGED[b.dataset.resetGroup]; openSettingsPage(b.dataset.resetGroup); });
+  bindSettingsInputs(tab._htmlEl);
+}
+function openTextTab(rel, name, text) {
+  let tab = S.tabs.find(t=>t.rel===rel);
+  if (!tab) { tab={rel,root:'text',name,text,dirty:false}; S.tabs.push(tab); }
+  else tab.text = text;
+  S.activeTab = rel;
+  if (S.monacoReady===true && S.editor) {
+    S.editor.setModel(monaco.editor.createModel(text,'plaintext'));
+    $('#monaco').style.display='block';
+  }
+  $('#welcome').style.display='none';
+  renderTabs();
+}
+
+/* ================= 运行 ================= */
+async function loadJobs() {
+  try {
+    const r = await api('/api/wb/files/jobs');
+    $('#run-jobs').innerHTML = (r.items||[]).map(j=>
+      `<div class="job" data-job="${j.id}">${j.status==='running'?'⏳':(j.status==='done'?'✅':'❌')} ${esc(j.cmd.slice(0,60))}</div>`).join('') || '（无）';
+    $$('#run-jobs .job').forEach(el=> el.onclick=()=> pollJob(el.dataset.job, 0));
+  } catch {}
+}
+async function runCurrent() {
+  const f = S.currentRunFile;
+  if (!f) { toast('先在资源管理器里打开一个 .py 文件','err'); return; }
+  if (!f.rel.endsWith('.py')) { toast('只能运行 .py 文件','err'); return; }
+  openPanel('terminal');
+  setTerminal(`[运行] ${f.rel}\n`);
+  const r = await api('/api/wb/files/run',{method:'POST',body:{root:f.root, rel:f.rel, python:$('#run-python').value||null}});
+  if (!r.ok) { setTerminal(`启动失败：${r.error}`); return; }
+  pollJob(r.job, 0);
+}
+$('#run-btn').onclick = runCurrent;
+$('#run-template').onclick = async ()=>{
+  const t = await api('/api/wb/files/templates');
+  const list = t.items||[];
+  const pick = prompt('选择模板：\n'+list.map((x,i)=>`${i+1}. ${x.title} — ${x.desc}`).join('\n'), '1');
+  const idx = Math.max(0, parseInt(pick||'1',10)-1);
+  const tpl = list[idx]; if (!tpl) return;
+  const rel = 'scratch/'+tpl.name;
+  const r = await api('/api/wb/files/write',{method:'POST',body:{root:'soulagent', rel, text:tpl.code}});
+  if (!r.ok) { toast('创建失败：'+r.error,'err'); return; }
+  await loadTree(); openFile(rel); toast('已创建 '+rel,'ok');
+};
+
+let POLL = null;
+function pollJob(jobId, offset) {
+  clearTimeout(POLL);
+  const tick = async ()=>{
+    try {
+      const r = await api(`/api/wb/files/job?id=${jobId}&offset=${offset}`);
+      if (!r.ok) return;
+      if (r.output) { S.terminalText += r.output; setTerminal(S.terminalText); offset = r.next_offset; }
+      if (r.status === 'running') { POLL = setTimeout(tick, 800); }
+      else { S.terminalText += `\n[结束] status=${r.status} code=${r.returncode}\n`; setTerminal(S.terminalText); loadJobs(); }
+    } catch(e) { /* ignore */ }
+  };
+  tick();
+}
+function setTerminal(text) { $('#terminal').textContent = text; scrollBottom($('#terminal')); }
+function scrollBottom(el){ el.scrollTop = el.scrollHeight; }
+function openPanel(name) {
+  $$('.ptab').forEach(t=>t.classList.toggle('active', t.dataset.panel===name));
+  $$('.panel-view').forEach(v=>v.classList.toggle('active', v.id==='panel-'+name));
+  $('#panel-wrap').classList.remove('collapsed');
+  if (name==='audit') loadAudit();
+}
+$$('.ptab').forEach(t=> t.onclick = ()=> openPanel(t.dataset.panel));
+$('#panel-clear').onclick = ()=> { S.terminalText=''; setTerminal(''); };
+$('#panel-close').onclick = ()=> $('#panel-wrap').classList.toggle('collapsed');
+
+async function loadAudit() {
+  try {
+    const r = await api('/api/wb/audit?limit=50');
+    $('#audit-list').innerHTML = (r.items||[]).map(i=>
+      `<div>${new Date(i.ts*1000).toLocaleString()} · ${esc(i.action)} · ${esc(i.target).slice(0,60)}</div>`).join('') || '（暂无）';
+  } catch {}
+}
+
+/* ================= 命令面板（简化） ================= */
+document.addEventListener('keydown', e=>{
+  if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='s') { e.preventDefault(); saveActive(); }
+  if ((e.ctrlKey||e.metaKey) && e.shiftKey && e.key.toLowerCase()==='p') { e.preventDefault(); $('#cmd-input').focus(); }
+});
+$('#cmd-input').onkeydown = async e=>{
+  if (e.key!=='Enter') return;
+  const text = e.target.value.trim(); if (!text) return;
+  e.target.value='';
+  const hit = S.tabs.find(t=>t.rel.includes(text)) || null;
+  if (hit) { S.activeTab=hit.rel; openEditorForTab(hit.rel); return; }
+  // 搜索文件树
+  const r = await api(`/api/wb/files/tree?root=${S.root}&depth=4`);
+  const files = flattenFiles(r.items||[]);
+  const match = files.find(f=>f.toLowerCase().includes(text.toLowerCase()));
+  if (match) { await openFile(match); return; }
+  toast('没找到：'+text,'err');
+};
+function flattenFiles(items) {
+  const out=[];
+  for (const it of items) {
+    if (it.type==='file') out.push(it.rel);
+    else if (it.children) out.push(...flattenFiles(it.children));
+  }
+  return out;
+}
+
+/* ================= 初始化 ================= */
+$('#token').value = S.token;
+$('#connect').onclick = connect;
+$('#token').onkeydown = e=>{ if(e.key==='Enter') connect(); };
+initMonaco();
+showView('explorer');
+if (S.token) connect();
+setInterval(()=>{ if (S.services.length) loadServices().catch(()=>{}); }, 15000);
+</script>
 </body>
 </html>

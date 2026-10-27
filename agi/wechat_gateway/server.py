@@ -1406,6 +1406,30 @@ class Gateway:
                 self._reactive_dedupe[(str(contact or "").strip(),
                                        str(text or ""))] = now
             return out
+        # 发送后端：uia = 系统 .NET UIA（wxauto4 失效期间的替代，保留 wxauto 代码待其更新）
+        backend = str(self.cfg.get("send_backend") or "wxauto").strip().lower()
+        if backend == "uia":
+            try:
+                from . import uia_sender
+                if uia_sender.available():
+                    out = uia_sender.send_to_contact(contact, text, self.cfg)
+                    cls = sendclass.classify_send_result(out)
+                    if cls == sendclass.DELIVERED:
+                        self.send_times.append(time.time())
+                        self.sent_today += 1
+                        if reactive:
+                            self._reactive_dedupe[(str(contact or "").strip(),
+                                                   str(text or ""))] = now
+                        out["classification"] = cls
+                        out["backend"] = "uia"
+                        return out
+                    self._record("send_uia_failed", {
+                        "friend": contact,
+                        "error": str(out.get("error") or "")[:200],
+                        "status": str(out.get("status") or "")[:40]})
+            except Exception as exc:  # noqa: BLE001
+                self._record("send_uia_failed", {"friend": contact,
+                                                 "error": f"{type(exc).__name__}: {exc}"[:200]})
         if not WXAUTO_PYTHON.exists():
             return self._on_send_failure(contact, text, f"缺少 wxauto venv: {WXAUTO_PYTHON}")
         cmd = [str(WXAUTO_PYTHON), "-m", "agi.wechat_gateway.send_cli",
@@ -1604,6 +1628,58 @@ class Gateway:
             return {"ok": True, "status": "planned",
                     "items": [r for r in results if r is not None],
                     "sent": 0, "failed": 0, "draft_ids": []}
+
+        # ⑦b 发送后端：uia 优先（失败条目继续走下面 wxauto 批）
+        backend = str(self.cfg.get("send_backend") or "wxauto").strip().lower()
+        if backend == "uia":
+            try:
+                from . import uia_sender
+                if uia_sender.available():
+                    remaining = []
+                    for index, item in cleaned:
+                        try:
+                            if str(item.get("type") or "").lower() in ("text", "emoji_text"):
+                                out = uia_sender.send_to_contact(contact_name,
+                                                                 str(item.get("text") or ""),
+                                                                 self.cfg)
+                            else:
+                                out = uia_sender.send_media(contact_name, item, self.cfg)
+                        except Exception as exc:  # noqa: BLE001
+                            out = {"ok": False, "status": "failed",
+                                   "error": f"{type(exc).__name__}: {exc}"}
+                        if isinstance(out, dict) and out.get("ok"):
+                            out = dict(out)
+                            out.setdefault("type", str(item.get("type") or ""))
+                            out["backend"] = "uia"
+                            results[index] = out
+                        else:
+                            remaining.append((index, item))
+                            self._record("send_uia_failed", {
+                                "friend": contact_name,
+                                "type": item.get("type"),
+                                "error": str((out or {}).get("error") or "")[:200]})
+                    if not remaining:
+                        sent = 0
+                        for index, item in cleaned:
+                            r = results[index] or {}
+                            self._record("send_media", {
+                                "friend": contact_name, "type": str(r.get("type") or ""),
+                                "name": media_mod.item_label(item),
+                                "status": str(r.get("status") or ""),
+                                "fallback": r.get("fallback_used") or [],
+                                "used": r.get("used"), "error": "", "error_key": ""})
+                            if r.get("ok"):
+                                sent += 1
+                                self.send_times.append(now)
+                                self.sent_today += 1
+                        return {"ok": True, "status": "sent",
+                                "items": [r for r in results if r is not None],
+                                "sent": sent, "failed": 0, "draft_ids": [],
+                                "backend": "uia"}
+                    cleaned = remaining
+            except Exception as exc:  # noqa: BLE001
+                self._record("send_uia_failed", {"friend": contact_name,
+                                                 "error": f"{type(exc).__name__}: {exc}"[:200]})
 
         # ⑧ 真发：wxauto4 venv 子进程（与文本发送同一条链路）
         if not WXAUTO_PYTHON.exists():

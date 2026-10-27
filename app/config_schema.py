@@ -41,8 +41,8 @@ SCHEMA: list[dict[str, Any]] = [
      "label": "@ 识别名", "desc": "私聊里 @ 这个名字会被识别为点名（如：小鱼）", "restart": True},
 
     # ---------------- 发送节奏 ----------------
-    {"key": "send_mode", "group": "发送", "type": "str", "default": "auto", "enum": ["auto", "manual", "draft"],
-     "label": "发送模式", "desc": "auto=自动发送；manual=草稿箱；draft=只出草稿", "restart": False},
+    {"key": "send_mode", "group": "发送", "type": "str", "default": "confirm", "enum": ["auto", "confirm", "off"],
+     "label": "发送模式", "desc": "auto=自动发送；confirm=只生成草稿等人工批准；off=不发送", "restart": False},
     {"key": "reply_delay", "group": "发送", "type": "float", "default": 0.5, "min": 0, "max": 30,
      "label": "回复延迟（秒）", "desc": "收到消息后等待多久再生成", "restart": False},
     {"key": "reply_debounce_ms", "group": "发送", "type": "int", "default": 2000, "min": 0, "max": 60000,

@@ -37,6 +37,8 @@
   <div id="activitybar">
     <button class="ab-item active" data-view="explorer" title="资源管理器">🗂</button>
     <button class="ab-item" data-view="git" title="源代码管理">⑂</button>
+    <button class="ab-item" data-view="data" title="数据工作室">🗄</button>
+    <button class="ab-item" data-view="mem" title="记忆工作室">🧠</button>
     <button class="ab-item" data-view="run" title="运行/调试">▶</button>
     <button class="ab-item" data-view="services" title="服务">⚙</button>
     <button class="ab-item" data-view="config" title="设置">🎛</button>
@@ -69,6 +71,8 @@
         <label class="check small"><input id="commit-push" type="checkbox"> 提交后推送</label>
         <button class="btn primary full" id="commit-btn">提交</button>
       </div>
+      <div class="side-title" style="margin-top:12px">Git 设置</div>
+      <div id="git-settings" class="git-settings muted small">未连接</div>
     </div>
 
     <div id="side-run" class="side-view">
@@ -92,6 +96,20 @@
       <div class="side-title">设置</div>
       <input id="config-filter" placeholder="过滤设置…">
       <div id="config-groups" class="tree"></div>
+    </div>
+
+    <div id="side-data" class="side-view">
+      <div class="side-title">数据工作室</div>
+      <div class="side-sub muted small">所有可管理的 SQLite 库</div>
+      <div id="data-db-list" class="tree"></div>
+    </div>
+
+    <div id="side-mem" class="side-view">
+      <div class="side-title">记忆工作室</div>
+      <div class="side-sub">
+        <button class="btn primary full" id="mem-open">打开记忆工作室</button>
+      </div>
+      <div id="mem-overview-mini" class="muted small" style="padding:0 12px"></div>
     </div>
 
     <div id="side-overview" class="side-view">
@@ -211,7 +229,7 @@
 /* ================= 状态 ================= */
 const S = {
   interpreters: [],
-  token: localStorage.getItem('idea_token') || '',
+  token: localStorage.getItem('idea_token') || (new URLSearchParams(location.search).get('token') || ''),
   roots: {}, root: 'soulagent',
   tabs: [],          // {rel, root, name, text, dirty, path}
   activeTab: null,
@@ -256,7 +274,8 @@ async function connect(tokenOverride) {
     $('#conn-label').textContent = '已连接';
     $('#sb-token').textContent = '已连接';
     $('#sb-env').textContent = `python ${env.python}${env.torch? ' · torch '+env.torch+(env.cuda?' (cuda)':''):''}`;
-    await Promise.all([loadRoots(), loadServices(), loadGit(), loadConfig(), loadInterpreters()]);
+    await Promise.all([loadRoots(), loadServices(), loadGit(), loadConfig(), loadInterpreters(),
+      loadDataDbs().catch(()=>{}), loadMemSidebar().catch(()=>{}), loadGitSettings().catch(()=>{})]);
     toast('已连接','ok');
   } catch(e) {
     $('#conn-label').textContent = '连接失败';
@@ -278,11 +297,13 @@ document.addEventListener('click', e=>{
 });
 
 /* ================= 活动栏 / 侧栏 ================= */
-const VIEWS = ['explorer','git','run','services','config','overview'];
+const VIEWS = ['explorer','git','data','mem','run','services','config','overview'];
 function showView(name) {
   $$('#activitybar .ab-item').forEach(b=>b.classList.toggle('active', b.dataset.view===name));
   $$('.side-view').forEach(v=>v.classList.toggle('active', v.id==='side-'+name));
-  if (name==='git') loadGit();
+  if (name==='git') { loadGit(); loadGitSettings(); }
+  if (name==='data') loadDataDbs();
+  if (name==='mem') loadMemSidebar();
   if (name==='services') loadServices();
   if (name==='config') loadConfig();
   if (name==='overview') openOverviewPage();
@@ -290,6 +311,7 @@ function showView(name) {
 }
 $$('#activitybar .ab-item[data-view]').forEach(b=> b.onclick = ()=> showView(b.dataset.view));
 $('#ab-settings').onclick = ()=> openConnectDialog();
+$('#mem-open').onclick = ()=> { showView('mem'); openMemStudio(); };
 
 /* ================= 解释器 ================= */
 async function loadInterpreters() {
@@ -579,6 +601,7 @@ async function loadGit() {
     $$('#git-changes .tree-row').forEach(row=>{
       row.onclick = ()=> openDiff(row.dataset.path);
     });
+    loadGitSettings();
   } catch(e) { toast(e.message,'err'); }
 }
 async function openDiff(path) {
@@ -966,7 +989,535 @@ if (S.token) connect(S.token);
 initMonaco();
 showView('explorer');
 if (S.token) connect();
+/* 开发/截图用：?view=explorer|git|data|mem|... 直接打开对应视图 */
+const _startView = new URLSearchParams(location.search).get('view');
+if (_startView && VIEWS.includes(_startView)) {
+  setTimeout(() => {
+    showView(_startView);
+    if (_startView === 'mem') openMemStudio();
+    if (_startView === 'data') openFirstDataFromUrl();
+  }, 1400);
+}
 setInterval(()=>{ if (S.services.length) loadServices().catch(()=>{}); }, 15000);
+
+/* ================= M1：数据工作室 / 记忆工作室 / Git 设置 ================= */
+S.dataStudio = { dbs: null, db: null, schema: null, table: null, rows: null,
+  page: 1, pageSize: 50, q: '', orderBy: '', direction: 'asc',
+  sql: '', write: false, result: null, backups: null };
+S.memStudio = { overview: null, list: null, rules: null, decay: null,
+  timeline: null, detail: null, selected: null, purge: null };
+
+function studioBadge(text, cls) {
+  return `<span class="badge ${cls || ''}">${esc(text)}</span>`;
+}
+
+function studioDialog(title, bodyHtml, onOk, okLabel) {
+  const mask = document.createElement('div');
+  mask.className = 'dialog studio-dialog';
+  mask.innerHTML = `<div class="dialog-box">
+    <div class="dialog-title">${esc(title)}<button class="mini-btn studio-dialog-x">✕</button></div>
+    <div class="studio-dialog-body">${bodyHtml}</div>
+    <div class="dialog-actions">
+      <button class="btn studio-dialog-cancel">取消</button>
+      <button class="btn primary studio-dialog-ok">${esc(okLabel || '保存')}</button>
+    </div></div>`;
+  document.body.appendChild(mask);
+  const close = () => mask.remove();
+  mask.querySelector('.studio-dialog-x').onclick = close;
+  mask.querySelector('.studio-dialog-cancel').onclick = close;
+  mask.querySelector('.studio-dialog-ok').onclick = async () => {
+    try {
+      const keep = await onOk(mask);
+      if (keep !== false) close();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  return mask;
+}
+
+/* ---------- 数据工作室 ---------- */
+async function loadDataDbs() {
+  const r = await api('/api/wb/db/databases');
+  S.dataStudio.dbs = r.items || [];
+  renderDataSide();
+}
+function renderDataSide() {
+  const el = $('#data-db-list');
+  if (!el) return;
+  const items = S.dataStudio.dbs || [];
+  if (!items.length) { el.innerHTML = '<div class="muted small">没有可管理数据库</div>'; return; }
+  const order = ['memory', 'persona', 'audit', 'other'];
+  const groups = {};
+  for (const item of items) (groups[item.domain || 'other'] = groups[item.domain || 'other'] || []).push(item);
+  el.innerHTML = order.filter(g => groups[g]).map(g => `
+    <div class="side-title" style="padding:6px 10px 2px">${esc(g)} (${groups[g].length})</div>
+    ${groups[g].map((item) => {
+      const index = items.indexOf(item);
+      return `<div class="tree-row file" data-db-i="${index}" title="${esc(item.path)}">${esc(item.label || item.name)}</div>`;
+    }).join('')}`).join('');
+  $$('#data-db-list .tree-row').forEach(row => {
+    row.onclick = () => openDataStudio(S.dataStudio.dbs[Number(row.dataset.dbI)]);
+  });
+}
+
+async function openDataStudio(db) {
+  if (!db) return;
+  const ds = S.dataStudio;
+  ds.db = db; ds.page = 1; ds.q = ''; ds.table = null; ds.rows = null; ds.result = null;
+  try {
+    const schema = await api('/api/wb/db/schema?db=' + encodeURIComponent(db.id));
+    ds.schema = schema;
+    if (schema.ok && schema.tables.length) {
+      ds.table = schema.tables[0].name;
+      await loadDataRows();
+    }
+  } catch (e) { toast('读取表结构失败：' + e.message, 'err'); }
+  openDataTab();
+}
+
+async function openFirstDataFromUrl() {
+  try {
+    await loadDataDbs();
+    const dbs = S.dataStudio.dbs || [];
+    if (dbs.length) await openDataStudio(dbs[0]);
+  } catch (e) { /* 截图/直达失败不阻塞 */ }
+}
+
+async function loadDataRows() {
+  const ds = S.dataStudio;
+  if (!ds.db || !ds.table) return;
+  const params = new URLSearchParams({
+    db: ds.db.id, table: ds.table, page: String(ds.page),
+    page_size: String(ds.pageSize), q: ds.q || '',
+    order_by: ds.orderBy || '', direction: ds.direction || 'asc',
+  });
+  try {
+    ds.rows = await api('/api/wb/db/rows?' + params.toString());
+  } catch (e) { ds.rows = { ok: false, error: e.message }; }
+}
+
+function dataStudioHtml() {
+  const ds = S.dataStudio;
+  const db = ds.db || {};
+  const schema = ds.schema || { tables: [] };
+  const tables = schema.tables || [];
+  const rows = ds.rows || {};
+  const columns = rows.columns || (tables.find(t => t.name === ds.table) || {}).columns || [];
+  const tableMeta = tables.find(t => t.name === ds.table) || {};
+  const pk = rows.primary_key || tableMeta.primary_key || [];
+  const total = rows.total ?? tableMeta.rows ?? 0;
+  const pages = Math.max(1, Math.ceil(total / ds.pageSize));
+  const items = rows.rows || [];
+  const cell = (row, col, index) => {
+    const value = row[col];
+    if (value === null || value === undefined) return '<span class="muted">NULL</span>';
+    const text = String(value);
+    return `<span data-row="${index}" data-col="${esc(col)}" title="双击编辑">${esc(text.length > 120 ? text.slice(0, 120) + '…' : text)}</span>`;
+  };
+  return `<div class="studio-page">
+    <h2>数据工作室</h2>
+    <div class="studio-toolbar">
+      <span class="badge on">${esc(db.domain || 'other')}</span>
+      <b>${esc(db.label || db.name || '')}</b>
+      <span class="muted small mono">${esc(db.path || '')}</span>
+      <span class="grow"></span>
+      <button class="btn" id="ds-refresh">刷新</button>
+      <button class="btn" id="ds-backup">备份此库</button>
+      <button class="btn" id="ds-backups">备份列表</button>
+    </div>
+    <div class="ds-layout">
+      <div class="studio-card ds-tables">
+        <div class="studio-card-title">表（${tables.length}）</div>
+        <input id="ds-table-filter" placeholder="过滤表名…">
+        <div id="ds-table-list" class="ds-table-list">${tables.map(t => `
+          <div class="tree-row file ${t.name === ds.table ? 'active' : ''}" data-table="${esc(t.name)}">
+            ${esc(t.name)} <span class="muted small">${t.rows ?? ''}</span></div>`).join('') ||
+          '<div class="muted small">没有表</div>'}</div>
+      </div>
+      <div class="studio-card ds-main">
+        <div class="studio-toolbar">
+          <b>${esc(ds.table || '选择表')}</b>
+          ${ds.table ? `<span class="muted small">${total} 行 · ${columns.length} 列${pk.length ? ' · PK ' + esc(pk.join(',')) : ' · 无主键（不可行编辑）'}</span>` : ''}
+          <span class="grow"></span>
+          <input id="ds-q" placeholder="搜索 q…" value="${esc(ds.q)}" style="width:160px">
+          <button class="btn" id="ds-search">搜索</button>
+          <button class="btn" id="ds-prev" ${ds.page <= 1 ? 'disabled' : ''}>上一页</button>
+          <span class="muted small">${ds.page}/${pages}</span>
+          <button class="btn" id="ds-next" ${ds.page >= pages ? 'disabled' : ''}>下一页</button>
+        </div>
+        ${rows.ok === false ? `<div class="warn small">读取失败：${esc(rows.error || '')}</div>` : ''}
+        <div class="ds-table-wrap"><table class="ds-table">
+          <thead><tr>${['#', ...columns.map(c => c.name)].map((name, i) => {
+            if (i === 0) return '<th>#</th>';
+            const active = ds.orderBy === name;
+            return `<th class="ds-sort" data-sort="${esc(name)}">${esc(name)}${active ? (ds.direction === 'asc' ? ' ▲' : ' ▼') : ''}</th>`;
+          }).join('')}</tr></thead>
+          <tbody>${items.length ? items.map((row, index) => `<tr>${['' + (index + 1 + (ds.page - 1) * ds.pageSize), ...columns.map(c => c.name)].map((value, ci) => `<td>${ci === 0 ? esc(value) : cell(row, value, index)}</td>`).join('')}</tr>`).join('') :
+            `<tr><td colspan="${columns.length + 1}" class="muted">没有行</td></tr>`}</tbody>
+        </table></div>
+        <details class="studio-sql" ${ds.result ? 'open' : ''}>
+          <summary>SQL 控制台（默认只读）</summary>
+          <textarea id="ds-sql" rows="4" spellcheck="false">${esc(ds.sql)}</textarea>
+          <div class="studio-toolbar">
+            <label class="check small"><input type="checkbox" id="ds-write" ${ds.write ? 'checked' : ''}> 允许写入</label>
+            <input id="ds-confirm" placeholder="写操作需输入：确认写入" value="" style="width:220px" ${ds.write ? '' : 'disabled'}>
+            <button class="btn primary" id="ds-run-sql">执行 SQL</button>
+            <span class="muted small">写入前自动备份；仅允许 data/selflearn 与 .data 下的 sqlite</span>
+          </div>
+          <div id="ds-sql-result">${ds.result ? dataSqlResultHtml(ds.result) : ''}</div>
+        </details>
+      </div>
+    </div>
+    ${ds.backups ? `<div class="studio-card"><div class="studio-card-title">备份</div>${dataBackupsHtml(ds.backups)}</div>` : ''}
+  </div>`;
+}
+
+function dataSqlResultHtml(result) {
+  if (!result) return '';
+  if (!result.ok) return `<div class="warn small">SQL 失败：${esc(result.error || '')} ${esc(result.hint || '')} ${result.backup ? '（已备份 ' + esc(result.backup) + '）' : ''}</div>`;
+  return `<div class="muted small">${esc(result.kind || 'read')} · ${result.rowcount ?? (result.rows || []).length} 行 · ${result.elapsed_ms ?? '?'}ms${result.backup ? ' · 备份 ' + esc(result.backup) : ''}</div>
+    ${result.columns && result.columns.length ? `<div class="ds-table-wrap"><table class="ds-table"><thead><tr>${result.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+      <tbody>${(result.rows || []).map(row => `<tr>${result.columns.map(c => `<td>${esc(String(row[c] ?? 'NULL'))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : ''}`;
+}
+
+function dataBackupsHtml(data) {
+  const items = data.items || [];
+  if (!items.length) return '<div class="muted small">还没有备份</div>';
+  return `<div class="backup-list">${items.map(b => `<div class="muted small">${esc(b.name || b.path)} · ${new Date((b.mtime || 0) * 1000).toLocaleString()} · ${Math.round((b.size || 0) / 1024)}KB</div>`).join('')}</div>`;
+}
+
+function openDataTab() {
+  const key = 'data:studio';
+  let tab = S.tabs.find(t => t.rel === key);
+  if (!tab) { tab = { rel: key, root: 'data', name: '数据工作室', text: '', dirty: false }; S.tabs.push(tab); }
+  tab.html = dataStudioHtml();
+  S.activeTab = key;
+  showHtmlTab(tab);
+  renderTabs();
+  bindDataStudio();
+}
+
+function bindDataStudio() {
+  const root = $('#editors .html-tab:not([style*="display: none"])') || document;
+  const ds = S.dataStudio;
+  const rerender = () => openDataTab();
+  $$('#ds-table-list .tree-row', root).forEach(row => {
+    row.onclick = async () => {
+      ds.table = row.dataset.table; ds.page = 1; ds.q = ''; ds.orderBy = '';
+      await loadDataRows(); rerender();
+    };
+  });
+  const filter = $('#ds-table-filter', root);
+  if (filter) filter.oninput = () => {
+    const q = filter.value.trim().toLowerCase();
+    $$('#ds-table-list .tree-row', root).forEach(row => {
+      row.style.display = !q || row.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
+  const q = $('#ds-q', root);
+  if (q) q.onkeydown = (e) => { if (e.key === 'Enter') { ds.q = q.value.trim(); ds.page = 1; loadDataRows().then(rerender); } };
+  const search = $('#ds-search', root);
+  if (search) search.onclick = () => { ds.q = (q ? q.value : '').trim(); ds.page = 1; loadDataRows().then(rerender); };
+  const prev = $('#ds-prev', root);
+  if (prev) prev.onclick = () => { ds.page = Math.max(1, ds.page - 1); loadDataRows().then(rerender); };
+  const next = $('#ds-next', root);
+  if (next) next.onclick = () => { ds.page += 1; loadDataRows().then(rerender); };
+  $$('.ds-sort', root).forEach(th => {
+    th.onclick = () => {
+      const name = th.dataset.sort;
+      ds.direction = ds.orderBy === name && ds.direction === 'asc' ? 'desc' : 'asc';
+      ds.orderBy = name; loadDataRows().then(rerender);
+    };
+  });
+  $$('.ds-table td span[data-col]', root).forEach(cell => {
+    cell.ondblclick = () => openCellEditor(cell.dataset.row, cell.dataset.col, cell.textContent);
+  });
+  const refresh = $('#ds-refresh', root);
+  if (refresh) refresh.onclick = async () => {
+    if (ds.db) {
+      try { ds.schema = await api('/api/wb/db/schema?db=' + encodeURIComponent(ds.db.id)); } catch (e) { toast(e.message, 'err'); }
+    }
+    await loadDataRows(); rerender();
+  };
+  const backup = $('#ds-backup', root);
+  if (backup) backup.onclick = async () => {
+    if (!ds.db) return;
+    try {
+      const r = await api('/api/wb/db/backup', { method: 'POST', body: { db: ds.db.id } });
+      toast(r.ok ? '已备份：' + (r.backup || '') : '备份失败：' + (r.error || ''), r.ok ? 'ok' : 'err');
+      ds.backups = await api('/api/wb/db/backups'); rerender();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  const backups = $('#ds-backups', root);
+  if (backups) backups.onclick = async () => {
+    try { ds.backups = await api('/api/wb/db/backups'); rerender(); } catch (e) { toast(e.message, 'err'); }
+  };
+  const sql = $('#ds-sql', root);
+  if (sql) sql.oninput = () => { ds.sql = sql.value; };
+  const write = $('#ds-write', root);
+  if (write) write.onchange = () => { ds.write = write.checked; rerender(); };
+  const run = $('#ds-run-sql', root);
+  if (run) run.onclick = async () => {
+    if (!ds.db) { toast('先选数据库', 'err'); return; }
+    const text = (sql ? sql.value : ds.sql || '').trim();
+    if (!text) { toast('先输入 SQL', 'err'); return; }
+    const confirmInput = $('#ds-confirm', root);
+    const confirmText = confirmInput ? confirmInput.value.trim() : '';
+    if (ds.write && confirmText !== '确认写入') { toast('写入必须输入确认短语「确认写入」', 'err'); return; }
+    try {
+      const body = { db: ds.db.id, sql: text };
+      if (ds.write) { body.write = true; body.confirm = '确认写入'; }
+      ds.result = await api('/api/wb/db/sql', { method: 'POST', body });
+      if (ds.result.ok && ds.write) { await loadDataRows(); }
+      rerender();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+}
+
+function openCellEditor(rowIndex, column, oldText) {
+  const ds = S.dataStudio;
+  const rows = (ds.rows && ds.rows.rows) || [];
+  const row = rows[Number(rowIndex)];
+  if (!row) { toast('行不存在，刷新后重试', 'err'); return; }
+  const table = (ds.schema && ds.schema.tables || []).find(t => t.name === ds.table) || {};
+  const pk = table.primary_key || [];
+  if (!pk.length) { toast('该表没有主键，不能行编辑', 'err'); return; }
+  const keys = {};
+  for (const name of pk) keys[name] = row[name];
+  studioDialog('编辑单元格 · ' + ds.table + '.' + column,
+    `<div class="muted small">主键：${esc(pk.join(' + '))} = ${esc(JSON.stringify(keys))}</div>
+     <textarea id="cell-editor" rows="4">${esc(oldText === 'NULL' ? '' : oldText)}</textarea>
+     <div class="muted small">保存会自动备份该库；写入需确认短语（内部已固定为「确认写入」）。</div>`,
+    async (mask) => {
+      let raw = mask.querySelector('#cell-editor').value;
+      let value = raw;
+      try { value = JSON.parse(raw); } catch {}
+      const r = await api('/api/wb/db/update', { method: 'POST', body: { db: ds.db.id, table: ds.table, keys, values: { [column]: value }, confirm: '确认写入' } });
+      if (!r.ok) throw new Error(r.error || '更新失败');
+      toast('已更新' + (r.backup ? '（备份 ' + r.backup + '）' : ''), 'ok');
+      await loadDataRows(); openDataTab();
+    }, '保存（确认写入）');
+}
+
+/* ---------- 记忆工作室 ---------- */
+async function loadMemSidebar() {
+  try {
+    const d = await api('/api/wb/mem/overview');
+    S.memStudio.overview = d;
+    const el = $('#mem-overview-mini');
+    if (el) el.innerHTML = `<div>记忆 ${d.total ?? 0} 条</div>
+      <div class="muted small">${Object.entries(d.by_kind || {}).map(([k, v]) => k + ':' + v).join(' · ')}</div>`;
+  } catch (e) { /* 侧栏只显示失败提示 */ }
+}
+function openMemStudio() {
+  loadMemStudioPage();
+}
+
+async function loadMemStudioPage() {
+  const ms = S.memStudio;
+  const errors = [];
+  for (const [key, fn] of [
+    ['overview', () => api('/api/wb/mem/overview')],
+    ['list', () => api('/api/wb/mem/list?limit=200'
+      + (ms.kind ? '&kind=' + encodeURIComponent(ms.kind) : '')
+      + (ms.stage ? '&stage=' + encodeURIComponent(ms.stage) : '')
+      + (ms.q ? '&q=' + encodeURIComponent(ms.q) : ''))],
+    ['rules', () => api('/api/wb/mem/rules')],
+    ['decay', () => api('/api/wb/mem/decay')],
+    ['timeline', () => api('/api/wb/mem/timeline?days=14')],
+  ]) {
+    try { ms[key] = await fn(); } catch (e) { errors.push(key + ': ' + e.message); }
+  }
+  ms.errors = errors;
+  openMemTab();
+}
+
+function memStudioHtml() {
+  const ms = S.memStudio;
+  const ov = ms.overview || {};
+  const list = ms.list || {};
+  const items = list.items || [];
+  const rules = (ms.rules && ms.rules.items) || [];
+  const decay = ms.decay || {};
+  const timeline = (ms.timeline && ms.timeline.items) || [];
+  const detail = ms.detail;
+  const kinds = Object.keys(ov.by_kind || {});
+  const stages = Object.keys(ov.by_stage || {});
+  return `<div class="studio-page"><h2>记忆工作室</h2>
+    ${(ms.errors || []).length ? `<div class="warn small">部分数据读取失败：${esc(ms.errors.join('；'))}</div>` : ''}
+    <div class="mem-cards">
+      <div class="ov-card"><div class="muted small">总记忆</div><div class="big-num">${ov.total ?? '-'}</div></div>
+      ${['full', 'compressed', 'keyword', 'dormant'].map(stage => `<div class="ov-card"><div class="muted small">阶段 ${esc(stage)}</div><div class="big-num">${ov.by_stage?.[stage] ?? 0}</div></div>`).join('')}
+    </div>
+    <div class="mem-cols">
+      <div class="studio-card">
+        <div class="studio-toolbar"><b>记忆列表</b><span class="grow"></span>
+          <select id="mem-kind"><option value="">全部 kind</option>${kinds.map(k => `<option ${ms.kind === k ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select>
+          <select id="mem-stage"><option value="">全部 stage</option>${stages.map(s => `<option ${ms.stage === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
+          <input id="mem-q" placeholder="搜索内容…" value="${esc(ms.q || '')}">
+          <button class="btn" id="mem-refresh">刷新</button>
+        </div>
+        ${list.ok === false ? `<div class="warn small">列表读取失败：${esc(list.error || '')}</div>` : ''}
+        <div class="ds-table-wrap"><table class="ds-table"><thead><tr><th>kind</th><th>stage</th><th>strength</th><th>内容</th><th>时间</th></tr></thead>
+        <tbody>${items.length ? items.map(item => `<tr class="mem-row" data-id="${esc(item.id)}">
+          <td>${studioBadge(item.kind || '')}</td><td>${esc(item.stage || '')}</td><td>${esc(item.strength ?? '')}</td>
+          <td>${esc(String(item.content || '').slice(0, 90))}</td><td class="muted small">${esc(new Date((item.created_at || 0) * 1000).toLocaleDateString())}</td></tr>`).join('') :
+          `<tr><td colspan="5" class="muted">${list.ok === false ? '（读取失败）' : '没有匹配记忆'}</td></tr>`}</tbody></table></div>
+      </div>
+      <div class="studio-card mem-detail">
+        ${detail ? `<div class="row"><b>记忆详情</b><span class="grow"></span><button class="btn" id="mem-revive">唤醒这条</button></div>
+          <div class="kv"><div>id</div><div class="mono small">${esc(detail.id)}</div>
+            <div>kind / stage</div><div>${studioBadge(detail.kind || '')} ${esc(detail.stage || '')}</div>
+            <div>strength / importance</div><div>${esc(detail.strength ?? '')} / ${esc(detail.importance ?? '')}</div>
+            <div>status / revive</div><div>${esc(detail.status || '')} / ${esc(detail.revive_count ?? 0)}</div>
+            <div>内容</div><div class="mem-content">${esc(detail.content_full || detail.content || '')}</div>
+            <div>evidence</div><div class="muted small">${esc(detail.evidence || '')}</div></div>` :
+          '<div class="muted small">点左侧一行查看详情（含完整内容/证据/强度）</div>'}
+      </div>
+    </div>
+    <div class="mem-cols">
+      <div class="studio-card"><div class="studio-card-title">衰减参数（只读）</div>
+        ${decayTableHtml(decay)}</div>
+      <div class="studio-card"><div class="studio-card-title">规则（可保存）</div>
+        <div id="mem-rules">${rules.map(it => `<div class="rule-row">
+          <div><b>${esc(it.label || it.key)}</b><div class="muted small">${esc(it.key)} · ${esc(it.desc || '')}</div></div>
+          <div>${ruleInput(it)}</div></div>`).join('') || '<div class="muted small">无规则</div>'}</div>
+        <button class="btn primary" id="mem-save-rules">保存规则</button>
+        <span class="muted small">保存后下一轮生效（auto_commit 按 Git 设置）</span>
+      </div>
+    </div>
+    <div class="mem-cols">
+      <div class="studio-card"><div class="studio-card-title">近 14 天记忆时间线</div>
+        <div class="mem-timeline">${timeline.map(t => `<div class="tree-row">${esc(t.date)} · ${t.count} 条 · 平均强度 ${esc(t.avg_strength ?? '')}</div>`).join('') || '<div class="muted small">暂无</div>'}</div></div>
+      <div class="studio-card"><div class="studio-card-title">清理</div>
+        <p class="muted small">先预演，再决定是否永久删除休眠记忆（不可恢复）。</p>
+        <button class="btn" id="mem-purge-dry">清理预演</button>
+        <button class="btn danger" id="mem-purge">真实清理</button>
+        <div id="mem-purge-result" class="muted small">${ms.purge ? JSON.stringify(ms.purge, null, 2) : ''}</div>
+      </div>
+    </div>
+  </div>`;
+}
+function decayTableHtml(decay) {
+  const half = decay.half_life_days || {};
+  return `<table class="ds-table"><thead><tr><th>桶</th><th>half-life（天）</th></tr></thead><tbody>
+    ${Object.entries(half).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</tbody></table>
+    <div class="muted small" style="margin-top:6px">默认 ${esc(decay.default_half_life ?? '')} 天 · 阈值 ${esc(JSON.stringify(decay.stage_thresholds || {}))} · 唤醒强度 ${esc(decay.revive_strength ?? '')}</div>`;
+}
+function ruleInput(it) {
+  if (it.type === 'bool') return `<input type="checkbox" data-rule="${esc(it.key)}" ${it.value ? 'checked' : ''}>`;
+  if (it.type === 'int' || it.type === 'float') return `<input type="number" data-rule="${esc(it.key)}" value="${esc(it.value ?? '')}" ${it.min !== null && it.min !== undefined ? 'min=' + it.min : ''} ${it.max !== null && it.max !== undefined ? 'max=' + it.max : ''}>`;
+  return `<input type="text" data-rule="${esc(it.key)}" value="${esc(it.value ?? '')}">`;
+}
+
+function openMemTab() {
+  const key = 'mem:studio';
+  let tab = S.tabs.find(t => t.rel === key);
+  if (!tab) { tab = { rel: key, root: 'mem', name: '记忆工作室', text: '', dirty: false }; S.tabs.push(tab); }
+  tab.html = memStudioHtml();
+  S.activeTab = key;
+  showHtmlTab(tab);
+  renderTabs();
+  bindMemStudio();
+}
+function bindMemStudio() {
+  const root = $('#editors .html-tab:not([style*="display: none"])') || document;
+  const ms = S.memStudio;
+  const reload = () => { loadMemStudioPage(); loadMemSidebar(); };
+  $$('.mem-row', root).forEach(row => {
+    row.onclick = async () => {
+      try { ms.detail = (await api('/api/wb/mem/get?id=' + encodeURIComponent(row.dataset.id))).memory; openMemTab(); }
+      catch (e) { toast(e.message, 'err'); }
+    };
+  });
+  const refresh = $('#mem-refresh', root);
+  if (refresh) refresh.onclick = () => {
+    ms.kind = $('#mem-kind', root).value; ms.stage = $('#mem-stage', root).value; ms.q = $('#mem-q', root).value.trim();
+    reload();
+  };
+  const revive = $('#mem-revive', root);
+  if (revive) revive.onclick = async () => {
+    if (!ms.detail) return;
+    try { const r = await api('/api/wb/mem/revive', { method: 'POST', body: { id: ms.detail.id } }); toast(r.ok ? '已唤醒，strength=' + (r.strength ?? '') : '唤醒失败：' + (r.error || ''), r.ok ? 'ok' : 'err'); ms.detail = null; reload(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  const save = $('#mem-save-rules', root);
+  if (save) save.onclick = async () => {
+    const patch = {};
+    $$('[data-rule]', root).forEach(el => {
+      const it = ((ms.rules && ms.rules.items) || []).find(x => x.key === el.dataset.rule);
+      if (!it) return;
+      if (it.type === 'bool') patch[it.key] = el.checked;
+      else if (it.type === 'int') patch[it.key] = parseInt(el.value, 10);
+      else if (it.type === 'float') patch[it.key] = parseFloat(el.value);
+      else patch[it.key] = el.value;
+    });
+    try { const r = await api('/api/wb/mem/rules', { method: 'POST', body: { patch } }); toast(r.ok ? '规则已保存' : '保存失败：' + (r.error || ''), r.ok ? 'ok' : 'err'); reload(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  const dry = $('#mem-purge-dry', root);
+  if (dry) dry.onclick = async () => {
+    try { ms.purge = await api('/api/wb/mem/purge-dry-run', { method: 'POST', body: {} }); toast('预演：将清理 ' + (ms.purge.count ?? 0) + ' 条', 'ok'); openMemTab(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  const purge = $('#mem-purge', root);
+  if (purge) purge.onclick = async () => {
+    const phrase = prompt('真实清理不可恢复。输入「永久删除休眠记忆」确认：');
+    if (phrase === null) return;
+    try { const r = await api('/api/wb/mem/purge', { method: 'POST', body: { confirm: phrase } }); toast(r.ok ? '已清理 ' + (r.deleted ?? r.count ?? 0) + ' 条' : '清理失败：' + (r.error || ''), r.ok ? 'ok' : 'err'); ms.purge = r; reload(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+}
+
+/* ---------- Git 设置 ---------- */
+async function loadGitSettings() {
+  try {
+    const r = await api('/api/wb/git/settings');
+    S.gitSettings = r.settings || {};
+    renderGitSettings();
+  } catch (e) { const el = $('#git-settings'); if (el) el.innerHTML = `<span class="warn small">读取失败：${esc(e.message)}</span>`; }
+}
+function renderGitSettings() {
+  const el = $('#git-settings');
+  if (!el) return;
+  const g = S.gitSettings || {};
+  el.innerHTML = `
+    <div class="gs-row"><label class="check small"><input type="checkbox" data-gs="auto_commit" ${g.auto_commit ? 'checked' : ''}> 自动提交</label></div>
+    <div class="gs-row"><label class="check small"><input type="checkbox" data-gs="auto_push" ${g.auto_push ? 'checked' : ''}> 自动推送</label></div>
+    <div class="gs-row"><label class="check small"><input type="checkbox" data-gs="block_secrets" ${g.block_secrets ? 'checked' : ''}> 提交前拦截密钥</label></div>
+    <div class="gs-row"><span class="muted small">分支模式</span>
+      <select data-gs="branch_mode"><option value="fixed" ${g.branch_mode === 'fixed' ? 'selected' : ''}>fixed</option>
+        <option value="daily" ${g.branch_mode === 'daily' ? 'selected' : ''}>daily</option>
+        <option value="per-change" ${g.branch_mode === 'per-change' ? 'selected' : ''}>per-change</option></select></div>
+    <div class="gs-row"><span class="muted small">remote</span><input data-gs="remote" value="${esc(g.remote || '')}"></div>
+    <div class="gs-row"><span class="muted small">branch</span><input data-gs="branch" value="${esc(g.branch || '')}"></div>
+    <div class="gs-row"><span class="muted small">push_retry</span><input type="number" min="1" max="9" data-gs="push_retry" value="${esc(g.push_retry ?? 3)}"></div>
+    <button class="btn primary full" id="git-settings-save">保存 Git 设置</button>
+    <button class="btn full" id="git-secret-scan">🔍 扫描密钥</button>
+    <div id="git-scan-result" class="muted small"></div>`;
+  const save = $('#git-settings-save');
+  if (save) save.onclick = async () => {
+    const patch = { ...(S.gitSettings || {}) };
+    $$('[data-gs]', el).forEach(input => {
+      const key = input.dataset.gs;
+      if (input.type === 'checkbox') patch[key] = input.checked;
+      else if (key === 'push_retry') patch[key] = parseInt(input.value, 10) || 3;
+      else patch[key] = input.value;
+    });
+    try { const r = await api('/api/wb/git/settings', { method: 'POST', body: patch }); S.gitSettings = r.settings || patch; renderGitSettings(); toast('Git 设置已保存', 'ok'); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  const scan = $('#git-secret-scan');
+  if (scan) scan.onclick = async () => {
+    try {
+      const r = await api('/api/wb/git/secret-scan');
+      const files = r.files || [];
+      $('#git-scan-result').innerHTML = files.length
+        ? `<span class="warn">发现 ${files.length} 个疑似密钥文件：</span>` + files.slice(0, 12).map(f => `<div class="small">${esc(f.path || f.file || f)}</div>`).join('')
+        : '<span class="muted">未发现疑似密钥（扫描 ' + (r.scanned ?? 0) + ' 个文件）</span>';
+    } catch (e) { toast(e.message, 'err'); }
+  };
+}
+
 </script>
 </body>
 </html>

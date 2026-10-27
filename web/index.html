@@ -106,17 +106,46 @@
     <div id="tabs"></div>
     <div id="editors">
       <div id="welcome" class="welcome">
-        <div class="welcome-inner">
-          <div class="welcome-logo">◈ IDEA</div>
-          <div class="welcome-grid" id="welcome-grid">
-            <div class="wc" data-cmd="explorer"><b>资源管理器</b><span>浏览/编辑项目文件</span></div>
-            <div class="wc" data-cmd="git"><b>源代码管理</b><span>暂存/提交/分支/推送</span></div>
-            <div class="wc" data-cmd="run"><b>运行</b><span>运行 Python/PyTorch 脚本</span></div>
-            <div class="wc" data-cmd="config"><b>设置</b><span>按域分页编辑配置</span></div>
-            <div class="wc" data-cmd="services"><b>服务</b><span>启停网关/控制台/模型</span></div>
-            <div class="wc" data-cmd="overview"><b>总览</b><span>项目/环境/状态</span></div>
+        <div class="welcome-page">
+          <div class="welcome-toolbar">
+            <button class="wt-btn" data-task="open-folder" title="打开文件夹">📂 打开文件夹</button>
+            <button class="wt-btn" data-task="new-file" title="新建文件">📄 新建文件</button>
+            <span class="wt-sep"></span>
+            <button class="wt-btn" data-task="run" title="运行当前文件">▶ 运行</button>
+            <button class="wt-btn" data-task="git" title="源代码管理">⑂ 源代码管理</button>
+            <button class="wt-btn" data-task="services" title="服务">⚙ 服务</button>
+            <button class="wt-btn" data-task="settings" title="设置">🎛 设置</button>
+            <button class="wt-btn" data-task="overview" title="总览">📊 总览</button>
+            <span class="wt-grow"></span>
+            <button class="wt-btn" data-task="connect" title="连接">🔑 连接</button>
           </div>
-          <div class="welcome-tip muted small">左侧文件树打开文件 · Ctrl+S 保存 · Git 侧栏 Ctrl+Enter 提交</div>
+
+          <div class="welcome-body">
+            <div class="welcome-head">
+              <div class="welcome-logo">◈ IDEA</div>
+              <div class="welcome-title">SoulAgent 工作台</div>
+              <div class="welcome-desc">项目的一切：文件 / 代码 / 训练 / 数据库 / 记忆 / 对话流 / Git</div>
+            </div>
+
+            <div class="welcome-stats" id="welcome-stats">
+              <div class="stat-card"><div class="stat-label">项目目录</div><div class="stat-value" id="stat-project">-</div></div>
+              <div class="stat-card"><div class="stat-label">服务</div><div class="stat-value" id="stat-services">-</div></div>
+              <div class="stat-card"><div class="stat-label">Git</div><div class="stat-value" id="stat-git">-</div></div>
+              <div class="stat-card"><div class="stat-label">环境</div><div class="stat-value" id="stat-env">-</div></div>
+            </div>
+
+            <div class="welcome-section-title">常用任务</div>
+            <div class="task-grid">
+              <div class="task-card" data-task="open-folder"><b>打开文件夹</b><span>把任意项目目录加进来</span></div>
+              <div class="task-card" data-task="new-file"><b>新建文件</b><span>在当前目录下创建文件</span></div>
+              <div class="task-card" data-task="run"><b>运行脚本</b><span>Python / PyTorch，输出进终端</span></div>
+              <div class="task-card" data-task="git"><b>源代码管理</b><span>暂存 / 提交 / 分支 / 推送</span></div>
+              <div class="task-card" data-task="services"><b>服务管理</b><span>网关 / 控制台 / 模型 启停</span></div>
+              <div class="task-card" data-task="settings"><b>设置</b><span>按域分页改配置</span></div>
+            </div>
+
+            <div class="welcome-tip muted small">Ctrl+S 保存 · Ctrl+` 折叠终端 · 拖终端顶部边缘可调高度 · 左下角钥匙连接</div>
+          </div>
         </div>
       </div>
     </div>
@@ -236,10 +265,16 @@ async function connect(tokenOverride) {
   }
 }
 
-/* 欢迎页卡片 → 打开对应视图 */
+/* 欢迎页任务按钮 / 卡片 */
 document.addEventListener('click', e=>{
-  const card = e.target.closest('.wc');
-  if (card && card.dataset.cmd) showView(card.dataset.cmd);
+  const el = e.target.closest('[data-task]');
+  if (!el) return;
+  const task = el.dataset.task;
+  if (task==='open-folder') openFolderDialog();
+  else if (task==='new-file') newFileDialog();
+  else if (task==='run') runCurrent();
+  else if (task==='connect') openConnectDialog();
+  else showView(task);
 });
 
 /* ================= 活动栏 / 侧栏 ================= */
@@ -726,6 +761,11 @@ async function saveGroup(group) {
 async function loadOverview() {
   const d = await api('/api/wb/overview');
   const running = (d.services||[]).filter(s=>s.running).length;
+  const stat = (id, val) => { const el = $('#'+id); if (el) el.textContent = val; };
+  stat('stat-project', d.soulagent || '-');
+  stat('stat-services', `${running}/${(d.services||[]).length} 运行中`);
+  stat('stat-git', `${d.git.branch || '-'}${d.git.dirty ? '（有变更）' : ''}`);
+  stat('stat-env', `python ${S.env?.python || '?'}${S.env?.torch ? ' · torch ' + S.env.torch : ''}`);
   $('#overview-mini').innerHTML = `
     <div>项目：${esc(d.soulagent)}</div>
     <div>服务：${running}/${(d.services||[]).length}</div>

@@ -51,11 +51,12 @@
 
 1. 根 `tests/test_webui.py` 的 9 条旧 `/agi` 用例已 `skipif`（依赖已移除的 `agi.core`）；如需恢复需重写为 802 控制台。
 2. 8081/8082 仅保留历史/调试用途，不写入主链文档的操作步骤。
-3. 真实发送（2026-10-28 04:05 更新）：
-   - **wxauto4 41.1.7 的 UIA 通道在本机不可用**：`WeChat()` 报「未找到已登录的客户端主窗口」；重启电脑、重建 venv、降级 comtypes、受限权限运行均无效。系统 .NET UIA（PowerShell）能正常看到微信窗口（`mmui::MainWindow`）与控件树。
-   - **替代方案（已验证可用）**：`tools/wechat_uia/query.ps1`（.NET UIA 只读查询）+ `agi/wechat_gateway/uia_sender.py`：定位会话列表 `mmui::ChatSessionCell` 矩形 → 点击 → 校验标题 `mmui::ChatTitleBarChatSingleView` → 点输入框 → 粘贴 → 回车；标题不匹配直接中止。实测网关 `/api/approve` 成功送达（`method=uia, verified=true, classification=delivered`）。
-   - 配置：`fallback_enabled=true` / `fallback_mode=auto` / `fallback_send_mode=uia`；`send_mode` 仍为 `confirm`（草稿需人工批准）。
-   - 旧 OCR 坐标兜底（`win_send.send_to_contact`）保留但不再默认使用（会因搜索框聚焦失败发错人）。
+3. 真实发送（2026-10-28 05:40 更新）：
+   - **换用 wechatauto-replica（Apache-2.0，1.2.8.1）作为发送后端**：`send_backend=sender` + `send_module=wechatauto`，`wxauto_python=E:/agent/venv_wx312/Scripts/python.exe`。
+   - 原因：Python 3.13 下 comtypes/UIA 枚举返回空（wxauto4 内置 uia 失效）；**Python 3.12 下 uiautomation 2.0.29 正常**，因此 wechatauto 需要独立 3.12 venv。
+   - 实测：体检账号识别、16/16 数据库可解密、控件树已物化；CLI `发` 与网关 `/api/approve` 均真实送达（`status=sent, module=wechatauto, chat_name=文件传输助手`）。
+   - wxauto4 代码与配置保留：改回 `send_module=wxauto4` + 原 venv 即可（等 wxauto 更新）。
+   - 旧 UIA 自研后端（uia_sender）保留为 `send_backend=uia` 备选。
 
 ## 7. 记忆引用闭环（P1-3）
 

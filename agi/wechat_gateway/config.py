@@ -45,7 +45,8 @@ DEFAULTS = {
     "reactive_rate_per_minute": 8,
     "daily_limit": 200,
     "send_mode": "auto",
-    "send_backend": "wxauto",   # wxauto | uia（uia = 系统 .NET UIA 替代后端）   # 历史兼容默认；control.send_mode 对缺省 key 兜底 confirm；生产 config.json=confirm
+    "send_backend": "sender",  # sender = wxauto 系发送器子进程（默认 wechatauto 模块）| uia
+    "send_module": "wechatauto",  # 发送器模块：wechatauto（当前）/ wxauto4（历史）   # 历史兼容默认；control.send_mode 对缺省 key 兜底 confirm；生产 config.json=confirm
     "admin_token": "",
     "complaint_stop": True,
     "min_interval_s": 1.5,

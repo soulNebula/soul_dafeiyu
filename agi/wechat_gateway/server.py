@@ -185,7 +185,9 @@ class Gateway:
         self.engine_reason = "startup" if self.engine_enabled else "config_disabled"
         self.receiver = None
         self.backend = None
-        self.sender = WxAutoSender()
+        self.sender = WxAutoSender(module_name=str(self.cfg.get("send_module") or "wechatauto"))
+        self.wxauto_python = Path(os.environ.get("WECHAT_WXAUTO_PYTHON") or
+                                  self.cfg.get("wxauto_python") or WXAUTO_PYTHON)
         self.queue: "queue.Queue[dict]" = queue.Queue(maxsize=200)
         self.worker = None
         self.stop_event = threading.Event()
@@ -1430,9 +1432,9 @@ class Gateway:
             except Exception as exc:  # noqa: BLE001
                 self._record("send_uia_failed", {"friend": contact,
                                                  "error": f"{type(exc).__name__}: {exc}"[:200]})
-        if not WXAUTO_PYTHON.exists():
-            return self._on_send_failure(contact, text, f"缺少 wxauto venv: {WXAUTO_PYTHON}")
-        cmd = [str(WXAUTO_PYTHON), "-m", "agi.wechat_gateway.send_cli",
+        if not self.wxauto_python.exists():
+            return self._on_send_failure(contact, text, f"缺少 wxauto venv: {self.wxauto_python}")
+        cmd = [str(self.wxauto_python), "-m", "agi.wechat_gateway.send_cli",
                "--contact", contact, "--text", text]
         try:
             proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True,
@@ -1442,6 +1444,8 @@ class Gateway:
                                            "1" if self.cfg.get("send_probe_enabled", True) else "0",
                                        "WECHAT_SEND_RETRY_MAX":
                                            str(self.cfg.get("send_retry_max", 1)),
+                                       "WECHAT_SEND_MODULE":
+                                           str(self.cfg.get("send_module") or "wechatauto"),
                                        "WECHAT_GATEWAY_LOG": str(self.log_path)})
             line = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else ""
             if not line:
@@ -1485,6 +1489,7 @@ class Gateway:
                 self.cfg.get("sticker_fallback_emoji") or "😄"),
             # 审计统一由 Gateway._record 写，子进程那层关掉避免重复
             "WECHAT_MEDIA_AUDIT": "0",
+            "WECHAT_SEND_MODULE": str(self.cfg.get("send_module") or "wechatauto"),
         }
 
     def _media_blocked(self, contact: str, reason: str,
@@ -1682,12 +1687,12 @@ class Gateway:
                                                  "error": f"{type(exc).__name__}: {exc}"[:200]})
 
         # ⑧ 真发：wxauto4 venv 子进程（与文本发送同一条链路）
-        if not WXAUTO_PYTHON.exists():
+        if not self.wxauto_python.exists():
             payload_items = []
-            error = f"缺少 wxauto venv: {WXAUTO_PYTHON}"
+            error = f"缺少 wxauto venv: {self.wxauto_python}"
         else:
             payload = [item for _, item in cleaned]
-            cmd = [str(WXAUTO_PYTHON), "-m", "agi.wechat_gateway.send_cli",
+            cmd = [str(self.wxauto_python), "-m", "agi.wechat_gateway.send_cli",
                    "--contact", contact_name,
                    "--items", json.dumps(payload, ensure_ascii=False)]
             error = ""
@@ -1700,6 +1705,8 @@ class Gateway:
                                                "1" if self.cfg.get("send_probe_enabled", True) else "0",
                                            "WECHAT_SEND_RETRY_MAX":
                                                str(self.cfg.get("send_retry_max", 1)),
+                                           "WECHAT_SEND_MODULE":
+                                               str(self.cfg.get("send_module") or "wechatauto"),
                                            "WECHAT_GATEWAY_LOG": str(self.log_path),
                                            **self._media_env()})
                 stdout = (proc.stdout or "").strip()

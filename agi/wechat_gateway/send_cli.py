@@ -15,6 +15,7 @@ stdout 契约：items 模式输出 ``{"ok": bool, "items": [每条结果]}`` 一
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import sys
@@ -84,7 +85,19 @@ def main(argv=None) -> int:
     p.add_argument("--items", help="P5-a：JSON 数组，多气泡媒体 items")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
+    module_name = (os.environ.get("WECHAT_SEND_MODULE") or "").strip()
+    if not module_name:
+        # 自动探测：优先 wechatauto（当前可用），退回 wxauto4（历史方案）
+        for cand in ("wechatauto", "wxauto4"):
+            try:
+                importlib.import_module(cand)
+                module_name = cand
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        module_name = module_name or "wxauto4"
     sender = WxAutoSender(cfg=_env_cfg(),
+                          module_name=module_name,
                           log_path=os.environ.get("WECHAT_GATEWAY_LOG") or None)
     if args.items is not None:
         try:

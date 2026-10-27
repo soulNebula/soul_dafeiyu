@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audit, config_store, files_api, gitstudio, paths, services
+from . import audit, config_store, datastudio, files_api, gitstudio, memstudio, paths, services
 
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
 
@@ -36,6 +36,7 @@ class ConfigSaveBody(BaseModel):
 class GitCommitBody(BaseModel):
     message: str
     push: bool = False
+    block_secrets: bool | None = None
 
 
 class FileWriteBody(BaseModel):
@@ -60,6 +61,37 @@ class BranchBody(BaseModel):
 
 class StageBody(BaseModel):
     paths: list[str] = []
+
+
+class DbSqlBody(BaseModel):
+    db: str
+    sql: str
+    write: bool = False
+    confirm: str = ""
+
+
+class DbUpdateBody(BaseModel):
+    db: str
+    table: str
+    keys: dict[str, Any]
+    values: dict[str, Any]
+    confirm: str = ""
+
+
+class DbRefBody(BaseModel):
+    db: str
+
+
+class MemIdBody(BaseModel):
+    id: str
+    contact: str | None = None
+    boost: float | None = None
+
+
+class MemPurgeBody(BaseModel):
+    contact: str | None = None
+    days: int | None = None
+    confirm: str = ""
 
 
 # ------------------------------------------------------------------ 基础
@@ -178,7 +210,8 @@ def git_log(limit: int = Query(default=20, ge=1, le=200)):
 
 @app.post("/api/wb/git/commit", dependencies=[Depends(require_token)])
 def git_commit(body: GitCommitBody):
-    result = gitstudio.commit(body.message, push=body.push)
+    result = gitstudio.commit(body.message, push=body.push,
+                              block_secrets=body.block_secrets)
     if result.get("ok"):
         audit.record("git.commit", "repository", actor="workbench",
                      meta={"sha": result.get("sha"), "message": body.message})
@@ -279,6 +312,139 @@ def git_stage(body: StageBody):
 @app.post("/api/wb/git/unstage", dependencies=[Depends(require_token)])
 def git_unstage(body: StageBody):
     return gitstudio.unstage(body.paths)
+
+
+# ------------------------------------------------------------------ Data Studio（M1-A）
+@app.get("/api/wb/db/databases", dependencies=[Depends(require_token)])
+def db_databases():
+    return datastudio.list_databases()
+
+
+@app.get("/api/wb/db/schema", dependencies=[Depends(require_token)])
+def db_schema(db: str):
+    return datastudio.schema(db)
+
+
+@app.get("/api/wb/db/rows", dependencies=[Depends(require_token)])
+def db_rows(db: str, table: str, page: int = Query(default=1, ge=1),
+            page_size: int = Query(default=50, ge=1, le=500),
+            order_by: str = "", direction: str = "asc", q: str = "",
+            filters: str = ""):
+    parsed = {}
+    if filters:
+        try:
+            import json as _json
+            parsed = _json.loads(filters) or {}
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="filters 必须是 JSON 对象")
+    return datastudio.read_rows(db, table, page=page, page_size=page_size,
+                                order_by=order_by, direction=direction,
+                                filters=parsed, q=q)
+
+
+@app.post("/api/wb/db/sql", dependencies=[Depends(require_token)])
+def db_sql(body: DbSqlBody):
+    return datastudio.run_sql(body.db, body.sql, write=body.write,
+                              confirm=body.confirm)
+
+
+@app.post("/api/wb/db/update", dependencies=[Depends(require_token)])
+def db_update(body: DbUpdateBody):
+    return datastudio.update_row(body.db, body.table, body.keys, body.values,
+                                 confirm=body.confirm)
+
+
+@app.post("/api/wb/db/backup", dependencies=[Depends(require_token)])
+def db_backup(body: DbRefBody):
+    return datastudio.backup_database(body.db, actor="workbench")
+
+
+@app.get("/api/wb/db/backups", dependencies=[Depends(require_token)])
+def db_backups(limit: int = Query(default=50, ge=1, le=500)):
+    return datastudio.list_backups(limit)
+
+
+# ------------------------------------------------------------------ Memory Studio（M1-B）
+@app.get("/api/wb/mem/overview", dependencies=[Depends(require_token)])
+def mem_overview(contact: str | None = None):
+    return memstudio.overview(contact)
+
+
+@app.get("/api/wb/mem/list", dependencies=[Depends(require_token)])
+def mem_list(contact: str | None = None, kind: str = "", stage: str = "",
+             q: str = "", limit: int = Query(default=50, ge=1, le=500),
+             offset: int = Query(default=0, ge=0)):
+    return memstudio.list_memories(contact, kind=kind, stage=stage, q=q,
+                                   limit=limit, offset=offset)
+
+
+@app.get("/api/wb/mem/get", dependencies=[Depends(require_token)])
+def mem_get(id: str, contact: str | None = None):
+    return memstudio.get_memory(id, contact)
+
+
+@app.get("/api/wb/mem/rules", dependencies=[Depends(require_token)])
+def mem_rules():
+    return memstudio.rules()
+
+
+@app.post("/api/wb/mem/rules", dependencies=[Depends(require_token)])
+def mem_save_rules(body: dict):
+    return memstudio.save_rules(body.get("patch") or {}, actor="workbench")
+
+
+@app.get("/api/wb/mem/decay", dependencies=[Depends(require_token)])
+def mem_decay():
+    return memstudio.decay_params()
+
+
+@app.post("/api/wb/mem/decay", dependencies=[Depends(require_token)])
+def mem_save_decay(body: dict):
+    return memstudio.save_rules(body.get("patch") or {}, actor="workbench")
+
+
+@app.post("/api/wb/mem/revive", dependencies=[Depends(require_token)])
+def mem_revive(body: MemIdBody):
+    return memstudio.revive_memory(body.id, body.contact, boost=body.boost)
+
+
+@app.post("/api/wb/mem/purge-dry-run", dependencies=[Depends(require_token)])
+def mem_purge_dry(body: MemPurgeBody):
+    return memstudio.purge_dry_run(body.contact, days=body.days)
+
+
+@app.post("/api/wb/mem/purge", dependencies=[Depends(require_token)])
+def mem_purge(body: MemPurgeBody):
+    fn = getattr(memstudio, "purge", None)
+    if fn is None:
+        raise HTTPException(status_code=501, detail="purge 未实现")
+    return fn(body.contact, confirm=body.confirm, days=body.days)
+
+
+@app.get("/api/wb/mem/timeline", dependencies=[Depends(require_token)])
+def mem_timeline(contact: str | None = None, days: int = Query(default=30, ge=1, le=365)):
+    return memstudio.timeline(contact, days=days)
+
+
+# ------------------------------------------------------------------ Git 设置/密钥扫描（M1-C）
+@app.get("/api/wb/git/settings", dependencies=[Depends(require_token)])
+def git_settings():
+    return {"ok": True, "settings": gitstudio.settings()}
+
+
+@app.post("/api/wb/git/settings", dependencies=[Depends(require_token)])
+def git_save_settings(body: dict):
+    return {"ok": True, "settings": gitstudio.update_settings(body or {})}
+
+
+@app.get("/api/wb/git/secret-scan", dependencies=[Depends(require_token)])
+def git_secret_scan():
+    return gitstudio.secret_scan()
+
+
+@app.post("/api/wb/git/secret-scan", dependencies=[Depends(require_token)])
+def git_secret_scan_files(body: dict):
+    return gitstudio.secret_scan(body.get("files"))
 
 
 # ------------------------------------------------------------------ 审计

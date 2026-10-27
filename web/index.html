@@ -28,6 +28,13 @@
   </div>
   <div class="tb-center"></div>
   <div class="tb-right">
+    <div class="mode-box" title="切换发送模式：自动发送 ↔ 草稿模式（人工批准）">
+      <span class="muted small">发送</span>
+      <button id="mode-toggle" class="mode-switch" aria-pressed="false" title="切换发送模式">
+        <span class="knob"></span>
+      </button>
+      <span id="mode-label" class="small">-</span>
+    </div>
     <span id="conn-label" class="muted small">未连接 · 点左下角钥匙连接</span>
   </div>
 </div>
@@ -198,6 +205,7 @@
 <!-- ================= 状态栏 ================= -->
 <div id="statusbar">
   <span id="sb-git">⑂ -</span>
+  <span id="sb-mode" title="点击切换发送模式">发送 -</span>
   <span id="sb-services">服务 -</span>
   <span id="sb-env">python -</span>
   <span class="grow"></span>
@@ -285,7 +293,7 @@ async function connect(tokenOverride) {
     $('#conn-label').textContent = '已连接';
     $('#sb-token').textContent = '已连接';
     $('#sb-env').textContent = `python ${env.python}${env.torch? ' · torch '+env.torch+(env.cuda?' (cuda)':''):''}`;
-    await Promise.all([loadRoots(), loadServices(), loadGit(), loadConfig(), loadInterpreters(),
+    await Promise.all([loadRoots(), loadServices(), loadGit(), loadConfig(), loadInterpreters(), loadSendMode(),
       loadDataDbs().catch(()=>{}), loadMemSidebar().catch(()=>{}), loadGitSettings().catch(()=>{}),
       loadOverview().catch(()=>{})]);
     toast('已连接','ok');
@@ -651,6 +659,37 @@ async function doCommit() {
   else toast('提交失败：'+(r.error||r.detail||''),'err');
   loadGit();
 }
+
+/* ================= 发送模式开关 ================= */
+async function loadSendMode() {
+  try {
+    const r = await api('/api/wb/wechat/send-mode');
+    applySendMode(r.mode);
+  } catch (e) { /* 未连接时忽略 */ }
+}
+function applySendMode(mode) {
+  const auto = mode === 'auto';
+  const label = auto ? '自动发送' : (mode === 'off' ? '已关闭' : '草稿模式');
+  const sw = $('#mode-toggle');
+  if (sw) {
+    sw.classList.toggle('on', auto);
+    sw.setAttribute('aria-pressed', String(auto));
+  }
+  const ml = $('#mode-label'); if (ml) ml.textContent = label;
+  const sb = $('#sb-mode'); if (sb) { sb.textContent = '发送 ' + label; sb.dataset.mode = mode; }
+}
+async function toggleSendMode() {
+  const cur = ($('#sb-mode') && $('#sb-mode').dataset.mode) || 'confirm';
+  const next = cur === 'auto' ? 'confirm' : 'auto';
+  if (next === 'auto' && !confirm('切到自动发送？她会直接把回复发到微信，不再等草稿批准。')) return;
+  try {
+    const r = await api('/api/wb/wechat/send-mode', {method:'POST', body:{mode: next}});
+    if (r.ok) { applySendMode(r.mode); toast('已切换：' + (r.mode === 'auto' ? '自动发送' : '草稿模式'), 'ok'); }
+    else toast('切换失败：' + (r.error || ''), 'err');
+  } catch (e) { toast(e.message, 'err'); }
+}
+$('#mode-toggle').onclick = toggleSendMode;
+$('#sb-mode').onclick = toggleSendMode;
 
 /* ================= 微信草稿箱 ================= */
 async function loadDrafts() {

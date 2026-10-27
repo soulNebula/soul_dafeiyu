@@ -166,3 +166,33 @@ def test_wechat_proxy_maps_drafts_and_actions(monkeypatch):
     assert calls[-1][2] == {"id": "D1", "confirm": True, "force_quiet": True}
     wechat_proxy.reject("D1")
     assert calls[-1] == ("POST", "/api/draft/reject", {"id": "D1"})
+
+
+# ---------------------------------------------------------------- 发送模式开关
+def test_send_mode_switch_writes_all_contacts(tmp_path, monkeypatch):
+    import json
+    from app import wechat_proxy
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"send_mode": "confirm",
+                               "allowed_contacts": ["A", "B"],
+                               "contact_modes": {"A": "confirm", "B": "confirm"}},
+                              ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(wechat_proxy.paths, "wechat_config_path", lambda: cfg)
+    monkeypatch.setattr("app.config_store.paths.wechat_config_path", lambda: cfg)
+    monkeypatch.setattr("app.config_store.BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr("app.config_store.audit.record", lambda *a, **k: None)
+    monkeypatch.setattr("app.config_store.gitstudio.auto_commit",
+                        lambda *a, **k: {"ok": True})
+    reloads = []
+    monkeypatch.setattr(wechat_proxy, "reload_config",
+                        lambda: reloads.append(1) or {"ok": True, "reloaded": True})
+
+    out = wechat_proxy.set_send_mode("auto")
+    assert out["ok"] is True and out["mode"] == "auto"
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    assert data["send_mode"] == "auto"
+    assert data["contact_modes"] == {"A": "auto", "B": "auto"}
+    assert reloads, "切换后应触发网关 reload"
+
+    assert wechat_proxy.set_send_mode("nonsense")["ok"] is False
+    assert wechat_proxy.get_send_mode()["mode"] == "auto"

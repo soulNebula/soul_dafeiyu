@@ -64,3 +64,44 @@ def send_now(contact: str, text: str, *, force_quiet: bool = True) -> dict:
     return _call("POST", "/api/approve",
                  {"contact": contact, "text": text, "confirm": True,
                   "force_quiet": force_quiet})
+
+# ------------------------------------------------------------------ 发送模式开关
+MODES = ("auto", "confirm", "off")
+
+
+def get_send_mode() -> dict:
+    """当前发送模式（全局 + 每个联系人覆盖）。"""
+    cfg = {}
+    cfg_path = paths.wechat_config_path()
+    if cfg_path.is_file():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            cfg = {}
+    return {"ok": True, "mode": str(cfg.get("send_mode") or "confirm"),
+            "contact_modes": cfg.get("contact_modes") or {},
+            "contacts": list(cfg.get("allowed_contacts") or []),
+            "modes": list(MODES)}
+
+
+def set_send_mode(mode: str, *, actor: str = "workbench") -> dict:
+    """一键切换发送模式：写全局 send_mode + 所有白名单联系人的 contact_modes，并让网关立即重载。"""
+    from . import config_store  # 延迟导入避免循环
+    value = str(mode or "").strip().lower()
+    if value not in MODES:
+        return {"ok": False, "error": "invalid_mode", "modes": list(MODES)}
+    current = get_send_mode()
+    contacts = current.get("contacts") or []
+    patch = {"send_mode": value,
+             "contact_modes": {c: value for c in contacts} if contacts else {}}
+    saved = config_store.save(patch, actor=actor, auto_commit=False)
+    if not saved.get("ok"):
+        return {"ok": False, "error": saved.get("error"), "errors": saved.get("errors")}
+    reloaded = reload_config()
+    return {"ok": True, "mode": value, "contact_modes": patch["contact_modes"],
+            "changed": saved.get("changed"), "gateway": reloaded}
+
+
+def reload_config() -> dict:
+    """让网关立即重读配置（801 的 /api/config/reload）。"""
+    return _call("POST", "/api/config/reload")

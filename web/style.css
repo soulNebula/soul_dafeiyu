@@ -300,3 +300,15 @@ select:focus, input:focus, textarea:focus { border-color: var(--accent); }
 .draft-item:hover { border-color: var(--accent); }
 .draft-text { margin-bottom: 3px; word-break: break-all; }
 .draft-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+
+/* ---------- 发送模式开关 ---------- */
+.mode-box { display: flex; align-items: center; gap: 6px; margin-right: 10px; }
+.mode-switch { position: relative; width: 42px; height: 20px; border-radius: 999px;
+  background: #4a3b13; border: 1px solid #6b5a20; cursor: pointer; padding: 0; }
+.mode-switch .knob { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+  border-radius: 50%; background: #d8c37a; transition: left .15s, background .15s; }
+.mode-switch.on { background: #14361f; border-color: #2f7a45; }
+.mode-switch.on .knob { left: 24px; background: #4ec9b0; }
+#mode-label { min-width: 56px; color: var(--text-dim); }
+#sb-mode { cursor: pointer; }

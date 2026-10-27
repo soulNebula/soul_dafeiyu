@@ -483,6 +483,22 @@ def wechat_send(body: dict):
     return out
 
 
+# ------------------------------------------------------------------ 发送模式开关
+@app.get("/api/wb/wechat/send-mode", dependencies=[Depends(require_token)])
+def wechat_get_send_mode():
+    return wechat_proxy.get_send_mode()
+
+
+@app.post("/api/wb/wechat/send-mode", dependencies=[Depends(require_token)])
+def wechat_set_send_mode(body: dict):
+    mode = str(body.get("mode") or "")
+    out = wechat_proxy.set_send_mode(mode, actor="workbench")
+    if out.get("ok"):
+        audit.record("wechat.send_mode", "config", actor="workbench",
+                     meta={"mode": out.get("mode"), "contacts": out.get("contact_modes")})
+    return out
+
+
 # ------------------------------------------------------------------ 审计
 @app.get("/api/wb/audit", dependencies=[Depends(require_token)])
 def audit_list(limit: int = Query(default=100, ge=1, le=500)):

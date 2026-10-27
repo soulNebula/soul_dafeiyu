@@ -1335,7 +1335,8 @@ function memStudioHtml() {
   const ms = S.memStudio;
   const ov = ms.overview || {};
   const list = ms.list || {};
-  const items = list.items || [];
+  const listFailed = list.ok === false;
+  const items = (list.items || []).length ? list.items : (listFailed ? (ov.recent || []) : []);
   const rules = (ms.rules && ms.rules.items) || [];
   const decay = ms.decay || {};
   const timeline = (ms.timeline && ms.timeline.items) || [];
@@ -1356,7 +1357,7 @@ function memStudioHtml() {
           <input id="mem-q" placeholder="搜索内容…" value="${esc(ms.q || '')}">
           <button class="btn" id="mem-refresh">刷新</button>
         </div>
-        ${list.ok === false ? `<div class="warn small">列表读取失败：${esc(list.error || '')}</div>` : ''}
+        ${listFailed ? `<div class="warn small">列表接口读取失败：${esc(list.error || '')}；暂显示 overview.recent 最近 ${items.length} 条（详情/唤醒仍可用）</div>` : ''}
         <div class="ds-table-wrap"><table class="ds-table"><thead><tr><th>kind</th><th>stage</th><th>strength</th><th>内容</th><th>时间</th></tr></thead>
         <tbody>${items.length ? items.map(item => `<tr class="mem-row" data-id="${esc(item.id)}">
           <td>${studioBadge(item.kind || '')}</td><td>${esc(item.stage || '')}</td><td>${esc(item.strength ?? '')}</td>

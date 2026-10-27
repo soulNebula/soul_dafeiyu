@@ -124,3 +124,26 @@ def test_timeline(env):
     assert data["ok"] is True
     assert data["items"]
     assert all("count" in item and "avg_strength" in item for item in data["items"])
+
+
+def test_legacy_schema_without_decay_columns(tmp_path, monkeypatch):
+    """旧版 memory 库没有 forget_stage/last_strength_at/content_full 列也要能列出来。"""
+    import sqlite3
+    db = tmp_path / "legacy.memory.sqlite3"
+    con = sqlite3.connect(str(db))
+    con.execute(
+        "CREATE TABLE user_memories(id TEXT PRIMARY KEY, scope TEXT, kind TEXT, "
+        "content TEXT, evidence TEXT, confidence REAL, status TEXT, created_at REAL, "
+        "importance REAL, access_count INTEGER, last_accessed REAL, evidence_history TEXT)")
+    con.execute(
+        "INSERT INTO user_memories(id,kind,content,confidence,status,created_at,importance) "
+        "VALUES('L1','fact','旧库记忆',0.9,'active',1000.0,0.5)")
+    con.commit(); con.close()
+    monkeypatch.setattr(memstudio, "_memory_file", lambda contact=None: db)
+    data = memstudio.list_memories()
+    assert data["ok"] is True and data["total"] == 1
+    assert data["items"][0]["id"] == "L1"
+    # 旧库没有 forget_stage：full 视作全部，其它阶段为空
+    assert memstudio.list_memories(stage="full")["total"] == 1
+    assert memstudio.list_memories(stage="dormant")["total"] == 0
+    assert memstudio.get_memory("L1")["ok"] is True

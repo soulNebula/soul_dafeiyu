@@ -65,10 +65,10 @@ def isolated(tmp_path, monkeypatch):
 
 
 def test_config_save_writes_file_and_reports_restart(isolated):
-    r = config_store.save({"send_mode": "manual", "port": 802})
+    r = config_store.save({"send_mode": "confirm", "port": 802})
     assert r["ok"] is True
     data = json.loads(isolated.read_text(encoding="utf-8"))
-    assert data["send_mode"] == "manual" and data["port"] == 802
+    assert data["send_mode"] == "confirm" and data["port"] == 802
     assert "port" in r["restart_required"]          # 端口需重启
     assert r["git"]["sha"] == "abc123"
 
@@ -81,7 +81,7 @@ def test_config_save_rejects_invalid(isolated):
 
 
 def test_config_save_creates_backup(isolated):
-    config_store.save({"send_mode": "manual"})
+    config_store.save({"send_mode": "confirm"})
     backups = config_store.backups()
     assert backups and backups[0].startswith("config.")
 

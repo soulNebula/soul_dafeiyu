@@ -186,8 +186,10 @@ def list_memories(contact: str | None = None, *, kind: str = "",
         if stage and "forget_stage" in cols:
             where.append("forget_stage = ?")
             params.append(str(stage))
-        elif stage:
-            return {"ok": True, "items": [], "total": 0, "contact": contact or ""}
+        elif stage and str(stage) != "full":
+            # 旧库没有 forget_stage 列：所有记忆都算 full，其余阶段为空
+            return {"ok": True, "items": [], "total": 0, "contact": contact or "",
+                    "limit": limit, "offset": offset}
         if q:
             if "content_full" in cols:
                 where.append("(content LIKE ? OR content_full LIKE ?)")
@@ -203,9 +205,15 @@ def list_memories(contact: str | None = None, *, kind: str = "",
             limit, offset = 50, 0
         total = int(con.execute(
             f"SELECT count(*) FROM user_memories{clause}", params).fetchone()[0])
+        # 不同版本的 memory 库列不一致：优先 last_strength_at，其次 updated_at/created_at
+        if "last_strength_at" in cols:
+            order = "COALESCE(last_strength_at, created_at) DESC, created_at DESC"
+        elif "updated_at" in cols:
+            order = "COALESCE(updated_at, created_at) DESC, created_at DESC"
+        else:
+            order = "created_at DESC"
         rows = con.execute(
-            f"SELECT * FROM user_memories{clause} "
-            "ORDER BY COALESCE(last_strength_at, created_at) DESC, created_at DESC "
+            f"SELECT * FROM user_memories{clause} ORDER BY {order} "
             "LIMIT ? OFFSET ?", (*params, limit, offset)).fetchall()
         return {"ok": True, "contact": contact or "", "items": [
             _row_public(dict(row)) for row in rows], "total": total,

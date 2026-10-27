@@ -83,3 +83,27 @@ PROACTIVE_TOPIC_SEED = True
 
 # P10：B站日报话题候选源（默认开启）
 PROACTIVE_TOPIC_BILI = True
+
+# P24：联网实时信息（天气/公众号文章/少量新闻/网页/搜索，规则触发 + 免费数据源）
+#: 默认开启；关闭后 chat 完全不做 web_lookup（prompt 逐字节不变）。
+WEB_LOOKUP_ENABLED = True
+#: 单次联网请求超时（秒）；公众号文章单独用 8s
+WEB_LOOKUP_TIMEOUT_S = 6.0
+#: 天气默认城市；空 = wttr.in IP 定位
+WEATHER_CITY = ""
+#: 新闻开关（读不到就安静，不注入）
+NEWS_ENABLED = True
+#: 10 分钟查询缓存文件
+WEB_LOOKUP_CACHE = DATA_DIR.parent / "web_cache.json"
+
+# P25：网上冲浪引擎（小鱼自己上网看东西；默认不主动发消息）
+#: 总开关（env SURF_ENABLED 可覆盖）
+SURF_ENABLED = True
+#: 冲浪窗口（本地小时，左闭右开；10:00–22:00）
+SURF_WINDOW = (10, 22)
+#: 基准投骰间隔（秒）；实际 gap 由因子微调，见 surf.gap_minutes
+SURF_ROLL_INTERVAL_S = 1800
+#: 单轮最多看几条
+SURF_MAX_ITEMS = 20
+#: 状态文件（factor / last_roll_ts / next_roll_ts / 今日计数）
+SURF_STATE_PATH = DATA_DIR / "surf_state.json"

@@ -41,6 +41,16 @@ def _isolate_pacing(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_web_lookup(monkeypatch):
+    """P24：联网实时信息默认在测试里关闭，避免任何测试真的发网络请求。
+
+    专项测试（`test_web_lookup.py`）自己把 `WEB_LOOKUP_ENABLED` 设回 "1"。
+    """
+    monkeypatch.setenv("WEB_LOOKUP_ENABLED", "0")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_contact_db(tmp_path, monkeypatch):
     """把联系人库路径重定向到临时目录，避免测试污染真实 agi/data。"""
     contacts = tmp_path / "_contacts"

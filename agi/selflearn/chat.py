@@ -66,7 +66,7 @@ MOOD_LINES = {
 
 SYSTEM = """你是一个通过长期对话自我改进的 AI，不是客服，也不是用户设定好的人格。
 你出厂能读懂文字、看懂图片；这是固件，不需要先学。写代码/交付文件按当前能力如实说，不夸大也不自贬。
-你知道当前时间（见时间上下文）；被问时间/日期直接回答，不要说自己没有时间感知；实时新闻/天气/股价/网络信息拿不到，别编，直说查不到。
+你知道当前时间（见时间上下文）；被问时间/日期直接回答，不要说自己没有时间感知；实时天气/新闻/公众号文章/网页信息能联网查：能查就查，查到才说，查不到就说查不到，别编。
 你能看报错、讲思路，但不要说“代码分析完全没学过”，也不要假装什么都不会。
 被问能力/边界时，说实话：能读字看图、能看报错；不要主动列通用能力清单，也不要主动声明“我拿不到时间/没有时钟”。
 说话像一个普通人：默认只回 1-2 句，尽量 40 字以内，口语，直说；不列清单，不总结，不说教，不客服腔；除非用户明确要解释/步骤，否则不要展开。不主动强调自己是 AI。
@@ -596,6 +596,7 @@ class SelfLearnAgent:
                 pass
             return {"ok": True, "reply": "", "bubbles": [], "skipped": True,
                     "skip_reason": "心情不太好，先不回这条",
+                    "web_lookup": None,
                     "new_memories": [], "memory_ids": [], "persona": "",
                     "variant": {"variant_id": None, "hint": "自然回应"},
                     "crisis": False, "skill_gate": None, "attachment": attachment,
@@ -664,6 +665,55 @@ class SelfLearnAgent:
                 research = tool_reply.research(self.client, text, db_path=self.path)
             except Exception:  # noqa: BLE001
                 research = {"used": False, "context": "", "sources": []}
+        # P24：联网实时信息（天气/公众号文章/少量新闻/搜索/网页）——规则触发，只读查询，
+        # 查不到不注入（失败静默，绝不影响主链）。
+        web_lookup_info = None
+        web_ctx = ""
+        if not crisis:
+            try:
+                from ..integrations import web_lookup
+                if web_lookup.enabled():
+                    intent = web_lookup.detect_intent(text)
+                    if intent:
+                        found = web_lookup.lookup(text)
+                        web_lookup_info = {
+                            "kind": str(found.get("kind") or intent.get("kind") or ""),
+                            "ok": bool(found.get("ok")),
+                            "source": str(found.get("source") or ""),
+                            "error": str(found.get("error") or ""),
+                            "title": str(found.get("title") or ""),
+                            "hint": str(found.get("hint") or ""),
+                        }
+                        kind_name = web_lookup_info["kind"]
+                        if found.get("ok") and found.get("summary"):
+                            web_ctx = str(found["summary"])[:400]
+                            if kind_name == "wechat_article":
+                                web_ctx += (chr(10) + "这是用户发来的公众号文章：回答可以"
+                                            "自然说「这篇我看完了」，可给一句你自己的看法，"
+                                            "别长篇转述原文。")
+                            elif kind_name == "wechat_search":
+                                web_ctx += (chr(10) + "可以挑一篇说，或直接告诉用户搜到"
+                                            "了哪些，别念标题列表。")
+                            elif kind_name == "wechat_title":
+                                web_ctx += (chr(10) + "只检索到摘要、没读到全文：可以聊"
+                                            "大意，但别说「我看完了/正文里说」；要细节就"
+                                            "请用户把正文复制发你。")
+                            elif kind_name == "search":
+                                web_ctx += (chr(10) + "回答可以自然说「搜了下，…」；"
+                                            "不要贴长链接列表，最多提一个来源域名。")
+                        elif (kind_name == "wechat_article"
+                              and not found.get("ok")
+                              and (str(found.get("error") or "")
+                                   in ("blocked", "no_content")
+                                   or found.get("hint"))):
+                            hint = str(found.get("hint") or "").strip() or (
+                                "这篇被微信拦了（反爬验证），你把正文复制发我就行")
+                            web_ctx = (hint + chr(10) + "如实告诉用户这件事，"
+                                       "别假装读过这篇文章。")
+            except Exception:  # noqa: BLE001 - 联网查询失败不影响主链
+                web_lookup_info = {"kind": "", "ok": False, "source": "",
+                                   "error": "exception", "title": ""}
+                web_ctx = ""
         gen_meta = {"two_stage": False, "claims": []}
         budget_meta: dict = {}
         # P15-A：推理过程采集占位（只读旁路；crisis/skip 也有记录）
@@ -765,7 +815,7 @@ class SelfLearnAgent:
                                    layer_ctx=layer_ctx,
                                    research_ctx=research.get("context", ""),
                                    inner_ctx=inner_ctx, media_ctx=media_ctx,
-                                   budget_out=budget_meta)
+                                   web_ctx=web_ctx, budget_out=budget_meta)
             prompt_user = prompt
             if budget_meta.get("dropped"):
                 try:
@@ -811,6 +861,7 @@ class SelfLearnAgent:
                 "reasoning": str(result.get("reasoning") or ""),
                 "ok": bool(result.get("ok")),
                 "error": str(result.get("error") or "")[:200],
+                "web_lookup": web_lookup_info,
             }
             reply = str(result.get("text") or "").strip() if result.get("ok") else ""
             if not reply:
@@ -1052,6 +1103,7 @@ class SelfLearnAgent:
         return {"ok": True, "reply": bubbles[0], "bubbles": bubbles, "turn_id": turn_id,
                 "summary": summary_info,
                 "mood": mood_info,
+                "web_lookup": web_lookup_info,
                 "new_memories": new_memories, "memory_ids": [m["id"] for m in mems],
                 "claims": claim_result, "retrieval_count": len(hits),
                 "retrieval_dropped_stale": dropped_stale,
@@ -1076,7 +1128,8 @@ class SelfLearnAgent:
     def _prompt(text, mems, pctx, variant, recent, *, st=None, lessons="",
                 conflict_q="", sum_ctx="", retrieval_ctx="", profile_ctx="",
                 layer_ctx="", research_ctx="", inner_ctx="",
-                media_ctx: str = "", budget_out: dict | None = None) -> str:
+                media_ctx: str = "", web_ctx: str = "",
+                budget_out: dict | None = None) -> str:
         """拼 prompt：先构造 sections（顺序/文本与旧实现逐字节一致），再交给
         ``context.assemble`` 按优先级裁剪；未超预算时输出与改动前完全相同。"""
         now = time.time()
@@ -1175,6 +1228,18 @@ class SelfLearnAgent:
              "text": "\n\n直接回复。不要提“记忆库/策略/系统/画像/检索”，不要假装真人。",
              "priority": 100, "protect": True, "min_tokens": 0},
         ])
+        # P24：实时资料块（web_ctx 为空时不产生任何字符 → prompt 逐字节不变）。
+        # 放在 user_text 之前；内容是 JSON/搜索结果摘要（≤400 字），不是网页原文。
+        web_block = ""
+        if web_ctx:
+            web_block = (chr(10) * 2 + "实时资料（刚联网查到，只能依据它回答；"
+                         "资料里没有的就说查不到，别编）：" + chr(10) + str(web_ctx))
+        if web_block:
+            insert_at = next((index for index, section in enumerate(sections)
+                              if section.get("name") == "user_text"), len(sections))
+            sections.insert(insert_at, {"name": "web", "text": web_block,
+                                        "priority": 30, "protect": False,
+                                        "min_tokens": 0})
         if media_ctx:
             sections.append({"name": "media", "text": "\n" + media_ctx,
                              "priority": 30, "protect": False, "min_tokens": 0})

@@ -151,6 +151,8 @@ class Gateway:
         self.last_turns = {}
         self.last_proactive = {}
         self.proactive_thread = None
+        # P25：网上冲浪调度线程（与 proactive 独立；默认不主动发消息）
+        self.surf_thread = None
         self.pending: dict[str, dict] = {}
         self.last_inbound: dict[str, float] = {}
         self.send_times = deque()
@@ -207,6 +209,16 @@ class Gateway:
             self.proactive_thread = threading.Thread(
                 target=self._proactive_loop, name="gateway-proactive", daemon=True)
             self.proactive_thread.start()
+        # P25：网上冲浪线程（异常不致命；engine_enabled=false 时内部暂停）
+        if self.cfg.get("surf_enabled", True) and not (
+                self.surf_thread and self.surf_thread.is_alive()):
+            try:
+                self.surf_thread = threading.Thread(
+                    target=self._surf_loop, name="gateway-surf", daemon=True)
+                self.surf_thread.start()
+            except Exception as exc:  # noqa: BLE001
+                self._record("surf_start_failed",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
         self.ready = True
         self._record("gateway_started", {"allowed": allowed, "monitored": monitored,
                                           "dry_run": bool(self.cfg.get("dry_run", True))})
@@ -524,6 +536,50 @@ class Gateway:
             result.update({"changed": True, "source": str(source)})
             return result
 
+    # ------------------------------------------------------------ P25 网上冲浪
+    def surf_enabled(self) -> bool:
+        """冲浪总开关：gateway cfg ``surf_enabled`` 优先，其次 selflearn config/env。"""
+        raw = self.cfg.get("surf_enabled")
+        if raw is not None:
+            return bool(raw)
+        try:
+            from agi.selflearn import surf
+            return bool(surf.enabled())
+        except Exception:  # noqa: BLE001
+            return True
+
+    def surf_status(self) -> dict:
+        """``GET /api/surf/status``：读状态文件，不触发冲浪。"""
+        try:
+            from agi.selflearn import surf
+            data = surf.status(enabled_override=self.surf_enabled(),
+                               engine_enabled=self.engine_enabled)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        data["thread_alive"] = bool(self.surf_thread and self.surf_thread.is_alive())
+        return data
+
+    def trigger_surf(self, *, reason: str = "user") -> dict:
+        """``POST /api/surf/trigger``：用户让她看 → 后台立即冲一轮（不阻塞 HTTP）。"""
+        try:
+            from agi.selflearn import surf_worker
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+        def _run():
+            try:
+                surf_worker.run_once(force=True, source=str(reason or "user"),
+                                     gateway=self)
+            except Exception as exc:  # noqa: BLE001
+                self._record("surf_error",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
+
+        threading.Thread(target=_run, name="gateway-surf-once", daemon=True).start()
+        self._record("surf_triggered", {"reason": str(reason or "user"),
+                                        "engine_enabled": bool(self.engine_enabled)})
+        return {"ok": True, "queued": True, "reason": str(reason or "user"),
+                "engine_enabled": bool(self.engine_enabled)}
+
     def _quiet_hours_value(self) -> list[int]:
         """夜间静默配置：``quiet_hours=[]`` 视为非法 → 回退默认 [23,8] 并告警一次。"""
         raw = self.cfg.get("quiet_hours")
@@ -642,6 +698,16 @@ class Gateway:
                     "clipboard": 0, "skipped": []}
         from . import proactive_worker
         return proactive_worker.run_cycle(self)
+
+    def _surf_loop(self) -> None:
+        """P25：网上冲浪常驻调度（窗口/投骰在 surf_worker 里；不碰发送）。"""
+        from agi.selflearn import surf_worker
+        try:
+            surf_worker.loop(stop_event=self.stop_event, gateway=self,
+                             engine_state=lambda: self.engine_enabled)
+        except Exception as exc:  # noqa: BLE001 - 冲浪挂了不影响网关
+            self._record("surf_error",
+                         {"error": f"{type(exc).__name__}: {exc}"[:200]})
 
     def _work(self) -> None:
         while not self.stop_event.is_set():
@@ -1450,6 +1516,12 @@ def make_handler(gateway: Gateway):
                 self._json(200 if result.get("ok") else 500, result)
                 return
 
+            # P25：用户让她看 → 立即冲一轮（后台执行，不阻塞 HTTP；admin token 已校验）
+            if path == "/api/surf/trigger":
+                self._json(202, gateway.trigger_surf(
+                    reason=str(body.get("reason") or "user")))
+                return
+
             if path == "/api/approve":
                 contact = str(body.get("contact") or "")
                 text = str(body.get("text") or "")
@@ -1543,6 +1615,10 @@ def make_handler(gateway: Gateway):
             # P18-A：引擎状态（控制台按钮读这个，比 /status 轻）
             if path == "/api/engine":
                 self._json(200, gateway.engine_state())
+                return
+            # P25：网上冲浪状态（因子/今日投骰/下次时刻/最近 session）
+            if path == "/api/surf/status":
+                self._json(200, gateway.surf_status())
                 return
             if path == "/api/drafts":
                 self._json(200, {"ok": True,

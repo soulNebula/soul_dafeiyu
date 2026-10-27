@@ -123,3 +123,26 @@ def test_services_list_has_core_entries():
     data = services.list_services()
     names = {i["name"] for i in data["items"]}
     assert {"gateway", "console", "soul", "local3b"} <= names
+
+
+# ---------------------------------------------------------------- 编码回退
+def test_read_write_gbk_file(tmp_path, monkeypatch):
+    from app import files_api
+    (tmp_path / "run.bat").write_bytes("echo 你好\r\n".encode("gbk"))
+    monkeypatch.setattr(files_api, "roots", lambda: {"tmp": str(tmp_path)})
+    r = files_api.read_file("tmp", "run.bat")
+    assert r["ok"] and r["encoding"] in ("gb18030", "cp936")
+    assert "你好" in r["text"]
+    # 按原编码写回，不破坏 bat 的 GBK
+    w = files_api.write_file("tmp", "run.bat", r["text"], encoding=r["encoding"])
+    assert w["ok"]
+    raw = (tmp_path / "run.bat").read_bytes()
+    assert "你好" in raw.decode("gbk")
+
+
+def test_read_utf8_file(tmp_path, monkeypatch):
+    from app import files_api
+    (tmp_path / "a.md").write_text("# 中文\n", encoding="utf-8")
+    monkeypatch.setattr(files_api, "roots", lambda: {"tmp": str(tmp_path)})
+    r = files_api.read_file("tmp", "a.md")
+    assert r["ok"] and r["encoding"] == "utf-8" and "中文" in r["text"]

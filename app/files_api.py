@@ -167,15 +167,23 @@ def read_file(root: str, rel: str) -> dict:
     raw = p.read_bytes()
     if len(raw) > 2_000_000:
         return {"ok": False, "error": "too_large"}
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return {"ok": False, "error": "not_utf8"}
+    # 中文项目里 .bat/.ps1 常见 GBK；按顺序尝试，记住编码，保存时按原编码写回
+    text, encoding = None, "utf-8"
+    for enc in ("utf-8", "utf-8-sig", "gb18030", "cp936"):
+        try:
+            text = raw.decode(enc)
+            encoding = enc
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        return {"ok": False, "error": "decode_failed"}
     return {"ok": True, "rel": rel, "path": str(p), "text": text,
-            "mtime": p.stat().st_mtime}
+            "encoding": encoding, "mtime": p.stat().st_mtime}
 
 
-def write_file(root: str, rel: str, text: str, *, actor: str = "workbench") -> dict:
+def write_file(root: str, rel: str, text: str, *, encoding: str = "utf-8",
+               actor: str = "workbench") -> dict:
     try:
         p = _resolve(root, rel)
     except ValueError as exc:
@@ -183,8 +191,17 @@ def write_file(root: str, rel: str, text: str, *, actor: str = "workbench") -> d
     if p.suffix.lower() not in TEXT_SUFFIX:
         return {"ok": False, "error": "unsupported_suffix"}
     p.parent.mkdir(parents=True, exist_ok=True)
-    before = p.read_text(encoding="utf-8") if p.is_file() else ""
-    p.write_text(text, encoding="utf-8")
+    before = ""
+    if p.is_file():
+        try:
+            before = p.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            try:
+                before = p.read_text(encoding="gb18030")
+            except UnicodeDecodeError:
+                before = ""
+    enc = encoding if encoding in ("utf-8", "utf-8-sig", "gb18030", "cp936") else "utf-8"
+    p.write_text(text, encoding=enc)
     audit.record("file.write", str(p), actor=actor,
                  meta={"root": root, "rel": rel, "chars": len(text),
                        "changed": before != text})

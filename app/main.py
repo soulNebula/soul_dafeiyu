@@ -42,6 +42,7 @@ class FileWriteBody(BaseModel):
     root: str = "soulagent"
     rel: str
     text: str
+    encoding: str = "utf-8"
 
 
 class FileRunBody(BaseModel):
@@ -209,7 +210,7 @@ def files_read(root: str = "soulagent", rel: str = ""):
 
 @app.post("/api/wb/files/write", dependencies=[Depends(require_token)])
 def files_write(body: FileWriteBody):
-    result = files_api.write_file(body.root, body.rel, body.text)
+    result = files_api.write_file(body.root, body.rel, body.text, encoding=body.encoding)
     if result.get("ok"):
         audit.record("file.write", result["path"], actor="workbench", meta={"rel": body.rel})
     return result

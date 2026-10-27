@@ -437,8 +437,12 @@ async function openFile(rel) {
   const existing = S.tabs.find(t=>t.rel===rel && t.root===S.root);
   if (!existing) {
     const r = await api(`/api/wb/files/read?root=${S.root}&rel=${encodeURIComponent(rel)}`);
-    if (!r.ok) { toast('打开失败：'+r.error,'err'); return; }
-    S.tabs.push({rel, root:S.root, name:rel.split('/').pop(), text:r.text, dirty:false});
+    if (!r.ok) {
+      const hint = r.error==='decode_failed' ? '（文件不是 UTF-8/GBK 文本，可能是二进制）' : '';
+      toast('打开失败：'+r.error+hint,'err'); return;
+    }
+    S.tabs.push({rel, root:S.root, name:rel.split('/').pop(), text:r.text,
+                 encoding:r.encoding || 'utf-8', dirty:false});
   }
   S.activeTab = rel;
   S.currentRunFile = {root:S.root, rel};
@@ -450,6 +454,10 @@ async function openFile(rel) {
 function openEditorForTab(rel) {
   const tab = S.tabs.find(t=>t.rel===rel);
   if (!tab) return;
+  // 隐藏所有 HTML 渲染页（设置/总览），显示编辑器
+  $$('#editors > .html-tab').forEach(el=> el.style.display='none');
+  if (S.monacoReady === true && $('#monaco')) $('#monaco').style.display='block';
+  if ($('#fallback-editor')) $('#fallback-editor').style.display='block';
   if (S.monacoReady === true && S.editor) {
     const model = monaco.editor.createModel(tab.text, langOf(rel));
     const old = S.editor.getModel();
@@ -491,7 +499,7 @@ async function saveActive() {
   const tab = S.tabs.find(t=>t.rel===S.activeTab);
   if (!tab) return;
   tab.text = S.editor ? S.editor.getValue() : ($('#fallback-editor textarea')?.value ?? tab.text);
-  const r = await api('/api/wb/files/write', {method:'POST', body:{root:tab.root, rel:tab.rel, text:tab.text}});
+  const r = await api('/api/wb/files/write', {method:'POST', body:{root:tab.root, rel:tab.rel, text:tab.text, encoding:tab.encoding || 'utf-8'}});
   if (r.ok) { tab.dirty=false; renderTabs(); toast('已保存 '+tab.name,'ok'); }
   else toast('保存失败：'+r.error,'err');
 }
@@ -726,6 +734,7 @@ function showHtmlTab(tab) {
   $$('#editors > .html-tab').forEach(el=> el.style.display='none');
   if (S.monacoReady === true && $('#monaco')) $('#monaco').style.display='none';
   if ($('#fallback-editor')) $('#fallback-editor').style.display='none';
+  $$('#editors > .html-tab').forEach(el=> el.style.display='none');
   tab._htmlEl.style.display='block';
   tab._htmlEl.innerHTML = tab.html || '';
   bindHtmlActions(tab);

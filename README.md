@@ -3,27 +3,48 @@
 > 项目的「IDE」：在浏览器里管理 SoulAgent 的服务、配置、数据库、记忆、对话流水线、训练工厂与 Git。
 > 设计文档见 SoulAgent 仓库：`docs/specs/11-工作台-Workbench.md`、`docs/specs/10-训练工厂-TrainLab.md`。
 
-## 当前阶段：M0（骨架）
+## 当前阶段：M0.1（VS Code 风格骨架）
 
 已完成的目标范围：
 
-- [x] FastAPI 后端（803，OpenAI 无关；本机 127.0.0.1）
-- [x] Token 鉴权（默认 `8888`，可用环境变量 `IDEA_TOKEN` 覆盖）
-- [x] **服务管理**：gateway 801 / console 802 / soul 8123 / local3b 8125 的查看、启动、停止、日志
-- [x] **配置中心**：schema 驱动（类型/范围/说明/分组）、校验、保存、热生效、审计
-- [x] **Git Studio（最小版）**：状态、diff、提交、自动提交（每次保存配置自动 commit）
-- [x] 审计日志（sqlite，记录每次变更 before/after）
-- [x] Web 前端（原生 JS，无需构建）
+- [x] FastAPI 后端（803，本机 127.0.0.1）+ Token 鉴权（默认 `8888`）
+- [x] **VS Code 风格 UI**：标题栏 / 活动栏 / 侧栏 / 编辑器标签页 / 底部面板 / 状态栏
+- [x] **资源管理器**：文件树（SoulAgent / idea 两个根）、点击打开、Ctrl+S 保存
+- [x] **代码编辑器**：Monaco（CDN 加载，离线自动退回 textarea）
+- [x] **代码工作区**：运行 Python（可选 4 个解释器，含训练 venv312/torch），输出进「终端」面板
+- [x] **代码模板**：PyTorch 环境自检 / LoRA SFT 训练骨架，一键生成到 `scratch/`
+- [x] **Git Studio**：变更列表、diff 查看、分支下拉/新建切换、提交/推送、历史
+- [x] **服务管理**：801/802/8123/8125 启停/重启/日志
+- [x] **设置（按域分页）**：每个配置分组独立一页，保存即校验+备份+审计
+- [x] 审计日志（sqlite，before/after）
 - [x] 测试（pytest）
 
 ## 快速开始
 
 ```bat
 cd C:\Users\Administrator\Desktop\idea
-.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 803
+scripts\run.bat
 ```
 
 浏览器打开 <http://127.0.0.1:803>，右上角填 token（默认 `8888`）。
+
+## 界面速览（VS Code 风格）
+
+```
+标题栏：命令输入（Ctrl+P 文件 / Ctrl+Shift+P 命令）
+活动栏：资源管理器 | 源代码管理 | 运行 | 服务 | 设置 | 总览 | 训练(M3) | 数据(M1)
+侧栏  ：文件树 / Git 变更 / 运行任务 / 服务卡片 / 设置分组
+编辑区：Monaco 编辑器 + 标签页；设置页按域独立渲染；总览页
+底部  ：终端（运行输出）| 输出 | 审计
+状态栏：分支 · 服务运行数 · python/torch · 连接状态
+```
+
+## 代码工作区怎么用
+
+1. 侧栏「运行」→ 选择解释器（含 `E:/agent/venv312`，带 torch 2.6 + CUDA）
+2. 点「新建训练脚本（模板）」生成 `scratch/pytorch_train_lora.py`
+3. 打开文件 → 点「运行当前 Python 文件」→ 输出实时进终端
+4. 改完 Ctrl+S 保存；提交走 Git 侧栏
 
 ## 环境变量
 

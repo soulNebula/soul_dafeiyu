@@ -59,6 +59,17 @@ def test_dataset_discovery_and_path_guard(env):
     assert info["ok"] is True and info["rows"] == 3
 
 
+def test_filter_length_uses_content_not_raw_json(env):
+    # 行很长但正文很短，长度 4–500 应保留
+    long_row = {"user_msg": "你好世界", "context": [{"role": "system", "text": "x" * 2000}],
+                "target": {"a": "y" * 2000}}
+    path = env["train"] / "long.jsonl"
+    path.write_text(json.dumps(long_row, ensure_ascii=False) + "\n", encoding="utf-8")
+    result = trainstudio.filter_dataset(str(path), name="long_filtered",
+                                        min_chars=4, max_chars=500)
+    assert result["ok"] is True and result["kept"] == 1
+
+
 def test_assets(env):
     assets = trainstudio.list_assets()
     assert assets["ok"] is True
@@ -88,7 +99,7 @@ def test_create_start_stop_job(env, monkeypatch):
     created = trainstudio.create_training_job(
         str(env["train"] / "daily.jsonl"), out_name="job_adapter")
     assert created["ok"] is True and created["status"] == "created"
-    job_id = created["job"]
+    job_id = created["job"]["id"]
     assert trainstudio.job_status(job_id)["status"] == "created"
     stopped = trainstudio.stop_job(job_id)
     assert stopped["ok"] is True and stopped["status"] == "stopped"
@@ -103,11 +114,11 @@ def test_create_start_stop_job(env, monkeypatch):
                         lambda *a, **k: FakeProc())
     created = trainstudio.create_training_job(
         str(env["train"] / "daily.jsonl"), out_name="job_adapter2")
-    assert trainstudio.start_job(created["job"])["ok"] is True
+    assert trainstudio.start_job(created["job_id"])["ok"] is True
     deadline = time.time() + 2
-    while time.time() < deadline and trainstudio.job_status(created["job"])["status"] != "done":
+    while time.time() < deadline and trainstudio.job_status(created["job_id"])["status"] != "done":
         time.sleep(0.02)
-    assert trainstudio.job_status(created["job"])["status"] == "done"
+    assert trainstudio.job_status(created["job_id"])["status"] == "done"
     assert any(item["action"] == "train.create" for item in env["audits"])
     assert any(item["action"] == "train.start" for item in env["audits"])
     assert any(item["action"] == "train.stop" for item in env["audits"])
@@ -128,6 +139,13 @@ def test_training_plan_uses_real_cli(env):
     assert all(flag in cmd for flag in ("--data", "--model-path", "--save-adapter"))
 
 
+def test_empty_model_path_falls_back_to_default(env):
+    plan = trainstudio.training_plan(str(env["train"] / "daily.jsonl"), model_path="")
+    assert plan["ok"] is True
+    index = plan["cmd"].index("--model-path")
+    assert plan["cmd"][index + 1] == trainstudio.DEFAULT_MODEL
+
+
 def test_start_training_background_and_status(env, monkeypatch):
     class FakeProc:
         pid = 4242
@@ -141,7 +159,7 @@ def test_start_training_background_and_status(env, monkeypatch):
         str(env["train"] / "daily.jsonl"),
         output=str(env["agent"] / "output" / "new_adapter"))
     assert result["ok"] is True and result["job"]
-    job_id = result["job"]
+    job_id = result["job"]["id"]
     deadline = time.time() + 2
     while time.time() < deadline:
         status = trainstudio.job_status(job_id)
@@ -155,6 +173,17 @@ def test_start_training_background_and_status(env, monkeypatch):
     assert trainstudio.list_jobs()["ok"] is True
     log = trainstudio.tail_log(job_id)
     assert log["ok"] is True and log["status"] == "done"
+
+
+def test_job_metrics_from_summary_log(env):
+    created = trainstudio.create_training_job(
+        str(env["train"] / "daily.jsonl"), out_name="metrics_adapter")
+    assert created["ok"] is True
+    log = Path(created["log"])
+    log.write_text('[smoke] SUMMARY {"loss_last": 1.25, "steps": 5}\n', encoding="utf-8")
+    status = trainstudio.job_status(created["job"]["id"])
+    assert status["metrics"]["loss_last"] == 1.25
+    assert status["metrics"]["steps"] == 5
 
 
 def test_export_plan_and_background(env, monkeypatch):
@@ -187,7 +216,7 @@ def test_export_plan_and_background(env, monkeypatch):
     result = trainstudio.start_export(str(env["adapter"]), str(env["base"]),
                                       "idea_test", out_dir=str(env["gguf"]))
     assert result["ok"] is True
-    job_id = result["job"]
+    job_id = result["job"]["id"]
     deadline = time.time() + 2
     while time.time() < deadline:
         if trainstudio.job_status(job_id).get("status") in ("done", "failed"):

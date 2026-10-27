@@ -159,6 +159,22 @@ def preview_dataset(path: str, *, limit: int = 20) -> dict:
     return {"ok": True, "path": str(target), "rows": rows, "count": len(rows)}
 
 
+def _row_text_len(row: dict) -> int:
+    """过滤用的正文长度：优先 user_msg / messages 里的 user+response，其次 text。"""
+    if isinstance(row.get("user_msg"), str) and row["user_msg"].strip():
+        return len(row["user_msg"].strip())
+    messages = row.get("messages")
+    if isinstance(messages, list):
+        text_len = sum(len(str(m.get("content") or "")) for m in messages
+                       if isinstance(m, dict))
+        response = len(str(row.get("response") or ""))
+        return max(text_len, response)
+    for key in ("text", "content", "input", "prompt"):
+        if isinstance(row.get(key), str) and row[key].strip():
+            return len(row[key].strip())
+    return len(json.dumps(row, ensure_ascii=False))
+
+
 def filter_dataset(path: str, *, name: str, min_chars: int = 0, max_chars: int = 0,
                    blacklist: list[str] | None = None, dedupe: bool = True) -> dict:
     """按长度/关键词去重过滤，生成 ``agi/data/train_work/<name>.jsonl``。"""
@@ -183,12 +199,12 @@ def filter_dataset(path: str, *, name: str, min_chars: int = 0, max_chars: int =
                 if not text:
                     continue
                 try:
-                    json.loads(text)
+                    row = json.loads(text)
                 except json.JSONDecodeError:
                     stats["parse"] += 1
                     removed += 1
                     continue
-                length = len(text)
+                length = _row_text_len(row)
                 if min_chars and length < int(min_chars):
                     stats["too_short"] += 1
                     removed += 1
@@ -331,6 +347,7 @@ def training_plan(dataset: str, *, model_path: str = DEFAULT_MODEL,
     target, error = resolve_dataset(dataset)
     if not target:
         return {"ok": False, "error": error}
+    model_path = str(model_path or DEFAULT_MODEL)
     root = Path(paths.soulagent_home())
     adapter = Path(output) if output else (
         Path(paths.agent_home()) / "output" / f"idea_lora_{time.strftime('%Y%m%d_%H%M%S')}")
@@ -417,6 +434,7 @@ def create_training_job(dataset: str, *, model_path: str = DEFAULT_MODEL,
                         lora_r: int = 16, lora_alpha: int = 32,
                         load_4bit: bool = False, max_len: int = 512,
                         epochs: int = 1) -> dict:
+    model_path = str(model_path or DEFAULT_MODEL)
     if out_name and not output:
         if not _NAME_RE.match(str(out_name)):
             return {"ok": False, "error": "invalid_name"}
@@ -435,8 +453,10 @@ def create_training_job(dataset: str, *, model_path: str = DEFAULT_MODEL,
     _write_job(job)
     audit.record("train.create", plan["dataset"], actor="workbench",
                  meta={"job": job["id"], "adapter": plan["adapter"]})
-    return {"ok": True, "job": job["id"], "status": "created",
-            "cmd": plan["cmd"], "log": job["log"]}
+    job_ref = {"id": job["id"], "status": "created", "kind": "train",
+               "log": job["log"], "adapter": plan["adapter"]}
+    return {"ok": True, "job": job_ref, "job_id": job["id"],
+            "status": "created", "cmd": plan["cmd"], "log": job["log"]}
 
 
 create_job = create_training_job
@@ -521,7 +541,10 @@ def start_training(dataset: str, *, model_path: str = DEFAULT_MODEL,
                          meta={"job": job["id"], "error": str(exc)})
 
     threading.Thread(target=worker, name=f"train-{job['id']}", daemon=True).start()
-    return {"ok": True, "job": job["id"], "cmd": plan["cmd"], "log": job["log"]}
+    return {"ok": True, "job": {"id": job["id"], "status": "running",
+                                "kind": "train", "log": job["log"],
+                                "adapter": plan["adapter"]},
+            "job_id": job["id"], "cmd": plan["cmd"], "log": job["log"]}
 
 
 def export_plan(adapter: str, base: str, name: str, *, out_dir: str = DEFAULT_GGUF_DIR,
@@ -588,7 +611,10 @@ def start_export(adapter: str, base: str, name: str, **params) -> dict:
                          meta={"job": job["id"], "error": str(exc)})
 
     threading.Thread(target=worker, name=f"export-{job['id']}", daemon=True).start()
-    return {"ok": True, "job": job["id"], "cmd": [plan["merge_cmd"], plan["convert_cmd"]],
+    job_ref = {"id": job["id"], "status": "running", "kind": "export",
+               "log": job["log"], "gguf": plan["gguf"]}
+    return {"ok": True, "job": job_ref, "job_id": job["id"],
+            "cmd": [plan["merge_cmd"], plan["convert_cmd"]],
             "log": job["log"], "gguf": plan["gguf"]}
 
 
@@ -616,6 +642,16 @@ def job_status(job_id: str, *, tail: int = 80) -> dict:
                 metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 metrics = None
+    if metrics is None:
+        # smoke_lora 不写 metrics 文件，但从日志末尾的 [smoke] SUMMARY 读
+        for line in reversed(lines):
+            marker = "[smoke] SUMMARY "
+            if marker in line:
+                try:
+                    metrics = json.loads(line.split(marker, 1)[1])
+                except json.JSONDecodeError:
+                    metrics = None
+                break
     result.update({"ok": True, "log_size": size, "tail": lines,
                    "log": str(log_path), "metrics": metrics})
     return result

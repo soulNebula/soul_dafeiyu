@@ -19,6 +19,12 @@ import time
 from pathlib import Path
 
 import pytest
+import importlib.util
+
+agi_core_skip = pytest.mark.skipif(
+    importlib.util.find_spec("agi.core") is None,
+    reason="agi.core 已移除：8081 旧 /agi 页面为遗留链路（非主链，见 docs/STATUS.md）",
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -2565,6 +2571,7 @@ class _FakeAgiCoreService:
         return self.consent_action_data
 
 
+@agi_core_skip
 def test_server_agi_core_pages(web_server):
     """GET /agi/core 与 /agi/core.html：200、令牌替换、CSP/Referrer/no-store；旧页兼容。"""
     for path in ("/agi/core", "/agi/core.html"):
@@ -2594,6 +2601,7 @@ def test_server_agi_core_pages(web_server):
     assert status == 405 and data["code"] == "bad_request"
 
 
+@agi_core_skip
 def test_server_agi_core_status_and_drafts(web_server, monkeypatch):
     """AGI core status/drafts：401、405、limit 归一、service 异常/ok:false/non-dict 503。"""
     fake = _FakeAgiCoreService()
@@ -2665,6 +2673,7 @@ def test_server_agi_core_status_and_drafts(web_server, monkeypatch):
     assert status == 503 and "格式不正确" in data["error"]
 
 
+@agi_core_skip
 def test_server_agi_core_cycle(web_server, monkeypatch):
     """POST /api/agi/core/cycle：200、空/过长 ok:false→400、异常 503、401/405。"""
     fake = _FakeAgiCoreService()
@@ -2732,6 +2741,7 @@ def test_server_agi_core_cycle(web_server, monkeypatch):
     assert "AGI core 运行失败" in data["error"]
 
 
+@agi_core_skip
 def test_server_agi_core_feedback(web_server, monkeypatch):
     """feedback：成功、参数校验 400 不调用、草稿不存在 404、其它 400、401/405。"""
     fake = _FakeAgiCoreService()
@@ -2804,6 +2814,7 @@ def test_server_agi_core_feedback(web_server, monkeypatch):
     assert status == 400 and data["code"] == "bad_request"
 
 
+@agi_core_skip
 def test_server_agi_core_memories(web_server, monkeypatch):
     """GET /api/agi/core/memories：status 缺省 pending、limit 归一、405、异常/ok:false 503。"""
     fake = _FakeAgiCoreService()
@@ -2858,6 +2869,7 @@ def test_server_agi_core_memories(web_server, monkeypatch):
     assert status == 503 and "读取记忆失败" in data["error"]
 
 
+@agi_core_skip
 def test_server_agi_core_memory_approve_reject(web_server, monkeypatch):
     """记忆审批/驳回：缺 id 400 不调用、200、不存在 404、其它 400、异常 503、401/405。"""
     fake = _FakeAgiCoreService()
@@ -2944,6 +2956,7 @@ def test_server_agi_core_memory_approve_reject(web_server, monkeypatch):
     assert "AGI core 记忆审批失败" in data["error"]
 
 
+@agi_core_skip
 def test_server_agi_core_profile(web_server, monkeypatch):
     """GET /api/agi/core/profile：401、200 原样、POST 405、异常/ok:false 503。"""
     fake = _FakeAgiCoreService(profile_data={"ok": True, "profile": {"subjects": ["a"]}})
@@ -2983,6 +2996,7 @@ def test_server_agi_core_profile(web_server, monkeypatch):
     assert status == 503 and "AGI core 画像读取失败" in data["error"]
 
 
+@agi_core_skip
 def test_server_agi_core_consent(web_server, monkeypatch):
     """授权接口：GET 状态/HEAD、POST grant/revoke、action/scope 归一、400/503/401/405。"""
     fake = _FakeAgiCoreService()
@@ -3066,6 +3080,7 @@ def test_server_agi_core_consent(web_server, monkeypatch):
         assert "AGI core" in data["error"], method
 
 
+@agi_core_skip
 def test_server_agi_core_service_unavailable_503(web_server, monkeypatch):
     """AGI core 依赖/DB 不可用：四个接口都 503 + 中文 error，不抛 500 堆栈。"""
     monkeypatch.setattr(

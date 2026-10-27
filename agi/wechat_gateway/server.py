@@ -362,6 +362,28 @@ class Gateway:
             self.recent.append(entry)
         _log(entry, self.log_path)
 
+    def reload_config_now(self) -> dict:
+        """立即检查并热重载 config.json（不依赖主动链 tick）。
+
+        主动链只在非静默/窗口期跑，导致静默时段改配置不生效；发送/入站前各调一次
+        （stat + mtime 比较，代价极小）。
+        """
+        if not getattr(self, "_config_hot_reload", False):
+            return {"reloaded": False, "changes": {}, "warning": "hot_reload_off"}
+        try:
+            from . import config as gw_cfg
+            fresh, changes, warning = gw_cfg.hot_reload(self.cfg)
+        except Exception as exc:  # noqa: BLE001
+            return {"reloaded": False, "changes": {}, "warning": f"{type(exc).__name__}: {exc}"}
+        if changes:
+            self.cfg = fresh
+            try:
+                self._record("config_reloaded", {"changed": sorted(changes),
+                                                 "source": "lazy"})
+            except Exception:  # noqa: BLE001
+                pass
+        return {"reloaded": bool(changes), "changes": changes, "warning": warning}
+
     def stale_threshold(self) -> float:
         """P0-16 动态死区阈值（秒）：max(配置值, 间隔上限×1.2, 3600)。"""
         try:
@@ -778,6 +800,7 @@ class Gateway:
         return not active
 
     def on_inbound(self, msg: dict) -> None:
+        self.reload_config_now()
         # P18-A：引擎停止时入口直接丢，不记录 inbound、不进队列、不补发历史
         if not self.engine_enabled:
             self._log_engine_pause("inbound")
@@ -1235,6 +1258,7 @@ class Gateway:
     def _send(self, contact: str, text: str, *, force: bool = False,
               reactive: bool = False, proactive: bool = False,
               manual: bool = False, force_quiet: bool = False) -> dict:
+        self.reload_config_now()
         # P0-22：STOP 文件是最高优先级，先于任何发送判断（含 reactive/force）
         if self.stop_present():
             self._log_stopped()
@@ -1922,6 +1946,10 @@ def make_handler(gateway: Gateway):
                 return
 
             # P18-A：引擎一键启停（admin token 已由 _guard 校验；幂等）
+            if path == "/api/config/reload":
+                self._json(200, {"ok": True, **gateway.reload_config_now()})
+                return
+
             if path in ("/api/engine/start", "/api/engine/stop"):
                 wanted = path.endswith("/start")
                 result = gateway.set_engine(wanted, source="api")

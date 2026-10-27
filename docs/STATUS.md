@@ -1,17 +1,17 @@
 # 当前状态（docs/STATUS）
 
-> 最后实测：2026-10-28 02:20（本地 Windows，Python 3.14）。
+> 最后实测：2026-10-28 02:50（本地 Windows，Python 3.14）。
 > **真实数字以本页为准**；README/旧文档里的历史数字（如 78 / 166 passed）已过期，不再作为口径。
 
 ## 1. 测试（实测）
 
 | 套件 | 命令 | 结果 | 说明 |
 | --- | --- | --- | --- |
-| 根 `tests/` | `python -m pytest tests -q` | **244 passed / 9 failed**（56.79s） | 9 个失败集中在 `tests/test_webui.py` 的旧 `/agi` 页：模块 `agi.core` 已移除（legacy 8081），不是当前主链 |
-| `agi/tests/` | `python -m pytest agi/tests -q` | **1975 passed / 1 skipped / 1 failed**（1298.58s ≈21m38s） | 失败：`test_proactive_budget.py::test_llm_can_speak_even_below_score_and_state`（期望纯文本、实际被加上 emoji/slang；疑似环境/规则配置差异，待单独修） |
+| 根 `tests/` | `python -m pytest tests -q` | **244 passed / 9 skipped**（43.34s） | 9 条 `tests/test_webui.py` 旧 `/agi` 用例依赖已移除的 `agi.core`，已加 `skipif` 跳过（legacy 8081，非主链） |
+| `agi/tests/` | `python -m pytest agi/tests -q` | **2002 passed / 1 skipped**（840.99s ≈14min） | 全绿；此前记录的 `test_proactive_budget` 抖动本次未复现 |
 
 - 测试数字与 `docs/plans` 旧记录中的 600/678/166/78 不同是正常的：项目已合并、测试集扩大。
-- 发布前最低要求：**先跑 `agi/tests`，确认除已知 1 条外全绿；根 `tests` 的 9 条旧 `/agi` 失败不算主链**。
+- 发布前最低要求：**两套都绿**（根 `tests` 9 skipped 为 legacy、不算主链）。
 
 ## 2. 服务与端口（主链 / 非主链）
 
@@ -36,7 +36,7 @@
 | W1–W4 | 已完成 | 内状态、四臂/六臂实验、灵魂线、LoRA 与评估 |
 | P 系列（P0–P38） | 大部分完成 | 网关护栏、媒体/贴纸、B站、主动节奏、引擎/模型启停、每日语料、日记/自我叙事、记忆衰减 |
 | M0 工作台 | 完成 | 服务/配置/Git/文件 API + 802 控制台 |
-| M1 Data Studio / 验收 | 进行中 | SQLite 浏览/SQL/行编辑/备份（后端已就绪，路由待接） |
+| M1 Data Studio / 验收 | 完成 | SQLite 浏览/SQL/行编辑/备份（工作台 803 已接线并实测；idea 仓库 34 tests） |
 | 文档收口 P1-1 | 本次完成 | `docs/INDEX.md`、`docs/STATUS.md`、plans 合并、快照、链接检查 |
 
 ## 5. 文档现状
@@ -49,7 +49,6 @@
 
 ## 6. 已知问题 / 待办
 
-1. 根 `tests/test_webui.py` 的 9 条旧 `/agi` 用例：依赖已移除的 `agi.core`；要么删/跳过，要么重写为 802 控制台，不在本次文档任务范围。
-2. `agi/tests/test_proactive_budget.py` 的 1 条失败：期望无 emoji/slang，实际输出被追加；先怀疑测试环境/配置（simple/legacy 风格或护栏配置）差异。
-3. Data Studio（M1-A）后端已实现，7 条测试通过；**路由尚未接 main.py**（Lead 统一接线）。
-4. 8081/8082 仅保留历史/调试用途，不写入主链文档的操作步骤。
+1. 根 `tests/test_webui.py` 的 9 条旧 `/agi` 用例已 `skipif`（依赖已移除的 `agi.core`）；如需恢复需重写为 802 控制台。
+2. 8081/8082 仅保留历史/调试用途，不写入主链文档的操作步骤。
+3. 真实发送依赖本机微信窗口可被 wxauto4 附着；2026-10-28 02:33 实测报"未找到已登录的客户端窗口"（当时应用未处于可附着状态），失败内容自动落草稿。

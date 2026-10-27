@@ -21,6 +21,35 @@ NUMBER = re.compile(r"(?<!\d)(?:\d{2,4}年|\d{1,2}月|\d{1,2}日|\d+(?:\.\d+)?\s
 CITATION = re.compile(r"\[(M-[0-9a-zA-Z_-]+)\]")
 TIME_CLAIM = re.compile(r"(今天|昨天|明天|前天|后天|上周|下周|上个月|下个月|去年|明年|刚刚|刚才)")
 FORBIDDEN = ("保证收益", "包治", "百分之百治好", "你必须", "你一定", "绝对安全")
+#: P27：网络梗/比赛比喻/总结式评价（命中后重写或删分句）
+SLANG_RE = re.compile(
+    r"赢了|输了|这波|拿捏|绝了|笑死|栓Q|666|开摆|绷不住|"
+    r"血压(?:飙升|升高)?|算是.{0,6}(?:赢|输)|只能算")
+
+
+def slang_check(text: Any) -> dict:
+    """返回 {hit, issues}；纯函数，不写 DB。"""
+    value = str(text or "")
+    # 媒体指令不是正文，尤其 [[media:sticker:666]] 里的 666 不能当网感词
+    value = re.sub(r"\[\[media:[^\]]*\]\]", "", value)
+    hits = list(dict.fromkeys(SLANG_RE.findall(value)))
+    return {"hit": bool(hits), "issues": [f"slang:{x}" for x in hits], "hits": hits}
+
+
+def strip_slang_clauses(text: Any) -> str:
+    """保底：删掉命中禁用词的短句/分句；删空返回空串。"""
+    value = str(text or "")
+    parts = re.split(r"([，,。！!？?；;])", value)
+    kept: list[str] = []
+    for index in range(0, len(parts), 2):
+        clause = parts[index]
+        sep = parts[index + 1] if index + 1 < len(parts) else ""
+        if clause and SLANG_RE.search(clause):
+            continue
+        if clause or sep:
+            kept.append(clause + sep)
+    result = "".join(kept).strip("，,。；; ")
+    return result
 
 
 def _rewrite(reply: str) -> tuple[str, list[str]]:

@@ -125,6 +125,33 @@ def _spoken_connectives(text: str, reasons: list[str]) -> str:
     return value
 
 
+#: P27：网络腔/比赛比喻的轻量兜底（只改表达，不新增事实）
+SLANG_REPLACEMENTS = (
+    ("算是赢了", "确实不错"),
+    ("算是输了", "有点可惜"),
+    ("就赢了", "就挺好"),
+    ("这波", "这次"),
+    ("拿捏", "搞定"),
+    ("绝了", "厉害"),
+    ("笑死", "好笑"),
+    ("栓Q", "无语"),
+    ("666", "厉害"),
+    ("开摆", "算了"),
+    ("绷不住", "忍不住"),
+    ("血压飙升", "有点上头"),
+    ("血压升高", "有点上头"),
+)
+
+
+def _deslang(text: str, reasons: list[str]) -> str:
+    value = text
+    for source, target in SLANG_REPLACEMENTS:
+        if source in value:
+            value = value.replace(source, target)
+            reasons.append(f"slang:{source}->{target}")
+    return value
+
+
 def _truncate(text: str, max_chars: int, reasons: list[str]) -> str:
     if max_chars <= 0 or len(text) <= max_chars:
         return text
@@ -166,6 +193,7 @@ def polish_reply(text: str, *, rng: random.Random | None = None,
     value = original
     value = _strip_trailing_period(value, reasons)
     value = _spoken_connectives(value, reasons)
+    value = _deslang(value, reasons)
     value = _truncate(value, max_chars, reasons)
     value = _add_particle(value, generator, reasons)
     return {"text": value, "changed": value != original, "reasons": reasons}

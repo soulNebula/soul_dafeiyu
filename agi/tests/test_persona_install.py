@@ -47,6 +47,8 @@ def test_install_writes_prompts_backup_and_relation(tmp_path, monkeypatch):
     values = prompt_store.overrides()
     assert "小鱼" in values["chat.system"] and "跟用户是朋友关系" in values["chat.system"]
     assert "爸" not in values["chat.system"] and "父女" not in values["chat.system"]
+    assert "网络梗" in values["chat.system"] and "赢了" in values["chat.system"]
+    assert "生活化打趣" in values["chat.system"] and "输赢评判" in values["chat.system"]
     assert "普通朋友" in values["proactive.persona_constraints"]
     assert "样例0" in values["proactive.voice_fewshot"]
     backup = json.loads(installed.read_text(encoding="utf-8"))

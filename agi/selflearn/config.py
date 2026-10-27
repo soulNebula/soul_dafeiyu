@@ -31,6 +31,9 @@ MEDIA_WISH_FILE = DATA_DIR / "media_wishes.jsonl"
 #: 预留：素材获取管线默认关闭（本仓库不下载、不联网）
 MEDIA_ACQUISITION_ENABLED = False
 
+# P27：网络腔/比赛比喻守卫（默认开启）
+SLANG_GUARD_ENABLED = True
+
 # P16-A：时间感知（被动回复 + simple 主动消息注入当前时间）
 INJECT_TIME_CONTEXT = True
 _WECHAT_CONFIG = ROOT / "agi" / "data" / "wechat" / "config.json"

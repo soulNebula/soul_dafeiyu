@@ -57,7 +57,13 @@ def test_topic_seed_from_memory_claims_and_messages(tmp_path):
     assert all("我记得你说过" not in item["text"] for item in seed["candidates"])
 
 
-def test_topic_seed_empty_and_claims_only(tmp_path):
+def test_topic_seed_empty_and_claims_only(tmp_path, monkeypatch):
+    # 隔离真实 B 站日报：否则空库也会从 ~/.dsh/bili-duty/out 读到当天报告，
+    # 导致"空库应无候选"的断言随日期/真实数据变化（2026-10-28 踩到）。
+    from agi.integrations import bili_digest
+    monkeypatch.setattr(bili_digest, "DEFAULT_DIR", tmp_path / "_no_bili", raising=False)
+    monkeypatch.setattr(bili_digest, "latest_topics", lambda *a, **k: [], raising=False)
+    monkeypatch.setenv("PROACTIVE_TOPIC_BILI", "0")
     now = time.time()
     empty = tmp_path / "empty.sqlite3"
     db.connect(empty).close()

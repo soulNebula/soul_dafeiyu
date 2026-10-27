@@ -430,6 +430,22 @@ def memory_snapshot() -> dict:
     return {"ok": True, "db": str(path), "metrics": metrics, "recent": recent}
 
 
+def memory_strength() -> dict:
+    """P38：GET /api/memory/strength 只读（按遗忘阶段/强度）。"""
+    path = contact_db_path()
+    if not path:
+        return {"ok": False, "error": "contact_db_not_found", "count": 0,
+                "stages": {}, "strongest": [], "weakest": [], "items": []}
+    try:
+        from agi.selflearn import memory_decay
+        return memory_decay.strength_report(path)
+    except Exception as exc:  # noqa: BLE001 - 页面只读观测，失败降级
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                "count": 0, "stages": {}, "strongest": [], "weakest": [],
+                "items": []}
+
+
+
 # --------------------------------------------------------------------------- #
 # 语气对照
 # --------------------------------------------------------------------------- #
@@ -4175,6 +4191,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, read_messages(self._limit(query, 100))); return
             if path == "/api/memory":
                 self._json(200, memory_snapshot()); return
+            # P38：记忆强度/遗忘阶段（只读）
+            if path == "/api/memory/strength":
+                self._json(200, memory_strength()); return
             if path == "/api/tone":
                 self._json(200, tone_snapshot(self._limit(query, 100))); return
             if path == "/api/models":

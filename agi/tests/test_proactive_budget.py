@@ -50,7 +50,10 @@ def test_llm_can_say_skip(tmp_path):
     assert r["available"] is False and r["reason"] == "llm_skip"
 
 
-def test_llm_can_speak_even_below_score_and_state(tmp_path):
+def test_llm_can_speak_even_below_score_and_state(tmp_path, monkeypatch):
+    # 固定随机数：完整套件里 random 状态不同会让概率闸门偶发跳过（order-dependent flake）
+    import random as _random
+    monkeypatch.setattr(_random, "random", lambda: 0.0)
     path = tmp_path / "p.sqlite3"
     _seed(path)
     con = db.connect(path)

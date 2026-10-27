@@ -24,6 +24,10 @@ DEFAULTS = {
     # P18-A：引擎总开关（监听+自动回复+主动消息）；默认 true，与 enabled 不同：
     # enabled 是网关进程是否启动，engine_enabled 是运行中的软开关（控制台一键运行/停止）。
     "engine_enabled": True,
+    # P38：每天 03:00 睡眠整理（衰减/渐进遗忘/休眠清理）；engine 停也跑
+    "memory_decay_enabled": True,
+    "memory_purge_enabled": False,
+    "memory_sleep_hour": 3,
     "port": 801,
     "auto_reply": False,
     "dry_run": True,

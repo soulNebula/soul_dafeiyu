@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..inner import inject as inner_inject
-from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, mood_judge, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, timefuzz, tool_reply, trace, trust
+from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, memory_decay, mood_judge, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, timefuzz, tool_reply, trace, trust
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -714,10 +714,23 @@ class SelfLearnAgent:
             pass
         # P1-b：时间分层检索（hot≤30d/warm 30–90d/cold>90d，带预算与时间模糊）
         mems = memory.retrieve_tiered(self.path, text)["items"]
+        # P38：按遗忘阶段取可注入文本；dormant 不注入（命中由 P38 检索续命）
+        filtered_mems: list[dict] = []
+        for mem in mems:
+            stage = str(mem.get("forget_stage") or "full")
+            if stage == "dormant":
+                continue
+            text_stage = memory_decay.stage_text(mem)
+            if text_stage:
+                mem = dict(mem)
+                mem["content"] = text_stage
+            filtered_mems.append(mem)
+        mems = filtered_mems
         hits: list[dict] = []
         dropped_stale = 0
         try:
-            hits = retrieval.hybrid(self.path, text, k=5)
+            # P38：检索命中即续命（替代 retrieval.hybrid）
+            hits = memory_decay.search_with_revive(self.path, text, limit=5)
             hits, dropped_stale = filter_stale_hits(self.path, hits, text)
             retrieval_ctx = "\n".join(
                 f"- [{h.get('source_type')}] {str(h.get('text') or '')[:160]}"

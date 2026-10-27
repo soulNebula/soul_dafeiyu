@@ -144,6 +144,20 @@ def keywords_of(text: str, limit: int = 4) -> str:
     return "、".join(picked[:4])
 
 
+def stage_text(row: dict) -> str:
+    """按阶段取可注入文本；dormant 返回空串（不注入）。"""
+    stage = str(row.get("forget_stage") or "full")
+    content = str(row.get("content") or "")
+    full = str(row.get("content_full") or "")
+    if stage == "dormant":
+        return ""
+    if stage == "compressed":
+        return content or compress_text(full)
+    if stage == "keyword":
+        return content or keywords_of(full)
+    return content
+
+
 def _row_value(row: dict, key: str, default: Any) -> Any:
     value = row.get(key, default)
     return default if value is None else value
@@ -216,8 +230,8 @@ def decay_all(path: Path | str = DEFAULT_DB_PATH, *, now: float | None = None,
 
 
 def revive(path: Path | str = DEFAULT_DB_PATH, memory_id: str = "",
-           *, now: float | None = None) -> dict:
-    """命中/被提起：强度≥0.6、恢复原文/压缩态、revive_count+1。"""
+           *, boost: float = REVIVE_STRENGTH, now: float | None = None) -> dict:
+    """命中/被提起：强度≥boost、恢复原文/压缩态、revive_count+1。"""
     now = _now(now)
     if not str(memory_id or "").strip():
         return {"ok": False, "error": "memory_id 不能为空"}
@@ -229,7 +243,7 @@ def revive(path: Path | str = DEFAULT_DB_PATH, memory_id: str = "",
             return {"ok": False, "error": "记忆不存在"}
         row = dict(row)
         old_strength = float(_row_value(row, "strength", 1.0) or 1.0)
-        strength = max(old_strength, REVIVE_STRENGTH)
+        strength = max(old_strength, float(boost))
         original = str(_row_value(row, "content_full", "") or row.get("content") or "")
         content = str(row.get("content") or "")
         stage = "full" if strength >= 0.5 else "compressed"
@@ -254,10 +268,17 @@ def search_with_revive(path: Path | str = DEFAULT_DB_PATH, query: str = "",
     """检索命中即续命；返回 hits（memory hit 会带 revived/strength/stage）。"""
     hits: list[dict] = []
     try:
-        from . import search
-        hits = list(search.search(path, query, limit=limit))
+        # 优先用带来源权重/MMR 的 hybrid 检索；空/失败再退回 search
+        from . import retrieval
+        hits = list(retrieval.hybrid(path, query, k=limit))
     except Exception:  # noqa: BLE001
         hits = []
+    if not hits:
+        try:
+            from . import search
+            hits = list(search.search(path, query, limit=limit))
+        except Exception:  # noqa: BLE001
+            hits = []
     if not hits:
         con = _connect(path, write=False)
         try:
@@ -358,13 +379,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--purge", action="store_true")
     parser.add_argument("--purge-write", action="store_true")
     parser.add_argument("--report", action="store_true")
+    parser.add_argument("--status", action="store_true")
+    parser.add_argument("--revive", metavar="ID", default="")
+    parser.add_argument("--now", type=float, default=None)
     args = parser.parse_args(argv)
-    if args.report:
+    if args.status or args.report:
         result = strength_report(args.db)
+    elif args.revive:
+        result = revive(args.db, args.revive, now=args.now)
     elif args.purge:
-        result = purge_dormant(args.db, dry_run=not args.purge_write)
+        result = purge_dormant(args.db, now=args.now,
+                               dry_run=not args.purge_write)
     else:
-        result = decay_all(args.db, dry_run=not args.write)
+        result = decay_all(args.db, now=args.now, dry_run=not args.write)
     print(json.dumps(result, ensure_ascii=False, indent=1))
     return 0
 

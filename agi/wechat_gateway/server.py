@@ -190,6 +190,9 @@ class Gateway:
         self.diary_thread = None
         # P32：自我叙事周复盘线程（周日 23:30；engine 停也允许）
         self.narrative_thread = None
+        # P38：每天 03:00 睡眠整理（衰减/渐进遗忘/休眠清理；engine 停也跑）
+        self.memory_sleep_thread = None
+        self.last_memory_sleep: dict = {}
         self.pending: dict[str, dict] = {}
         self.last_inbound: dict[str, float] = {}
         self.send_times = deque()
@@ -275,6 +278,17 @@ class Gateway:
                 self.narrative_thread.start()
             except Exception as exc:  # noqa: BLE001
                 self._record("narrative_start_failed",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
+        # P38：每天 03:00 睡眠整理（衰减/渐进遗忘/休眠清理；engine 停也跑）
+        if self.cfg.get("memory_decay_enabled", True) and not (
+                self.memory_sleep_thread and self.memory_sleep_thread.is_alive()):
+            try:
+                self.memory_sleep_thread = threading.Thread(
+                    target=self._memory_sleep_loop, name="gateway-memory-sleep",
+                    daemon=True)
+                self.memory_sleep_thread.start()
+            except Exception as exc:  # noqa: BLE001
+                self._record("memory_sleep_start_failed",
                              {"error": f"{type(exc).__name__}: {exc}"[:200]})
         self.ready = True
         self._record("gateway_started", {"allowed": allowed, "monitored": monitored,
@@ -897,6 +911,102 @@ class Gateway:
         while not self.stop_event.is_set():
             retry_at = self._narrative_tick(time.time(), retry_at)
             self.stop_event.wait(60.0)
+
+    # ------------------------------------------------------------------ #
+    # P38：每天 03:00 记忆睡眠整理（衰减/渐进遗忘/休眠清理；engine 停也跑）
+    # ------------------------------------------------------------------ #
+    def _seconds_until_memory_sleep(self, now: float | None = None) -> float:
+        """距下一个本地 memory_sleep_hour（默认 3:00）的秒数（至少 1s）。"""
+        now = time.time() if now is None else float(now)
+        try:
+            hour = int(self.cfg.get("memory_sleep_hour", 3))
+        except (TypeError, ValueError):
+            hour = 3
+        hour = max(0, min(23, hour))
+        local = time.localtime(now)
+        target = time.mktime((local.tm_year, local.tm_mon, local.tm_mday,
+                              hour, 0, 0, local.tm_wday, local.tm_yday,
+                              local.tm_isdst))
+        if target <= now:
+            target += 86400.0
+        return max(1.0, target - now)
+
+    def _memory_decay_paths(self) -> list[Path]:
+        """需要做睡眠整理的 memory 库（白名单联系人 + 显式配置）。"""
+        paths: list[Path] = []
+        for raw in (self.cfg.get("memory_decay_paths") or []):
+            if str(raw or "").strip():
+                paths.append(Path(str(raw)))
+        for contact in list(self.cfg.get("allowed_contacts") or []) + list(
+                self.cfg.get("monitored_contacts") or []):
+            contact = str(contact or "").strip()
+            if contact:
+                paths.append(Path(cfg.contact_db(contact)))
+        seen: set[str] = set()
+        result = []
+        for path in paths:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(path)
+        return result
+
+    def _run_memory_sleep(self, now: float | None = None) -> dict:
+        """单次睡眠整理；engine_enabled 不影响。返回聚合统计。"""
+        now = time.time() if now is None else float(now)
+        if not bool(self.cfg.get("memory_decay_enabled", True)):
+            return {"ok": True, "skipped": "disabled"}
+        try:
+            from agi.selflearn import memory_decay
+        except Exception as exc:  # noqa: BLE001
+            self._record("memory_sleep_error",
+                         {"error": f"{type(exc).__name__}: {exc}"[:200]})
+            return {"ok": False, "error": "import_failed"}
+        purge_enabled = bool(self.cfg.get("memory_purge_enabled", False))
+        aggregate = {"ok": True, "ts": now, "paths": 0, "checked": 0,
+                     "changed": 0, "compressed": 0, "keyword": 0,
+                     "dormant": 0, "purged": 0, "purge_dry_run": not purge_enabled}
+        for path in self._memory_decay_paths():
+            try:
+                decayed = memory_decay.decay_all(path, now=now, dry_run=False)
+                purged = memory_decay.purge_dormant(
+                    path, now=now, dry_run=not purge_enabled)
+            except Exception as exc:  # noqa: BLE001 - 单库失败不影响其它
+                self._record("memory_sleep_error", {
+                    "path": str(path), "error": f"{type(exc).__name__}: {exc}"[:200]})
+                continue
+            stages = decayed.get("stages") or {}
+            event = {"path": str(path), "checked": decayed.get("checked", 0),
+                     "decayed": decayed.get("changed", 0),
+                     "changed": decayed.get("changed", 0),
+                     "compressed": int(stages.get("compressed", 0)),
+                     "keyword": int(stages.get("keyword", 0)),
+                     "keyworded": int(stages.get("keyword", 0)),
+                     "dormant": int(stages.get("dormant", 0)),
+                     "purged": purged.get("count", 0),
+                     "purge_dry_run": bool(purge_enabled is False),
+                     "engine_enabled": bool(self.engine_enabled)}
+            self._record("memory_sleep", event)
+            aggregate["paths"] += 1
+            for key in ("checked", "changed"):
+                aggregate[key] += int(event[key])
+            for key in ("compressed", "keyword", "dormant", "purged"):
+                aggregate[key] += int(event[key])
+        self.last_memory_sleep = aggregate
+        return aggregate
+
+    def _memory_sleep_loop(self) -> None:
+        """每天 03:00 跑一次；engine 停也跑（睡眠整理不打扰人）。"""
+        while not self.stop_event.is_set():
+            delay = self._seconds_until_memory_sleep()
+            if self.stop_event.wait(delay):
+                break
+            try:
+                self._run_memory_sleep()
+            except Exception as exc:  # noqa: BLE001 - 睡眠整理失败不影响网关
+                self._record("memory_sleep_error",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
 
     def _work(self) -> None:
         while not self.stop_event.is_set():

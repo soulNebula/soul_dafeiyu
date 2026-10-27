@@ -1922,3 +1922,22 @@ def test_every_nav_page_has_renderer():
     have = {key for key, _ in re.findall(r"(\w+):\s*(\w+)", match.group(1))}
     missing = sorted(page for page in navs if page not in have)
     assert not missing, f"这些页面没有注册渲染器：{missing}"
+
+
+# ============================================================ P26 媒体页去素材区块
+def test_media_page_no_asset_block_and_library_selector(write_env):
+    from pathlib import Path as _Path
+    static_dir = _Path(console.STATIC_DIR)
+    app_js = (static_dir / "app.js").read_text(encoding="utf-8")
+    style = (static_dir / "style.css").read_text(encoding="utf-8")
+    assert "素材库（完整管理请到" not in app_js
+    assert "asset-missing" not in app_js
+    assert "无预览" not in app_js
+    assert "media-filter" not in app_js
+    assert "data-asset-path" not in app_js
+    assert "/api/library/list?enabled=1&limit=300" in app_js
+    assert "btn-media-send" in app_js
+    assert "media-import-submit" in app_js
+    assert "本页只负责发送与导入" in app_js
+    assert "library-missing" in app_js          # 素材库页自身的文件缺失兜底仍保留
+    assert ".library-grid" in style

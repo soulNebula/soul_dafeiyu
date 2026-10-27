@@ -200,6 +200,10 @@ tags、启用开关）、删除（确认短语「删除素材」；默认软删�
 
 ## 媒体页（P5-d + P5-e-B 本地导入）
 
+**素材管理统一在「素材库」页**（本页不再有素材库网格）；本页的发送素材选择器实时读
+`GET /api/library/list?enabled=1&limit=300`（media_store 权威数据），只显示已启用且可预览的项，
+软删/停用后立即消失；拿不到缩略图的项不出现。
+
 本地导入面板：多选图片（png/jpg/jpeg/gif/webp、≤2MB）→ 预览/名称/标签 → 逐条显示结果
 （已导入/重复/被拒原因）；也支持白名单路径导入（Desktop / 素材库 / 仓库 media）。
 图片会复制进 `agi/data/selflearn/media/`、自动去重/剥 EXIF 并索引，可作为贴纸（图片形式）发送。
@@ -211,11 +215,8 @@ tags、启用开关）、删除（确认短语「删除素材」；默认软删�
 - **能力矩阵**：text / unicode_emoji / image / gif / sticker_as_image / sticker_native / sticker_collect / mixed，
   每项 ✅支持 / ⚠️降级 / 🔒预留 / ❌不可用 + 说明。优先读 `agi/wechat_gateway/media.capabilities()`，
   import 失败自动降级静态矩阵（页面不崩）。
-- **素材库**：优先读联系人库 `emoji_archive`（使用次数/标签）；表为空时回退扫描
-  `wx_core/emoji_assets` + `media/stickers` + `selflearn/media`（当前 120+ 个文件），网格缩略图
-  （经 `/api/media/file` 白名单读取，路径穿越 404）。
 - **统计卡**：总数 / 已使用 / 未使用 / 最常用 top5（emoji_usage 计数；扫描回退时无使用记录）。
-- **测试发送**：选类型（文本/Unicode emoji/图片/GIF/贴纸）→ 素材或文本 → 发送；
+- **测试发送**：选类型（文本/Unicode emoji/图片/GIF/贴纸）→ 素材（来自素材库页、实时数据）或文本 → 发送；
   **联系人强制为「文件传输助手」**（body 里传别人也覆盖，服务端强制），显示 sent/blocked/error。
   P5-a 的 gateway `/api/media/send` 未落地时返回 **501 + 说明**，不会真的发消息。
 - **愿望清单**：读 `agi/data/media_wishes.jsonl`（模型想发但库里没有的表情），标注

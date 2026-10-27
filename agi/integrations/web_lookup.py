@@ -69,6 +69,15 @@ TITLE_MARKERS = ("发布", "官宣", "揭秘", "深度", "盘点", "对话", "�
                  "年度", "｜", "|")
 CHAT_WORDS = ("我", "你", "吗", "呢", "啊", "累", "开心", "难过", "在吗",
               "吃", "睡", "想", "今天", "明天", "?!", "?", "？", "！")
+#: P37：B站/网上“去看看”类请求；有主题走网页搜索，无主题务实回答
+BILI_WORDS = ("去B站看看", "去b站看看", "刷刷B站", "刷B站", "B站看看",
+              "看看人家怎么说", "看看大家怎么说", "去网上查查", "上网看看",
+              "网上有什么好玩的", "帮我找点", "帮我找找")
+BILI_GENERIC = ("去B站看看", "去b站看看", "刷刷B站", "刷B站", "B站看看",
+                "B站", "b站", "看看人家怎么说", "看看大家怎么说",
+                "去网上查查", "上网看看", "网上有什么好玩的", "帮我找点",
+                "帮我找找", "网上", "看看", "查查", "一下", "有", "什么",
+                "好玩的", "人家", "怎么说", "帮我", "找点", "找找")
 
 #: 优先给「新鲜」的公开 RSS；36氪/新浪的 feed 可能格式变化或停更，
 #: 统一由 news() 的 _news_fresh() 判断，太旧就退搜狗新闻。
@@ -277,6 +286,11 @@ def detect_intent(text: str) -> dict | None:
             return {"kind": "wechat_article", "query": url,
                     "params": {"url": url}}
         return {"kind": "url", "query": url, "params": {"url": url}}
+    if any(word in compact for word in BILI_WORDS):
+        topic = _strip_words(compact, BILI_GENERIC + TIME_STOP)
+        topic = _clean_search_query(topic) if topic else ""
+        return {"kind": "bili_request", "query": topic,
+                "params": {"query": topic, "bili": True}}
     if any(word in compact for word in WEATHER_WORDS):
         city = _extract_city(compact)
         return {"kind": "weather", "query": city or "默认城市",
@@ -1008,6 +1022,17 @@ def _summary_of(kind: str, result: dict) -> str:
         lines = [f"- {item.get('title')}（{item.get('account') or '公众号'}）"
                  for item in (result.get("items") or [])[:3]]
         return _clip("找到这几篇公众号文章：" + chr(10) + chr(10).join(lines))
+    if kind == "bili_request":
+        if not result.get("ok"):
+            return _clip(str(result.get("hint") or
+                             "B站是后台每天刷的，我这边没法即时点开视频；我帮你查网页看看"))
+        lines = []
+        for item in (result.get("items") or [])[:3]:
+            title = str(item.get("title") or "").strip()
+            snippet = str(item.get("summary") or "").strip()
+            if title:
+                lines.append("- " + title + ("：" + snippet[:80] if snippet else ""))
+        return _clip("我帮你翻了下网页：" + chr(10) + chr(10).join(lines))
     if kind == "search" and result.get("ok"):
         items = result.get("items") or []
         lines = []
@@ -1066,6 +1091,15 @@ def lookup(text: str, *, now: float | None = None) -> dict:
         result = news(params.get("topic") or "")
     elif kind == "url":
         result = fetch_url(params.get("url") or intent["query"])
+    elif kind == "bili_request":
+        query = params.get("query") or ""
+        if query:
+            result = search(query, 3)
+            result["bili"] = True
+        else:
+            result = {"ok": False, "items": [], "count": 0, "source": "",
+                      "query": "", "error": "no_topic",
+                      "hint": "B站是后台每天刷的，我这边没法即时点开视频；我帮你查网页看看"}
     else:
         result = search(params.get("query") or intent["query"])
     result = dict(result or {})

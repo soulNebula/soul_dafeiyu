@@ -786,6 +786,10 @@ class SelfLearnAgent:
                             elif kind_name == "search":
                                 web_ctx += (chr(10) + "回答可以自然说「搜了下，…」；"
                                             "不要贴长链接列表，最多提一个来源域名。")
+                            elif kind_name == "bili_request":
+                                web_ctx += (chr(10) + "B站是后台每天刷的，你不能即时点开视频；"
+                                            "可以聊我帮你翻到的网页内容，别说成自己刷到了视频。"
+                                            "不要编网络故障。")
                         elif (kind_name == "wechat_article"
                               and not found.get("ok")
                               and (str(found.get("error") or "")
@@ -795,6 +799,13 @@ class SelfLearnAgent:
                                 "这篇被微信拦了（反爬验证），你把正文复制发我就行")
                             web_ctx = (hint + chr(10) + "如实告诉用户这件事，"
                                        "别假装读过这篇文章。")
+                        elif kind_name == "bili_request" and not found.get("ok"):
+                            hint = str(found.get("hint") or "").strip() or (
+                                "B站是后台每天刷的，我这边没法即时点开视频；"
+                                "我帮你查网页看看")
+                            web_ctx = (hint + chr(10) + "如实说，不要编网络出不去/"
+                                       "页面转圈/刷不了B站；如果用户给了主题，可以说"
+                                       "我先帮你查网页，等下刷到再跟你说。")
             except Exception:  # noqa: BLE001 - 联网查询失败不影响主链
                 web_lookup_info = {"kind": "", "ok": False, "source": "",
                                    "error": "exception", "title": ""}

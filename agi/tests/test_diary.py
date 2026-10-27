@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from agi.selflearn import db, diary, surf
+from agi.selflearn import db, diary, guard, surf
 from agi.wechat_gateway.server import Gateway, make_handler
 
 DAY = "2026-10-27"
@@ -230,8 +230,9 @@ def test_write_creates_txt_and_index(tmp_path):
     target = Path(diary.DIARY_DIR) / f"{DAY}.txt"
     assert Path(result["path"]) == target and target.exists()
     content = target.read_text(encoding="utf-8")
-    assert content.strip() == LONG_DIARY.strip()
-    assert result["chars"] == len(LONG_DIARY.strip())
+    # P37：真实状态句会追加在正文末尾，允许其作为后缀存在
+    assert content.strip().startswith(LONG_DIARY.strip())
+    assert result["chars"] >= len(LONG_DIARY.strip())
     assert result["mood_avg"] == pytest.approx(70.0)
     lines = (Path(diary.DIARY_DIR) / "index.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
@@ -267,7 +268,8 @@ def test_write_force_rewrites_and_keeps_single_index_line(tmp_path):
     new_text = "换一个写法。" + "今天其实一直在想那句新的自己。" * 6
     result = diary.write(base, DAY, force=True, client=FakeLLM(new_text))
     assert result["written"] and not result["skipped"]
-    assert Path(result["path"]).read_text(encoding="utf-8").strip() == new_text.strip()
+    written = Path(result["path"]).read_text(encoding="utf-8").strip()
+    assert written.startswith(new_text.strip())
     lines = (Path(diary.DIARY_DIR) / "index.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1 and json.loads(lines[0])["chars"] == result["chars"]
 
@@ -527,3 +529,51 @@ def test_http_diary_routes(tmp_path, monkeypatch):
 
     status, _ = _call(gw, "GET", "/api/diary/latest", token=None)
     assert status == 401
+
+
+def test_collect_injects_activity_and_materials(tmp_path, monkeypatch):
+    base = tmp_path / "selflearn.sqlite3"
+    db.connect(base).close()
+    monkeypatch.setattr(diary, "_activity_context", lambda now: (
+        "bili_today: ran=2, picked=0, report_date=2026-10-27; "
+        "surf_today: sessions=9, items=27。今天没刷到就说没看到什么"))
+    data = diary.collect(base, DAY, now=_at(20))
+    assert "bili_today" in data["activity"]
+    assert "bili_today" in data["materials"]
+    prompt = diary.build_prompt(data)
+    assert "bili_today" in prompt[1]["content"]
+    assert "网络坏了" in prompt[0]["content"]
+
+
+class _SeqLLM:
+    def __init__(self, texts):
+        self.texts = list(texts)
+        self.calls = []
+
+    def available(self):
+        return True
+
+    def chat(self, messages, **kwargs):
+        self.calls.append(messages)
+        return {"ok": True, "text": self.texts.pop(0) if self.texts else ""}
+
+
+def test_generate_rewrites_false_failure(monkeypatch):
+    monkeypatch.setattr(guard, "net_probe", lambda *a, **k: False)
+    data = {"date": DAY, "materials": "今天聊了聊", "mood": {"current": {}},
+            "activity": "bili_today: ran=2, picked=0, report_date=2026-10-27; "
+                        "surf_today: sessions=9, items=27。"}
+    bad = "今天网出不去，B站怎么都刷不成。" + "别的都还行。" * 20
+    good = "今天没看到什么，别的都还行。" + "心情一般。" * 30
+    fake = _SeqLLM([bad, good])
+    text, error = diary.generate(data, client=fake)
+    assert error == "" and len(fake.calls) == 2
+    assert "网出不去" not in text and "刷不成" not in text
+    assert "今天后台刷了2轮" in text
+
+
+def test_generate_state_sentence_without_activity():
+    data = {"date": DAY, "materials": "今天聊了聊", "mood": {"current": {}}}
+    fake = _SeqLLM(["今天聊了聊，没别的。" * 20])
+    text, _ = diary.generate(data, client=fake)
+    assert "后台刷了" not in text

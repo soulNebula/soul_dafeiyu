@@ -407,6 +407,15 @@ def _collect_bili(path, start: float, end: float) -> list[dict[str, Any]]:
              "value": float(row["value"] or 0)} for row in rows]
 
 
+def _activity_context(now: float) -> str:
+    """P37：日记也用真实的今日 bili/surf 状态，避免把旧话当故障复述。"""
+    try:
+        from .simple_tick import today_activity_context
+        return str(today_activity_context(now)).strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def collect(path: Path | str | None = None, date: str | None = None, *,
             now: float | None = None) -> dict[str, Any]:
     """只读汇总某天素材；返回结构化 dict（含压缩后的 materials）。"""
@@ -424,6 +433,7 @@ def collect(path: Path | str | None = None, date: str | None = None, *,
         "persona_updates": _collect_persona(path, start, end),
         "interests": _collect_interests(path, start, end),
         "bili": _collect_bili(path, start, end),
+        "activity": _activity_context(start),
     }
     data["mood_avg"] = data["mood"].get("avg")
     data["materials"] = materials(data)
@@ -463,7 +473,15 @@ def materials(data: dict[str, Any], limit: int = MAX_MATERIAL_CHARS) -> str:
         if feedback.get("good"):
             lines.append(f"反馈：今天他说了 {feedback.get('good')} 次好/不错。")
         samples = _sample_messages(conv.get("messages") or [], 26)
+        try:
+            from .guard import FALSE_FAILURE_RE
+        except Exception:  # noqa: BLE001
+            FALSE_FAILURE_RE = None
         for item in samples:
+            if FALSE_FAILURE_RE is not None and FALSE_FAILURE_RE.search(str(item.get("text") or "")):
+                continue
+            if _DIARY_STALE_RE.search(str(item.get("text") or "")):
+                continue
             speaker = "他说" if item["role"] == "user" else "你说"
             if item.get("proactive"):
                 speaker = "你主动说"
@@ -473,6 +491,12 @@ def materials(data: dict[str, Any], limit: int = MAX_MATERIAL_CHARS) -> str:
     proactive = data.get("proactive") or {}
     if proactive.get("count"):
         for item in proactive.get("items") or []:
+            try:
+                from .guard import FALSE_FAILURE_RE
+                if FALSE_FAILURE_RE.search(str(item.get("text") or "")):
+                    continue
+            except Exception:  # noqa: BLE001
+                pass
             replied = "他回了" if item.get("answered") else "他没回"
             lines.append(
                 f"你主动开口（{item.get('intent_kind') or '主动'}，"
@@ -490,6 +514,9 @@ def materials(data: dict[str, Any], limit: int = MAX_MATERIAL_CHARS) -> str:
         for item in bili[:3]:
             take = f"，我的看法：{_clip(item.get('my_take'), 50)}" if item.get("my_take") else ""
             lines.append(f"刷到的视频：《{_clip(item.get('title'), 40)}》{take}")
+    activity = str(data.get("activity") or "").strip()
+    if activity:
+        lines.append("真实后台状态：" + activity)
     mood = data.get("mood") or {}
     current = mood.get("current") or {}
     try:
@@ -549,6 +576,9 @@ def _persona_head() -> str:
     return head[:1200]
 
 
+_DIARY_STALE_RE = __import__("re").compile(
+    r"时钟不太准|钟不太准|让他自己看手机|让他看手机|没刷成|刷不成|刷不出来")
+
 DIARY_INSTRUCTION = (
     "用你自己的口吻写今天的日记（第一人称，300-600 字）：写记得的事、情绪起伏、"
     "想不通的地方、想跟他说但没说的；可以写刷到的东西和自己的看法；"
@@ -561,7 +591,10 @@ DIARY_RULES = (
     "- 可以分 2-4 段，但不要用「- 」列条目；\n"
     "- 只写下面记录里真实发生过的事，没发生的事不要编；\n"
     "- 不要提「素材」「数据」「记录」「总结」「今天学到」这类词，也不要把这段话写出来；\n"
-    "- 语气像平时说话，可以有一点点情绪，不必每段都积极。"
+    "- 语气像平时说话，可以有一点点情绪，不必每段都积极；\n"
+    "- 必须有一句真实状态句，数字按上面的真实状态，例如「今天后台刷了 2 轮，挑中 0 条；自己上网看了 9 轮、翻了 27 条」；没刷到就写「今天没看到什么」；\n"
+    "- 禁止写网络坏了/页面打不开/连不上/刷不了B站这类故障，也不要拿旧对话里的故障说法当事实；\n"
+    "- 不要写“时钟不太准/让你看手机”这类旧话，你现在知道当前时间。"
 )
 
 
@@ -661,6 +694,41 @@ def generate(data: dict[str, Any], *, client=None) -> tuple[str, str]:
     text = _clean_output(result.get("text"))
     if len(text) < MIN_OUTPUT_CHARS:
         return "", f"too_short: {len(text)}"
+    # P37：日记正文若复述旧对话里的「网出不去」，按真实网络重写一次；仍命中删分句
+    try:
+        from . import guard
+        bad = guard.false_failure_check(text)
+        if bad.get("hit"):
+            messages = build_prompt(data)
+            messages[0]["content"] += (
+                "\n【重写要求】日记里不要写网络坏了/页面打不开/连不上/刷不了B站；"
+                "按真实后台状态写：没刷到就写今天没看到什么。")
+            messages.append({"role": "user", "content":
+                             "请只重写日记正文，保留事实与情绪，去掉上面这些故障说法。"})
+            retry = client.chat(messages, purpose=PROMPT_PURPOSE,
+                                max_tokens=1600, temperature=0.8)
+            if isinstance(retry, dict) and retry.get("ok"):
+                candidate = _clean_output(retry.get("text"))
+                if len(candidate) >= MIN_OUTPUT_CHARS:
+                    text = candidate
+            if guard.false_failure_check(text).get("hit"):
+                cleaned = guard.strip_false_failure_clauses(text)
+                if cleaned:
+                    text = cleaned
+    except Exception:  # noqa: BLE001 - 守卫失败不影响日记主链
+        pass
+    # P37：把真实后台状态明确写进正文（模型可能只写“刷到两个视频”，不写轮数）
+    try:
+        activity = str(data.get("activity") or "")
+        import re as _re
+        bili = _re.search(r"ran=(\d+), picked=(\d+)", activity)
+        surf = _re.search(r"sessions=(\d+), items=(\d+)", activity)
+        if bili and surf and "后台刷了" not in text:
+            text = (text.rstrip() + "\n\n" +
+                    f"今天后台刷了{bili.group(1)}轮，挑中{bili.group(2)}条；"
+                    f"自己上网看了{surf.group(1)}轮、翻了{surf.group(2)}条。")
+    except Exception:  # noqa: BLE001
+        pass
     return text, ""
 
 

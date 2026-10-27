@@ -3,7 +3,7 @@ import json
 from collections import Counter, defaultdict
 
 EVAL = r"E:\agent\logs\eval_v1_llama_05b.json"
-DATA = r"C:\Users\Administrator\Desktop\wx_box\agi\soul\data\soul_sft_v1_val.jsonl"
+DATA = r"C:\Users\Administrator\Desktop\SoulAgent\agi\soul\data\soul_sft_v1_val.jsonl"
 
 
 def main():

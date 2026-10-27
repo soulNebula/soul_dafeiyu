@@ -2,7 +2,7 @@
 import json
 from collections import Counter, defaultdict
 
-BASE = r"C:\Users\Administrator\Desktop\wx_box\agi\soul\data"
+BASE = r"C:\Users\Administrator\Desktop\SoulAgent\agi\soul\data"
 
 
 def load(name):

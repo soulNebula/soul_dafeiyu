@@ -26,7 +26,7 @@
 ## 用法
 
 ```bash
-cd C:\Users\Administrator\Desktop\wx_box
+cd C:\Users\Administrator\Desktop\SoulAgent
 
 # 1) mock 自测：确定性 FakeClient，不联网、不需要 key。不要写默认输出路径，
 #    避免 mock 行占位导致之后的 --real 被断点续跑跳过。

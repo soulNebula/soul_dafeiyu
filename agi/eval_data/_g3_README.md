@@ -93,7 +93,7 @@ HTTP 400（实测：`Prompt must contain the word 'json' ...`）。
 ## 用法
 
 ```bash
-cd C:\Users\Administrator\Desktop\wx_box
+cd C:\Users\Administrator\Desktop\SoulAgent
 
 # 1) mock 自测：不联网、不需要 key、不需要 llama-server（CI 也能跑）
 python -m agi.eval_data.downstream --mock --limit 3 --bias-check 2 \

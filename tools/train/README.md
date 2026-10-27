@@ -100,7 +100,7 @@ assistant = json.dumps(target, ensure_ascii=False)   # 纯 InnerState JSON，不
 ## 五、怎么跑
 
 ```powershell
-cd C:\Users\Administrator\Desktop\wx_box
+cd C:\Users\Administrator\Desktop\SoulAgent
 
 # 0) 只验证数据/分词/长度（秒级，不加载权重）
 E:\agent\venv312\Scripts\python.exe tools\train\smoke_lora.py --dry-run

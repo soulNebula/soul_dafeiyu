@@ -10,7 +10,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(r"C:\Users\Administrator\Desktop\wx_box")
+ROOT = Path(r"C:\Users\Administrator\Desktop\SoulAgent")
 sys.path.insert(0, str(ROOT))
 
 from agi.inner import render, schema  # noqa: E402

@@ -65,7 +65,7 @@ C:\Python314\python.exe tools\audit_compliance.py
 **方法二（命令行）**：
 
 ```bat
-cd /d C:\Users\Administrator\Desktop\wx_box
+cd /d C:\Users\Administrator\Desktop\SoulAgent
 C:\Python314\python.exe app.py
 ```
 
@@ -252,7 +252,7 @@ C:\Python314\python.exe tools\audit_compliance.py
 ==================================================================
 wx_box 合规静态审计（只读 / 不注入 / 不写数据库 / 授权只读直读）
 ==================================================================
-项目根目录 : C:\Users\Administrator\Desktop\wx_box
+项目根目录 : C:\Users\Administrator\Desktop\SoulAgent
 扫描文件数 : 31 个 .py
 已排除目录 : .dsh-ops、.git、.idea、.mypy_cache、.pytest_cache、.venv、.vscode、WechatMoments、__pycache__、_refs、build、dist、env、log、logs、media、node_modules、recon、reference_weflow、venv
 已排除文件 : tools/audit_compliance.py（自身 pattern 表含禁用字样）

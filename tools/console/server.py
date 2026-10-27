@@ -621,6 +621,78 @@ def _with_model_hint(result: dict) -> dict:
     return data
 
 
+# --------------------------------------------------------------------------- #
+# P30：每日语料/训练门禁只读接口
+# --------------------------------------------------------------------------- #
+TRAIN_ROOT = ROOT / "agi" / "data" / "train"
+TRAIN_DAILY_DIR = TRAIN_ROOT / "daily"
+TRAIN_HISTORY_PATH = TRAIN_ROOT / "history.jsonl"
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def train_status() -> dict:
+    """今日/累计样本、最近训练、门禁状态（只读，不改任何文件）。"""
+    today = time.strftime("%Y-%m-%d")
+    today_rows = _read_jsonl(TRAIN_DAILY_DIR / f"{today}.jsonl")
+    daily_files = sorted(TRAIN_DAILY_DIR.glob("*.jsonl")) if TRAIN_DAILY_DIR.exists() else []
+    cumulative = sum(len(_read_jsonl(path)) for path in daily_files)
+    history = _read_jsonl(TRAIN_HISTORY_PATH)
+    last = history[-1] if history else None
+    gate: dict = {}
+    try:
+        try:
+            from tools.train import train_gate
+        except ImportError:  # 直接 `python tools/console/server.py` 时 repo root 不在 sys.path
+            import sys as _sys
+            if str(ROOT) not in _sys.path:
+                _sys.path.insert(0, str(ROOT))
+            from tools.train import train_gate
+        gate = train_gate.check_ready()
+    except Exception as exc:  # noqa: BLE001 - 页面只读观测，失败降级
+        gate = {"ready": None, "error": f"{type(exc).__name__}: {exc}"}
+    usable = sum(1 for row in today_rows
+                 if str(row.get("meta", {}).get("quality") or "") in ("positive", "correction"))
+    return {"ok": True, "today": {"date": today, "samples": len(today_rows),
+                                  "usable": usable},
+            "cumulative": {"samples": cumulative, "files": len(daily_files)},
+            "last_training": last, "gate": gate,
+            "next_ready": gate.get("next_ready") if isinstance(gate, dict) else None,
+            "hint": "只读展示；训练默认只计划，不自动执行"}
+
+
+def train_daily(date: str) -> dict:
+    """某天日报 + 语气总结 markdown 原文。"""
+    date = str(date or "").strip()
+    if not date:
+        date = time.strftime("%Y-%m-%d")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+        return {"ok": False, "error": "bad_date", "hint": "日期格式应为 YYYY-MM-DD"}
+    report = TRAIN_DAILY_DIR / f"{date}.md"
+    summary = TRAIN_DAILY_DIR / f"{date}.summary.md"
+    if not report.exists():
+        return {"ok": False, "error": "not_found", "date": date,
+                "hint": f"{date} 还没有日报（当天没有跑流水线？）"}
+    return {"ok": True, "date": date,
+            "report": report.read_text(encoding="utf-8"),
+            "summary": summary.read_text(encoding="utf-8") if summary.exists() else "",
+            "path": str(report)}
+
+
+
 
 def _config_view() -> dict:
     raw = gateway_config()
@@ -4073,6 +4145,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, tone_snapshot(self._limit(query, 100))); return
             if path == "/api/models":
                 self._json(200, models_snapshot()); return
+            # P30：每日语料/训练门禁只读接口
+            if path == "/api/train/status":
+                self._json(200, train_status()); return
+            if path == "/api/train/daily":
+                date = str((query.get("date") or [""])[0] or "")
+                result = train_daily(date)
+                self._json(200 if result.get("ok") else 404, result); return
             if path == "/api/config":
                 self._json(200, _config_view()); return
             if path == "/api/media/capabilities":

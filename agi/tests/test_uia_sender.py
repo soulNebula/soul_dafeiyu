@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """P0-send：.NET UIA 发送后端测试（mock ps1/subprocess/窗口，不碰真实微信）。"""
-from __future__ import annotations
 
 import subprocess
 from pathlib import Path
@@ -247,3 +246,263 @@ def test_smoke_is_read_only(monkeypatch):
     result = uia_sender.smoke("文件传输助手")
     assert result["ok"] is True and result["note"].startswith("只读")
     assert calls == ["contact", "input"]
+
+# -*- coding: utf-8 -*-
+"""P0-2：媒体发送 + 常驻 UIA worker 测试（全 mock，不碰真实微信）。"""
+
+import io
+import json
+import sys
+import time
+import types
+from pathlib import Path
+
+import pytest
+
+from agi.wechat_gateway import uia_sender
+
+
+# --------------------------------------------------------------------------- #
+# send_media：图片 / GIF / 输入框缺失 / 标题不匹配
+# --------------------------------------------------------------------------- #
+def _media_env(tmp_path, monkeypatch):
+    win = FakeWin()
+    clipboard = FakeClipboard()
+    monkeypatch.setattr(uia_sender, "available", lambda: True)
+    monkeypatch.setattr(uia_sender.win_send, "_load",
+                        lambda: ((win, clipboard), ""))
+    monkeypatch.setattr(uia_sender.win_send, "_verify_chat_open",
+                        lambda win_, info, contact: "ok")
+    monkeypatch.setattr(uia_sender.win_send, "_ctrl_v", lambda: None)
+    monkeypatch.setattr(uia_sender.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(uia_sender, "find_contact", lambda contact: {
+        "ok": True, "window": {"name": "微信"},
+        "contact": {"found": True, "x": 90, "y": 100, "w": 300, "h": 80},
+        "search_box": {"found": False}, "input": {"found": False}, "error": ""})
+    monkeypatch.setattr(uia_sender, "find_input", lambda: {
+        "ok": True, "contact": {"found": False},
+        "input": {"found": True, "x": 410, "y": 940, "w": 760, "h": 70},
+        "search_box": {"found": False}, "error": ""})
+    copied: list[str] = []
+    monkeypatch.setattr(uia_sender, "_copy_image_to_clipboard",
+                        lambda path: copied.append(str(path)) or True)
+    image = tmp_path / "pic.png"
+    image.write_bytes(b"png")
+    return {"win": win, "clipboard": clipboard, "copied": copied,
+            "cfg": {"fallback_enabled": True}, "image": image}
+
+
+def test_send_media_image_success(tmp_path, monkeypatch):
+    env = _media_env(tmp_path, monkeypatch)
+    out = uia_sender.send_media(
+        "文件传输助手", {"type": "image", "path": str(env["image"])}, env["cfg"])
+    assert out["ok"] is True and out["status"] == "sent"
+    assert out["type"] == "image" and out["animated"] is False
+    assert out["verified"] is True and out["sent"] is True
+    assert env["copied"] == [str(env["image"])]
+    assert env["clipboard"].texts == []          # 图片走 CF_DIB，不写文本剪贴板
+    assert env["win"].keys == [0x0D]             # 只回车发送
+    assert env["win"].clicks[0] == (240, 140)
+    assert env["win"].clicks[1] == (790, 975)
+
+
+def test_send_media_gif_marks_static(tmp_path, monkeypatch):
+    env = _media_env(tmp_path, monkeypatch)
+    gif = tmp_path / "a.gif"
+    gif.write_bytes(b"gif")
+    out = uia_sender.send_media(
+        "文件传输助手", {"type": "gif", "path": str(gif)}, env["cfg"])
+    assert out["ok"] is True and out["type"] == "gif"
+    assert out["animated"] is False
+    assert "静态" in out["warning"]
+
+
+def test_send_media_input_not_found_aborts(tmp_path, monkeypatch):
+    env = _media_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(uia_sender, "find_input", lambda: {
+        "ok": True, "contact": {"found": False}, "input": {"found": False},
+        "search_box": {"found": False}, "error": ""})
+    out = uia_sender.send_media(
+        "文件传输助手", {"type": "image", "path": str(env["image"])}, env["cfg"])
+    assert out["ok"] is False and out["error"] == "input_not_found"
+    assert env["copied"] == [] and env["win"].keys == []
+
+
+def test_send_media_title_mismatch_does_not_paste(tmp_path, monkeypatch):
+    env = _media_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(uia_sender.win_send, "_verify_chat_open",
+                        lambda win_, info, contact: "mismatch")
+    out = uia_sender.send_media(
+        "目标", {"type": "image", "path": str(env["image"])}, env["cfg"])
+    assert out["ok"] is False and "verify_mismatch" in out["error"]
+    assert env["copied"] == [] and env["win"].keys == []
+
+
+def test_send_media_missing_path_and_disabled(tmp_path):
+    item = {"type": "image", "path": str(tmp_path / "missing.png")}
+    out = uia_sender.send_media("目标", item, {"fallback_enabled": True})
+    assert out["ok"] is False and out["error"] == "media_path_missing"
+    disabled = uia_sender.send_media("目标", item, {"fallback_enabled": False})
+    assert disabled["status"] == "disabled"
+
+
+def test_copy_image_to_clipboard_uses_cf_dib(tmp_path, monkeypatch):
+    image = tmp_path / "x.png"
+    image.write_bytes(b"fake")
+
+    class FakeImage:
+        mode = "RGBA"
+
+        def __init__(self, path):
+            self.path = path
+
+        def convert(self, mode):
+            self.mode = mode
+            return self
+
+        def save(self, buf, fmt):
+            assert fmt == "BMP"
+            buf.write(b"BMPHEADER12345" + b"DIBDATA")
+
+    pil = types.ModuleType("PIL")
+    pil.Image = types.SimpleNamespace(open=lambda path: FakeImage(path))
+    win32clipboard = types.ModuleType("win32clipboard")
+    recorded: dict = {}
+    win32clipboard.OpenClipboard = lambda: recorded.setdefault("open", True)
+    win32clipboard.EmptyClipboard = lambda: recorded.setdefault("empty", True)
+    win32clipboard.SetClipboardData = lambda fmt, data: recorded.update(
+        {"fmt": fmt, "data": data})
+    win32clipboard.CloseClipboard = lambda: recorded.setdefault("close", True)
+    win32con = types.ModuleType("win32con")
+    win32con.CF_DIB = 8
+    monkeypatch.setitem(sys.modules, "PIL", pil)
+    monkeypatch.setitem(sys.modules, "win32clipboard", win32clipboard)
+    monkeypatch.setitem(sys.modules, "win32con", win32con)
+
+    assert uia_sender._copy_image_to_clipboard(image) is True
+    assert recorded["fmt"] == 8 and recorded["data"] == b"DIBDATA"
+    assert recorded["open"] and recorded["empty"] and recorded["close"]
+
+
+# --------------------------------------------------------------------------- #
+# UIAClient：正常 / 超时 / 崩溃重启
+# --------------------------------------------------------------------------- #
+class _FakeStdin(io.StringIO):
+    def flush(self):
+        super().flush()
+
+
+class _FakeProc:
+    def __init__(self, lines: list[bytes | str], *, hang: bool = False):
+        self.stdin = _FakeStdin()
+        self.stdout = io.StringIO("".join(
+            line.decode("utf-8") if isinstance(line, bytes) else line
+            for line in lines))
+        self._hang = hang
+        self.killed = False
+        self._reads = 0
+
+    def poll(self):
+        return None
+
+    def kill(self):
+        self.killed = True
+
+    def readline(self):  # 兼容真实 Popen 接口（client 内部通过 stdout.readline）
+        return self.stdout.readline()
+
+
+class _BlockingStdout:
+    def __init__(self, delay: float):
+        self.delay = delay
+
+    def readline(self):
+        time.sleep(self.delay)
+        return ""
+
+
+class _HangingProc(_FakeProc):
+    def __init__(self):
+        super().__init__([])
+        self.stdout = _BlockingStdout(5.0)
+
+
+def test_uiaclient_normal_request():
+    payload = '{"ok":true,"input":{"found":true,"x":1,"y":2,"w":3,"h":4}}\n'
+    proc = _FakeProc([payload])
+    client = uia_sender.UIAClient(script=Path("fake.ps1"),
+                                  spawn=lambda: proc, timeout=1.0)
+    result = client.find_input()
+    assert result["ok"] is True and result["input"]["found"] is True
+    assert client.starts == 1
+    assert json.loads(proc.stdin.getvalue().splitlines()[-1]) == {"cmd": "input"}
+    client.close()
+
+
+def test_uiaclient_timeout_kills_and_errors():
+    proc = _HangingProc()
+    client = uia_sender.UIAClient(script=Path("fake.ps1"),
+                                  spawn=lambda: proc, timeout=0.05)
+    result = client.find_input()
+    assert result["ok"] is False and result["error"] == "timeout"
+    assert proc.killed is True
+    client.close()
+
+
+def test_uiaclient_restarts_once_after_crash():
+    good = _FakeProc(
+        ['{"ok":true,"input":{"found":true,"x":9,"y":9,"w":9,"h":9}}\n'])
+    procs = [_FakeProc([""]), good]      # 第一次 EOF → 第二次成功
+    client = uia_sender.UIAClient(script=Path("fake.ps1"),
+                                  spawn=lambda: procs.pop(0), timeout=1.0)
+    result = client.find_input()
+    assert result["ok"] is True and result["input"]["x"] == 9
+    assert client.starts == 2 and client.restarts == 1
+    client.close()
+
+
+# --------------------------------------------------------------------------- #
+# server：媒体批失败 → UIA 逐条兜底
+# --------------------------------------------------------------------------- #
+def test_server_media_batch_uses_uia_fallback(tmp_path, monkeypatch):
+    from agi.wechat_gateway.server import Gateway
+    from agi.wechat_gateway import server as server_mod
+
+    image = tmp_path / "pic.png"
+    image.write_bytes(b"png")
+    py = tmp_path / "py.exe"
+    py.write_text("", encoding="utf-8")
+    monkeypatch.setattr(server_mod, "WXAUTO_PYTHON", py)
+
+    class _Proc:
+        stdout = ('{"items":[{"ok":false,"status":"failed","type":"image",'
+                  '"error":"wxauto boom"}]}')
+        stderr = ""
+
+    monkeypatch.setattr(server_mod.subprocess, "run",
+                        lambda *a, **k: _Proc())
+    media_calls: list[tuple] = []
+
+    def fake_send_media(contact, item, cfg):
+        media_calls.append((contact, dict(item)))
+        return {"ok": True, "status": "sent", "type": "image",
+                "animated": False, "sent": True, "method": "uia"}
+
+    monkeypatch.setattr(uia_sender, "send_media", fake_send_media)
+    gw = Gateway({
+        "enabled": True, "port": 801, "dry_run": False, "send_mode": "auto",
+        "media_enabled": True, "allowed_contacts": ["好友A"],
+        "monitored_contacts": ["好友A"], "admin_token": "tok_secure_123",
+        "drafts_path": str(tmp_path / "drafts.jsonl"),
+        "log_path": str(tmp_path / "gateway.log"),
+        "quiet_hours": [0, 0], "min_interval_s": 0,
+        "fallback_enabled": True, "fallback_send_mode": "uia",
+    }, stop_path=tmp_path / "STOP", config_path=tmp_path / "config.json")
+
+    batch = gw.send_media_batch("好友A", [{"type": "image", "path": str(image)}])
+    assert batch["ok"] is True and batch["status"] == "sent"
+    assert batch["sent"] == 1 and media_calls and media_calls[0][0] == "好友A"
+    item = batch["items"][0]
+    assert item["ok"] is True and "uia_media" in (item.get("fallback_used") or [])
+    assert any(e.get("kind") == "fallback" and e.get("method") == "uia_media"
+               for e in gw.recent)

@@ -1647,8 +1647,36 @@ class Gateway:
                           "error": error or "missing_result", "fallback_used": [], "used": None}
             result = dict(result)
             result.setdefault("type", str(item.get("type") or ""))
-            # ⑨a 窗口级兜底：wxauto4 失败时用剪贴板粘贴图片/文字（默认开启才走）
-            if not result.get("ok") and self.cfg.get("fallback_enabled") and                     str(self.cfg.get("fallback_mode") or "").strip().lower() == "auto":
+            # ⑨a UIA 兜底（P0-2）：fallback_enabled + fallback_send_mode=uia 时逐条走
+            # uia_sender：文本类用文字发送，图片/贴纸/GIF 用剪贴板粘贴媒体。
+            if (not result.get("ok") and self.cfg.get("fallback_enabled")
+                    and str(self.cfg.get("fallback_send_mode") or "").strip().lower() == "uia"):
+                try:
+                    from . import uia_sender
+                    kind = str(item.get("type") or "").strip().lower()
+                    if kind in media_mod.TEXT_TYPES:
+                        fb = uia_sender.send_to_contact(
+                            contact_name, str(item.get("text") or ""), self.cfg)
+                        method = "uia_text"
+                    else:
+                        fb = uia_sender.send_media(contact_name, item, self.cfg)
+                        method = "uia_media"
+                    if isinstance(fb, dict) and fb.get("ok"):
+                        result = {**result, **fb}
+                        result["error"] = ""
+                        result["error_key"] = ""
+                        result["fallback_used"] = list(
+                            result.get("fallback_used") or []) + [method]
+                        self._record("fallback", {
+                            "friend": contact_name, "status": fb.get("status"),
+                            "ok": True, "method": method,
+                            "type": kind, "animated": fb.get("animated"),
+                            "trigger": str(error)[:120]})
+                except Exception:  # noqa: BLE001 - 兜底失败保持原错误
+                    pass
+            # ⑨b 窗口级兜底：wxauto4 失败时用剪贴板粘贴图片/文字（默认开启才走）
+            if (not result.get("ok") and self.cfg.get("fallback_enabled")
+                    and str(self.cfg.get("fallback_mode") or "").strip().lower() == "auto"):
                 try:
                     from . import win_send as _win_send
                     fb = _win_send.send_media_via_window(contact_name, item, self.cfg)
@@ -1663,7 +1691,7 @@ class Gateway:
                             "method": "window_media",
                             "type": item.get("type"),
                             "trigger": str(error)[:120]})
-                except Exception as _exc:  # noqa: BLE001
+                except Exception:  # noqa: BLE001
                     pass
             results[index] = result
             self._record("send_media", {

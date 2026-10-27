@@ -120,6 +120,7 @@
         </div>
       </div>
     </div>
+    <div id="panel-resizer" title="拖动调整终端高度；双击折叠/展开"></div>
     <div id="panel-wrap">
       <div id="panel-tabs">
         <button class="ptab active" data-panel="terminal">终端</button>
@@ -851,7 +852,54 @@ function openPanel(name) {
 }
 $$('.ptab').forEach(t=> t.onclick = ()=> openPanel(t.dataset.panel));
 $('#panel-clear').onclick = ()=> { S.terminalText=''; setTerminal(''); };
-$('#panel-close').onclick = ()=> $('#panel-wrap').classList.toggle('collapsed');
+/* ---------- 终端面板：拖拽高度 / 双击折叠 / 记忆 ---------- */
+const PANEL_MIN = 60, PANEL_DEFAULT = 220, PANEL_STORE = 'idea_panel_height';
+function panelHeight() { return $('#panel-wrap').offsetHeight; }
+function setPanelHeight(h, save=true) {
+  const max = Math.round(window.innerHeight * 0.75);
+  h = Math.max(PANEL_MIN, Math.min(max, Math.round(h)));
+  $('#panel-wrap').style.height = h + 'px';
+  $('#panel-wrap').classList.remove('collapsed');
+  if (save) localStorage.setItem(PANEL_STORE, String(h));
+}
+function collapsePanel() {
+  const wrap = $('#panel-wrap');
+  if (wrap.classList.contains('collapsed')) {
+    const h = parseInt(localStorage.getItem(PANEL_STORE) || PANEL_DEFAULT, 10);
+    setPanelHeight(h || PANEL_DEFAULT, false);
+    $('#panel-close').textContent = '▾';
+  } else {
+    wrap.dataset.prevHeight = String(panelHeight());
+    wrap.classList.add('collapsed');
+    $('#panel-close').textContent = '▴';
+  }
+}
+(function initPanelHeight(){
+  const saved = parseInt(localStorage.getItem(PANEL_STORE) || '0', 10);
+  if (saved > 0) setPanelHeight(saved, false);
+})();
+(function initPanelDrag(){
+  const bar = $('#panel-resizer');
+  let dragging = false, startY = 0, startH = 0;
+  bar.addEventListener('mousedown', e=>{
+    if ($('#panel-wrap').classList.contains('collapsed')) { setPanelHeight(parseInt(localStorage.getItem(PANEL_STORE)||PANEL_DEFAULT,10), false); }
+    dragging = true; startY = e.clientY; startH = panelHeight();
+    document.body.style.cursor = 'row-resize';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', e=>{
+    if (!dragging) return;
+    const next = startH - (e.clientY - startY);
+    setPanelHeight(next, false);
+  });
+  window.addEventListener('mouseup', ()=>{
+    if (!dragging) return;
+    dragging = false; document.body.style.cursor = '';
+    localStorage.setItem(PANEL_STORE, String(panelHeight()));
+  });
+  bar.addEventListener('dblclick', collapsePanel);
+})();
+$('#panel-close').onclick = collapsePanel;
 
 async function loadAudit() {
   try {
@@ -864,6 +912,8 @@ async function loadAudit() {
 /* ================= 命令面板（简化） ================= */
 document.addEventListener('keydown', e=>{
   if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='s') { e.preventDefault(); saveActive(); }
+  // Ctrl+` 折叠/展开终端（VS Code 习惯）
+  if ((e.ctrlKey||e.metaKey) && e.key === '`') { e.preventDefault(); collapsePanel(); }
 });
 
 /* ================= 初始化 ================= */

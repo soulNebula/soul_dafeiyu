@@ -157,9 +157,14 @@ select:focus, input:focus, textarea:focus { border-color: var(--accent); }
 .overview-page h3 { font-weight: 400; color: var(--text-dim); }
 
 /* ---------- 面板 ---------- */
+#panel-resizer { height: 6px; flex-shrink: 0; cursor: row-resize; background: transparent;
+  position: relative; z-index: 6; }
+#panel-resizer::after { content: ''; position: absolute; left: 0; right: 0; top: 2px;
+  height: 2px; background: transparent; }
+#panel-resizer:hover::after { background: var(--accent); }
 #panel-wrap { height: 220px; border-top: 1px solid var(--border); background: var(--bg-panel);
   display: flex; flex-direction: column; flex-shrink: 0; }
-#panel-wrap.collapsed { height: 30px; }
+#panel-wrap.collapsed { height: 30px !important; }
 #panel-wrap.collapsed .panel-view { display: none; }
 #panel-tabs { height: 30px; display: flex; align-items: center; gap: 2px; padding: 0 8px;
   border-bottom: 1px solid var(--border); }

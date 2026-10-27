@@ -2,9 +2,12 @@
 """03 防幻觉：生成后的轻量规则校验，不重调大模型。"""
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from . import citation, db
 from .config import DB_PATH
@@ -154,7 +157,34 @@ def _rewrite(reply: str) -> tuple[str, list[str]]:
     return out, issues
 
 
-def check(reply: str, path: Path | str = DB_PATH, *, context: str = "") -> dict[str, Any]:
+def _record_citation_invalid(path: Path | str, removed: Iterable[str],
+                             reply: str) -> None:
+    """审计坏引用：raw_events(kind=citation_invalid)；失败不影响主链。"""
+    removed_list = [str(item) for item in (removed or [])]
+    if not removed_list:
+        return
+    try:
+        now = time.time()
+        rid = "RE-cite-" + hashlib.sha1(
+            (str(removed_list) + str(now)).encode("utf-8")).hexdigest()[:14]
+        payload = {"removed": removed_list, "reply": str(reply or "")[:300]}
+        con = db.connect(path)
+        try:
+            con.execute(
+                "INSERT OR REPLACE INTO raw_events(id,source,source_id,friend,"
+                "sender,kind,text,ts,meta_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                (rid, "selflearn", rid, "", "system", "citation_invalid",
+                 str(reply or "")[:500], now,
+                 json.dumps(payload, ensure_ascii=False)))
+            con.commit()
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001 - 审计失败不影响回复
+        pass
+
+
+def check(reply: str, path: Path | str = DB_PATH, *, context: str = "",
+          citation_ids: Iterable[str] | None = None) -> dict[str, Any]:
     """返回 {level, reply, issues}；L2 用安全回复，不重试。"""
     text = str(reply or "").strip()
     if not text:
@@ -186,10 +216,14 @@ def check(reply: str, path: Path | str = DB_PATH, *, context: str = "") -> dict[
             rewritten = rewritten.replace(word, "我不能保证")
     # 引用必须对应真实 message/memory；未知/失效引用删掉
     try:
-        checked = citation.validate_citations(rewritten, path)
+        checked = citation.validate_citations(
+            rewritten, path, allowed=citation_ids)
         if not checked.get("ok"):
             issues.append("bad_citation")
             rewritten = checked.get("reply") or rewritten
+            if citation.enabled():
+                _record_citation_invalid(path, checked.get("removed") or [],
+                                         rewritten)
     except Exception:  # noqa: BLE001
         pass
     if any(i.startswith("tool_claim") for i in issues) or len(issues) >= 2:

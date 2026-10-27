@@ -985,7 +985,10 @@ class SelfLearnAgent:
         if not crisis:
             guard_ctx = "\n".join([text] + [str(m.get("content") or "") for m in mems]
                                    + [str(m.get("text") or "") for m in recent[-6:]])
-            guard_info = guard.check(reply, self.path, context=guard_ctx)
+            guard_info = guard.check(
+                reply, self.path, context=guard_ctx,
+                citation_ids=citation.injected_ids(mems) if citation.enabled()
+                else None)
             if guard_info.get("level") in ("L1", "L2") and guard_info.get("issues") and self.client.available():
                 try:
                     judged = nli.verify(reply, [guard_ctx], self.client)
@@ -1327,8 +1330,16 @@ class SelfLearnAgent:
             if tier not in groups:
                 tier = memory.tier_of(mem.get("created_at"), now)
             groups[tier].append(mem)
-        rendered = {tier: memory.render_memories(group, now=now)
-                    for tier, group in groups.items()}
+        # P1-3：记忆引用闭环——给实际注入的记忆行加稳定短引用 [M-<hash8>]；
+        # 开关关闭时 rendered 与旧逻辑逐字节一致（不产生任何额外字符）。
+        cite_enabled = citation.enabled()
+        allowed_ids = citation.injected_ids(mems) if cite_enabled else set()
+        rendered: dict[str, list[str]] = {}
+        for tier, group in groups.items():
+            lines = memory.render_memories(group, now=now)
+            if cite_enabled and lines:
+                lines = citation.inject_lines(lines, group, allowed_ids)
+            rendered[tier] = lines
         dialog = _render_dialog(recent)
         research_block = ""
         if research_ctx:

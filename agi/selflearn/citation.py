@@ -6,6 +6,9 @@ prompt 里的每条记忆都要带一个稳定引用，模型只能复制、不�
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Iterable
@@ -31,6 +34,84 @@ def citation_id(memory: dict) -> str:
     if not memory_id:
         return ""
     return memory_id if memory_id.startswith("M-") else "M-" + memory_id
+
+
+def enabled() -> bool:
+    """开关 memory_citation_enabled（默认 true；env 优先，其次 selflearn config/wechat config）。"""
+    raw = os.environ.get("MEMORY_CITATION_ENABLED")
+    if raw is not None:
+        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+    try:
+        from . import config as sl_config
+        if hasattr(sl_config, "MEMORY_CITATION_ENABLED"):
+            value = getattr(sl_config, "MEMORY_CITATION_ENABLED")
+            if isinstance(value, str):
+                return value.strip().lower() in ("1", "true", "yes", "on")
+            return bool(value)
+    except Exception:  # noqa: BLE001
+        pass
+    # 运行期 wechat config（与 trace_enabled 等同一份本机配置）
+    try:
+        config_path = (Path(__file__).resolve().parents[2] / "agi" / "data"
+                       / "wechat" / "config.json")
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict) and "memory_citation_enabled" in payload:
+            value = payload.get("memory_citation_enabled")
+            if isinstance(value, str):
+                return value.strip().lower() in ("1", "true", "yes", "on")
+            return bool(value)
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+def short_citation_id(memory: dict, length: int = 8) -> str:
+    """一条记忆的**短**稳定引用：``M-`` + sha1(真实 id) 前 8 位。
+
+    - 用 memory 表 id（没有则 evidence_message_id）做 hash，稳定且不会泄露完整 id；
+    - 同一输入重复调用结果一致；无 id 返回空串（该条不注入引用）。
+    """
+    source = _text((memory or {}).get("id")) or _text(
+        (memory or {}).get("evidence_message_id"))
+    if not source:
+        return ""
+    digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:max(4, int(length))]
+    return "M-" + digest
+
+
+def injected_ids(mems: Iterable[dict] | None, limit: int = 10) -> set[str]:
+    """真正注入 prompt 的记忆短引用集合（≤limit 条，给 guard 校验用）。"""
+    ids: set[str] = set()
+    for memory in list(mems or [])[:max(0, int(limit))]:
+        if not isinstance(memory, dict):
+            continue
+        cid = short_citation_id(memory)
+        if cid:
+            ids.add(cid)
+    return ids
+
+
+def inject_lines(lines: Iterable[str], mems: Iterable[dict] | None,
+                 allowed: set[str] | None = None) -> list[str]:
+    """把 ``[M-xxxx]`` 插到 memory.render_memories 的每行开头（``- `` 之后）。
+
+    - 只注入 ``allowed`` 里的短引用；没有 id/不在 allowed 的行原样返回；
+    - lines 与 mems 一一对应；长度不一致时只处理共同前缀。
+    """
+    line_list = list(lines or [])
+    mem_list = list(mems or [])
+    out: list[str] = []
+    for index, line in enumerate(line_list):
+        memory = mem_list[index] if index < len(mem_list) else None
+        cid = short_citation_id(memory) if isinstance(memory, dict) else ""
+        if not cid or (allowed is not None and cid not in allowed):
+            out.append(line)
+            continue
+        if line.startswith("- "):
+            out.append("- [" + cid + "] " + line[2:])
+        else:
+            out.append("[" + cid + "] " + line)
+    return out
 
 
 def format_memory_context(mems: Iterable[dict] | None) -> str:
@@ -62,12 +143,22 @@ def format_memory_context(mems: Iterable[dict] | None) -> str:
     return "\n".join(lines) or EMPTY_MEMORY
 
 
-def _resolvable(ids: list[str], path: Path | str) -> set[str]:
-    """返回 ids 中在库里有真实来源的引用：message 存在，或 memory 存在且 active。"""
+def _resolvable(ids: list[str], path: Path | str,
+                allowed: Iterable[str] | None = None) -> set[str]:
+    """返回 ids 中在库里有真实来源的引用：message 存在，或 memory 存在且 active。
+
+    ``allowed``：本次实际注入 prompt 的短引用（``M-<hash8>``）；命中即视为有效
+    （短 hash 无法直接按库 id 反查，必须由调用方提供本次注入集合）。
+    """
     if not ids:
         return set()
+    allowed_set = set()
+    for item in allowed or []:
+        value = _text(item)
+        if value:
+            allowed_set.add(value if value.startswith("M-") else "M-" + value)
+    valid: set[str] = {cid for cid in ids if cid in allowed_set}
     marks = ",".join("?" for _ in ids)
-    valid: set[str] = set()
     con = db.connect(path)
     try:
         for row in con.execute(f"SELECT id FROM messages WHERE id IN ({marks})", ids):
@@ -88,7 +179,8 @@ def _resolvable(ids: list[str], path: Path | str) -> set[str]:
     return valid
 
 
-def validate_citations(reply: str, path: Path | str = DB_PATH) -> dict[str, Any]:
+def validate_citations(reply: str, path: Path | str = DB_PATH,
+                       allowed: Iterable[str] | None = None) -> dict[str, Any]:
     """删掉回复里指向不存在 / 已失效 message 或 memory 的 ``[M-...]`` 引用。
 
     返回 ``{"ok": bool, "reply": str, "removed": list[str]}``：
@@ -107,7 +199,7 @@ def validate_citations(reply: str, path: Path | str = DB_PATH) -> dict[str, Any]
             ids.append(cid)
     if not ids:
         return {"ok": True, "reply": text, "removed": []}
-    valid = _resolvable(ids, path)
+    valid = _resolvable(ids, path, allowed)
     removed = [cid for cid in ids if cid not in valid]
     out = text
     if removed:

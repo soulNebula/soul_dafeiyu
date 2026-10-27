@@ -57,3 +57,18 @@
    - 配置：`fallback_enabled=true` / `fallback_mode=auto` / `fallback_send_mode=uia`；`send_mode` 仍为 `confirm`（草稿需人工批准）。
    - 旧 OCR 坐标兜底（`win_send.send_to_contact`）保留但不再默认使用（会因搜索框聚焦失败发错人）。
 
+## 7. 记忆引用闭环（P1-3）
+
+prompt 里实际注入的记忆行带稳定短引用，模型回复可引用、guard 再校验，形成防幻觉闭环：
+
+- **注入**：`agi/selflearn/chat.py::_prompt` 在 `memory.render_memories` 的行首加
+  `[M-<hash8>]`（hash 自 memory 表 id，稳定、不泄露完整 id；最多注入 10 条，只注入实际进 prompt 的）；
+  示例：`- [M-4c0f75d0] [user/preference] 我喜欢晚上写东西（依据：…）`
+- **校验**：`agi/selflearn/guard.py::check(..., citation_ids=...)` 调用
+  `citation.validate_citations`；本次注入的短 id 视为有效，回复里指向不存在/未注入的
+  `[M-xxx]` 按 citation 原策略**删除引用**（不删整句），并写 `raw_events(kind="citation_invalid")` 审计。
+- **开关**：`memory_citation_enabled`（默认 true；env `MEMORY_CITATION_ENABLED` 优先）——
+  关闭时不注入 id、不调用 inject、不写新的 citation 审计，prompt 与旧逻辑一致。
+- **测试**：`agi/tests/test_memory_citation.py`（11 条：短 id 稳定、≤10 注入、
+  allowed 校验、无效引用删除+审计、开关关闭无注入/无新审计）；
+  回归：`pytest agi/tests -q -k "chat or guard or citation or memory"` → **354 passed**。

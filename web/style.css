@@ -292,3 +292,11 @@ select:focus, input:focus, textarea:focus { border-color: var(--accent); }
 .git-settings .btn { margin-top: 2px; }
 .btn.danger { background: #5a1f1f; border-color: #7a2a2a; color: #ffd7d5; }
 .btn.danger:hover { border-color: var(--err); }
+
+
+/* ---------- 草稿箱 ---------- */
+.draft-item { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  margin: 0 8px 8px; background: #1f1f29; }
+.draft-item:hover { border-color: var(--accent); }
+.draft-text { margin-bottom: 3px; word-break: break-all; }
+.draft-actions { display: flex; gap: 6px; margin-top: 6px; }

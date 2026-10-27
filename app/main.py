@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audit, config_store, datastudio, files_api, gitstudio, memstudio, paths, services
+from . import audit, config_store, datastudio, files_api, gitstudio, memstudio, paths, services, wechat_proxy
 
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
 
@@ -445,6 +445,42 @@ def git_secret_scan():
 @app.post("/api/wb/git/secret-scan", dependencies=[Depends(require_token)])
 def git_secret_scan_files(body: dict):
     return gitstudio.secret_scan(body.get("files"))
+
+
+# ------------------------------------------------------------------ 微信草稿箱（confirm 模式）
+@app.get("/api/wb/wechat/drafts", dependencies=[Depends(require_token)])
+def wechat_drafts():
+    return wechat_proxy.drafts()
+
+
+@app.post("/api/wb/wechat/drafts/{draft_id}/approve", dependencies=[Depends(require_token)])
+def wechat_approve(draft_id: str, force_quiet: bool = True):
+    out = wechat_proxy.approve(draft_id, force_quiet=force_quiet)
+    audit.record("wechat.draft_approve", draft_id, actor="workbench",
+                 meta={"ok": out.get("ok"), "status": out.get("status"),
+                       "error": out.get("error")})
+    return out
+
+
+@app.post("/api/wb/wechat/drafts/{draft_id}/reject", dependencies=[Depends(require_token)])
+def wechat_reject(draft_id: str):
+    out = wechat_proxy.reject(draft_id)
+    audit.record("wechat.draft_reject", draft_id, actor="workbench",
+                 meta={"ok": out.get("ok")})
+    return out
+
+
+@app.post("/api/wb/wechat/send", dependencies=[Depends(require_token)])
+def wechat_send(body: dict):
+    contact = str(body.get("contact") or "")
+    text = str(body.get("text") or "")
+    if not contact or not text:
+        raise HTTPException(status_code=400, detail="contact/text 不能为空")
+    out = wechat_proxy.send_now(contact, text,
+                                force_quiet=bool(body.get("force_quiet", True)))
+    audit.record("wechat.send", contact, actor="workbench",
+                 meta={"ok": out.get("ok"), "status": out.get("status")})
+    return out
 
 
 # ------------------------------------------------------------------ 审计

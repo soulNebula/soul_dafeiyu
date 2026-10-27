@@ -39,6 +39,7 @@
     <button class="ab-item" data-view="git" title="源代码管理">⑂</button>
     <button class="ab-item" data-view="data" title="数据工作室">🗄</button>
     <button class="ab-item" data-view="mem" title="记忆工作室">🧠</button>
+    <button class="ab-item" data-view="drafts" title="微信草稿箱（confirm 模式）">💬</button>
     <button class="ab-item" data-view="run" title="运行/调试">▶</button>
     <button class="ab-item" data-view="services" title="服务">⚙</button>
     <button class="ab-item" data-view="config" title="设置">🎛</button>
@@ -73,6 +74,16 @@
       </div>
       <div class="side-title" style="margin-top:12px">Git 设置</div>
       <div id="git-settings" class="git-settings muted small">未连接</div>
+    </div>
+
+    <div id="side-drafts" class="side-view">
+      <div class="side-title">微信草稿箱</div>
+      <div class="side-sub">
+        <button class="mini-btn" id="drafts-refresh">刷新</button>
+        <span id="drafts-count" class="muted small"></span>
+      </div>
+      <div class="muted small" style="padding:0 10px 6px">confirm 模式下她的回复只落草稿，批准才真正发出。</div>
+      <div id="drafts-list" class="tree"></div>
     </div>
 
     <div id="side-run" class="side-view">
@@ -306,6 +317,7 @@ function showView(name) {
   if (name==='data') loadDataDbs();
   if (name==='mem') loadMemSidebar();
   if (name==='services') loadServices();
+  if (name==='drafts') loadDrafts();
   if (name==='config') loadConfig();
   if (name==='overview') openOverviewPage();
   if (name==='run') loadJobs();
@@ -639,6 +651,45 @@ async function doCommit() {
   else toast('提交失败：'+(r.error||r.detail||''),'err');
   loadGit();
 }
+
+/* ================= 微信草稿箱 ================= */
+async function loadDrafts() {
+  const box = $('#drafts-list');
+  if (!box) return;
+  box.innerHTML = '<div class="muted small">加载中…</div>';
+  try {
+    const r = await api('/api/wb/wechat/drafts');
+    const items = r.items || [];
+    $('#drafts-count').textContent = `${items.length} 条`;
+    if (!items.length) { box.innerHTML = '<div class="muted small">（没有待批准草稿）</div>'; return; }
+    box.innerHTML = items.map(d => `
+      <div class="draft-item" data-id="${esc(d.id)}">
+        <div class="draft-text">${esc(d.text || '')}</div>
+        <div class="muted small">${esc(d.contact || '')} · ${esc(d.reason || '')} · ${new Date((d.ts||0)*1000).toLocaleString()}</div>
+        <div class="draft-actions">
+          <button class="mini-btn" data-draft-act="approve">批准发送</button>
+          <button class="mini-btn danger" data-draft-act="reject">拒绝</button>
+        </div>
+      </div>`).join('');
+    box.querySelectorAll('[data-draft-act]').forEach(btn => {
+      btn.onclick = async () => {
+        const item = btn.closest('.draft-item');
+        const id = item.dataset.id;
+        const act = btn.dataset.draftAct;
+        btn.disabled = true;
+        try {
+          const r2 = await api(`/api/wb/wechat/drafts/${encodeURIComponent(id)}/${act}`, {method:'POST'});
+          if (r2.ok) toast(act==='approve' ? `已批准（${r2.status||'ok'}）` : '已拒绝', 'ok');
+          else toast(`失败：${r2.error || r2.status || 'unknown'}`, 'err');
+        } catch(e) { toast(e.message, 'err'); }
+        await loadDrafts();
+      };
+    });
+  } catch(e) {
+    box.innerHTML = `<div class="muted small">加载失败：${esc(e.message)}</div>`;
+  }
+}
+$('#drafts-refresh').onclick = loadDrafts;
 
 /* ================= 服务 ================= */
 async function loadServices() {

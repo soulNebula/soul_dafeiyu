@@ -146,3 +146,23 @@ def test_read_utf8_file(tmp_path, monkeypatch):
     monkeypatch.setattr(files_api, "roots", lambda: {"tmp": str(tmp_path)})
     r = files_api.read_file("tmp", "a.md")
     assert r["ok"] and r["encoding"] == "utf-8" and "中文" in r["text"]
+
+
+# ---------------------------------------------------------------- 微信草稿代理
+def test_wechat_proxy_maps_drafts_and_actions(monkeypatch):
+    from app import wechat_proxy
+    calls = []
+
+    def fake_call(method, path, payload=None):
+        calls.append((method, path, payload))
+        if path == "/api/drafts":
+            return {"ok": True, "drafts": [{"id": "D1", "text": "hi"}]}
+        return {"ok": True, "status": "planned"}
+
+    monkeypatch.setattr(wechat_proxy, "_call", fake_call)
+    d = wechat_proxy.drafts()
+    assert d["ok"] and d["count"] == 1 and d["items"][0]["id"] == "D1"
+    assert wechat_proxy.approve("D1", force_quiet=True)["status"] == "planned"
+    assert calls[-1][2] == {"id": "D1", "confirm": True, "force_quiet": True}
+    wechat_proxy.reject("D1")
+    assert calls[-1] == ("POST", "/api/draft/reject", {"id": "D1"})

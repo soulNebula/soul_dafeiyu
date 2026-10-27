@@ -102,7 +102,17 @@ def _system_prompt(path: Path | str | None = None) -> str:
         mood_line = mood_judge.context_line(path)
     except Exception:  # noqa: BLE001 - 心情注入失败不影响主链
         mood_line = ""
-    return base + time_line + (mood_line or "")
+    # P32：自我叙事（core 层）短句注入；无叙事时返回空串 → 输出逐字节不变
+    narrative_line = ""
+    try:
+        from . import self_narrative
+        narrative_line = self_narrative.inject_line(db_path=path)
+    except Exception:  # noqa: BLE001 - 注入失败不影响主链
+        narrative_line = ""
+    prompt = base + time_line + (mood_line or "")
+    if narrative_line:
+        prompt = prompt.rstrip() + "\n\n" + narrative_line
+    return prompt
 
 
 def _id(prefix: str, *parts) -> str:
@@ -124,6 +134,65 @@ def _is_meaningless(reply: Any) -> bool:
     if value in MEANINGLESS_REPLIES:
         return True
     return _visible_len(value) <= 2
+
+
+DIALOG_HISTORY_LIMIT = 12          # P29：聊天 prompt 历史 6→12
+DIALOG_CHAR_BUDGET = 2000          # 历史文本预算（字符）；超了从旧往新丢
+
+
+def _is_pat_event(value: object) -> bool:
+    """P29 兜底：文本是否像拍一拍事件（真机可能是 kind=text 的 ``"X" 拍了拍我``）。"""
+    text = str(value or "")
+    if not text or "拍了拍" not in text or len(text) > 120:
+        return False
+    try:
+        from agi.wechat_gateway.receiver import looks_like_pat
+        return bool(looks_like_pat(text))
+    except Exception:  # noqa: BLE001 - 不依赖 gateway 也能兜底
+        return bool(re.search(r"拍了拍(我|你|他|她|它|对方|咱|俺)", text))
+
+
+def _render_dialog(recent: list[dict] | None, *,
+                   limit: int = DIALOG_HISTORY_LIMIT,
+                   char_budget: int = DIALOG_CHAR_BUDGET) -> str:
+    """最近对话（默认最多 12 条）；按字符预算从旧往新丢弃，保留最近上下文。"""
+    rows = list(recent or [])[-int(limit):]
+    lines: list[str] = []
+    total = 0
+    for message in reversed(rows):
+        line = f"{'用户' if message.get('role') == 'user' else '你'}：{message.get('text') or ''}"
+        if lines and total + len(line) > int(char_budget):
+            break
+        lines.append(line)
+        total += len(line)
+    return "\n".join(reversed(lines)) or "（第一次对话）"
+
+
+def _image_history_text(display: str, caption: str) -> str:
+    """P29：图片消息进历史时带图片理解摘要（无摘要保持 [图片]）。"""
+    base = str(display or "[图片]")
+    cap = " ".join(str(caption or "").split())[:120]
+    if not cap:
+        return base
+    if "[图片]" in base:
+        return base.replace("[图片]", f"[图片] 图里是{cap}", 1)
+    return f"{base}（图里是{cap}）"
+
+
+def _update_message_text(path: Path | str, message_id: str, text: str) -> None:
+    """回填某条消息的文本（图片 caption 写回历史）；失败静默。"""
+    if not message_id or not text:
+        return
+    con = None
+    try:
+        con = db.connect(path)
+        con.execute("UPDATE messages SET text=? WHERE id=?", (str(text), str(message_id)))
+        con.commit()
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        if con is not None:
+            con.close()
 
 
 def _recent_assistant_texts(path: Path | str, limit: int = 5) -> list[str]:
@@ -424,12 +493,14 @@ class SelfLearnAgent:
 
     def _simple_reply(self, user_id: str, reply: str, st: dict, attachment,
                       *, skill_gate=None, identity=False, had_image=False,
-                      t0: float | None = None) -> dict[str, Any]:
+                      t0: float | None = None, allow_short: bool = False) -> dict[str, Any]:
         # 先口语化再清句号：voice_polished 事件里保留的 before 是原始回复串
         reply = self._polish_outbound(reply)
         reply = style_profile.strip_periods(reply)
         # P0-26：禁止「？」/纯标点/复读占位进入最终外发文本
-        reply = _ensure_meaningful(reply, user_text="", path=self.path)
+        # P29：拍一拍固定回「干嘛？」属于有意义的事件回应，跳过「≤2 字=占位」兜底
+        if not allow_short:
+            reply = _ensure_meaningful(reply, user_text="", path=self.path)
         assistant_id = memory.store_message(self.path, "assistant", reply)
         try:
             live_ingest.record_message(self.path, "assistant", reply, message_id=assistant_id)
@@ -466,7 +537,7 @@ class SelfLearnAgent:
                 "generation": {"two_stage": False, "claims": []},
                 "state": st, "trust": trust.snapshot(self.path),
                 "affect": affect.snapshot(self.path),
-                "history": memory.recent_messages(self.path, limit=6),
+                "history": memory.recent_messages(self.path, limit=12),
                 "had_image": had_image}
 
     def send(self, text: str, *, image: str | None = None,
@@ -498,12 +569,20 @@ class SelfLearnAgent:
             live_ingest.record_message(self.path, "user", display, message_id=user_id)
         except Exception:  # noqa: BLE001
             pass
-        # P22：拍一拍只是"拍了一下"，不是一句话；回一句短话，不走正常生成
-        # 2026-10-27 用户定：回"干嘛？"（比"嗯"更像本人）
-        if "[拍一拍]" in text:
+        # P34：用户提到未来事件（面试/体检/搬家/下周…）→ 攒一条 progress_check 欲望
+        if not proactive:
+            try:
+                from . import urges as _urges
+                _urges.observe_future_event(self.path, text)
+            except Exception:  # noqa: BLE001 - 欲望触发失败不影响回复
+                pass
+        # P22/P29：拍一拍只是"拍了一下"，不是一句话；回"干嘛？"，不走正常生成。
+        # 兜底：即使上游没转成 [拍一拍]（真机曾有 kind=text 的 "X" 拍了拍我），
+        # 只要文本像拍一拍事件也走这里；普通"拍"字（拍照/拍了拍肩）不误判。
+        if "[拍一拍]" in text or _is_pat_event(text):
             st = state.load(self.path)
             return self._simple_reply(user_id, "干嘛？", st, None,
-                                      had_image=False, t0=t0)
+                                      had_image=False, t0=t0, allow_short=True)
         correction_info = None
         try:
             correction_info = memory.apply_correction(self.path, text)
@@ -527,6 +606,13 @@ class SelfLearnAgent:
         except Exception:  # noqa: BLE001
             pass
         st = state.load(self.path)
+        # P34：心情极值（≥0.8 / ≤0.3）→ 攒一条 light 欲望
+        if not proactive:
+            try:
+                from . import urges as _urges
+                _urges.observe_mood(self.path, float(st["self"].get("mood", 0.55)))
+            except Exception:  # noqa: BLE001
+                pass
         try:
             affect.decay(self.path)
         except Exception:  # noqa: BLE001
@@ -603,7 +689,7 @@ class SelfLearnAgent:
                     "generation": {"two_stage": False, "claims": []},
                     "state": st, "trust": trust.snapshot(self.path),
                 "affect": affect.snapshot(self.path),
-                    "history": memory.recent_messages(self.path, limit=6),
+                    "history": memory.recent_messages(self.path, limit=12),
                     "had_image": bool(image)}
         new_memories = memory.extract_user_memories(self.path, self.client, text, user_id)
         claim_result = claim_ingest.ingest(self.path, self.client, text, user_id)
@@ -640,7 +726,7 @@ class SelfLearnAgent:
             retrieval_ctx = ""
         pctx = personality.context(self.path)
         variant = skills.pick_variant(self.path, self.rng)
-        recent = memory.recent_messages(self.path, limit=10)
+        recent = memory.recent_messages(self.path, limit=12)
         crisis = bool(st["boundary"]["crisis"])
         lessons = errors.context(self.path)
         for _cat in ("too_long", "too_many_questions", "pushy", "bad_feedback"):
@@ -1062,6 +1148,13 @@ class SelfLearnAgent:
                     existing_caption=reply, db_path=self.path)
             except Exception:  # noqa: BLE001
                 media_info = None
+        # P29：图片理解摘要写回 user 消息 → 下一轮历史里是 [图片] 图里是…（无摘要保持 [图片]）
+        if image and isinstance(media_info, dict) and media_info.get("caption"):
+            try:
+                _update_message_text(self.path, user_id,
+                                     _image_history_text(display, media_info["caption"]))
+            except Exception:  # noqa: BLE001
+                pass
         if image_memory:
             new_memories = list(new_memories) + [image_memory]
         turn_id = _id("T-", user_id, time.time(), turn_reply)
@@ -1190,7 +1283,7 @@ class SelfLearnAgent:
                 "skill_gate": locals().get("sk_gate"),
                 "state": st, "trust": trust.snapshot(self.path),
                 "affect": affect.snapshot(self.path),
-                "history": memory.recent_messages(self.path, limit=6),
+                "history": memory.recent_messages(self.path, limit=12),
                 "had_image": bool(image)}
 
     @staticmethod
@@ -1212,10 +1305,7 @@ class SelfLearnAgent:
             groups[tier].append(mem)
         rendered = {tier: memory.render_memories(group, now=now)
                     for tier, group in groups.items()}
-        dialog = "\n".join(
-            f"{'用户' if m['role'] == 'user' else '你'}：{m['text']}"
-            for m in recent[-8:]
-        ) or "（第一次对话）"
+        dialog = _render_dialog(recent)
         research_block = ""
         if research_ctx:
             research_block = (

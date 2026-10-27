@@ -397,3 +397,128 @@ def test_surf_session_without_signal_does_not_push(tmp_path, monkeypatch):
         now=time.time(), db_path=db_path, fetch_fn=fetch_stub,
         observe_fn=lambda texts, **kw: None, keywords=["杂项"])
     assert urges.list_active(db_path, now=time.time(), limit=5) == []
+
+
+# --------------------------------------------------------------------------- #
+# P35：worker 接线（urge 优先发 / spend / 失败降强度 / 无货回退 / 开关）
+# --------------------------------------------------------------------------- #
+from agi.selflearn import ticker  # noqa: E402
+from agi.wechat_gateway import config as gw_cfg  # noqa: E402
+from agi.wechat_gateway import proactive_worker  # noqa: E402
+
+
+class _FakeGateway:
+    def __init__(self, **cfg):
+        self.cfg = {
+            "proactive_enabled": True,
+            "allowed_contacts": ["好友A"],
+            "proactive_contacts": [],
+            "pacing_enabled": False,
+            "initiative_enabled": True,
+            "urges_enabled": True,
+            "proactive_probability_min": 1.0,
+            "proactive_probability_max": 1.0,
+            **cfg,
+        }
+        self.sent = []
+        self.records = []
+        self.last_turns = {}
+        self.last_proactive = {}
+        self.log_path = None
+
+    def _send(self, contact, text, **kw):
+        self.sent.append((contact, text, kw))
+        return {"ok": True, "status": "sent"}
+
+    def _record(self, kind, data):
+        self.records.append((kind, data))
+
+
+def _tick_available():
+    return {"ok": True, "ran": True, "gate": {"allowed": True},
+            "proactive": {"ok": True, "available": True,
+                          "messages": ["在吗"], "message": "在吗",
+                          "turn_id": "T-1", "kind": "light"}}
+
+
+def _prep(monkeypatch, g):
+    db_path = gw_cfg.contact_db("好友A")
+    monkeypatch.setattr(proactive_worker.initiative, "daily_cap",
+                        lambda *a, **k: {"daily_cap": 12, "user_msgs_today": 0})
+    monkeypatch.setattr(proactive_worker.initiative, "today_sent",
+                        lambda *a, **k: 0)
+    monkeypatch.setattr(proactive_worker.initiative, "drive",
+                        lambda *a, **k: {"familiarity": 0.6, "mood": 0.7,
+                                         "trust": 0.6, "drive": 0.8,
+                                         "days_active": 5, "total_user_msgs": 100,
+                                         "recent_7d_msgs": 20})
+    monkeypatch.setattr(proactive_worker.initiative, "adjust",
+                        lambda cfg, drive, **k: {
+                            "applied": True, "send": True, "reason": "drive",
+                            "probability": 0.8, "interval_min_s": 1800,
+                            "interval_max_s": 3600, "drive": 0.8,
+                            "familiarity": 0.6, "mood": 0.7, "trust": 0.6,
+                            "daily_cap": 12, "today_sent": 0,
+                            "conservative": False})
+    return db_path
+
+
+def test_worker_urge_fires_and_spends(path, monkeypatch):
+    g = _FakeGateway()
+    db_path = _prep(monkeypatch, g)
+    urge_id = urges.push(db_path, "light", "想说一句", intensity=0.7,
+                   contact="好友A", now=1_800_000_000.0)
+    assert urge_id
+    called: list[str] = []
+    monkeypatch.setattr(ticker, "run_once",
+                        lambda *a, **k: called.append("tick") or _tick_available())
+    out = proactive_worker.run_cycle(g, client=object(), now=1_800_000_000.0)
+    assert called == []                       # urge 优先，不再走随机 tick
+    assert out["sent"] == 1 and out["urge"]["spent"] is True
+    assert out["urge"]["kind"] == "light"
+    assert _row(db_path, urge_id)["status"] == "spent"
+    assert any(k == "urge_fired" for k, _ in g.records)
+    assert g.sent and g.sent[0][1]
+
+
+def test_worker_urge_failure_halves_intensity(path, monkeypatch):
+    g = _FakeGateway()
+    db_path = _prep(monkeypatch, g)
+    urge_id = urges.push(db_path, "light", "想说一句", intensity=0.8,
+                   contact="好友A", now=1_800_000_000.0)
+    monkeypatch.setattr(g, "_send",
+                        lambda contact, text, **kw: {"ok": False,
+                                                     "status": "failed",
+                                                     "error": "boom"})
+    monkeypatch.setattr(ticker, "run_once",
+                        lambda *a, **k: _tick_available())
+    out = proactive_worker.run_cycle(g, client=object(), now=1_800_000_000.0)
+    row = _row(db_path, urge_id)
+    assert row["status"] == "active"
+    assert row["intensity"] == pytest.approx(0.4, abs=0.02)
+    assert out["urge"]["spent"] is False
+    assert any(k == "urge_failed" for k, _ in g.records)
+
+
+def test_worker_without_urge_falls_back_to_random(path, monkeypatch):
+    g = _FakeGateway()
+    _prep(monkeypatch, g)
+    called: list[str] = []
+    monkeypatch.setattr(ticker, "run_once",
+                        lambda *a, **k: called.append("tick") or _tick_available())
+    monkeypatch.setattr(proactive_worker.random, "random", lambda: 0.0)
+    out = proactive_worker.run_cycle(g, client=object(), now=1_800_000_000.0)
+    assert called == ["tick"]
+    assert out["sent"] == 1
+
+
+def test_worker_urges_disabled_ignores_queue(path, monkeypatch):
+    g = _FakeGateway(urges_enabled=False)
+    db_path = _prep(monkeypatch, g)
+    urges.push(db_path, "light", "想说一句", intensity=0.9,
+                   contact="好友A", now=1_800_000_000.0)
+    called: list[str] = []
+    monkeypatch.setattr(ticker, "run_once",
+                        lambda *a, **k: called.append("tick") or _tick_available())
+    proactive_worker.run_cycle(g, client=object(), now=1_800_000_000.0)
+    assert called == ["tick"]

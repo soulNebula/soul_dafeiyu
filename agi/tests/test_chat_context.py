@@ -122,3 +122,206 @@ def test_probe_main_json(tmp_path, capsys):
     assert code == 0
     assert payload["summary"]["pat_inbound"] == 1
     assert payload["summary"]["guard_fallback_replies"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# P35：chat.py 收尾接线（拍一拍兜底 / 历史 12 / 图片 caption / 叙事注入 / 触发点）
+# --------------------------------------------------------------------------- #
+import io  # noqa: E402
+
+import pytest  # noqa: E402
+
+from agi.selflearn import chat, generation, self_narrative  # noqa: E402
+from agi.selflearn import urges as urges_mod  # noqa: E402
+
+PNG_1PX = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
+           "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+
+class _FakeClient:
+    model = "fake"
+
+    def available(self):
+        return True
+
+    def chat(self, messages, **kwargs):
+        return {"ok": True, "text": "好啊", "usage": {}}
+
+
+def _agent(tmp_path: Path) -> chat.SelfLearnAgent:
+    return chat.SelfLearnAgent(tmp_path / "selflearn.sqlite3", client=_FakeClient())
+
+
+def _capture_reply(monkeypatch):
+    seen: dict = {}
+
+    def fake_simple(self, user_id, reply, st, attachment, **kwargs):
+        seen["reply"] = reply
+        return {"ok": True, "reply": reply, "bubbles": [reply]}
+
+    monkeypatch.setattr(chat.SelfLearnAgent, "_simple_reply", fake_simple)
+    return seen
+
+
+def test_chat_pat_fallback_raw_variants(tmp_path, monkeypatch):
+    seen = _capture_reply(monkeypatch)
+    agent = _agent(tmp_path)
+    for raw in ('"好友A" 拍了拍我', '"好友A"拍了拍我',
+                "「好友A」拍了拍我", "拍了拍你", "我拍了拍你"):
+        out = agent.send(raw)
+        assert out["reply"] == "干嘛？", raw
+        assert seen["reply"] == "干嘛？"
+
+
+def test_chat_pat_does_not_misfire_on_normal_text(tmp_path, monkeypatch):
+    captured: dict = {}
+
+    def fake_generate(client, system, prompt, memories, **kwargs):
+        captured["prompt"] = prompt
+        return {"ok": True, "text": "拍出来应该挺好看的，光线不错"}, {
+            "two_stage": False, "claims": []}
+
+    monkeypatch.setattr(generation, "generate", fake_generate)
+    agent = _agent(tmp_path)
+    out = agent.send("今天拍了拍照，光线不错")
+    assert out["reply"] != "干嘛？"
+    assert "拍了拍" in captured["prompt"]  # 原文进 prompt，但没走 [拍一拍] 分支
+
+
+def test_render_dialog_keeps_12_and_budget():
+    rows = [{"role": "user" if i % 2 else "assistant", "text": f"消息{i}"}
+            for i in range(20)]
+    dialog = chat._render_dialog(rows)
+    assert len(dialog.splitlines()) <= 12
+    huge = [{"role": "user", "text": "长" * 500} for _ in range(12)]
+    small = chat._render_dialog(huge)
+    assert len(small) <= chat.DIALOG_CHAR_BUDGET + 20
+
+
+def test_chat_history_uses_12_messages(tmp_path, monkeypatch):
+    captured: dict = {}
+
+    def fake_generate(client, system, prompt, memories, **kwargs):
+        captured["prompt"] = prompt
+        return {"ok": True, "text": "拍出来应该挺好看的，光线不错"}, {
+            "two_stage": False, "claims": []}
+
+    monkeypatch.setattr(generation, "generate", fake_generate)
+    base = tmp_path / "selflearn.sqlite3"
+    db.connect(base)
+    for i in range(14):
+        memory.store_message(base, "user", f"第{i}条")
+    agent = chat.SelfLearnAgent(base, client=_FakeClient())
+    agent.send("现在呢")
+    prompt = captured["prompt"]
+    # 12 条历史里：第 2~13 条应出现，最早的第 0/1 条被挤出
+    assert "第13条" in prompt and "第3条" in prompt
+    assert "第0条" not in prompt and "第1条" not in prompt
+
+
+def test_image_caption_goes_into_history(tmp_path, monkeypatch):
+    from agi.selflearn import image_understanding
+
+    monkeypatch.setattr(image_understanding, "describe_image",
+                        lambda *a, **k: {"ok": True, "caption": "一盘寿司和仙人掌"})
+    agent = _agent(tmp_path)
+    agent.send("", image="data:image/png;base64," + PNG_1PX)
+    rows = memory.recent_messages(agent.path, limit=5)
+    user_rows = [r for r in rows if r["role"] == "user"]
+    assert user_rows and "图里是一盘寿司和仙人掌" in user_rows[-1]["text"]
+
+
+def test_system_prompt_narrative_injection(tmp_path, monkeypatch):
+    path = tmp_path / "selflearn.sqlite3"
+    db.connect(path)
+    monkeypatch.setattr(chat, "mood_judge", type("M", (), {
+        "context_line": staticmethod(lambda _p: "")}))
+    monkeypatch.setattr("agi.selflearn.config.time_context_enabled", lambda: False)
+
+    monkeypatch.setattr(self_narrative, "inject_line", lambda **kw: "")
+    baseline = chat._system_prompt(path)
+    monkeypatch.setattr(self_narrative, "inject_line",
+                        lambda **kw: "你最近是这样理解自己的：想陪着他慢慢走。")
+    injected = chat._system_prompt(path)
+    assert injected == baseline + "\n\n你最近是这样理解自己的：想陪着他慢慢走。"
+
+
+def test_chat_triggers_future_event_and_mood(tmp_path, monkeypatch):
+    future_calls: list[str] = []
+    mood_calls: list[float] = []
+    monkeypatch.setattr(urges_mod, "observe_future_event",
+                        lambda path, text, **kw: future_calls.append(text))
+    monkeypatch.setattr(urges_mod, "observe_mood",
+                        lambda path, mood, **kw: mood_calls.append(float(mood)))
+    monkeypatch.setattr(generation, "generate",
+                        lambda *a, **k: ({"ok": True, "text": "嗯"},
+                                         {"two_stage": False, "claims": []}))
+    agent = _agent(tmp_path)
+    agent.send("明天要面试，有点紧张")
+    assert future_calls and "面试" in future_calls[-1]
+    assert mood_calls
+
+
+def test_gateway_narrative_tick_and_routes(tmp_path, monkeypatch):
+    from agi.wechat_gateway.server import Gateway, make_handler
+
+    gw = Gateway({
+        "enabled": True, "port": 801, "dry_run": True, "admin_token": "tok",
+        "allowed_contacts": ["好友A"], "monitored_contacts": ["好友A"],
+        "drafts_path": str(tmp_path / "drafts.jsonl"),
+        "log_path": str(tmp_path / "gateway.log"),
+        "narrative_enabled": True})
+    called: list[dict] = []
+    monkeypatch.setattr(self_narrative, "maybe_weekly",
+                        lambda **kw: {"should_run": True, "week": "2026-W44"})
+    monkeypatch.setattr(self_narrative, "weekly_review",
+                        lambda **kw: called.append(kw) or {
+                            "ok": True, "week": "2026-W44", "skipped": False,
+                            "changed": True, "llm": "fake", "narrative": "n" * 80})
+    retry = gw._narrative_tick(1_800_000_000.0)
+    assert called and retry > 1_800_000_000.0
+    assert any(e.get("kind") == "narrative_review" for e in gw.recent)
+
+    disabled = Gateway({"enabled": True, "narrative_enabled": False,
+                        "allowed_contacts": ["好友A"],
+                        "monitored_contacts": ["好友A"],
+                        "drafts_path": str(tmp_path / "d2.jsonl"),
+                        "log_path": str(tmp_path / "g2.log")})
+    monkeypatch.setattr(self_narrative, "maybe_weekly",
+                        lambda **kw: called.append(kw) or {"should_run": True})
+    assert disabled._narrative_tick(1_800_000_000.0) == 0.0
+
+    handler_cls = make_handler(gw)
+
+    def _get(path, token="tok"):
+        handler = handler_cls.__new__(handler_cls)
+        handler.path = path
+        handler.command = "GET"
+        handler.requestline = f"GET {path} HTTP/1.1"
+        handler.request_version = "HTTP/1.1"
+        handler.close_connection = True
+        handler.wfile = io.BytesIO()
+        handler._headers_buffer = []
+        handler.rfile = io.BytesIO(b"")
+        handler.headers = {"Host": "127.0.0.1:801", "Content-Length": "0"}
+        if token:
+            handler.headers["X-Admin-Token"] = token
+        handler.do_GET()
+        raw = handler.wfile.getvalue().decode("utf-8")
+        head, _, payload = raw.partition("\r\n\r\n")
+        status = int(head.split(" ")[1]) if head else 0
+        return status, json.loads(payload) if payload.strip() else None
+
+    status, data = _get("/api/urges/status?contact=好友A")
+    assert status == 200 and "items" in data and data["contact"] == "好友A"
+    status, data = _get("/api/initiative/status?contact=好友A")
+    assert status == 200 and "drive" in data
+    status, _data = _get("/api/urges/status?contact=好友A", token=None)
+    assert status == 401
+
+
+def test_chat_pat_real_simple_reply_returns_ganma(tmp_path):
+    """不 mock _simple_reply：确认「干嘛？」不会被 P0-26「≤2字占位」兜底改写。"""
+    agent = _agent(tmp_path)
+    out = agent.send('"好友A" 拍了拍我')
+    assert out["reply"] == "干嘛？"

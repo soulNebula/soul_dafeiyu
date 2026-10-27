@@ -1941,3 +1941,25 @@ def test_media_page_no_asset_block_and_library_selector(write_env):
     assert "本页只负责发送与导入" in app_js
     assert "library-missing" in app_js          # 素材库页自身的文件缺失兜底仍保留
     assert ".library-grid" in style
+
+
+# ============================================================ P35 growth routes
+import types  # noqa: E402
+
+
+def test_growth_routes_401_and_200(write_env, monkeypatch):
+    fake = types.SimpleNamespace(
+        growth_narrative=lambda: {"ok": True, "text": "叙事", "history": []},
+        growth_status=lambda enabled=True: {"ok": True, "enabled": bool(enabled),
+                                            "last_week": "2026-W43"})
+    monkeypatch.setattr(console, "_load_growth_api", lambda: fake)
+
+    for path in ("/api/growth/narrative", "/api/growth/status"):
+        status, data = _call("GET", path)
+        assert status == 401 and data["ok"] is False
+        status, data = _call("GET", path, token="tok")
+        assert status == 200 and data["ok"] is True
+
+    monkeypatch.setattr(console, "_load_growth_api", lambda: None)
+    status, data = _call("GET", "/api/growth/narrative", token="tok")
+    assert status == 501 and data["ok"] is False

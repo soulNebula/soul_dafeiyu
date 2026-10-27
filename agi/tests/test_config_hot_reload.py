@@ -23,6 +23,14 @@ from agi.wechat_gateway.server import Gateway, make_handler
 # --------------------------------------------------------------------------- #
 # 夹具：配置路径/STOP 路径全部落 tmp（与 config.json 同目录）
 # --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _deterministic_probability(monkeypatch):
+    """P35：P33 initiative 会把 base=1.0 的概率乘 drive 系数（约 0.81），
+    这些用例验证热加载/STOP 而非概率，固定 random=0 避免 45% 概率性失败。"""
+    monkeypatch.setattr(proactive_worker.random, "random", lambda: 0.0)
+    monkeypatch.setattr(proactive_worker.random, "uniform", lambda lo, hi: lo)
+
+
 @pytest.fixture
 def cfg_path(tmp_path, monkeypatch):
     path = tmp_path / "wechat" / "config.json"

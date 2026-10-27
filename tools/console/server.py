@@ -3867,6 +3867,40 @@ def _load_trace_api():
     return None
 
 
+def _load_growth_api():
+    """加载同目录 growth_api.py；不存在返回 None（P32 路由降级为 501）。"""
+    try:
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        target = here / "growth_api.py"
+        if target.is_file():
+            spec = importlib.util.spec_from_file_location("console_growth_api", target)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                return module
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def growth_dispatch(name: str, query: dict) -> dict:
+    """把 /api/growth/* 转给 growth_api（只读；实现缺失时返回 501 语义）。"""
+    module = _load_growth_api()
+    if module is None:
+        return {"ok": False, "error": "growth_backend_unavailable",
+                "hint": "自我叙事 helper 尚未就绪（tools/console/growth_api.py）"}
+    try:
+        if name == "narrative":
+            return module.growth_narrative()
+        config = gateway_config()
+        enabled = bool(config.get("narrative_enabled", True))
+        return module.growth_status(enabled=enabled)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "growth_api_error",
+                "hint": f"{type(exc).__name__}: {exc}"}
+
+
 def trace_dispatch(path: str, query: dict) -> dict:
     """把 /api/trace/* 转给 trace_api.handle_trace(suffix, query)。
 
@@ -4148,6 +4182,16 @@ class Handler(BaseHTTPRequestHandler):
             # P30：每日语料/训练门禁只读接口
             if path == "/api/train/status":
                 self._json(200, train_status()); return
+            # P32：自我叙事/成长只读接口（控制台「成长」页用；需 admin token）
+            if path in ("/api/growth/narrative", "/api/growth/status"):
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                result = growth_dispatch(
+                    "narrative" if path.endswith("/narrative") else "status", query)
+                code = 501 if str(result.get("error") or "").startswith(
+                    "growth_backend_unavailable") else (
+                    200 if result.get("ok", True) else 500)
+                self._json(code, result); return
             if path == "/api/train/daily":
                 date = str((query.get("date") or [""])[0] or "")
                 result = train_daily(date)

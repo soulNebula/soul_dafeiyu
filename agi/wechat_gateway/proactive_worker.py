@@ -26,6 +26,7 @@ from typing import Any
 from agi.selflearn import db as _selflearn_db
 from agi.selflearn import pacing
 from agi.selflearn import initiative
+from agi.selflearn import urges
 
 from . import sendclass
 
@@ -372,6 +373,57 @@ def _record_video_share(gateway, contact: str, pro: dict, *, delivered: bool,
     return marked
 
 
+def _urge_text(urge: dict) -> str:
+    """P34：把一条欲望变成一句可发的话（简单、可离线；复杂文案仍走原生成链）。"""
+    kind = str((urge or {}).get("kind") or "")
+    topic = str((urge or {}).get("topic") or "").strip()
+    payload = (urge or {}).get("payload") or {}
+    try:
+        from agi.selflearn import proactive as _pro
+        if kind == "light":
+            return str(_pro._safe_fallback("light"))[:60]
+        if kind == "progress_check":
+            anchor_text = topic or str(payload.get("source_text") or "")[:20]
+            return str(_pro._safe_fallback("progress_check", anchor=anchor_text))[:120]
+        if kind in ("share", "share_thought"):
+            return str(_pro._safe_fallback("share", topic=topic or "最近的事"))[:120]
+    except Exception:  # noqa: BLE001
+        pass
+    if kind == "ask_about":
+        return f"想问你个事：{topic}"[:120]
+    if kind == "share_find":
+        summary = str(payload.get("summary") or topic or "刚看到的东西").strip()
+        return f"刚看到{summary[:80]}，挺想跟你说说"[:160]
+    if kind == "progress_check":
+        return f"想起你说「{topic}」，现在进展怎么样了？"[:120]
+    if kind == "light":
+        return "在吗"
+    return ""
+
+
+def _urge_penalize(db_path, urge_id: str, *, now: float,
+                   factor: float = 0.5) -> float:
+    """发送失败：强度 ×factor，attempts+1（不 spend）。返回新强度（失败 0）。"""
+    try:
+        from agi.selflearn import urges as _urges
+        con = _urges._conn(db_path)
+        try:
+            row = con.execute("SELECT intensity FROM urges WHERE id=?",
+                              (str(urge_id or ""),)).fetchone()
+            if row is None:
+                return 0.0
+            value = max(0.0, float(row[0] or 0.0) * float(factor))
+            con.execute("UPDATE urges SET intensity=?, attempts=attempts+1, "
+                        "last_attempt_at=?, updated_at=? WHERE id=?",
+                        (round(value, 4), now, now, str(urge_id or "")))
+            con.commit()
+            return round(value, 4)
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any]:
     """对所有（或指定）联系人跑一次主动循环；返回统计，不抛异常。"""
     from agi.selflearn import proactive as selflearn_proactive
@@ -474,7 +526,7 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                            "media_sent": 0,
                            "initiative": None, "daily_cap": None,
                            "today_sent": 0, "initiative_suppressed": False,
-                           "failed_any": False,
+                           "urge": None, "failed_any": False,
                            "breaker_open": False, "skipped": []}
     idle_gap = float(gateway.cfg.get("proactive_idle_s") or 0)
     media_sent = 0
@@ -483,6 +535,13 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
     out["initiative_suppressed"] = suppress_drive
     for contact in contact_list:
         db_path = gw_cfg.contact_db(contact)
+        # P34：每轮先衰减/清理内驱力队列（失败静默，不影响发送）
+        if gateway.cfg.get("urges_enabled", True):
+            try:
+                urges.decay(db_path, now)
+                urges.cleanup(db_path, now)
+            except Exception:  # noqa: BLE001
+                pass
         # P33-补：按当天 user 消息数动态算日上限（旧 pacing_daily_cap 兼容成下限）
         cap_info = initiative.daily_cap(db_path, now, config=gateway.cfg)
         daily_cap = int(cap_info["daily_cap"])
@@ -596,6 +655,60 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                 gateway._record("initiative_adjusted", dict(out["initiative"]))
             except Exception:  # noqa: BLE001
                 pass
+        # P34：内驱力优先——drive≥0.35 且不在静默/日上限（init_adjustment 已校验）
+        urge_info = None
+        if gateway.cfg.get("urges_enabled", True) and drive_info is not None \
+                and float(drive_info.get("drive") or 0.0) >= 0.35 \
+                and not suppress_drive and init_adjustment is not None \
+                and init_adjustment.get("send", True):
+            try:
+                urge_info = urges.top(db_path, now)
+            except Exception:  # noqa: BLE001
+                urge_info = None
+        if urge_info:
+            content = _urge_text(urge_info)
+            urge_status: dict[str, Any] = {}
+            if content:
+                try:
+                    urge_status = gateway._send(contact, content, proactive=True)
+                except Exception as exc:  # noqa: BLE001
+                    urge_status = {"ok": False, "status": "failed",
+                                   "error": f"{type(exc).__name__}: {exc}"}
+            urge_class = sendclass.classify_send_result(urge_status)
+            base_event = {
+                "contact": contact,
+                "kind": str(urge_info.get("kind") or ""),
+                "topic": str(urge_info.get("topic") or "")[:80],
+                "intensity": float(urge_info.get("intensity") or 0.0),
+                "attempts": int(urge_info.get("attempts") or 0) + 1,
+                "text": str(content or "")[:120],
+                "status": urge_status.get("status"),
+                "classification": urge_class,
+                "drive": float(drive_info.get("drive") or 0.0),
+            }
+            if content and urge_class == sendclass.DELIVERED:
+                try:
+                    urges.spend(db_path, str(urge_info.get("id") or ""), now)
+                except Exception:  # noqa: BLE001
+                    pass
+                out["sent"] += 1
+                out["urge"] = dict(base_event, spent=True)
+                try:
+                    gateway._record("urge_fired", out["urge"])
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                new_intensity = _urge_penalize(
+                    db_path, str(urge_info.get("id") or ""), now=now)
+                out["urge"] = dict(base_event, spent=False,
+                                   intensity_after=new_intensity,
+                                   error=str(urge_status.get("error") or "")[:120])
+                out["failed_any"] = True
+                try:
+                    gateway._record("urge_failed", out["urge"])
+                except Exception:  # noqa: BLE001
+                    pass
+            continue
         roll = random.random()
         if roll >= probability:
             # 跳过时不查库、不调 LLM，只记一条带 contact 和本次 p 的日志
@@ -624,9 +737,13 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             out["skipped"].append({"contact": contact, "reason": cooldown})
             continue
         try:
-            tick = ticker.run_once(db_path, client, now=now,
-                                   drive=(float(drive_info.get("drive"))
-                                          if drive_info else None)) or {}
+            if drive_info:
+                # P33：drive 透传给候选选择；旧测试 monkeypatch 的 run_once 可能
+                # 只接受 (path, client, now)，无 drive 时保持旧调用形状。
+                tick = ticker.run_once(db_path, client, now=now,
+                                       drive=float(drive_info.get("drive"))) or {}
+            else:
+                tick = ticker.run_once(db_path, client, now=now) or {}
         except Exception as exc:  # noqa: BLE001 - 单个联系人失败不影响其他人
             out["skipped"].append({"contact": contact,
                                    "reason": f"{type(exc).__name__}: {str(exc)[:120]}"})

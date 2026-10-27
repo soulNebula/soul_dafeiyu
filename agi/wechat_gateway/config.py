@@ -77,6 +77,9 @@ DEFAULTS = {
     "pacing_min_interval_s": 1200,
     # P33：主动度（关系熟悉度×心情×信任 → 概率↑/间隔↓/分享偏好）；默认开
     "initiative_enabled": True,
+    # P32/P34：自我叙事周复盘 / 内驱力队列（默认开；可独立关闭）
+    "narrative_enabled": True,
+    "urges_enabled": True,
     "proactive_until_ts": 0,
     "reply_debounce_ms": 2000,
     # 对方多久之前还在说话就不主动（秒）：15 分钟，对齐 qq-bridge 的静默要求

@@ -188,6 +188,8 @@ class Gateway:
         self.surf_thread = None
         # P31：日记线程（每晚 23:00 后写今天；engine 停也允许写）
         self.diary_thread = None
+        # P32：自我叙事周复盘线程（周日 23:30；engine 停也允许）
+        self.narrative_thread = None
         self.pending: dict[str, dict] = {}
         self.last_inbound: dict[str, float] = {}
         self.send_times = deque()
@@ -263,6 +265,16 @@ class Gateway:
                 self.diary_thread.start()
             except Exception as exc:  # noqa: BLE001
                 self._record("diary_start_failed",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
+        # P32：自我叙事周复盘（周日 23:30 后；engine 停也允许，写叙事不打扰用户）
+        if self.cfg.get("narrative_enabled", True) and not (
+                self.narrative_thread and self.narrative_thread.is_alive()):
+            try:
+                self.narrative_thread = threading.Thread(
+                    target=self._narrative_loop, name="gateway-narrative", daemon=True)
+                self.narrative_thread.start()
+            except Exception as exc:  # noqa: BLE001
+                self._record("narrative_start_failed",
                              {"error": f"{type(exc).__name__}: {exc}"[:200]})
         self.ready = True
         self._record("gateway_started", {"allowed": allowed, "monitored": monitored,
@@ -733,6 +745,15 @@ class Gateway:
             return
         self._record("inbound", {"friend": msg.get("friend"), "text": msg.get("text"),
                                   "id": msg.get("id")})
+        # P34：用户回复 → 内驱力队列里该联系人的 active 欲望「被满足」
+        if self.cfg.get("urges_enabled", True):
+            try:
+                from agi.selflearn import urges as _urges
+                contact = str(msg.get("friend") or "")
+                if contact:
+                    _urges.satisfy(cfg.contact_db(contact), contact)
+            except Exception:  # noqa: BLE001 - 欲望满足失败不影响回复
+                pass
         if self.cfg.get("complaint_stop", True) and control.is_complaint(str(msg.get("text") or "")):
             self.cfg["stop"] = True
             self._record("complaint_circuit", {"friend": msg.get("friend"),
@@ -835,6 +856,46 @@ class Gateway:
         retry_at = 0.0
         while not self.stop_event.is_set():
             retry_at = self._diary_tick(time.time(), retry_at)
+            self.stop_event.wait(60.0)
+
+    def _narrative_tick(self, now: float | None = None,
+                        retry_at: float = 0.0) -> float:
+        """P32：单次周复盘检查（周日 23:30 后、本周未跑才跑；便于测试/诊断）。
+
+        - ``narrative_enabled`` 独立开关（默认 true）；
+        - 幂等：本周 weekly md 已存在 → maybe_weekly 返回 already_ran，不重复调 API；
+        - 失败退避 30 分钟；异常不致命；**不看 engine_enabled**（写叙事不打扰用户）。
+        """
+        now = time.time() if now is None else float(now)
+        if not bool(self.cfg.get("narrative_enabled", True)) or now < retry_at:
+            return retry_at
+        try:
+            from datetime import datetime
+            from agi.selflearn import self_narrative
+            check = self_narrative.maybe_weekly(
+                now=datetime.now(), enabled=bool(self.cfg.get("narrative_enabled", True)))
+            if not check.get("should_run"):
+                return retry_at
+            result = self_narrative.weekly_review()
+            self._record("narrative_review", {
+                "week": result.get("week"),
+                "ok": bool(result.get("ok")),
+                "skipped": bool(result.get("skipped")),
+                "changed": bool(result.get("changed")),
+                "llm": result.get("llm"),
+                "narrative_chars": len(str(result.get("narrative") or "")),
+                "error": str(result.get("error") or "")[:200]})
+            return now + 1800
+        except Exception as exc:  # noqa: BLE001 - 周复盘挂了不影响网关
+            self._record("narrative_error",
+                         {"error": f"{type(exc).__name__}: {exc}"[:200]})
+            return now + 1800
+
+    def _narrative_loop(self) -> None:
+        """P32：周日 23:30 后跑一次周复盘（每 60s 看一次；engine 停也照跑）。"""
+        retry_at = 0.0
+        while not self.stop_event.is_set():
+            retry_at = self._narrative_tick(time.time(), retry_at)
             self.stop_event.wait(60.0)
 
     def _work(self) -> None:
@@ -1761,6 +1822,42 @@ def make_handler(gateway: Gateway):
             # P25：网上冲浪状态（因子/今日投骰/下次时刻/最近 session）
             if path == "/api/surf/status":
                 self._json(200, gateway.surf_status())
+                return
+            # P33/P34：主动度 + 内驱力队列只读状态（控制台可显示「她今天多想找你」）
+            if path == "/api/initiative/status":
+                contact = str(self._query_param("contact", "") or "")
+                allowed = [str(x) for x in (gateway.cfg.get("allowed_contacts") or [])]
+                if not contact and allowed:
+                    contact = allowed[0]
+                if not contact:
+                    self._json(400, {"ok": False, "error": "contact is required"})
+                    return
+                try:
+                    from agi.selflearn import initiative
+                    result = initiative.status(cfg.contact_db(contact),
+                                               time.time(), config=gateway.cfg)
+                    result["contact"] = contact
+                    self._json(200, result)
+                except Exception as exc:  # noqa: BLE001
+                    self._json(500, {"ok": False,
+                                     "error": f"{type(exc).__name__}: {exc}"[:200]})
+                return
+            if path == "/api/urges/status":
+                contact = str(self._query_param("contact", "") or "")
+                allowed = [str(x) for x in (gateway.cfg.get("allowed_contacts") or [])]
+                if not contact and allowed:
+                    contact = allowed[0]
+                if not contact:
+                    self._json(400, {"ok": False, "error": "contact is required"})
+                    return
+                try:
+                    from agi.selflearn import urges
+                    result = urges.status(cfg.contact_db(contact), contact=contact)
+                    result["contact"] = contact
+                    self._json(200, result)
+                except Exception as exc:  # noqa: BLE001
+                    self._json(500, {"ok": False,
+                                     "error": f"{type(exc).__name__}: {exc}"[:200]})
                 return
             # P31：小鱼的日记（只读；/api/diary/write 走 POST）
             if path == "/api/diary/latest":

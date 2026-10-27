@@ -110,8 +110,7 @@
       <div id="welcome" class="welcome">
         <div class="welcome-inner">
           <div class="welcome-logo">◈ IDEA</div>
-          <div class="welcome-sub">SoulAgent 工作台 · VS Code 风格</div>
-          <div class="welcome-grid">
+          <div class="welcome-grid" id="welcome-grid">
             <div class="wc" data-cmd="explorer"><b>资源管理器</b><span>浏览/编辑项目文件</span></div>
             <div class="wc" data-cmd="git"><b>源代码管理</b><span>暂存/提交/分支/推送</span></div>
             <div class="wc" data-cmd="run"><b>运行</b><span>运行 Python/PyTorch 脚本</span></div>
@@ -237,6 +236,12 @@ async function connect() {
   }
 }
 
+/* 欢迎页卡片 → 打开对应视图 */
+document.addEventListener('click', e=>{
+  const card = e.target.closest('.wc');
+  if (card && card.dataset.cmd) showView(card.dataset.cmd);
+});
+
 /* ================= 活动栏 / 侧栏 ================= */
 const VIEWS = ['explorer','git','run','services','config','overview'];
 function showView(name) {
@@ -245,7 +250,7 @@ function showView(name) {
   if (name==='git') loadGit();
   if (name==='services') loadServices();
   if (name==='config') loadConfig();
-  if (name==='overview') loadOverview();
+  if (name==='overview') openOverviewPage();
   if (name==='run') loadJobs();
 }
 $$('#activitybar .ab-item[data-view]').forEach(b=> b.onclick = ()=> showView(b.dataset.view));
@@ -695,10 +700,7 @@ async function loadOverview() {
     <div>服务：${running}/${(d.services||[]).length}</div>
     <div>Git：${esc(d.git.branch||'-')} ${d.git.dirty?'(有变更)':'(干净)'}</div>
     <div>配置：${esc(d.config_path||'')}</div>`;
-  const key = 'overview:home';
-  let tab = S.tabs.find(t=>t.rel===key);
-  if (!tab) { tab={rel:key,root:'overview',name:'总览',text:'',dirty:false}; S.tabs.push(tab); }
-  tab.html = `<div class="overview-page">
+  S.overviewHtml = `<div class="overview-page">
     <h2>总览</h2>
     <div class="ov-grid">
       <div class="ov-card"><div class="muted small">项目目录</div><div>${esc(d.soulagent)}</div></div>
@@ -709,7 +711,22 @@ async function loadOverview() {
     <h3>服务</h3>
     <div class="ov-grid">${(d.services||[]).map(s=>`<div class="ov-card"><b>${esc(s.label)}</b><div class="muted small">:${s.port} ${s.running?'运行':'停止'}</div></div>`).join('')}</div>
   </div>`;
-  if (S.activeTab === null) { S.activeTab = key; showHtmlTab(tab); renderTabs(); }
+  const existing = S.tabs.find(t=>t.rel==='overview:home');
+  if (existing) { existing.html = S.overviewHtml; }
+}
+
+async function openOverviewPage() {
+  await loadOverview();
+  const key = 'overview:home';
+  let tab = S.tabs.find(t=>t.rel===key);
+  if (!tab) {
+    tab = {rel:key, root:'overview', name:'总览', text:'', dirty:false};
+    S.tabs.push(tab);
+  }
+  tab.html = S.overviewHtml || '';
+  S.activeTab = key;
+  showHtmlTab(tab);
+  renderTabs();
 }
 
 /* ================= 通用：HTML 标签页 / 文本标签页 ================= */

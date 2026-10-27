@@ -1,0 +1,14 @@
+# 本地运行数据
+.data/
+*.db
+*.sqlite3
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# 环境/密钥
+.env
+*.local.json
+# 前端构建（M4 之后）
+web/dist/
+node_modules/

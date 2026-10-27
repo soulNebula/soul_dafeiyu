@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IDEA · SoulAgent 工作台</title>
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">IDEA <span>· SoulAgent 工作台</span></div>
+  <div class="right">
+    <input id="token" type="password" placeholder="管理令牌" autocomplete="off">
+    <button id="connect" class="btn primary">连接</button>
+    <span id="statusDot" class="dot"></span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="overview">总览</button>
+  <button class="tab" data-tab="services">服务</button>
+  <button class="tab" data-tab="config">配置</button>
+  <button class="tab" data-tab="git">Git</button>
+  <button class="tab" data-tab="audit">审计</button>
+</nav>
+
+<main>
+  <section id="tab-overview" class="panel active">
+    <div class="grid" id="overview-cards"></div>
+    <pre id="overview-raw" class="muted"></pre>
+  </section>
+
+  <section id="tab-services" class="panel">
+    <div class="grid" id="services"></div>
+  </section>
+
+  <section id="tab-config" class="panel">
+    <div class="row">
+      <input id="config-filter" placeholder="搜索配置项…" style="flex:1">
+      <button id="config-save" class="btn primary">保存改动</button>
+      <button id="config-reset" class="btn">还原</button>
+    </div>
+    <div id="config-form"></div>
+    <div class="card">
+      <div class="card-title">配置备份（保存前自动留档）</div>
+      <div id="config-backups" class="muted small"></div>
+    </div>
+  </section>
+
+  <section id="tab-git" class="panel">
+    <div class="grid" id="git-cards"></div>
+    <div class="card">
+      <div class="card-title">提交</div>
+      <div class="row">
+        <input id="git-message" placeholder="提交信息（留空自动生成）" style="flex:1">
+        <label class="check"><input id="git-push" type="checkbox"> 提交后推送</label>
+        <button id="git-commit" class="btn primary">提交</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">最近提交</div>
+      <div id="git-log" class="muted small"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Diff</div>
+      <pre id="git-diff" class="diff"></pre>
+    </div>
+  </section>
+
+  <section id="tab-audit" class="panel">
+    <div class="row">
+      <button id="audit-refresh" class="btn">刷新</button>
+    </div>
+    <div id="audit" class="muted small"></div>
+  </section>
+</main>
+
+<div id="toast" class="toast"></div>
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-title"><span id="modal-title">日志</span><button id="modal-close" class="btn small">关闭</button></div>
+    <pre id="modal-body" class="logs"></pre>
+  </div>
+</div>
+
+<script src="/web/app.js"></script>
+</body>
+</html>

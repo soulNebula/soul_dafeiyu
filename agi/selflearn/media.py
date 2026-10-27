@@ -12,8 +12,20 @@ from . import db
 from .config import DATA_DIR, DB_PATH
 
 MEDIA_DIR = DATA_DIR / "media"
+#: P23：聊天图片与素材库物理分离；save_image 只落这里。
+CHAT_MEDIA_DIR = DATA_DIR / "media_chat"
 MAX_BYTES = 12 * 1024 * 1024
 _DATA_RE = re.compile(r"^data:image/(png|jpeg|jpg|webp|gif);base64,(.+)$", re.S)
+
+
+def chat_media_dir() -> Path:
+    """聊天图片目录（不进素材库扫描）。"""
+    return CHAT_MEDIA_DIR
+
+
+def library_media_dir() -> Path:
+    """素材库目录（只放人工/导入素材；聊天图不再写这里）。"""
+    return MEDIA_DIR
 
 
 def save_image(data_url: str, message_id: str | None = None,
@@ -30,8 +42,8 @@ def save_image(data_url: str, message_id: str | None = None,
         raise ValueError("图片为空或超过 12MB")
     sha = hashlib.sha256(raw).hexdigest()
     ext = "jpg" if subtype in ("jpeg", "jpg") else subtype
-    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-    target = MEDIA_DIR / f"{sha[:24]}.{ext}"
+    CHAT_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    target = CHAT_MEDIA_DIR / f"{sha[:24]}.{ext}"
     if not target.exists():
         target.write_bytes(raw)
     aid = "ATT-" + sha[:16]

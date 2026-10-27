@@ -20,6 +20,8 @@ from agi.selflearn import config, db
 
 ROOT = Path(__file__).resolve().parents[2]
 MEDIA_DIR = config.DATA_DIR / "media"
+#: P23：聊天图片目录，永不进入素材库扫描/导入
+CHAT_MEDIA_DIR = config.DATA_DIR / "media_chat"
 #: builtin 迁移扫描目录（现有素材分散在 3 个目录：微信表情资产 / stickers / 导入库）
 MEDIA_SCAN_DIRS = (
     ROOT / "wx_core" / "emoji_assets",
@@ -53,12 +55,40 @@ def _media_dir() -> Path:
     return Path(env) if env else Path(MEDIA_DIR)
 
 
+def _norm_path(value) -> str:
+    try:
+        return os.path.normcase(os.path.abspath(str(value or "")))
+    except Exception:  # noqa: BLE001
+        return str(value or "")
+
+
+def _is_chat_media(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(CHAT_MEDIA_DIR.resolve())
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _attachment_paths(con) -> set[str]:
+    """attachments 表里已登记的聊天图片路径（防御：这些文件不导入素材库）。"""
+    try:
+        rows = con.execute("SELECT path FROM attachments").fetchall()
+        return {_norm_path(row[0]) for row in rows if row and row[0]}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def _scan_dirs() -> list[Path]:
-    """迁移扫描目录：测试用 MEDIA_LIBRARY_DIR 覆盖成单目录，否则扫全部现有素材目录。"""
+    """迁移扫描目录：测试用 MEDIA_LIBRARY_DIR 覆盖成单目录，否则扫全部现有素材目录。
+
+    P23：聊天图目录 media_chat 永不扫描（即使 MEDIA_LIBRARY_DIR 误指过去）。
+    """
     env = os.environ.get("MEDIA_LIBRARY_DIR")
     if env:
-        return [Path(env)]
-    return [Path(item) for item in MEDIA_SCAN_DIRS]
+        return [p for p in (Path(env),) if not _is_chat_media(p)]
+    return [Path(item) for item in MEDIA_SCAN_DIRS
+            if not _is_chat_media(Path(item))]
 
 
 def _trash_dir() -> Path:
@@ -147,6 +177,7 @@ def ensure_imported(path: Path | str | None = None, *, force: bool = False) -> d
         sources = _sources()
         by_path = {str(item.get("path") or ""): item for item in sources.values()
                    if isinstance(item, dict)}
+        chat_paths = _attachment_paths(con)
         candidates: list[Path] = []
         for scan_dir in _scan_dirs():
             if not scan_dir.is_dir():
@@ -161,6 +192,8 @@ def ensure_imported(path: Path | str | None = None, *, force: bool = False) -> d
         now = time.time()
         with con:
             for file_path in candidates:
+                if _norm_path(file_path) in chat_paths or _is_chat_media(file_path):
+                    continue
                 try:
                     raw = file_path.read_bytes()
                 except OSError:

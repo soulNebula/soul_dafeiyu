@@ -122,3 +122,15 @@ worker 已发文本后，把非文本项交给 `gateway.send_bubbles(contact, it
 - 回复后 `record(path, turn_id, reply_media, turn_reply)`：无媒体也记 `used=0`；表缺失/写失败不阻断回复。
 - 不改变：贴纸最多 3、7 天去重、mood<0.35 禁搞笑、硬拦截与长度限制。
 - 开关：`media_sticker_in_reply` 控制是否允许贴纸；`MEDIA_QUOTA_ENABLED`（默认 true，env 可覆盖）关闭后配额不强制。配额只在被动回复非 crisis 时生效。
+
+## 10. 聊天图片 vs 素材库（P23）
+
+| 目录 | 用途 | 说明 |
+| --- | --- | --- |
+| `agi/data/selflearn/media_chat/` | 聊天图片 | `media.save_image()` 落盘 + `attachments` 登记；素材库不扫描 |
+| `agi/data/selflearn/media/` | 素材库 | 只放人工/内置导入素材；`media_store._scan_dirs()` 扫描 |
+
+- `media.CHAT_MEDIA_DIR` / `chat_media_dir()`：聊天图目录；
+- `media.MEDIA_DIR` / `library_media_dir()`：素材库目录；
+- `media_store.ensure_imported()` 会跳过 `attachments.path` 中登记的聊天图（历史误落也能防御）。
+- 存量迁移：`python -m tools.migrate_chat_media --db <contacts> --library-db <default>`；默认 dry-run，确认后加 `--apply`；备份清单在 `E:\agent\backups\chat_media_migration_<ts>.json`。

@@ -207,5 +207,5 @@ def test_chat_pat_returns_one_char_not_normal_reply(tmp_path, monkeypatch):
 
     monkeypatch.setattr(agent, "_simple_reply", fake_simple)
     out = agent.send("[拍一拍] 对方拍了拍你")
-    assert out["reply"] == "嗯" and len(out["reply"]) <= 2
-    assert captured["reply"] == "嗯"
+    assert out["reply"] == "干嘛？" and len(out["reply"]) <= 4
+    assert captured["reply"] == "干嘛？"

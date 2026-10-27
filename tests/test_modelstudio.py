@@ -391,3 +391,21 @@ def test_merge_adapter_resolves_hf_id_base(env):
     assert result["ok"] is True
     args = calls[0]
     assert str(env["base"]) in args          # 回退到 <models>/<basename>
+
+
+def test_running_models_includes_managed_ports(env, monkeypatch):
+    modelstudio._MANAGED[8199] = {"pid": 6552,
+                                  "model_path": "E:/x/soul.gguf",
+                                  "log": "x.log"}
+    try:
+        monkeypatch.setattr(modelstudio.services, "port_state",
+                            lambda port: (True, 6552) if port == 8199 else (False, None))
+        monkeypatch.setattr(modelstudio.services, "SERVICES", {})
+        result = modelstudio.running_models(env["home"])
+        ports = [item["port"] for item in result["items"]]
+        assert 8199 in ports
+        managed = next(item for item in result["items"] if item["port"] == 8199)
+        assert managed["model_path"] == "E:/x/soul.gguf"
+        assert managed["pid"] == 6552
+    finally:
+        modelstudio._MANAGED.pop(8199, None)

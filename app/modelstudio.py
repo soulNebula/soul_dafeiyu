@@ -43,6 +43,8 @@ _DEFAULT_PORTS = (8123, 8125)
 
 #: 已由本模块启动的进程（stop 时优先用端口 PID，取不到时兜底）
 _RUNNING: dict[int, Any] = {}
+#: 本进程管理的端口 → {pid, model_path, log}（/running 用，stop 后移除）
+_MANAGED: dict[int, dict] = {}
 
 
 # ------------------------------------------------------------------ 基础
@@ -249,18 +251,29 @@ def runtime_info(home: Path | str | None = None) -> dict:
 
 def disk_usage(home: Path | str | None = None) -> dict:
     base = Path(home) if home is not None else agent_home()
-    targets = (
-        ("models", base / "models"),
-        ("adapters", base / "output" / "adapters"),
-        ("gguf", base / "output" / "gguf"),
-    )
+    # adapter 实际布局有两种：output/adapters/* 与历史 output/<adapter> 直放；
+    # 磁盘统计按“adapter_config.json 的目录”聚合，避免 adapters 显示 0。
+    adapter_dirs = _adapter_dirs(base / "output" / "adapters")
+    seen = {str(path.resolve()) for path in adapter_dirs}
+    for path in _adapter_dirs(base / "output"):
+        key = str(path.resolve())
+        if key not in seen:
+            adapter_dirs.append(path)
+            seen.add(key)
+    adapter_size = sum(_size_of(path)[0] for path in adapter_dirs)
+    adapter_files = sum(_size_of(path)[1] for path in adapter_dirs)
     items = []
     total = 0
-    for kind, path in targets:
-        size, files = _size_of(path)
-        items.append({"kind": kind, "dir": str(path), "size": size,
-                      "files": files, "exists": path.exists()})
-        total += size
+    for kind, path, size, files in (
+            ("models", base / "models", *_size_of(base / "models")),
+            ("adapters", base / "output", adapter_size, adapter_files),
+            ("gguf", base / "output" / "gguf", *_size_of(base / "output" / "gguf")),
+    ):
+        items.append({"kind": kind, "dir": str(path), "size": int(size),
+                      "files": int(files),
+                      "exists": path.exists() if kind != "adapters"
+                      else bool(adapter_dirs)})
+        total += int(size)
     return {"ok": True, "items": items, "total": total,
             "agent_home": str(base)}
 
@@ -298,6 +311,9 @@ def _ports_of_interest() -> list[int]:
                 ports.append(int(cfg.get("port")))
             except (TypeError, ValueError):
                 continue
+    for port in list(_MANAGED) + list(_RUNNING):
+        if PORT_MIN <= port <= PORT_MAX and port not in ports:
+            ports.append(port)
     out: list[int] = []
     for port in ports:
         if PORT_MIN <= port <= PORT_MAX and port not in out:
@@ -323,7 +339,8 @@ def running_models(home: Path | str | None = None) -> dict:
             running, pid = services.port_state(port)
         except Exception:  # noqa: BLE001 - 探测失败视为未运行
             running, pid = False, None
-        model_path = ""
+        managed = _MANAGED.get(port) or {}
+        model_path = str(managed.get("model_path") or "")
         for name, cfg in getattr(services, "SERVICES", {}).items():
             try:
                 if int(cfg.get("port")) == port:
@@ -421,6 +438,9 @@ def start_model(model_path: str | Path, port: int, ngl: int = 99,
             up, live_pid = False, None
         if up:
             _RUNNING[port_value] = proc
+            _MANAGED[port_value] = {
+                "pid": live_pid or getattr(proc, "pid", None),
+                "model_path": str(resolved), "log": str(log_path)}
             _record("model.start", str(resolved),
                     port=port_value, pid=live_pid or getattr(proc, "pid", None))
             return {"ok": True, "port": port_value,
@@ -452,6 +472,7 @@ def stop_model(port: int, *, force: bool = True,
         running, pid = False, None
     if not running:
         _RUNNING.pop(port_value, None)
+        _MANAGED.pop(port_value, None)
         return {"ok": True, "already_stopped": True, "port": port_value}
     if pid is None:
         proc = _RUNNING.get(port_value)
@@ -476,6 +497,7 @@ def stop_model(port: int, *, force: bool = True,
     except Exception:  # noqa: BLE001
         still = False
     _RUNNING.pop(port_value, None)
+    _MANAGED.pop(port_value, None)
     _record("model.stop", str(port_value), pid=pid, force=force)
     return {"ok": not still, "port": port_value, "pid": pid,
             "detail": detail, "returncode": code}

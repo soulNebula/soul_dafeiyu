@@ -47,7 +47,6 @@ PROJECT_ROOT = WEBUI_DIR.parent
 STATIC_DIR = WEBUI_DIR / "static"
 INDEX_FILE = STATIC_DIR / "index.html"
 AGI_FILE = STATIC_DIR / "agi.html"
-AGI_CORE_FILE = STATIC_DIR / "agicode.html"
 MEDIA_DIR = PROJECT_ROOT / "media"
 MEDIA_DIR_RESOLVED = MEDIA_DIR.resolve()
 STATIC_DIR_RESOLVED = STATIC_DIR.resolve()
@@ -292,7 +291,8 @@ class _WebRequestHandler(BaseHTTPRequestHandler):
             elif path in ("/agi", "/agi.html"):
                 self._serve_agi()
             elif path in ("/agi/core", "/agi/core.html"):
-                self._serve_agi_core()
+                # 8081 旧 AGI core 页面已移除：显式 410，不再返回 legacy 页面
+                self._send_agi_core_gone()
             elif path.startswith("/api/"):
                 self._handle_api(path)
             else:
@@ -551,27 +551,6 @@ class _WebRequestHandler(BaseHTTPRequestHandler):
             ],
         )
 
-    def _serve_agi_core(self) -> None:
-        """渲染 AGI core 页面（令牌注入/CSP 与旧 AGI 页一致）。"""
-        self._require_get()
-        try:
-            raw = AGI_CORE_FILE.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            raise _ApiError(500, f"读取 AGI core 页面失败：{exc}", "server_error") from None
-        page = raw.replace(
-            "__WXBOX_TOKEN__", html.escape(str(self.context.token or ""), quote=True)
-        )
-        self._send_bytes(
-            200,
-            page.encode("utf-8"),
-            "text/html; charset=utf-8",
-            cache_control="no-store",
-            extra_headers=[
-                ("Content-Security-Policy", CONTENT_SECURITY_POLICY),
-                ("Referrer-Policy", "no-referrer"),
-            ],
-        )
-
     # ---- AGI 草稿 API（只读 + dry-run，无发送能力） ----
 
     def _api_agi_status(self) -> None:
@@ -591,280 +570,17 @@ class _WebRequestHandler(BaseHTTPRequestHandler):
         result = get_agi_service().generate(limit=limit)
         self._send_json(200 if result.get("ok") else 409, result)
 
-    # ---- AGI core API（handler 内延迟 import，避免 server 启动时依赖 core DB） ----
+    # ---- 已移除的 8081 AGI core 旧接口：显式 410 Gone ----
+    # agi.core 包已删除；旧页面与 /api/agi/core/* 不再提供任何功能。
+    # 保留显式 410 + 可读 hint，避免旧书签/脚本把"已移除"误判成服务故障（503/500）。
+    AGI_CORE_GONE_BODY = {
+        "error": "agi_core_removed",
+        "hint": "8081 旧接口已移除，请用 802 控制台",
+    }
 
-    @staticmethod
-    def _agi_core_service():
-        from agi.core import web_service
-
-        return web_service.get_service()
-
-    def _api_agi_core_status(self) -> None:
-        try:
-            result = self._agi_core_service().status()
-        except Exception as exc:  # noqa: BLE001 - core DB/依赖异常给可读 503
-            raise _ApiError(503, f"AGI core 状态读取失败：{exc}", "server_error") from None
-        if not isinstance(result, dict):
-            raise _ApiError(503, "AGI core 返回数据格式不正确", "server_error")
-        self._send_json(200, result)
-
-    def _api_agi_core_drafts(self) -> None:
-        limit = self._query_int("limit", 20, 1, 50)
-        try:
-            result = self._agi_core_service().drafts(limit)
-        except Exception as exc:  # noqa: BLE001
-            raise _ApiError(503, f"AGI core 草稿读取失败：{exc}", "server_error") from None
-        if not isinstance(result, dict):
-            raise _ApiError(503, "AGI core 返回数据格式不正确", "server_error")
-        if result.get("ok") is False:
-            raise _ApiError(
-                503, str(result.get("error") or "读取 AGI core 草稿失败"), "server_error"
-            )
-        self._send_json(200, result)
-
-    def _api_agi_core_cycle(self) -> None:
-        body = self._read_json_body()
-        text = str(body.get("text") or "")
-        try:
-            result = self._agi_core_service().run_cycle(text)
-        except Exception as exc:  # noqa: BLE001
-            raise _ApiError(503, f"AGI core 运行失败：{exc}", "server_error") from None
-        if not isinstance(result, dict):
-            raise _ApiError(503, "AGI core 返回数据格式不正确", "server_error")
-        if result.get("ok") is False:
-            error = str(result.get("error") or "AGI core 运行失败")
-            if "授权" in error:
-                # consent 门禁未通过：403 让页面弹「授权」引导，而不是普通参数错误
-                raise _ApiError(403, error, "unauthorized")
-            # 空文本/过长等输入问题按现有风格回 400，页面可直接展示 error
-            raise _ApiError(400, error, "bad_request")
-        self._send_json(200, result)
-
-    def _api_agi_core_feedback(self) -> None:
-        body = self._read_json_body()
-        draft_id = str(body.get("draft_id") or "").strip()
-        reaction = str(body.get("reaction") or "").strip().lower()
-        note = str(body.get("note") or "")
-        if not draft_id:
-            raise _ApiError(400, "缺少 draft_id", "bad_request")
-        if reaction not in ("good", "ok", "bad", "ignore"):
-            raise _ApiError(
-                400, f"非法 reaction：{reaction or '(空)'}（只支持 good/ok/bad/ignore）",
-                "bad_request",
-            )
-        try:
-            result = self._agi_core_service().feedback(draft_id, reaction, note)
-        except Exception as exc:  # noqa: BLE001
-            raise _ApiError(503, f"AGI core 反馈失败：{exc}", "server_error") from None
-        if not isinstance(result, dict):
-            raise _ApiError(503, "AGI core 返回数据格式不正确", "server_error")
-        if result.get("ok") is False:
-            error = str(result.get("error") or "提交反馈失败")
-            if "草稿不存在" in error:
-                raise _ApiError(404, error, "not_found")
-            raise _ApiError(400, error, "bad_request")
-        self._send_json(200, result)
-
-    # ---- AGI core 记忆审阅 / 画像 / 授权（延迟 import，异常统一 503） ----
-
-    def _agi_core_invoke(self, action: str, callback) -> dict:
-        """延迟 import core service 并调用；异常/非 dict 返回统一转 503。"""
-        try:
-            service = self._agi_core_service()
-            result = callback(service)
-        except _ApiError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - core DB/依赖异常给可读 503
-            raise _ApiError(503, f"AGI core {action}失败：{exc}", "server_error") from None
-        if not isinstance(result, dict):
-            raise _ApiError(503, "AGI core 返回数据格式不正确", "server_error")
-        return result
-
-    def _send_agi_memory_result(self, result: dict, action: str) -> None:
-        """记忆审批/驳回结果映射：不存在→404，其它业务失败→400，成功→200。"""
-        if result.get("ok") is False:
-            error = str(result.get("error") or action)
-            if "不存在" in error or "not found" in error.lower():
-                raise _ApiError(404, error, "not_found")
-            raise _ApiError(400, error, "bad_request")
-        self._send_json(200, result)
-
-    def _api_agi_core_memories(self) -> None:
-        status = self._query_first("status").strip() or "pending"
-        limit = self._query_int("limit", 30, 1, 100)
-        result = self._agi_core_invoke(
-            "记忆列表读取", lambda service: service.memories(status, limit)
-        )
-        if result.get("ok") is False:
-            raise _ApiError(
-                503, str(result.get("error") or "读取 AGI core 记忆失败"), "server_error"
-            )
-        self._send_json(200, result)
-
-    def _api_agi_core_memory_approve(self) -> None:
-        body = self._read_json_body()
-        memory_id = str(body.get("id") or "").strip()
-        if not memory_id:
-            raise _ApiError(400, "缺少 id", "bad_request")
-        result = self._agi_core_invoke(
-            "记忆审批", lambda service: service.approve_memory(memory_id)
-        )
-        self._send_agi_memory_result(result, "记忆审批失败")
-
-    def _api_agi_core_memory_reject(self) -> None:
-        body = self._read_json_body()
-        memory_id = str(body.get("id") or "").strip()
-        if not memory_id:
-            raise _ApiError(400, "缺少 id", "bad_request")
-        reason = str(body.get("reason") or "")
-        result = self._agi_core_invoke(
-            "记忆驳回", lambda service: service.reject_memory(memory_id, reason)
-        )
-        self._send_agi_memory_result(result, "记忆驳回失败")
-
-    def _api_agi_core_profile(self) -> None:
-        result = self._agi_core_invoke("画像读取", lambda service: service.profile())
-        if result.get("ok") is False:
-            raise _ApiError(
-                503, str(result.get("error") or "读取 AGI core 画像失败"), "server_error"
-            )
-        self._send_json(200, result)
-
-    def _api_agi_core_persona(self) -> None:
-        result = self._agi_core_invoke("人格库读取", lambda service: service.persona())
-        if result.get("ok") is False:
-            raise _ApiError(503, "读取人格库失败", "server_error")
-        self._send_json(200, result)
-
-    def _api_agi_core_persona_proposals(self) -> None:
-        result = self._agi_core_invoke(
-            "人格提案读取", lambda service: service.persona_proposals()
-        )
-        if result.get("ok") is False:
-            raise _ApiError(503, "读取人格提案失败", "server_error")
-        self._send_json(200, result)
-
-    def _api_agi_core_persona_promote(self) -> None:
-        body = self._read_json_body()
-        pid = str(body.get("id") or "").strip()
-        if not pid:
-            raise _ApiError(400, "缺少 id", "bad_request")
-        result = self._agi_core_invoke(
-            "人格提案批准", lambda service: service.promote_persona(pid)
-        )
-        if result.get("ok") is False:
-            raise _ApiError(400, str(result.get("error") or "人格提案批准失败"), "bad_request")
-        self._send_json(200, result)
-
-    def _api_agi_core_persona_reject(self) -> None:
-        body = self._read_json_body()
-        pid = str(body.get("id") or "").strip()
-        if not pid:
-            raise _ApiError(400, "缺少 id", "bad_request")
-        result = self._agi_core_invoke(
-            "人格提案否决", lambda service: service.reject_persona(pid)
-        )
-        if result.get("ok") is False:
-            raise _ApiError(400, str(result.get("error") or "人格提案否决失败"), "bad_request")
-        self._send_json(200, result)
-
-    def _api_agi_core_knowledge(self) -> None:
-        query = self._query_first("q").strip()
-        limit = self._query_int("limit", 20, 1, 50)
-        result = self._agi_core_invoke(
-            "知识库读取", lambda service: service.knowledge(query, limit)
-        )
-        if result.get("ok") is False:
-            raise _ApiError(503, "读取知识库失败", "server_error")
-        self._send_json(200, result)
-
-    def _api_agi_core_knowledge_proposals(self) -> None:
-        result = self._agi_core_invoke(
-            "知识提案读取", lambda service: service.knowledge_proposals()
-        )
-        if result.get("ok") is False:
-            raise _ApiError(503, "读取知识提案失败", "server_error")
-        self._send_json(200, result)
-
-    def _api_agi_core_knowledge_promote(self) -> None:
-        body = self._read_json_body()
-        kid = str(body.get("id") or "").strip()
-        if not kid:
-            raise _ApiError(400, "缺少 id", "bad_request")
-        result = self._agi_core_invoke(
-            "知识提案批准", lambda service: service.promote_knowledge(kid)
-        )
-        if result.get("ok") is False:
-            raise _ApiError(400, str(result.get("error") or "知识提案批准失败"), "bad_request")
-        self._send_json(200, result)
-
-    def _api_agi_core_knowledge_reject(self) -> None:
-        body = self._read_json_body()
-        kid = str(body.get("id") or "").strip()
-        if not kid:
-            raise _ApiError(400, "缺少 id", "bad_request")
-        result = self._agi_core_invoke(
-            "知识提案否决", lambda service: service.reject_knowledge(kid)
-        )
-        if result.get("ok") is False:
-            raise _ApiError(400, str(result.get("error") or "知识提案否决失败"), "bad_request")
-        self._send_json(200, result)
-
-    def _api_agi_core_acceptance(self) -> None:
-        result = self._agi_core_invoke("验收读取", lambda service: service.acceptance())
-        if result.get("ok") is False:
-            raise _ApiError(503, "读取验收仪表盘失败", "server_error")
-        self._send_json(200, result)
-
-    def _api_agi_core_acceptance_demo(self) -> None:
-        body = self._read_json_body()
-        try:
-            limit = int(body.get("limit") or 5)
-        except (TypeError, ValueError):
-            limit = 5
-        result = self._agi_core_invoke(
-            "验收副本演练", lambda service: service.acceptance_demo(limit)
-        )
-        if result.get("ok") is False:
-            raise _ApiError(400, str(result.get("error") or "验收演练失败"), "bad_request")
-        self._send_json(200, result)
-
-    def _api_agi_core_consent(self) -> None:
-        """GET 查授权状态；POST 授权/撤销（同一路径，按 method 分派）。"""
-        if self._method in ("GET", "HEAD"):
-            result = self._agi_core_invoke(
-                "授权状态读取", lambda service: service.consent_status()
-            )
-            if result.get("ok") is False:
-                raise _ApiError(
-                    503, str(result.get("error") or "读取 AGI core 授权状态失败"),
-                    "server_error",
-                )
-            self._send_json(200, result)
-            return
-        if self._method != "POST":
-            raise _ApiError(
-                405, "该接口只支持 GET/POST 请求", "bad_request",
-                headers=[("Allow", "GET, HEAD, POST")],
-            )
-        body = self._read_json_body()
-        action = str(body.get("action") or "").strip().lower()
-        if action not in ("grant", "revoke"):
-            raise _ApiError(400, "action 只支持 grant/revoke", "bad_request")
-        scope = str(body.get("scope") or "").strip() or "chat"
-        if action == "grant":
-            result = self._agi_core_invoke(
-                "授权", lambda service: service.grant_consent(scope)
-            )
-        else:
-            result = self._agi_core_invoke(
-                "撤销授权", lambda service: service.revoke_consent(scope)
-            )
-        if result.get("ok") is False:
-            raise _ApiError(
-                400, str(result.get("error") or "AGI core 授权操作失败"), "bad_request"
-            )
-        self._send_json(200, result)
+    def _send_agi_core_gone(self) -> None:
+        self.close_connection = True
+        self._send_json(410, dict(self.AGI_CORE_GONE_BODY))
 
     def _serve_static(self, rel_path: str) -> None:
         self._require_get()
@@ -944,6 +660,10 @@ class _WebRequestHandler(BaseHTTPRequestHandler):
 
     # ---- API 分发 ----
     def _handle_api(self, path: str) -> None:
+        # 8081 旧 AGI core 接口已整体移除：显式 410（不校验令牌/方法，Gone 即终态）
+        if path == "/api/agi/core" or path.startswith("/api/agi/core/"):
+            self._send_agi_core_gone()
+            return
         # 朋友圈内存视频：/api/moments/video/<moment_id>/<index>（路径参数，需在路由表之前特判）
         if path.startswith("/api/moments/video/"):
             self._require_get()
@@ -983,25 +703,6 @@ class _WebRequestHandler(BaseHTTPRequestHandler):
             "/api/agi/status": ("GET", self._api_agi_status),
             "/api/agi/drafts": ("GET", self._api_agi_drafts),
             "/api/agi/generate": ("POST", self._api_agi_generate),
-            "/api/agi/core/status": ("GET", self._api_agi_core_status),
-            "/api/agi/core/drafts": ("GET", self._api_agi_core_drafts),
-            "/api/agi/core/cycle": ("POST", self._api_agi_core_cycle),
-            "/api/agi/core/feedback": ("POST", self._api_agi_core_feedback),
-            "/api/agi/core/memories": ("GET", self._api_agi_core_memories),
-            "/api/agi/core/memories/approve": ("POST", self._api_agi_core_memory_approve),
-            "/api/agi/core/memories/reject": ("POST", self._api_agi_core_memory_reject),
-            "/api/agi/core/profile": ("GET", self._api_agi_core_profile),
-            "/api/agi/core/persona": ("GET", self._api_agi_core_persona),
-            "/api/agi/core/persona/proposals": ("GET", self._api_agi_core_persona_proposals),
-            "/api/agi/core/persona/promote": ("POST", self._api_agi_core_persona_promote),
-            "/api/agi/core/persona/reject": ("POST", self._api_agi_core_persona_reject),
-            "/api/agi/core/knowledge": ("GET", self._api_agi_core_knowledge),
-            "/api/agi/core/knowledge/proposals": ("GET", self._api_agi_core_knowledge_proposals),
-            "/api/agi/core/knowledge/promote": ("POST", self._api_agi_core_knowledge_promote),
-            "/api/agi/core/knowledge/reject": ("POST", self._api_agi_core_knowledge_reject),
-            "/api/agi/core/consent": ("ANY", self._api_agi_core_consent),
-            "/api/agi/core/acceptance": ("GET", self._api_agi_core_acceptance),
-            "/api/agi/core/acceptance/demo": ("POST", self._api_agi_core_acceptance_demo),
         }
         route = routes.get(path)
         if route is None:
@@ -1019,10 +720,6 @@ class _WebRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/video/auto":
             self._check_token()
             handler()  # GET 查状态 / POST 开关，由处理函数内部分派
-            return
-        if path == "/api/agi/core/consent":
-            self._check_token()
-            handler()  # GET 查授权 / POST grant/revoke，由处理函数内部分派
             return
         if method_kind == "GET":
             self._require_get()

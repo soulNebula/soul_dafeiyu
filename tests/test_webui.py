@@ -19,12 +19,6 @@ import time
 from pathlib import Path
 
 import pytest
-import importlib.util
-
-agi_core_skip = pytest.mark.skipif(
-    importlib.util.find_spec("agi.core") is None,
-    reason="agi.core 已移除：8081 旧 /agi 页面为遗留链路（非主链，见 docs/STATUS.md）",
-)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -2460,645 +2454,72 @@ def test_server_video_auto_post_errors(web_server, monkeypatch):
         web_server.context.video_auto = old
 
 
-class _FakeAgiCoreService:
-    """AGI core 网页服务测试替身（只记录调用，不碰 core SQLite）。"""
-
-    def __init__(self, *, status_data: dict | None = None,
-                 drafts_data: dict | None = None,
-                 cycle_data: dict | None = None,
-                 feedback_data: dict | None = None,
-                 memories_data: dict | None = None,
-                 approve_data: dict | None = None,
-                 reject_data: dict | None = None,
-                 profile_data: dict | None = None,
-                 consent_status_data: dict | None = None,
-                 consent_action_data: dict | None = None,
-                 exc: BaseException | None = None):
-        self.status_data = dict(status_data) if status_data is not None else {
-            "ok": True, "version": "0.1.0", "subjects": 1, "drafts": 0,
-        }
-        self.drafts_data = dict(drafts_data) if drafts_data is not None else {
-            "ok": True, "drafts": [], "limit": 20,
-        }
-        self.cycle_data = dict(cycle_data) if cycle_data is not None else {
-            "ok": True, "cycle_id": "c1", "drafts_created": 0,
-        }
-        self.feedback_data = dict(feedback_data) if feedback_data is not None else {
-            "ok": True, "draft_id": "d1", "reaction": "good",
-        }
-        self.memories_data = dict(memories_data) if memories_data is not None else {
-            "ok": True, "memories": [], "status": "pending", "limit": 30,
-        }
-        self.approve_data = dict(approve_data) if approve_data is not None else {
-            "ok": True, "id": "m1", "status": "approved",
-        }
-        self.reject_data = dict(reject_data) if reject_data is not None else {
-            "ok": True, "id": "m1", "status": "rejected",
-        }
-        self.profile_data = dict(profile_data) if profile_data is not None else {
-            "ok": True, "profile": {"subjects": []},
-        }
-        self.consent_status_data = (
-            dict(consent_status_data) if consent_status_data is not None else {
-                "ok": True, "scopes": {"chat": False},
-            }
-        )
-        self.consent_action_data = (
-            dict(consent_action_data) if consent_action_data is not None else {
-                "ok": True, "scope": "chat", "granted": True,
-            }
-        )
-        self.exc = exc
-        self.calls: list[tuple] = []
-
-    def _maybe_raise(self):
-        if self.exc is not None:
-            raise self.exc
-
-    def status(self) -> dict | list:
-        self.calls.append(("status",))
-        self._maybe_raise()
-        return self.status_data
-
-    def drafts(self, limit: int = 20):
-        self.calls.append(("drafts", int(limit)))
-        self._maybe_raise()
-        return self.drafts_data
-
-    def run_cycle(self, text: str):
-        self.calls.append(("cycle", str(text)))
-        self._maybe_raise()
-        return self.cycle_data
-
-    def feedback(self, draft_id: str, reaction: str, note: str):
-        self.calls.append(("feedback", str(draft_id), str(reaction), str(note)))
-        self._maybe_raise()
-        return self.feedback_data
-
-    def memories(self, status: str = "pending", limit: int = 30):
-        self.calls.append(("memories", str(status), int(limit)))
-        self._maybe_raise()
-        return self.memories_data
-
-    def approve_memory(self, memory_id: str):
-        self.calls.append(("approve", str(memory_id)))
-        self._maybe_raise()
-        return self.approve_data
-
-    def reject_memory(self, memory_id: str, reason: str):
-        self.calls.append(("reject", str(memory_id), str(reason)))
-        self._maybe_raise()
-        return self.reject_data
-
-    def profile(self):
-        self.calls.append(("profile",))
-        self._maybe_raise()
-        return self.profile_data
-
-    def consent_status(self):
-        self.calls.append(("consent_status",))
-        self._maybe_raise()
-        return self.consent_status_data
-
-    def grant_consent(self, scope: str):
-        self.calls.append(("grant", str(scope)))
-        self._maybe_raise()
-        return self.consent_action_data
-
-    def revoke_consent(self, scope: str):
-        self.calls.append(("revoke", str(scope)))
-        self._maybe_raise()
-        return self.consent_action_data
+# ---------------------------------------------------------------------------
+# 8081 已移除的 AGI core 旧链路：页面/API 一律显式 410 Gone（不再 skip）
+# ---------------------------------------------------------------------------
+_AGI_CORE_GONE = {
+    "error": "agi_core_removed",
+    "hint": "8081 旧接口已移除，请用 802 控制台",
+}
 
 
-@agi_core_skip
-def test_server_agi_core_pages(web_server):
-    """GET /agi/core 与 /agi/core.html：200、令牌替换、CSP/Referrer/no-store；旧页兼容。"""
-    for path in ("/agi/core", "/agi/core.html"):
-        status, headers, _data, raw = _http_request(web_server, "GET", path)
-        assert status == 200, path
-        page = raw.decode("utf-8")
-        assert web_server.token in page, f"{path} 没有注入会话令牌"
-        assert "__WXBOX_TOKEN__" not in page
-        assert headers["content-type"].startswith("text/html")
-        assert headers.get("referrer-policy") == "no-referrer"
-        assert headers.get("cache-control") == "no-store"
-        assert "content-security-policy" in headers
+@pytest.mark.parametrize("path", ["/agi/core", "/agi/core.html"])
+def test_server_agi_core_pages_gone(web_server, path):
+    """旧 /agi/core 页面已移除：410 + agi_core_removed，不再返回 legacy HTML。"""
+    status, headers, data, raw = _http_request(web_server, "GET", path)
+    assert status == 410
+    assert data == _AGI_CORE_GONE
+    assert "application/json" in headers.get("content-type", "")
+    assert headers.get("cache-control") == "no-store"
+    assert b"<html" not in raw.lower()
 
-    # 旧 AGI 页保留兼容
-    for path in ("/agi", "/agi.html"):
-        status, _headers, _data, raw = _http_request(web_server, "GET", path)
-        assert status == 200 and web_server.token in raw.decode("utf-8")
-
-    # HEAD 页面：200 头无 body
-    status, _headers, _data, raw = _http_request(web_server, "HEAD", "/agi/core")
-    assert status == 200 and raw == b""
-
-    # 页面只接受 GET/HEAD
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/agi/core", body={}
-    )
-    assert status == 405 and data["code"] == "bad_request"
+    status, _headers, _data, raw = _http_request(web_server, "HEAD", path)
+    assert status == 410 and raw == b""
 
 
-@agi_core_skip
-def test_server_agi_core_status_and_drafts(web_server, monkeypatch):
-    """AGI core status/drafts：401、405、limit 归一、service 异常/ok:false/non-dict 503。"""
-    fake = _FakeAgiCoreService()
-    monkeypatch.setattr("agi.core.web_service.get_service", lambda: fake)
-
-    status, _headers, _data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/status"
-    )
-    assert status == 401
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/status", token=web_server.token
-    )
-    assert status == 200 and data["ok"] is True and data["version"] == "0.1.0"
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/status", token=web_server.token, body={}
-    )
-    assert status == 405
-
-    # drafts limit 归一：默认 20、1..50、非数字 20
-    fake.calls.clear()
-    status, _headers, _data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/drafts", token=web_server.token
-    )
-    assert status == 200
-    assert fake.calls == [("drafts", 20)]
-
-    for value, expected in (
-        ("1", 1), ("50", 50), ("999", 50), ("abc", 20), ("0", 1), ("-5", 1),
-    ):
-        status, _headers, _data, _raw = _http_request(
-            web_server, "GET", f"/api/agi/core/drafts?limit={value}",
-            token=web_server.token,
-        )
-        assert status == 200, value
-        assert fake.calls[-1] == ("drafts", expected), value
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/drafts", token=web_server.token, body={}
-    )
-    assert status == 405
-
-    # service 抛异常 / 返回 ok:false / 非 dict → 503
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(exc=RuntimeError("core DB 锁住")),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/status", token=web_server.token
-    )
-    assert status == 503 and "AGI core 状态读取失败" in data["error"]
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(drafts_data={"ok": False, "error": "读取草稿失败"}),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/drafts", token=web_server.token
-    )
-    assert status == 503 and "读取草稿失败" in data["error"]
-
-    bad_status = _FakeAgiCoreService()
-    bad_status.status_data = []
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service", lambda: bad_status
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/status", token=web_server.token
-    )
-    assert status == 503 and "格式不正确" in data["error"]
+@pytest.mark.parametrize("path", ["/agi", "/agi.html"])
+def test_server_legacy_agi_page_still_served(web_server, path):
+    """旧 /agi 草稿页仍保留（LEGACY AGI 页，不属于 agi.core）；只验兼容与令牌注入。"""
+    status, _headers, _data, raw = _http_request(web_server, "GET", path)
+    assert status == 200 and web_server.token in raw.decode("utf-8")
 
 
-@agi_core_skip
-def test_server_agi_core_cycle(web_server, monkeypatch):
-    """POST /api/agi/core/cycle：200、空/过长 ok:false→400、异常 503、401/405。"""
-    fake = _FakeAgiCoreService()
-    monkeypatch.setattr("agi.core.web_service.get_service", lambda: fake)
-
-    status, _headers, _data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/cycle", body={"text": "你好"}
-    )
-    assert status == 401
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/cycle", token=web_server.token,
-        body={"text": "你好，帮我看看"},
-    )
-    assert status == 200 and data["ok"] is True and data["cycle_id"] == "c1"
-    assert fake.calls == [("cycle", "你好，帮我看看")]
-
-    # 空文本也交给 service 判断（server 不自行 400）
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/cycle", token=web_server.token,
-        body={},
-    )
-    assert status == 200
-    assert fake.calls[-1] == ("cycle", "")
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/cycle", token=web_server.token
-    )
-    assert status == 405
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(cycle_data={"ok": False, "error": "输入不能为空"}),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/cycle", token=web_server.token,
-        body={"text": ""},
-    )
-    assert status == 400 and data["code"] == "bad_request"
-    assert "输入不能为空" in data["error"]
-
-    # consent 门禁未通过（error 含「授权」）→ 403 unauthorized
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(
-            cycle_data={"ok": False, "error": "未授权：请先同意聊天授权（consent）"}
-        ),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/cycle", token=web_server.token,
-        body={"text": "x"},
-    )
-    assert status == 403 and data["code"] == "unauthorized"
-    assert "授权" in data["error"]
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(exc=RuntimeError("pipeline 崩溃")),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/cycle", token=web_server.token,
-        body={"text": "x"},
-    )
-    assert status == 503 and data["code"] == "server_error"
-    assert "AGI core 运行失败" in data["error"]
+_AGI_CORE_REMOVED_ROUTES = [
+    ("GET", "/api/agi/core"),
+    ("GET", "/api/agi/core/status"),
+    ("POST", "/api/agi/core/status"),
+    ("GET", "/api/agi/core/drafts"),
+    ("POST", "/api/agi/core/cycle"),
+    ("POST", "/api/agi/core/feedback"),
+    ("GET", "/api/agi/core/memories"),
+    ("POST", "/api/agi/core/memories/approve"),
+    ("POST", "/api/agi/core/memories/reject"),
+    ("GET", "/api/agi/core/profile"),
+    ("GET", "/api/agi/core/persona"),
+    ("GET", "/api/agi/core/persona/proposals"),
+    ("POST", "/api/agi/core/persona/promote"),
+    ("POST", "/api/agi/core/persona/reject"),
+    ("GET", "/api/agi/core/knowledge"),
+    ("GET", "/api/agi/core/knowledge/proposals"),
+    ("POST", "/api/agi/core/knowledge/promote"),
+    ("POST", "/api/agi/core/knowledge/reject"),
+    ("GET", "/api/agi/core/consent"),
+    ("POST", "/api/agi/core/consent"),
+    ("GET", "/api/agi/core/acceptance"),
+    ("POST", "/api/agi/core/acceptance/demo"),
+]
 
 
-@agi_core_skip
-def test_server_agi_core_feedback(web_server, monkeypatch):
-    """feedback：成功、参数校验 400 不调用、草稿不存在 404、其它 400、401/405。"""
-    fake = _FakeAgiCoreService()
-    monkeypatch.setattr("agi.core.web_service.get_service", lambda: fake)
-
-    status, _headers, _data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/feedback",
-        body={"draft_id": "d1", "reaction": "good"},
-    )
-    assert status == 401
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/feedback", token=web_server.token,
-        body={"draft_id": "d1", "reaction": "good", "note": "不错"},
-    )
-    assert status == 200 and data["ok"] is True
-    assert fake.calls[-1] == ("feedback", "d1", "good", "不错")
-
-    for reaction in ("good", "ok", "bad", "ignore", "GOOD"):
+@pytest.mark.parametrize("method,path", _AGI_CORE_REMOVED_ROUTES)
+def test_server_agi_core_api_gone(web_server, method, path):
+    """旧 /api/agi/core/* 已移除：带不带令牌、方法对不对都直接 410，不再 401/405/503。"""
+    body = {} if method == "POST" else None
+    for token in (None, web_server.token):
         status, _headers, data, _raw = _http_request(
-            web_server, "POST", "/api/agi/core/feedback", token=web_server.token,
-            body={"draft_id": "d1", "reaction": reaction},
+            web_server, method, path, body=body, token=token
         )
-        assert status == 200, reaction
-        assert fake.calls[-1][2] == reaction.lower()
-
-    before = list(fake.calls)
-    for body in (
-        {"reaction": "good"},
-        {"draft_id": "d1", "reaction": "great"},
-        {"draft_id": "  ", "reaction": "good"},
-        {"draft_id": "d1", "reaction": ""},
-    ):
-        status, _headers, data, _raw = _http_request(
-            web_server, "POST", "/api/agi/core/feedback", token=web_server.token,
-            body=body,
-        )
-        assert status == 400, body
-        assert data["code"] == "bad_request"
-    assert fake.calls == before, "参数非法时不应调用 feedback()"
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/feedback", token=web_server.token
-    )
-    assert status == 405
-
-    # 草稿不存在 → 404；其它业务失败 → 400
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(
-            feedback_data={"ok": False, "error": "草稿不存在：d404"}
-        ),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/feedback", token=web_server.token,
-        body={"draft_id": "d404", "reaction": "bad"},
-    )
-    assert status == 404 and data["code"] == "not_found"
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(
-            feedback_data={"ok": False, "error": "反馈写入失败"}
-        ),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/feedback", token=web_server.token,
-        body={"draft_id": "d1", "reaction": "bad"},
-    )
-    assert status == 400 and data["code"] == "bad_request"
-
-
-@agi_core_skip
-def test_server_agi_core_memories(web_server, monkeypatch):
-    """GET /api/agi/core/memories：status 缺省 pending、limit 归一、405、异常/ok:false 503。"""
-    fake = _FakeAgiCoreService()
-    monkeypatch.setattr("agi.core.web_service.get_service", lambda: fake)
-
-    status, _headers, _data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/memories"
-    )
-    assert status == 401
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/memories", token=web_server.token
-    )
-    assert status == 200 and data["ok"] is True
-    assert fake.calls == [("memories", "pending", 30)]
-
-    for query, expected_status, expected_limit in (
-        ("?status=approved&limit=1", "approved", 1),
-        ("?status=&limit=abc", "pending", 30),
-        ("?status=ignored&limit=999", "ignored", 100),
-        ("?status=all&limit=0", "all", 1),
-        ("?limit=-5", "pending", 1),
-    ):
-        status, _headers, _data, _raw = _http_request(
-            web_server, "GET", f"/api/agi/core/memories{query}",
-            token=web_server.token,
-        )
-        assert status == 200, query
-        assert fake.calls[-1] == ("memories", expected_status, expected_limit), query
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/memories", token=web_server.token, body={}
-    )
-    assert status == 405
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(exc=RuntimeError("core DB 锁住")),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/memories", token=web_server.token
-    )
-    assert status == 503 and "AGI core 记忆列表读取失败" in data["error"]
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(memories_data={"ok": False, "error": "读取记忆失败"}),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/memories", token=web_server.token
-    )
-    assert status == 503 and "读取记忆失败" in data["error"]
-
-
-@agi_core_skip
-def test_server_agi_core_memory_approve_reject(web_server, monkeypatch):
-    """记忆审批/驳回：缺 id 400 不调用、200、不存在 404、其它 400、异常 503、401/405。"""
-    fake = _FakeAgiCoreService()
-    monkeypatch.setattr("agi.core.web_service.get_service", lambda: fake)
-
-    status, _headers, _data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/memories/approve", body={"id": "m1"}
-    )
-    assert status == 401
-
-    before = list(fake.calls)
-    for body in ({}, {"id": ""}, {"id": "   "}):
-        status, _headers, data, _raw = _http_request(
-            web_server, "POST", "/api/agi/core/memories/approve",
-            token=web_server.token, body=body,
-        )
-        assert status == 400 and data["code"] == "bad_request"
-        status, _headers, data, _raw = _http_request(
-            web_server, "POST", "/api/agi/core/memories/reject",
-            token=web_server.token, body=body,
-        )
-        assert status == 400 and data["code"] == "bad_request"
-    assert fake.calls == before, "缺 id 时不应调用 approve/reject"
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/memories/approve",
-        token=web_server.token, body={"id": " m1 "},
-    )
-    assert status == 200 and data["ok"] is True
-    assert fake.calls[-1] == ("approve", "m1")
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/memories/reject",
-        token=web_server.token, body={"id": "m1"},
-    )
-    assert status == 200
-    assert fake.calls[-1] == ("reject", "m1", ""), "reason 缺省应为空字符串"
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/memories/reject",
-        token=web_server.token, body={"id": "m1", "reason": "证据不足"},
-    )
-    assert status == 200
-    assert fake.calls[-1] == ("reject", "m1", "证据不足")
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/memories/approve", token=web_server.token
-    )
-    assert status == 405
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(
-            approve_data={"ok": False, "error": "记忆不存在：m9"}
-        ),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/memories/approve",
-        token=web_server.token, body={"id": "m9"},
-    )
-    assert status == 404 and data["code"] == "not_found"
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(
-            reject_data={"ok": False, "error": "驳回失败：状态不允许"}
-        ),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/memories/reject",
-        token=web_server.token, body={"id": "m1"},
-    )
-    assert status == 400 and data["code"] == "bad_request"
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(exc=RuntimeError("SQLite 写入失败")),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/memories/approve",
-        token=web_server.token, body={"id": "m1"},
-    )
-    assert status == 503 and data["code"] == "server_error"
-    assert "AGI core 记忆审批失败" in data["error"]
-
-
-@agi_core_skip
-def test_server_agi_core_profile(web_server, monkeypatch):
-    """GET /api/agi/core/profile：401、200 原样、POST 405、异常/ok:false 503。"""
-    fake = _FakeAgiCoreService(profile_data={"ok": True, "profile": {"subjects": ["a"]}})
-    monkeypatch.setattr("agi.core.web_service.get_service", lambda: fake)
-
-    status, _headers, _data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/profile"
-    )
-    assert status == 401
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/profile", token=web_server.token
-    )
-    assert status == 200 and data["profile"]["subjects"] == ["a"]
-    assert fake.calls == [("profile",)]
-
-    status, _headers, _data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/profile", token=web_server.token, body={}
-    )
-    assert status == 405
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(profile_data={"ok": False, "error": "画像读取失败"}),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/profile", token=web_server.token
-    )
-    assert status == 503 and "画像读取失败" in data["error"]
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(exc=RuntimeError("core 未初始化")),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/profile", token=web_server.token
-    )
-    assert status == 503 and "AGI core 画像读取失败" in data["error"]
-
-
-@agi_core_skip
-def test_server_agi_core_consent(web_server, monkeypatch):
-    """授权接口：GET 状态/HEAD、POST grant/revoke、action/scope 归一、400/503/401/405。"""
-    fake = _FakeAgiCoreService()
-    monkeypatch.setattr("agi.core.web_service.get_service", lambda: fake)
-
-    status, _headers, _data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/consent"
-    )
-    assert status == 401
-    status, _headers, data, _raw = _http_request(
-        web_server, "GET", "/api/agi/core/consent", token=web_server.token
-    )
-    assert status == 200 and data["ok"] is True
-    assert fake.calls[-1] == ("consent_status",)
-
-    status, _headers, _data, _raw = _http_request(
-        web_server, "HEAD", "/api/agi/core/consent", token=web_server.token
-    )
-    assert status == 200 and _raw == b""
-
-    status, _headers, _data, _raw = _http_request(
-        web_server, "PUT", "/api/agi/core/consent", token=web_server.token, body={}
-    )
-    assert status == 405
-
-    # action 非法/缺失 → 400 且不调用 service
-    before = list(fake.calls)
-    for body in ({}, {"action": ""}, {"action": "allow"}, {"scope": "chat"}):
-        status, _headers, data, _raw = _http_request(
-            web_server, "POST", "/api/agi/core/consent", token=web_server.token,
-            body=body,
-        )
-        assert status == 400, body
-        assert data["code"] == "bad_request"
-    assert fake.calls == before, "action 非法时不应调用 grant/revoke"
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/consent", token=web_server.token,
-        body={"action": "grant"},
-    )
-    assert status == 200
-    assert fake.calls[-1] == ("grant", "chat"), "scope 缺省应为 chat"
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/consent", token=web_server.token,
-        body={"action": "GRANT", "scope": "moments"},
-    )
-    assert status == 200
-    assert fake.calls[-1] == ("grant", "moments"), "action 大小写不敏感、scope 原样"
-
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/consent", token=web_server.token,
-        body={"action": "revoke", "scope": ""},
-    )
-    assert status == 200
-    assert fake.calls[-1] == ("revoke", "chat"), "scope 空应为 chat"
-
-    # 业务失败 → 400；异常 → 503（GET/POST）
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(
-            consent_action_data={"ok": False, "error": "授权写入失败"}
-        ),
-    )
-    status, _headers, data, _raw = _http_request(
-        web_server, "POST", "/api/agi/core/consent", token=web_server.token,
-        body={"action": "grant"},
-    )
-    assert status == 400 and data["code"] == "bad_request"
-
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(exc=RuntimeError("core DB 不可用")),
-    )
-    for method, body in (("GET", None), ("POST", {"action": "grant"})):
-        status, _headers, data, _raw = _http_request(
-            web_server, method, "/api/agi/core/consent",
-            token=web_server.token, body=body,
-        )
-        assert status == 503 and data["code"] == "server_error", method
-        assert "AGI core" in data["error"], method
-
-
-@agi_core_skip
-def test_server_agi_core_service_unavailable_503(web_server, monkeypatch):
-    """AGI core 依赖/DB 不可用：四个接口都 503 + 中文 error，不抛 500 堆栈。"""
-    monkeypatch.setattr(
-        "agi.core.web_service.get_service",
-        lambda: _FakeAgiCoreService(exc=RuntimeError("sqlite3.OperationalError: locked")),
-    )
-    for method, path, body in (
-        ("GET", "/api/agi/core/status", None),
-        ("GET", "/api/agi/core/drafts", None),
-        ("POST", "/api/agi/core/cycle", {"text": "x"}),
-        ("POST", "/api/agi/core/feedback", {"draft_id": "d1", "reaction": "good"}),
-    ):
-        status, _headers, data, _raw = _http_request(
-            web_server, method, path, token=web_server.token, body=body
-        )
-        assert status == 503, path
-        assert data["code"] == "server_error", path
-        assert "AGI core" in data["error"], path
+        assert status == 410, (method, path, token)
+        assert data == _AGI_CORE_GONE, (method, path, token)
 
 
 def _sse_read_event(resp):

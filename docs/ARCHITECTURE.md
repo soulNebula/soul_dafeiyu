@@ -142,10 +142,26 @@ SoulAgent/
 | 802 | `python tools/console/server.py --port 802` | 控制台 |
 | 8123 | `llama-server -m soul_qwen25_05b_v1b-q4_k_m.gguf` | 内状态（潜意识） |
 | 8125 | `python tools/soul_serve/serve_local3b.py` | 本地 3B（提取/摘要） |
-| 8081 | `python web_app.py`（旧根网页 `/agi`） | **非主链/legacy**：旧 wx_box 网页，`agi.core` 已移除；仅供历史对照 |
+| 8081 | `python web_app.py`（旧根网页 `/agi`） | **非主链/legacy**：旧 wx_box 网页；`agi.core` 已移除，`/agi/core` 页面与 `/api/agi/core/*` 现恒返回 **410 Gone**（`agi_core_removed`），仅供历史对照 |
 | 8082 | `python -m agi.selflearn.web` | **非主链/调试**：selflearn 自带网页（记忆统计/反馈），日常入口仍是 802 控制台 |
 
-## 六、已知边界
+## 六、已删除 / 遗留清单（不要照旧文档接线）
+
+以下链路已删除或降级为非主链。新代码**只接 801 网关 + 802 控制台**（外加 8123 内状态、8125 本地 3B），
+不要再引用本表里的旧入口；旧书签/脚本请迁移到 802 控制台。
+
+| 已删除 / 遗留 | 现状 | 说明 |
+|---|---|---|
+| `WechatMoments/` | **已删除** | 朋友圈第三方参考项目（微信 4.x 导出）不再随仓库分发；`webui/moments*.py` 只保留"可选外部目录"探测，目录缺失时网页端「朋友圈」页签降级不可用，不影响主链 |
+| `agi/core` | **已删除** | 旧 AGI 核心包（草稿/记忆审批/画像/授权/验收）；`webui/server.py` 的 `/agi/core`、`/agi/core.html` 与 `/api/agi/core/*` 全部改为**显式 410 Gone**：`{"error":"agi_core_removed","hint":"8081 旧接口已移除，请用 802 控制台"}` |
+| 8081 旧页面 | **legacy，非主链** | `web_app.py` 的旧根网页（`/agi` 草稿页仍保留兼容）；`/agi/core*` 已 410；不要再把 8081 当作入口 |
+| `proactive.py` legacy 生成路径 | **非主链** | 现役主动消息生成 = `simple_tick`（`proactive_style=simple`），外层由 `pacing`（对等）× `initiative`（熟悉度×心情×信任→主动度）× `urges`（内驱力队列）门控/选题；`proactive.py` 的 legacy 路径只作兜底/实验，不要作为生成链来读 |
+| 8082 实验台 | **非主链/调试** | `agi.selflearn.web`（记忆统计/反馈页），日常入口仍是 802 控制台；不要把它当产品入口 |
+
+> 历史参考归档：`_refs/`（本地参考，git 忽略）、`tools/reference_weflow/`、`Demo/` 不参与运行，
+> 也不在合规审计扫描范围内；`WechatMoments/` 已删除，如本地仍有副本同样不参与运行/审计。
+
+## 七、已知边界
 
 - 微信侧只能通过 UIA 操作：群聊未支持；引用/拍一拍为启发式识别。
 - 公众号全文受微信 IP 级风控（302 验证码），只能搜索标题摘要，或由用户复制正文。

@@ -50,8 +50,11 @@
 --------
 项目根目录下所有 ``*.py``，但排除：
     recon/、media/、log/、.git/、venv/、.venv/、__pycache__/、
-    build/、dist/、WechatMoments/、tools/reference_weflow/、_refs/
-    （第三方参考代码归档，不参与运行）、
+    build/、dist/、tests/、docs/（测试与文档）、
+    历史第三方参考/归档残留（``_refs/``、``tools/reference_weflow/``、``Demo/``）：
+    这些只在本地作参考、不参与运行，也不属于交付物；
+    ``WechatMoments/`` 已随 8081 旧链路一并删除（本仓库不再存在），
+    若本地仍有其副本，同样不参与扫描/合规判定；
     tools/audit_compliance.py 自身（其 pattern 表里必然包含禁用字样，属误报源）。
 
 本脚本只用标准库，不 import 项目代码、不启动微信、不做任何进程/内存操作。
@@ -71,8 +74,10 @@ EXCLUDE_DIRS = {
     ".git", "recon", "media", "log", "logs", "__pycache__",
     "venv", ".venv", "env", "build", "dist", ".idea", ".vscode",
     ".dsh-ops", ".mypy_cache", ".pytest_cache", "node_modules",
-    # 参考项目 / 参考实现 / 第三方归档：不参与运行，也不在本项目交付物内
-    "WechatMoments", "reference_weflow", "_refs", "Demo", "demo",
+    # 历史第三方参考/归档：不是交付物、不参与运行，也不做合规判定。
+    # WechatMoments/ 已随 8081 旧链路删除（不再列排除项；本地若残留副本同样不扫描）；
+    # reference_weflow/_refs/Demo 仍是本地参考实现，继续排除。
+    "reference_weflow", "_refs", "Demo", "demo",
     # tests 里会故意写 sqlite 临时库做夹具，不属于运行代码
     "tests", "docs",
 }

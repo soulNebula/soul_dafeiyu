@@ -28,9 +28,7 @@
   </div>
   <div class="tb-center"></div>
   <div class="tb-right">
-    <input id="token" type="password" placeholder="令牌 8888">
-    <button id="connect" class="tb-btn">连接</button>
-    <span id="conn-dot" class="dot"></span>
+    <span id="conn-label" class="muted small">未连接 · 点左下角钥匙连接</span>
   </div>
 </div>
 
@@ -145,7 +143,7 @@
   <span id="sb-env">python -</span>
   <span class="grow"></span>
   <span id="sb-msg">M0 · IDEA</span>
-  <span id="sb-token">未连接</span>
+  <span id="sb-token" title="点击连接">未连接</span>
 </div>
 
 <div id="dialog" class="dialog hidden">
@@ -218,20 +216,21 @@ function toast(msg, kind='') {
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
 /* ================= 连接 ================= */
-async function connect() {
-  S.token = $('#token').value.trim() || S.token;
-  if (!S.token) { toast('先填令牌','err'); return; }
+async function connect(tokenOverride) {
+  S.token = (tokenOverride || S.token || '').trim();
+  if (!S.token) { openConnectDialog(); return; }
   try {
     const env = await api('/api/wb/env');
     S.env = env;
     localStorage.setItem('idea_token', S.token);
-    $('#conn-dot').className='dot ok';
+    $('#conn-label').textContent = '已连接';
     $('#sb-token').textContent = '已连接';
     $('#sb-env').textContent = `python ${env.python}${env.torch? ' · torch '+env.torch+(env.cuda?' (cuda)':''):''}`;
     await Promise.all([loadRoots(), loadServices(), loadGit(), loadConfig(), loadInterpreters()]);
     toast('已连接','ok');
   } catch(e) {
-    $('#conn-dot').className='dot err';
+    $('#conn-label').textContent = '连接失败';
+    $('#sb-token').textContent = '未连接';
     toast('连接失败：'+e.message,'err');
   }
 }
@@ -337,7 +336,7 @@ function openConnectDialog() {
   $('#connect-dialog').classList.remove('hidden');
 }
 $('#cd-close').onclick = $('#cd-cancel').onclick = ()=> $('#connect-dialog').classList.add('hidden');
-$('#cd-ok').onclick = ()=>{ $('#token').value = $('#cd-token').value; $('#connect-dialog').classList.add('hidden'); connect(); };
+$('#cd-ok').onclick = ()=>{ const tk = $('#cd-token').value.trim(); $('#connect-dialog').classList.add('hidden'); connect(tk); };
 
 /* ================= 文件树 ================= */
 async function loadRoots() {
@@ -868,9 +867,9 @@ document.addEventListener('keydown', e=>{
 });
 
 /* ================= 初始化 ================= */
-$('#token').value = S.token;
-$('#connect').onclick = connect;
-$('#token').onkeydown = e=>{ if(e.key==='Enter') connect(); };
+$('#sb-token').onclick = ()=> openConnectDialog();
+$('#conn-label').onclick = ()=> openConnectDialog();
+if (S.token) connect(S.token);
 initMonaco();
 showView('explorer');
 if (S.token) connect();

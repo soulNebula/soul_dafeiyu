@@ -112,13 +112,15 @@ select:focus, input:focus, textarea:focus { border-color: var(--accent); }
 .badge.on { background: #1d3b2a; color: var(--ok); }
 
 /* ---------- 编辑区 ---------- */
-#editor-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#editor-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+/* 焦点提示线：贴在最顶部（原先在 tab 上的那条蓝线移到这里） */
+#editor-wrap::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: var(--accent); opacity: .75; z-index: 8; pointer-events: none; }
 #tabs { height: 34px; background: var(--bg-tab); display: flex; overflow-x: auto; flex-shrink: 0; }
 .etab { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 32px;
   margin: 4px 2px 0; border-radius: 7px 7px 0 0; background: var(--bg-tab); cursor: pointer;
   color: var(--text-dim); white-space: nowrap; font-size: 12px; }
-.etab.active { background: var(--bg-tab-active); color: var(--text);
-  box-shadow: inset 0 2px 0 var(--accent); }
+.etab.active { background: var(--bg-tab-active); color: var(--text); }
 .etab .x { opacity: .5; padding: 0 2px; }
 .etab .x:hover { opacity: 1; color: var(--text); }
 #editors { flex: 1; position: relative; overflow: hidden; background: var(--bg-editor); }

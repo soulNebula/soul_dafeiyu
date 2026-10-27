@@ -548,12 +548,13 @@ def test_forget_redacts_evidence_and_search(tmp_path):
 
 
 def test_recall_and_quote_get_natural_reply(tmp_path):
+    """2026-10-27：撤回/引用不再走写死模板，交给模型生成；这里只保证有正常回复。"""
     p = tmp_path / "recall.sqlite3"
     a = SelfLearnAgent(p, client=FakeClient())
     r = a.send("[对方撤回了一条消息]")
-    assert "撤回" in r["reply"] and r["reply"] != "？"
+    assert r["reply"] and r["reply"] != "？"
     q = a.send("[对方引用了一条消息]")
-    assert "引用" in q["reply"]
+    assert q["reply"] and "你引用的那句" not in q["reply"]
 
 
 def test_replies_do_not_contain_periods(tmp_path):
@@ -565,15 +566,41 @@ def test_replies_do_not_contain_periods(tmp_path):
             assert "。" not in bubble
 
 
-def test_quote_with_content_is_reflected(tmp_path):
+def test_quote_content_is_passed_to_model(tmp_path):
+    """被引用的原文要进模型 prompt，由模型自己决定怎么接（不是模板回复）。"""
     p = tmp_path / "quote.sqlite3"
-    a = SelfLearnAgent(p, client=FakeClient())
+
+    class _Capture(FakeClient):
+        def __init__(self):
+            self.seen: list[str] = []
+
+        def chat(self, messages, **kwargs):
+            self.seen.append(chr(10).join(str(m.get("content") or "") for m in messages))
+            return super().chat(messages, **kwargs)
+
+    client = _Capture()
+    a = SelfLearnAgent(p, client=client)
     r = a.send("对方引用了这条消息：我喜欢咖啡")
-    assert "咖啡" in r["reply"] and "引用" in r["reply"]
+    assert r["reply"] and "你引用的那句" not in r["reply"]
+    assert any("咖啡" in prompt for prompt in client.seen)
 
 
 def test_quote_never_echoes_internal_wxid(tmp_path):
     p = tmp_path / "quoteid.sqlite3"
-    a = SelfLearnAgent(p, client=FakeClient())
-    r = a.send("对方引用了这条消息：wxid_0v0g2mpf37u322:1792801924481:1:27970b6973f85f8a8396b4ea")
-    assert "wxid_" not in r["reply"] and "1792801924481" not in r["reply"]
+
+    class _Capture(FakeClient):
+        def __init__(self):
+            self.seen: list[str] = []
+
+        def chat(self, messages, **kwargs):
+            self.seen.append(chr(10).join(str(m.get("content") or "") for m in messages))
+            return super().chat(messages, **kwargs)
+
+    client = _Capture()
+    a = SelfLearnAgent(p, client=client)
+    a.send("对方引用了这条消息：wxid_0v0g2mpf37u322:1792801924481:1:27970b6973f85f8a8396b4ea")
+    joined = chr(10).join(client.seen)
+    assert "wxid_" not in joined and "1792801924481" not in joined
+    assert "[消息]" in joined
+
+

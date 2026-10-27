@@ -475,6 +475,20 @@ class SelfLearnAgent:
         text = str(text or "").strip()
         if not text and not image:
             return {"ok": False, "error": "消息为空"}
+        # 2026-10-27 用户拍板：撤回/引用是"事件"，不写死回复模板，交给模型判断。
+        # 这里只做两件事（且在入库前做，避免内部 ID 进历史泄露给模型）：
+        # ① 保留 [引用]/[对方撤回了一条消息] 标记让模型知道发生了什么；
+        # ② 引用内容里若带微信内部 ID（wxid_… / 10位:数字:数字:hex）就脱敏成 [消息]。
+        if "引用" in text or ("撤回" in text and ("消息" in text or "刚才" in text)):
+            head, sep, tail = text.partition("：")
+            if not sep:
+                head, sep, tail = text.partition(":")
+            if sep and tail.strip():
+                quoted = tail.strip()
+                if "wxid_" in quoted or re.search(r"\d{10,}:\d+:\d+:[0-9a-f]+", quoted):
+                    quoted = "[消息]"
+                text = f"{head}{sep} {quoted}"
+
         display = text if text else "[图片]"
         if image and not text:
             display = "[图片]"
@@ -488,24 +502,6 @@ class SelfLearnAgent:
             st = state.load(self.path)
             return self._simple_reply(user_id, "嗯", st, None,
                                       had_image=False, t0=t0)
-        if "撤回" in text and ("消息" in text or "刚才" in text):
-            st = state.load(self.path)
-            return self._simple_reply(user_id, "看到了，你撤回了刚才那条。", st, None,
-                                      had_image=False, t0=t0)
-        if "引用" in text:
-            st = state.load(self.path)
-            quoted = ""
-            for sep in ("：", ":"):
-                if sep in text:
-                    quoted = text.split(sep, 1)[1].strip()
-                    break
-            if quoted:
-                if "wxid_" in quoted or re.search(r"\d{10,}:\d+:\d+:[0-9a-f]+", quoted):
-                    quoted = "[消息]"
-                msg = f"你引用的那句“{quoted[:60]}”，想说什么"
-            else:
-                msg = "看到了，你引用了一条消息，想说什么"
-            return self._simple_reply(user_id, msg, st, None, had_image=False, t0=t0)
         correction_info = None
         try:
             correction_info = memory.apply_correction(self.path, text)

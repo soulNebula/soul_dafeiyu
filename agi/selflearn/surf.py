@@ -642,6 +642,16 @@ def run_session(plan: dict[str, Any], *, now: float | None = None,
     except Exception as exc:  # noqa: BLE001 - 落库失败不影响返回
         errors.append(f"db: {type(exc).__name__}: {str(exc)[:60]}")
         session["error"] = "; ".join(errors[-2:])
+    # P34：冲浪结束 → 内驱力队列（摘要里若有「想看/有意思/值得说」才 push；
+    # 失败静默，绝不影响冲浪本身）。
+    try:
+        from . import urges
+        urges.observe_surf(
+            db_path, summary=summary, keywords=kws, items=items,
+            score=min(1.0, len(items) / 10.0),
+            ref={"surf_session": session_id}, now=now)
+    except Exception:  # noqa: BLE001 - trace 失败不影响主链
+        pass
     return {"ok": bool(items), "id": session_id, "items": items,
             "items_seen": len(items), "keywords": kws, "summary": summary,
             "sources": sorted(set(sources)), "error": session["error"],

@@ -379,7 +379,37 @@ $('#tree-refresh').onclick = loadTree;
 /* ================= 编辑器（Monaco） ================= */
 function initMonaco() {
   if (S.monacoReady) return;
-  // 用 CDN 的 AMD loader
+  // 优先本地 vendored Monaco（离线可用）；没有则用 npmmirror CDN；再不行退回 textarea
+  const LOCAL = '/web/vendor/monaco/vs';
+  const CDN = 'https://registry.npmmirror.com/monaco-editor/0.52.0/files/min/vs';
+  const tryLoad = (base) => new Promise((resolve, reject) => {
+    const sc = document.createElement('script');
+    sc.src = base + '/loader.js';
+    sc.onload = () => {
+      window.require.config({ paths: { vs: base }});
+      window.require(['vs/editor/editor.main'], () => resolve(true));
+    };
+    sc.onerror = () => reject(new Error('loader_failed'));
+    document.head.appendChild(sc);
+  });
+  tryLoad(LOCAL).then(() => {
+    S.monacoReady = true;
+    createEditor();
+    if (S.activeTab) openEditorForTab(S.activeTab);
+  }).catch(() => tryLoad(CDN).then(() => {
+    S.monacoReady = true;
+    createEditor();
+    if (S.activeTab) openEditorForTab(S.activeTab);
+  }).catch(() => {
+    toast('编辑器加载失败，已退回纯文本模式', 'err');
+    const wrap = document.createElement('div');
+    wrap.id = 'fallback-editor';
+    wrap.innerHTML = '<textarea></textarea>';
+    $('#editors').appendChild(wrap);
+    S.monacoReady = 'fallback';
+    createEditor();
+  }));
+  return; /* 旧逻辑保留在下面但不会执行 */
   const loaderScript = document.createElement('script');
   loaderScript.src = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js';
   loaderScript.onload = () => {

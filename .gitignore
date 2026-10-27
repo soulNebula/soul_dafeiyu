@@ -12,3 +12,4 @@ __pycache__/
 # 前端构建（M4 之后）
 web/dist/
 node_modules/
+web/vendor/

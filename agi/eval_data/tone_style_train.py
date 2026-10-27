@@ -24,13 +24,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 DATA_PATH = ROOT / "agi" / "eval_data" / "human_tone" / "style_sft_ai.jsonl"
 if str(ROOT / "agi" / "eval_data") not in sys.path:
     sys.path.insert(0, str(ROOT / "agi" / "eval_data"))
 from style_prompt import build_messages, extract_anchors, prompt_fingerprint  # noqa: E402
-DEFAULT_MODEL = Path(r"E:\agent\models\Qwen2.5-0.5B-Instruct")
-DEFAULT_OUT = Path(r"E:\agent\output\tone_style_qwen05_v1")
+DEFAULT_MODEL = agent_path(r"models\Qwen2.5-0.5B-Instruct")
+DEFAULT_OUT = agent_path(r"output\tone_style_qwen05_v1")
 
 
 def load_rows(path: Path = DATA_PATH) -> list[dict]:

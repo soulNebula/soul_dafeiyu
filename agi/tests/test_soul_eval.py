@@ -5,6 +5,13 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 import pytest
 
@@ -12,7 +19,7 @@ from agi.soul import evaluate
 
 ROOT = Path(__file__).resolve().parents[2]
 VAL_PATH = ROOT / "agi" / "soul" / "data" / "soul_sft_v0_val.jsonl"
-MODEL_PATH = Path(r"E:\agent\models\Qwen3.5-2B")
+MODEL_PATH = agent_path(r"models\Qwen3.5-2B")
 
 
 # --------------------------------------------------------------------------- #

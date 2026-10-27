@@ -27,7 +27,7 @@ $script:ConfigPath = Join-Path $script:RepoRoot "agi\data\wechat\config.json"
 $script:Launcher = Join-Path $script:RepoRoot "tools\desktop\launcher.py"
 $script:IconPath = Join-Path $script:RepoRoot "tools\desktop\icon.ico"
 $script:LogDirHints = @(
-    "E:\agent\logs",
+    $(if ($env:AGENT_HOME) { Join-Path $env:AGENT_HOME "logs" }),
     (Join-Path $script:RepoRoot "agi\data\desktop_logs")
 )
 $script:NotifyIcon = $null

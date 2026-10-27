@@ -43,14 +43,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 from tools import build_human_tone as ht  # noqa: E402
 from tools import build_qq_tone as bq  # noqa: E402
 
 DATA_PATH = ROOT / "agi" / "eval_data" / "human_tone" / "sft.jsonl"
-DEFAULT_MODEL = Path(r"E:\agent\models\Qwen2.5-0.5B-Instruct")
-DEFAULT_OUT = Path(r"E:\agent\output\tone_qwen05_v1")
-DEFAULT_QQ_EXPORT = Path(r"E:\agent\qq_export\c2c")
+DEFAULT_MODEL = agent_path(r"models\Qwen2.5-0.5B-Instruct")
+DEFAULT_OUT = agent_path(r"output\tone_qwen05_v1")
+DEFAULT_QQ_EXPORT = agent_path(r"qq_export\c2c")
 MIN_PAIRS_FOR_FORMAL_TRAIN = 200
 MAX_CONTEXT = 4
 MIN_CONTEXT = 2

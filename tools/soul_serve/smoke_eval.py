@@ -22,6 +22,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 from agi.inner import schema  # noqa: E402
 from agi.selflearn import llm as teacher_llm  # noqa: E402 - parse_json 容错解析
@@ -115,8 +122,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ctx", type=int, default=2048)
     parser.add_argument("--max-new-tokens", type=int, default=300)
     parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--out", default=r"E:\agent\logs\llama_smoke.json")
-    parser.add_argument("--log", default=r"E:\agent\logs\llama_server_smoke.log")
+    parser.add_argument("--out", default=str(agent_path(r"logs\llama_smoke.json")))
+    parser.add_argument("--log", default=str(agent_path(r"logs\llama_server_smoke.log")))
     parser.add_argument("--hf-dir", default="", help="可选：合并后的 HF 目录，做一致性抽查")
     parser.add_argument("--hf-compare", type=int, default=5)
     parser.add_argument("--hf-device", default="auto", choices=["auto", "cpu", "cuda"],

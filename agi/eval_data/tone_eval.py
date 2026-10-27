@@ -26,13 +26,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 from tools import build_human_tone as ht  # noqa: E402
 
 DATA_PATH = ROOT / "agi" / "eval_data" / "human_tone" / "sft.jsonl"
 PROFILE_WECHAT = ROOT / "agi" / "eval_data" / "human_tone" / "profile.md"
 PROFILE_QQ = ROOT / "agi" / "eval_data" / "human_tone" / "qq_profile.md"
-DEFAULT_MODEL = Path(r"E:\agent\models\Qwen2.5-0.5B-Instruct")
+DEFAULT_MODEL = agent_path(r"models\Qwen2.5-0.5B-Instruct")
 CLAUSE_SPLIT = re.compile(r"[，,。！!？?；;…~、]+")
 LEXICON_TERMS = tuple(ht.LEXICON)
 
@@ -281,14 +288,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="P2-b 语气 adapter 正式评测")
     parser.add_argument("--data", default=str(DATA_PATH))
     parser.add_argument("--model-path", default=str(DEFAULT_MODEL))
-    parser.add_argument("--adapter", default=r"E:\agent\output\tone_qwen05_v1")
+    parser.add_argument("--adapter", default=str(agent_path(r"output\tone_qwen05_v1")))
     parser.add_argument("--limit", type=int, default=0, help="最多生成多少条（0=全部 val）")
     parser.add_argument("--max-new-tokens", type=int, default=64)
     parser.add_argument("--pairwise-n", type=int, default=20)
     parser.add_argument("--no-judge", action="store_true")
     parser.add_argument("--judge-mock", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--out", default=r"E:\agent\logs\tone_eval_formal.json")
+    parser.add_argument("--out", default=str(agent_path(r"logs\tone_eval_formal.json")))
     args = parser.parse_args(argv)
 
     rows = load_rows(Path(args.data))

@@ -23,6 +23,13 @@ import re
 import sys
 import time
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 ROOT = Path(__file__).resolve().parents[2]
 EVAL_DIR = ROOT / "agi" / "eval_data"
@@ -36,13 +43,13 @@ from style_prompt import (  # noqa: E402
 )
 
 DATA_PATH = ROOT / "agi" / "eval_data" / "human_tone" / "style_sft_ai.jsonl"
-SCENARIO_PATH = Path(r"E:\agent\logs\style_baselines_scenarios.json")
-CD_PATH = Path(r"E:\agent\logs\style_baselines_cd.json")
-ADAPTER_PATH = Path(r"E:\agent\logs\style_baselines_adapters.json")
-TABLE_PATH = Path(r"E:\agent\logs\style_baselines_table.md")
+SCENARIO_PATH = agent_path(r"logs\style_baselines_scenarios.json")
+CD_PATH = agent_path(r"logs\style_baselines_cd.json")
+ADAPTER_PATH = agent_path(r"logs\style_baselines_adapters.json")
+TABLE_PATH = agent_path(r"logs\style_baselines_table.md")
 FEWSHOT_PATH = ROOT / "agi" / "eval_data" / "human_tone" / "fewshot.json"
-DEFAULT_MODEL_05B = Path(r"E:\agent\models\Qwen2.5-0.5B-Instruct")
-DEFAULT_MODEL_15B = Path(r"E:\agent\models\Qwen2.5-1.5B-Instruct")
+DEFAULT_MODEL_05B = agent_path(r"models\Qwen2.5-0.5B-Instruct")
+DEFAULT_MODEL_15B = agent_path(r"models\Qwen2.5-1.5B-Instruct")
 N_SCENARIOS = 20
 
 
@@ -333,8 +340,8 @@ def run_adapters() -> dict:
     scenarios = prepare_scenarios(client)
     payload = {}
     for name, model_path, adapter in (
-        ("0.5B_v3", DEFAULT_MODEL_05B, Path(r"E:\agent\output\tone_style_qwen05_v3")),
-        ("1.5B_v3", DEFAULT_MODEL_15B, Path(r"E:\agent\output\tone_style_qwen15_v3")),
+        ("0.5B_v3", DEFAULT_MODEL_05B, agent_path(r"output\tone_style_qwen05_v3")),
+        ("1.5B_v3", DEFAULT_MODEL_15B, agent_path(r"output\tone_style_qwen15_v3")),
     ):
         if not adapter.exists():
             print(f"[baseline] 跳过 {name}：adapter 不存在 {adapter}", flush=True)

@@ -14,7 +14,9 @@ rapidocr-onnxruntime==1.2.3
 # 用于图片/GIF 原文件解密（wx_core/dat_decrypt.py：.dat 的 AES + 异或，V1/V2/V3）
 # 与表情包（贴纸）解密（wx_core/emoticon.py：AES-128-CBC）。
 # 默认流程会用"一次性只读提取"的密钥解密图片/贴纸缓存，因此属于运行时依赖。
-pycryptodome==4.1.0
+# P0-3：原来写死 ==4.1.0（审计在 PyPI 上装不到；本机实测 4.1.0/4.2.0 可用），
+# 改成范围 `>=3.20,<5`：3.20+ 的 AES/CBC API 都兼容（已 pip download 验证 4.2.0 可装）。
+pycryptodome>=3.20,<5
 # 用于把表情包解密出的 wxgf（微信 HEVC 动画容器）转成动画 GIF；
 # 自带 ffmpeg 7.1 二进制（无需额外安装 ffmpeg）。不装时只保留原始 .wxgf、无 GIF 预览。
 imageio-ffmpeg==0.6.0

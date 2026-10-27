@@ -2,11 +2,11 @@
 # llama-server 启动脚本（JSON schema 常驻约束 + torch CUDA DLL 路径）
 #
 # 用法（在仓库根目录）:
-#   pwsh -File tools/soul_serve/start_server.ps1 -Model E:\agent\output\gguf\soul_qwen25_05b_v1-q4_k_m.gguf
+#   pwsh -File tools/soul_serve/start_server.ps1 -Model <AGENT_HOME>\output\gguf\soul_qwen25_05b_v1-q4_k_m.gguf
 #   pwsh -File tools/soul_serve/start_server.ps1 -Model <gguf> -Port 8124 -Cpu   # 不占 GPU 的调试
 #
 # 关键点（踩坑）：
-# - PATH 必须包含 E:\agent\venv312\Lib\site-packages\torch\lib，否则 ggml-cuda.dll 加载失败；
+# - PATH 必须包含 <AGENT_HOME>\venv312\Lib\site-packages\torch\lib，否则 ggml-cuda.dll 加载失败；
 # - 必须带 --jinja（用 GGUF 内自带 chat template 渲染 messages）；
 # - JSON schema 约束默认走**请求级** response_format（b11857 的服务端 -jf 在 Qwen jinja
 #   template 下会 400：Unexpected empty grammar stack after accepting piece: <|im_start|>）；
@@ -29,8 +29,15 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if ([string]::IsNullOrWhiteSpace($Schema)) {
     $Schema = Join-Path $repo "agi\soul\inner_state_schema.json"
 }
-$llamaBin = "E:\agent\llama\cuda"
-$torchLib = "E:\agent\venv312\Lib\site-packages\torch\lib"
+$agentHome = if ($env:AGENT_HOME) { $env:AGENT_HOME }
+    elseif ($env:SOULAGENT_AGENT_HOME) { $env:SOULAGENT_AGENT_HOME }
+    else {
+        $pathsJson = Join-Path $repo "agi\data\paths.json"
+        if (Test-Path $pathsJson) { (Get-Content $pathsJson -Raw | ConvertFrom-Json).agent_home }
+    }
+if (-not $agentHome) { throw "请设置 AGENT_HOME（或 SOULAGENT_AGENT_HOME / agi\data\paths.json）；见 docs\PATHS.md" }
+$llamaBin = Join-Path $agentHome "llama\cuda"
+$torchLib = Join-Path $agentHome "venv312\Lib\site-packages\torch\lib"
 $exe = Join-Path $llamaBin "llama-server.exe"
 
 if (-not (Test-Path $exe)) { throw "找不到 llama-server.exe: $exe" }

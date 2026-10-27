@@ -34,6 +34,12 @@ from urllib.parse import parse_qs, quote, urlsplit
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:            # 以脚本方式启动时也能 import agi.*
     sys.path.insert(0, str(ROOT))
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
 DATA_DIR = ROOT / "agi" / "data"
 GATEWAY_DIR = DATA_DIR / "wechat"
 GATEWAY_LOG = GATEWAY_DIR / "gateway.log"
@@ -47,7 +53,7 @@ PROMPTS_PATH = DATA_DIR / "prompts.json"
 LOG_DIR = ROOT / "log"
 LOG_MESSAGES = LOG_DIR / "messages.jsonl"
 LOG_CHAT = LOG_DIR / "聊天记录.txt"
-BACKUP_DIR = Path(r"E:\agent\backups")
+BACKUP_DIR = agent_path(r"backups")
 AUDIT_PATH = DATA_DIR / "console_audit.log"
 TONE_PROFILE = ROOT / "agi" / "eval_data" / "human_tone" / "profile.md"
 STATIC_DIR = Path(__file__).resolve().parent / "static"

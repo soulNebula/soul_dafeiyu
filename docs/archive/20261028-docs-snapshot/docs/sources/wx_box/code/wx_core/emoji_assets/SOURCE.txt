@@ -1,0 +1,4 @@
+这些 PNG 是微信内置表情素材，来自 npm 包 `wechat-emojis@1.0.2`
+（https://www.npmjs.com/package/wechat-emojis ，仓库 github.com/CN-Grace 相关）。
+仅用于本工具"emoji 图标 → 中文名"的可选兜底识别（主路径是微信右键复制得到的 [微笑]），
+不修改、不再分发素材本身；如原包有独立许可声明，以原包为准。

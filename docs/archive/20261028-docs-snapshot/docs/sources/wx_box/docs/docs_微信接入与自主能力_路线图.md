@@ -1,0 +1,332 @@
+# 微信接入与自主能力路线图（从「只读观察」到「能聊、能查、能学」）
+
+> **状态**：设计稿，2026-10-24 落盘，**尚未实施**。写完先存着，以后按阶段做。
+> **目标读者**：未来的你（实施者）。每一步都写成「改哪个文件、验收怎么算、风险在哪」。
+> **一句话目标**：让 wx_box 从「只读消息查看器 + 单轮 AI 分析」升级成**住在微信里的 agent**——
+> 能收发消息像人一样聊，遇到不知道的自己上网查，查完的东西能记进记忆并验证，而不是只会你问它答。
+
+---
+
+## 0. 先说清楚边界（不改变现有红线）
+
+本文**不推翻** `docs/风控与合规说明.md` 的「三不」红线：
+
+1. 不写微信进程内存（一次性只读取密钥的例外保持不变）；
+2. 不 Hook、不注入 DLL / 不挂全局钩子；
+3. 不写回、不修改微信数据库，不向微信安装目录写文件。
+
+**新增的唯一能力面是「发送消息」**——它必然改变产品定位（从只读工具变成可写入工具）。
+所以本文把发送设计成**默认关闭、逐联系人升级、全程可审计**，并且明确写出新增的风险与兜底。
+
+---
+
+## 1. 目标能力分档（验收口径）
+
+| 档位 | 能力 | 判定标准（可测） |
+| --- | --- | --- |
+| **L1 能聊** | 收到白名单联系人的消息 → 生成回复 → 真的发出去 | 与指定联系人完成 20 轮真实往返；误发 0 条；重复发送 0 条；平均延迟 < 10s |
+| **L2 能查** | 遇到事实/时效/网络用语问题，自己调 `web_search` / `web_fetch`，**多步**（≥2 次工具调用）后再回答 | 10 个时效性问题 ≥8 个答对，答案带可点来源；无来源时明确说「查不到」而不是编 |
+| **L3 能学** | 把查到/聊出来的结论写成**带原文证据**的记忆或技能，过闸门确认，下次能引用 | 一周内 confirmed 记忆 ≥20 条；同一问题第二次出现时能引用旧记忆且不编造；错误记忆可回滚 |
+| **L4 主动**（可选，最后做） | 按唤醒策略自己决定看消息 / 等下文 / 开口 / 潜水 | 主动发言被对方接住的比率 > 30%；「打扰感」投诉 0；夜间不主动 |
+
+**不要跳级**：L1 没跑稳之前不要开 L2 的自动发送；L3 的记忆闸门没接上之前不要让工具结果直接进记忆。
+
+---
+
+## 2. 现状盘点（很多地基已经有了，别从零开始）
+
+### 2.1 已经有的
+
+| 能力 | 现有实现 | 状态 |
+| --- | --- | --- |
+| 收消息 | `wx_core/monitor.py`（DB 直读 + OCR 回退）→ `agi/wechat_gateway/receiver.py`（好友、白名单、文本、去重、过滤自己发的） | ✅ 可用 |
+| **发消息** | `agi/wechat_gateway/sender.py` → **wxauto4**（`agi/data/wechat/.venv`，wxauto4 41.1.7 已装）。`dry_run` 默认 `true`；发送前 `ChatWith(exact=True)` + `ChatInfo()` 复核，不确定就 fail-closed | ✅ 已实测「发到文件传输助手成功」 |
+| 网关 | `agi/wechat_gateway/server.py`（801，队列 → agent → sender）、`send_cli.py`、`agi/tests/test_wechat_gateway.py` | ✅ 骨架可用 |
+| 大脑（单轮） | `agi/selflearn/llm.py` 直调 DeepSeek | ⚠️ **没有 tools / function calling**，只能一次生成 |
+| 记忆 | `agi/selflearn/`：claims / gates / memory / db / search（FTS5+bigram） | ✅ 最小版本（29 tests） |
+| 学习 | `agi/selflearn/learn_loop.py`、`proactive.py`、`initiative.py` | ⚠️ 最小版本，见 `agi/实现缺口清单.md` |
+| 网页端 | `webui/`（SSE、DeepSeek 分析、agi 页签） | ✅ 可用 |
+| 窗口级输入原语 | `wx_core/win.py`：`type_text` / `press_key` / `post_click` / `post_scroll` | ✅ 已有（发送兜底可直接用） |
+
+### 2.2 真正缺的（本路线图要补的）
+
+| # | 缺口 | 影响 | 对应阶段 |
+| --- | --- | --- | --- |
+| G1 | **没有 agent loop**：模型不能调工具，只会一次性生成 | L2/L3 完全卡死 | M2 |
+| G2 | **没有工具**：无搜索、无抓网页、无记忆检索工具化 | 只能「你问它答」 | M2/M3 |
+| G3 | **发送策略缺失**：确认、免打扰、频率、延迟、失败重试、审计都没有 | 不敢开 auto | M1 |
+| G4 | **801 网关无鉴权**（只绑回环，无 token） | 本机任意进程可调用发送 | M0 |
+| G5 | 记忆/技能闭环未完成（缺口清单 01/06/13） | L3 不成立 | M4 |
+| G6 | 唤醒无 worker/预算 | L4 不成立 | M5 |
+| G7 | **口径不一致**：根 `README.md` 说 agi「零发送 / `--dry-run` 写死在服务端」，但 `agi/wechat_gateway/sender.py` 已有真实发送路径（默认 dry_run） | 对外说明与代码不符，易误判 | M0 |
+
+> 关于 G7 的处置建议：**不要**把已有能力说成没有。统一口径为——
+> 「主监听器只读；`agi/wechat_gateway` 是可选的发送扩展，默认 `dry_run=true`，需显式开启」。
+
+---
+
+## 3. 实施前必须拍板的 4 个决策
+
+### 3.1 发送通道
+
+| 方案 | 现状 | 风险 | 结论 |
+| --- | --- | --- | --- |
+| **wxauto4**（COM/UIA 自动化） | 已装、已实测可用 | 依赖微信窗口与版本；微信升级可能失效；被风控概率中等 | ✅ **主通道** |
+| **窗口级键鼠**（`win.py` 的 `post_click` + 剪贴板粘贴 + Enter） | 原语已有 | 需定位输入框坐标、焦点容易被抢 | ✅ **兜底**（wxauto4 失败时） |
+| Hook / DLL 注入（第三方方案） | 参考 `WeChat-Hook-项目分析.md` | 违反微信 ToS、封号、自身合规审计直接 FAIL、第三方代码无 LICENSE | ❌ **不做** |
+| 企业微信客服 / 官方接口 | 需企业主体 | 不是个人微信，好友关系不通用 | ❌ 不适用 |
+
+### 3.2 大脑放哪
+
+| 方案 | 优点 | 缺点 | 建议 |
+| --- | --- | --- | --- |
+| **A. 自研 agent loop**（Python 直调 DeepSeek function calling） | 全可控、无私有协议依赖、好测 | 循环/上下文/预算/重试都要自己写 | ✅ **先做这个**（2–3 天出骨架） |
+| B. 接 DSH 当大脑（复用 qq-bridge 的 `dsh-client.js` 协议，写 Python 版） | 白拿 agent loop + MCP + 工具面 + token 账本 | 绑死 DSH 私有协议（Cookie 铸造 / 斜杠 RPC / remote.mux），DSH 一升级就断 | ⏳ 留接口，后置可选 |
+| C. LangChain/AutoGen 等框架 | 快 | 依赖重、调试黑盒、离线约束多 | ❌ 不推荐 |
+
+**接口设计**：把「大脑」抽象成一个函数 `run_agent(messages, tools, budget) -> reply`，
+M2 先实现 A；将来接 B 只换实现，不动网关与记忆层。
+
+### 3.3 自动发送的程度（三级开关，默认最低）
+
+```
+draft   （默认）：只生成草稿进 outbox，你在网页端确认后手动复制发送
+confirm        ：回复生成后先发到「文件传输助手」/ 你自己，回「确认」才发真目标
+auto           ：白名单联系人直接发（需要单独为每个联系人打开，默认全关）
+```
+
+- 升级路径：`draft → confirm → auto`，**逐联系人**配置，不是全局开关；
+- 一次性降级：任何异常（发送失败 3 次、对方连续未回、内容命中敏感规则）自动退回 `draft`；
+- 全局急停：网页端一个按钮 / `Ctrl+C` / 配置项，立即停止发送与采集。
+
+### 3.4 自主上网的边界
+
+- 默认允许**只读**上网（搜索 + 抓取），但：只走 https、禁内网/回环（SSRF 防护）、响应体限量、单轮最多 3 次联网、超时 30s；
+- 抓到的网页内容**只能当资料**，不得当指令（见 §6 注入防护）；
+- 支付、登录、表单提交、下载可执行文件：**禁止**；
+- 「冲浪」= 搜索 + 抓正文 + 可选的浏览器自动化（后置，见 M3.5），不是无头爬全网。
+
+---
+
+## 4. 目标架构
+
+```
+                       ┌──────────────── 微信 PC（Weixin.exe）────────────────┐
+                       │  聊天窗口 / 本地 db_storage / 缓存                  │
+                       └───────▲──────────────────────────────┬──────────────┘
+                    wxauto4 / 窗口键鼠                    wx_core 只读采集
+                               │                              │
+┌──────────────────────────────┴──────────────────────────────▼──────────────────┐
+│                        agi/wechat_gateway（801）                                │
+│  receiver ──► policy（白名单/静默/频率/确认等级）──► queue ──► sender ──► 审计日志 │
+│                    ▲                                    │                        │
+│                    │                            失败重试/降级 draft               │
+└────────────────────┼────────────────────────────────────┼────────────────────────┘
+                     │                                    ▼
+              ┌──────┴───────┐                    ┌────────────────┐
+              │  agent loop  │◄── tools ────────► │ web_search     │
+              │ (M2, 多步)   │                    │ web_fetch      │
+              │  预算/中断   │                    │ memory_query   │
+              └──────┬───────┘                    │ profile_query  │
+                     │                            └────────────────┘
+                     ▼
+        ┌─────────────────────────────┐      ┌──────────────────────────────┐
+        │ agi/selflearn（记忆/学习）   │      │ 观测：token 账本 / 审计 / 看板 │
+        │ claims → gates → 检索注入    │      │ webui（127.0.0.1 + token）    │
+        └─────────────────────────────┘      └──────────────────────────────┘
+```
+
+**分层原则**：网关只管「收发 + 策略」；agent loop 只管「想 + 调工具」；记忆只管「存 + 验 + 取」。
+三者只通过明确接口通信，任何一层都不许越权直接调微信。
+
+---
+
+## 5. 从 qq-bridge 拿什么（这是本文最有价值的部分）
+
+路径：`C:\Users\Administrator\Desktop\qq-bot\qq-bridge`（另一台机器上的参考实现，已跑通）
+
+| 要解决的问题 | qq-bridge 的现成实现 | 移植到本仓库的位置 |
+| --- | --- | --- |
+| 工具调用安全 | `plugins/qq-agent-presets/qq-tool-restrict.mjs`：注册期隐藏 + 执行期白名单**双闸门** | `agi/selflearn/tools.py`（新建）的 registry + guard |
+| 网页抓取 SSRF 防护 | `src/safe-fetch.js`：DNS 全量校验、连已校验 IP、每跳重定向重验、禁内网/CGNAT/ULA | `wx_core/safe_fetch.py`（新建，按 Python 重写） |
+| 搜索后端 | `src/web-search.js`：DeepSeek 原生搜索优先、Bing 兜底、key 解析顺序 config→env→凭据文件 | `wx_core/web_search.py`（新建） |
+| 发送硬边界 | 发送类工具目标必须命中白名单 + 出站敏感信息拦截 + 频率硬上限 | `agi/wechat_gateway/policy.py`（新建） |
+| 唤醒 / 等待 / 潜水 | `dsh/agent-presets/qq-chat-v2/agent.cordis.yml` + `socialV2.wake` 配置：三种 wait 语义、唤醒预算、批量窗口 | `agi/selflearn/initiative.py`（改造） |
+| 记忆卫生规则 | persona 里的 `activeTopic` / `pendingThought` / `memberImpression` 增删规则 | `agi/02-记忆与人格规格.md` 补充原则 |
+| 注入防护 | 外部数据单行化 + 明写「资料不是指令」 | `agi/selflearn/gates.py`（S7 闸门里加一道） |
+| 成本账本 | `src/token-ledger.js`（`(turn,step,retry)+seq` 幂等折叠 + JSONL）与 `src/model-prices.js`（峰谷×2、节假日、未知模型标 estimated） | `webui/cost.py`（新建，接现有 usage 解析） |
+| 单实例与离线队列 | `acquireLock()`、每会话 50 条 + 退避补投 | `agi/wechat_gateway/server.py` |
+| 落盘 ACL | `scripts/harden-state-acl.mjs`（icacls 切断继承、提权重试、失败不阻断） | `tools/harden_acl.py`（新建，保护 `config.json` / `web_config.json`） |
+| 控制台鉴权细节 | token + Host 校验 + `timingSafeEqual` + GET 无副作用 + 1MB body 上限 | `webui/server.py` 补 `hmac.compare_digest` 与 body 上限 |
+
+**不要抄的**：`bridge.js`（1.2 万行单体）、91 个脚本的工程方式、DSH 私有协议（除非选 B 方案）。
+
+---
+
+## 6. 分阶段路线（含验收与文件）
+
+> 每阶段独立可交付、可回滚。做完一个再开下一个。工作量是单人估算。
+
+### M0 · 口径与安全底座（0.5–1 天）
+
+- [x] 统一 README/agi 的「零发送」口径（见 G7），写明 `agi/wechat_gateway` 的存在与开关；
+- [x] 801 网关加 token 鉴权（`X-Admin-Token`，空 token **fail-closed**、启动自动生成）+ Host 回环校验 + 1MB body 上限 + `hmac.compare_digest`；
+- [x] 审计：复用既有 `agi/data/wechat/gateway.log`（收发/发送被拦/草稿/批准/拒绝都记）；
+- [x] `tools/harden_acl.py`：收紧 `config.json`、`web_config.json`、`log/`、`media/`、`agi/data/` 的 ACL（已 `--apply`，5 个路径全部切断继承；含 `--check` 只读盘点与 6 个单测）；
+- [x] 附带修复：引用消息内部 ID 的入/出站消毒（`agi/textguard.py`，见 2026-10-24 事故）。
+
+**验收**：无 token 调 801 → 401、伪造 Host → 403（均已实测）；`icacls` 复核 5 个敏感路径只剩 当前用户/SYSTEM/Administrators、无继承项。
+
+### M1 · 发送扶正（2–3 天）
+
+- [x] 三级开关：`auto` / `confirm`（落草稿，人工批准才发）/ `off`；**全局默认 confirm**，按联系人 `contact_modes` 覆盖（现网「白云一片去悠悠」保持 auto 以免打断真实对话）；
+- [x] 草稿持久化：`agi/data/wechat/drafts.jsonl`，接口 `GET /api/drafts`、`POST /api/draft/approve`、`POST /api/draft/reject`；
+- [x] 发送失败不丢内容：自动归档成 `reason=send_failed` 草稿；
+- [x] 频率窗口：最小间隔（只约束主动发送，被动多气泡不卡）、每分钟、**每小时**、每日；
+- [x] 内容闸门（`policy.check_content`）：空/超长/本机路径/凭据赋值/`wxid_`/`sk-`/私钥头，命中记 `send_blocked`；
+- [x] 窗口级兜底（`agi/wechat_gateway/win_send.py`）：默认关闭；`manual` 只放剪贴板 + 落草稿，`auto` 需显式配 `fallback_input_box` 且结果 `verified:false`；
+- [ ] 端到端 20 轮实录（现网已有真实 23+ 条 sent，但没有按 M1 验收口径统计）。
+
+**验收（当前）**：confirm 不批准不发、批准才发、失败归档、伪造 Host/错 token 被拒、
+超长/本机路径/凭据/内部 ID 被内容闸门拦下、每小时与最小间隔生效、兜底默认不盲发——32 个单测 + 真实链路通过。
+**M1 剩余**：只差「20 轮实录 + 误发/重复发送统计」这一项验收（需要真实对话积累）。
+
+### M2 · agent loop（3–5 天）
+
+- [x] `agi/selflearn/llm.py` 增加 `chat_with_tools`（OpenAI 兼容 tool_calls + 旧式 function_call）；
+- [x] `agi/selflearn/tools.py`：工具注册表（5 个 schema、执行期白名单、超时、结果裁剪 8000 字）；
+- [x] `agi/selflearn/agent.py`：多步循环（默认 3 步 / 4 次工具 / 60s，重复调用去重，预算耗尽强制收尾）；
+- [ ] 中断：收到新消息或用户急停时，当前循环可取消（**未做**，现在只靠墙钟/步数预算）；
+- [x] 工具接入：`memory_query`（内部检索）+ `web_search` / `web_fetch` / `calc` / `python_verify`。
+
+**验收**：给 agent 一个需要两步的问题（先查记忆再答），事件流里能看到 2 次 tool_call；超预算能优雅退出。
+
+### M3 · 上网能力（2–3 天）
+
+- [x] M3.1 `wx_core/safe_fetch.py`（29 测试）：禁内网/凭据 URL、DNS 全量校验+IP 钉住、逐跳重验、流式限字节；
+- [x] M3.2 `wx_core/web_search.py`（15 测试）：DeepSeek 原生搜索优先、Bing RSS 回退、`provider` 明示；
+- [x] M3.3 注册成工具并接入循环；检索结果裁剪（正文 4000 字 / 资料块 1600 字）；
+- [x] M3.4 来源落库 `research_sources`（url 去重、标题/摘要/turn_id）+ 回答里用 `[web-n]` 编号引用；**真实对话尚未触发过联网**；
+- [ ] M3.5（可选，后置）浏览器自动化「冲浪」：**未做**。
+
+**验收**：10 个时效性问题 ≥8 对；把 `http://127.0.0.1:8081/api/status` 喂给 `web_fetch` 必须被拒；抓取失败时回答「查不到」而非编造。
+
+### M4 · 学习闭环（3–5 天）
+
+- [x] 工具结果 → 长期记忆：`tool_reply.remember_research` 写 `scope=world / kind=fact`，
+      `evidence=来源 URL`，内容去重（**未走 claims 抽取**，先用记忆打通"查过能记住"）；
+- [ ] 过 `agi/selflearn/gates.py`：结构校验、敏感过滤、原文匹配、去重、冲突不覆盖；
+- [ ] 检索注入：回答前按需 `memory_query`，注入条数与字数上限（防上下文爆炸）；
+- [ ] `learn_loop`：确认 → 练习 → 复测 → 转正/退役，接 `13-弱验证技能怎么学.md`；
+- [ ] 每日复盘脚本：本周新增/确认/冲突/回滚。
+
+**验收**：一周后能回答「你上次查的那个 XX 是什么」并引用来源；故意喂一条错误信息，能被 gates 拦下或标记 pending。
+
+### M5 · 主动能力（进行中）
+
+- [x] 调度常驻：网关守护线程按 `proactive_interval_s` 跑（不再依赖浏览器 setInterval）；
+- [x] 库对齐：按 `allowed_contacts` 逐个用 per-contact DB，不再对活动库说话；
+- [x] 真发送：主动消息走 `_send(proactive=True)`，纳入 confirm/白名单/静默/频控/内容闸门；
+- [x] 反馈闭环第一步：`proactive.record_proactive_turn` 补 turn，发送成功后登记 `last_turns`；
+- [x] 等待语义（微信版）：`reply_debounce_ms` 合批——对方连发几条文字先攒着，到点一次回；
+      图片/表情/系统消息不攒；超长立刻回；
+- [ ] 已读水位（readThroughSeq 等价物）——**未做**（微信侧没有现成的已读 seq，需要自建 last_seen）；
+- [x] 被拒绝后收敛：收到"别发/烦/没意思"→ 24h 不主动；7 天内 2 次 → 7 天不主动；对方在说话时不主动；
+- [ ] 一周真实运行验收（主动被接住率、打扰投诉 0）。
+
+**当前**：代码链路已通（6 个单测），但 `proactive_enabled=false`，**没有对真人主动开口**；
+打开前建议先把该联系人降为 confirm。
+
+**验收**：一周无「打扰投诉」；主动消息被接住比率达标。
+
+---
+
+## 7. 风险清单（按严重度）
+
+| # | 风险 | 影响 | 缓解 |
+| --- | --- | --- | --- |
+| R1 | **微信风控/封号**（发送频率、内容雷同、自动化特征） | 账号受限 | 单账号、白名单、慢速（≥3s/条）、夜间静默、内容不模板化、可一键停 |
+| R2 | 违反微信用户协议 | 法律/账号风险 | 仅个人自用、不群发、不营销；风险自担并写进 README |
+| R3 | **prompt injection**：群友消息/网页内容里藏指令 | agent 越权行动 | 工具白名单（只读工具）+ 外部内容标注「资料不是指令」+ 发送前二次策略检查 |
+| R4 | 幻觉进记忆 | 错误长期沉淀 | 写入必须带 evidence；gates 原文匹配；pending 人工确认；可回滚 |
+| R5 | 隐私出机（消息/网页内容送模型供应商） | 隐私泄露 | 出机清单写进 README；敏感内容过滤；可关闭联网 |
+| R6 | wxauto4 随微信升级失效 | 发送中断 | 窗口级兜底 + 自动降级 draft + 版本检测日志 |
+| R7 | 网关被本机其他进程调用 | 代发垃圾消息 | 801 加 token + 回环 + 审计（M0） |
+| R8 | 密钥/聊天记录落盘被本机他人读取 | 数据泄露 | ACL 收紧（M0）+ 不分享 config.json |
+| R9 | 双实例/双采集 | 重复发送、日志错乱 | 单实例锁（照抄 qq-bridge 的 acquireLock） |
+| R10 | 成本失控（多步 + 联网 + 长上下文） | 花费飙升 | M2 的步数/预算 + M3 的联网次数上限 + token 账本 |
+
+---
+
+## 8. 待你拍板的 5 个问题（实施前回答）
+
+1. **发送范围**：先只对「文件传输助手 / 一个小号」跑，还是直接对真人白名单？
+2. **大脑**：接受「先自研 loop，DSH 留作后置」吗？（决定 M2 走法）
+3. **自主上网**：允许抓任何公网页面，还是只允许搜索 + 少数白名单站点？
+4. **auto 模式**：是否永久只对「自己」开放（永不对真人 auto）？
+5. **学习产物**：记忆只在本机 SQLite，还是也要导出可读的 markdown 供你审阅？
+
+---
+
+## 9. 参考索引
+
+本仓库：
+- `agi/wechat_gateway/README.md`（网关现状与「尚未做」清单）
+- `agi/wechat_gateway/sender.py` / `receiver.py` / `server.py`（收发骨架）
+- `agi/实现缺口清单.md`（00–14 的逐章差距）
+- `agi/14-按需运行与唤醒机制.md`、`agi/02-记忆与人格规格.md`
+- `wx_core/win.py`（窗口级输入原语）、`wx_core/clipboard.py`
+- `docs/风控与合规说明.md`（红线，不要越过）
+- `WeChat-Hook-项目分析.md`（为什么不做 Hook）
+
+参考实现（qq-bridge）：
+- `src/safe-fetch.js`、`src/web-search.js`（上网与 SSRF）
+- `plugins/qq-agent-presets/qq-tool-restrict.mjs`（工具双闸门）
+- `dsh/agent-presets/qq-chat-v2/agent.cordis.yml`（等待/唤醒/潜水协议）
+- `src/token-ledger.js`、`src/model-prices.js`（成本账本）
+- `scripts/harden-state-acl.mjs`（Windows ACL 加固）
+- `README.md`、`RULES.md`、`docs/guides/SECURITY_BASELINE.md`（边界与威胁模型写法）
+
+---
+
+> **实施提醒**：每个阶段结束都跑一遍 `python tools/audit_compliance.py` 与 `python -m pytest tests agi/tests -q`，
+> 并在本文件对应阶段打勾。只要有一项不通过，不要进下一阶段。
+
+---
+
+## 实施记录 · L2/M2+M3 第一版（2026-10-24）
+
+> 目标：让 agent **自己搜索 → 抓正文 → 多步 → 带来源回答**；最终回复仍走人格层（风格不变）。
+
+### 新增文件
+
+| 文件 | 作用 |
+| --- | --- |
+| `wx_core/safe_fetch.py` | SSRF 防护抓取：DNS 全量校验、TCP 目标钉在已校验 IP（保留 Host/SNI）、每跳重定向重验、流式限字节、HTML→纯文本、charset 兜底 |
+| `wx_core/web_search.py` | 搜索双后端：DeepSeek 原生搜索（`web_search_20250305`）优先，失败回退 Bing RSS；`provider` 明确标注 |
+| `agi/selflearn/agent.py` | 多步工具循环：预算（步数/调用数/墙钟）、重复调用去重、预算耗尽**强制收尾**（避免空回复）、来源去重 |
+| `agi/selflearn/tool_reply.py` | 「要不要查」判定（`SELFLEARN_LOOKUP=auto/always/off`）、资料块生成、`research_sources` 落库 |
+| `agi/textguard.py` | 微信内部 ID 出站消毒（引用事故的纵深防御） |
+| 测试 | `tests/test_safe_fetch.py`(29) / `tests/test_web_search.py`(15) / `agi/tests/test_agent_loop.py`(10) / `agi/tests/test_tools_registry.py`(7) / `agi/tests/test_tool_reply.py`(9) / `agi/tests/test_textguard.py`(5) |
+
+### 改动
+
+- `agi/selflearn/llm.py`：新增 `chat_with_tools()`（OpenAI 兼容 `tool_calls` + 旧式 `function_call`），既有 `chat()` 未动。
+- `agi/selflearn/tools.py`：新增 `web_search` / `web_fetch` / `memory_query` 与 `specs()`；旧 `calc/time/python_verify` 用法不变。
+- `agi/selflearn/chat.py`：发送前按需触发研究（`tool_reply.research`），资料注入 `_prompt`；回合结束把来源写入 `research_sources`；返回体新增 `research` 字段。
+- `agi/wechat_gateway/server.py`：入站/出站都过 `strip_internal_ids`（引用事故兜底），被消毒的发送记 `send_sanitized`。
+
+### 验收（真机）
+
+```text
+问题：帮我查一下今天北京天气怎么样，顺便说下适不适合出门
+结果：ok=True，tool_calls=3（web_search ×2 + web_fetch ×1），19.8s
+回答：带天气数据 + 「来源：https://www.qweather.com/weather/beijing-101010100.html」
+```
+
+### 已知坑 / 未做
+
+- `deepseek-flash` 会反复调工具：已加「同工具同参数去重」+ 预算耗尽强制收尾（不带 tools 再问一次）。
+- 检索预算：`max_steps=2`、`max_tool_calls=3`、`deadline_s=45`；抓正文截 4000 字、资料块截 1600 字。
+- 未做：来源在回复里用 `[web-1]` 形式引用、搜索缓存、每轮 token/费用记账、`research_sources` 的检索与清理、主动链路（L4）、网关 token 鉴权（M0 遗留）。
+- 隐私：搜索问题会发送给 DeepSeek（与聊天本身同一出口）；私聊敏感内容目前靠启发式不触发，后续可接 `pii.scrub_pii`。

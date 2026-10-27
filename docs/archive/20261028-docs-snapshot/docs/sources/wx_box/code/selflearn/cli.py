@@ -1,0 +1,364 @@
+# -*- coding: utf-8 -*-
+"""selflearn CLI。"""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from . import acceptance, affect, backfill, blind, db, decision, drift, emoji, emoji_profile, errors, evaluation, goals, grounding, image_understanding, implicit_feedback, initiative, ingest, learn_flow, learn_loop, learn_plan, learn_practice, media, memory, nightly, personality, pii, proactive, production, production_contacts, profile, proposal_auto, proposals, quality, report, research, retrieval, scheduler, scoring, skills, state, summary, ticker, tools, trust, wake, weak_validation
+from .chat import SelfLearnAgent
+from .config import DB_PATH
+from .llm import Client
+
+
+def _out(data):
+    try:
+        print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+    except UnicodeEncodeError:
+        print(json.dumps(data, ensure_ascii=True, indent=2, default=str))
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m agi.selflearn.cli")
+    parser.add_argument("--db", default=str(DB_PATH))
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    p_chat = sub.add_parser("chat"); p_chat.add_argument("text", nargs="?")
+    sub.add_parser("status")
+    p_hist = sub.add_parser("history"); p_hist.add_argument("--limit", type=int, default=30)
+    p_mem = sub.add_parser("memories"); p_mem.add_argument("--limit", type=int, default=30)
+    sub.add_parser("persona"); sub.add_parser("skills"); sub.add_parser("reflect")
+    p_fb = sub.add_parser("feedback")
+    p_fb.add_argument("turn_id"); p_fb.add_argument("reaction", choices=["good", "ok", "bad"])
+    p_fb.add_argument("--note", default="")
+    p_serve = sub.add_parser("serve"); p_serve.add_argument("--port", type=int, default=8082)
+    sub.add_parser("state"); sub.add_parser("trust"); sub.add_parser("proactive")
+    sub.add_parser("errors"); sub.add_parser("acceptance")
+    sub.add_parser("conflicts")
+    sub.add_parser("media")
+    p_sum = sub.add_parser("summarize"); p_sum.add_argument("--force", action="store_true")
+    sub.add_parser("summary")
+    p_forget = sub.add_parser("forget"); p_forget.add_argument("memory_id")
+    p_correct = sub.add_parser("correct-memory"); p_correct.add_argument("memory_id")
+    p_correct.add_argument("content"); p_correct.add_argument("--evidence", default="用户纠正")
+    p_report = sub.add_parser("report")
+    p_report.add_argument("--markdown", action="store_true")
+    p_resolve = sub.add_parser("resolve-conflict")
+    p_resolve.add_argument("conflict_id"); p_resolve.add_argument("winner_id")
+    p_intent = sub.add_parser("intent")
+    p_intent.add_argument("action", choices=["add", "due", "list"])
+    p_intent.add_argument("--kind", default="check_in")
+    p_intent.add_argument("--text", default="")
+    p_intent.add_argument("--after", type=float, default=3600)
+    p_learn_status = sub.add_parser("learn-status")
+    p_learn_status.add_argument("--skill", default="")
+    p_learn_gap = sub.add_parser("learn-gap")
+    p_learn_gap.add_argument("--skill", required=True); p_learn_gap.add_argument("--goal", default="")
+    p_learn_source = sub.add_parser("learn-source")
+    p_learn_source.add_argument("--skill", required=True)
+    p_learn_source.add_argument("--url", required=True)
+    p_learn_source.add_argument("--keyword", default="")
+    p_learn_source.add_argument("--quote", default="")
+    p_learn_source.add_argument("--title", default="")
+    p_learn_card = sub.add_parser("learn-card")
+    p_learn_card.add_argument("--skill", required=True)
+    p_learn_card.add_argument("--content", required=True)
+    p_learn_card.add_argument("--example", default="")
+    p_learn_practice = sub.add_parser("learn-practice")
+    p_learn_practice.add_argument("--task", required=True)
+    p_learn_practice.add_argument("--passed", action="store_true")
+    p_learn_practice.add_argument("--failed", action="store_true")
+    p_learn_practice.add_argument("--attempt", default="")
+    p_learn_practice.add_argument("--error", default="")
+    p_learn_verify = sub.add_parser("learn-verify")
+    p_learn_verify.add_argument("--task", required=True)
+    p_learn_verify.add_argument("--passed", action="store_true")
+    p_learn_verify.add_argument("--note", default="")
+    p_learn_fetch = sub.add_parser("learn-fetch")
+    p_learn_fetch.add_argument("--url", required=True); p_learn_fetch.add_argument("--keyword", default="")
+    p_lurl = sub.add_parser("learn-from-url")
+    p_lurl.add_argument("--skill", required=True); p_lurl.add_argument("--url", required=True)
+    p_lurl.add_argument("--keyword", default="")
+    p_lex = sub.add_parser("learn-exercise"); p_lex.add_argument("--content", required=True)
+    p_lans = sub.add_parser("learn-answer"); p_lans.add_argument("--task", required=True)
+    p_lans.add_argument("--answer", required=True); p_lans.add_argument("--terms", required=True)
+    p_bc = sub.add_parser("blind-create"); p_bc.add_argument("--skill", required=True)
+    p_bc.add_argument("--question", required=True); p_bc.add_argument("--terms", required=True)
+    p_ba = sub.add_parser("blind-answer"); p_ba.add_argument("--token", required=True)
+    p_ba.add_argument("--answer", required=True)
+    p_bv = sub.add_parser("blind-verify"); p_bv.add_argument("--task", required=True)
+    p_bv.add_argument("--token", required=True); p_bv.add_argument("--answer", required=True)
+    p_lp = sub.add_parser("learn-plan"); p_lp.add_argument("goal")
+    p_ingest = sub.add_parser("ingest-jsonl")
+    p_ingest.add_argument("--file", required=True); p_ingest.add_argument("--source", default="jsonl")
+    p_sessions = sub.add_parser("sessions"); p_sessions.add_argument("--friend", default="")
+    p_segment = sub.add_parser("segment")
+    p_segment.add_argument("--session", required=True); p_segment.add_argument("--max-chars", type=int, default=1200)
+    sub.add_parser("ingest-stats")
+    p_img = sub.add_parser("image-describe")
+    p_img.add_argument("--path", required=True); p_img.add_argument("--attachment", default="")
+    p_img.add_argument("--caption", default="")
+    sub.add_parser("profile")
+    sub.add_parser("profile-distill")
+    p_emoji_index = sub.add_parser("emoji-index"); p_emoji_index.add_argument("--dir", required=True)
+    sub.add_parser("emoji-stats"); sub.add_parser("emoji-list"); sub.add_parser("emoji-profile")
+    p_emoji_use = sub.add_parser("emoji-use"); p_emoji_use.add_argument("--name", required=True)
+    p_props = sub.add_parser("proposals"); p_props.add_argument("--status", default="")
+    p_trans = sub.add_parser("proposal-transition")
+    p_trans.add_argument("proposal_id"); p_trans.add_argument("action")
+    sub.add_parser("proposal-auto-gray")
+    sub.add_parser("proposal-weekly")
+    sub.add_parser("ticker-once")
+    p_bucket = sub.add_parser("score-bucket")
+    p_bucket.add_argument("--stage", default="陌生"); p_bucket.add_argument("--mood", default="neutral")
+    p_bucket.add_argument("--topic", default="生活")
+    sub.add_parser("affect"); sub.add_parser("initiative")
+    sub.add_parser("weak-status")
+    p_wsch = sub.add_parser("weak-schedule"); p_wsch.add_argument("--skill", required=True); p_wsch.add_argument("--reason", default="")
+    p_wre = sub.add_parser("weak-recheck"); p_wre.add_argument("--skill", required=True)
+    p_wre.add_argument("--passed", action="store_true"); p_wre.add_argument("--failed", action="store_true"); p_wre.add_argument("--note", default="")
+    p_wadd = sub.add_parser("wake-add"); p_wadd.add_argument("--kind", default="check_in")
+    p_wadd.add_argument("--text", default=""); p_wadd.add_argument("--after", type=float, default=3600)
+    p_wadd.add_argument("--priority", type=float, default=0.5)
+    p_wdue = sub.add_parser("wake-due"); p_wdue.add_argument("--budget", type=int, default=5)
+    p_wrun = sub.add_parser("wake-run"); p_wrun.add_argument("--budget", type=int, default=5)
+    p_prod = sub.add_parser("production"); p_prod.add_argument("--days", type=int, default=7)
+    p_prod.add_argument("--markdown", action="store_true")
+    p_imp = sub.add_parser("implicit-feedback"); p_imp.add_argument("--limit", type=int, default=80)
+    sub.add_parser("quality")
+    sub.add_parser("goals")
+    p_ga = sub.add_parser("goal-add"); p_ga.add_argument("title"); p_ga.add_argument("--parent", default=""); p_ga.add_argument("--priority", type=float, default=0.5)
+    p_gu = sub.add_parser("goal-update"); p_gu.add_argument("goal_id")
+    p_gu.add_argument("--status", default=""); p_gu.add_argument("--progress", type=float, default=-1)
+    p_night = sub.add_parser("nightly"); p_night.add_argument("--force", action="store_true")
+    sub.add_parser("drift")
+    sub.add_parser("grounding")
+    p_ret = sub.add_parser("retrieve"); p_ret.add_argument("query"); p_ret.add_argument("--k", type=int, default=6)
+    sub.add_parser("tools")
+    p_dec = sub.add_parser("decision"); p_dec.add_argument("--success", type=int, default=0)
+    p_dec.add_argument("--n", type=int, default=0); p_dec.add_argument("--score", type=float, default=0.5)
+    p_pc = sub.add_parser("production-contacts"); p_pc.add_argument("--days", type=int, default=7)
+    p_scrub = sub.add_parser("scrub-pii"); p_scrub.add_argument("--text", required=True)
+    args = parser.parse_args(argv)
+    path = Path(args.db)
+    if args.cmd == "serve":
+        from . import web
+        return web.main(["--db", str(path), "--port", str(args.port)])
+    agent = SelfLearnAgent(path)
+    if args.cmd == "chat":
+        if args.text:
+            _out(agent.send(args.text)); return 0
+        while True:
+            try: text = input("你：").strip()
+            except EOFError: break
+            if text in ("/exit", "/quit"): break
+            if not text: continue
+            r = agent.send(text)
+            print("AI：", r.get("reply") or r.get("error"))
+        return 0
+    if args.cmd == "status":
+        _out({"ok": True, "db": str(path), "counts": db.counts(path),
+              "persona": personality.list_persona(path),
+              "variants": skills.variant_stats(path)}); return 0
+    if args.cmd == "history":
+        con = db.connect(path)
+        try:
+            rows = [dict(r) for r in con.execute(
+                "SELECT role,text,ts FROM messages ORDER BY ts DESC,id DESC LIMIT ?",
+                (args.limit,))]
+        finally: con.close()
+        _out(rows[::-1]); return 0
+    if args.cmd == "memories":
+        _out(memory.list_user_memories(path, args.limit)); return 0
+    if args.cmd == "persona":
+        _out(personality.list_persona(path)); return 0
+    if args.cmd == "skills":
+        _out(skills.variant_stats(path)); return 0
+    if args.cmd == "reflect":
+        _out(personality.reflect(path, Client())); return 0
+    if args.cmd == "feedback":
+        _out(agent.feedback(args.turn_id, args.reaction, args.note)); return 0
+    if args.cmd == "state":
+        _out(state.load(path)); return 0
+    if args.cmd == "trust":
+        _out(trust.snapshot(path)); return 0
+    if args.cmd == "proactive":
+        _out(proactive.propose(path)); return 0
+    if args.cmd == "errors":
+        _out(errors.list_errors(path)); return 0
+    if args.cmd == "acceptance":
+        _out(acceptance.run(path)); return 0
+    if args.cmd == "conflicts":
+        _out(memory.open_conflicts(path)); return 0
+    if args.cmd == "media":
+        _out(media.list_attachments(path)); return 0
+    if args.cmd == "forget":
+        _out(memory.forget(path, args.memory_id)); return 0
+    if args.cmd == "correct-memory":
+        _out(memory.correct(path, args.memory_id, args.content, args.evidence)); return 0
+    if args.cmd == "summary":
+        _out(summary.latest(path)); return 0
+    if args.cmd == "summarize":
+        _out(summary.build(path, Client(), force=args.force)); return 0
+    if args.cmd == "report":
+        if args.markdown:
+            print(report.markdown(path))
+        else:
+            _out(report.growth(path))
+        return 0
+    if args.cmd == "resolve-conflict":
+        _out(memory.resolve_conflict(path, args.conflict_id, args.winner_id)); return 0
+    if args.cmd == "ingest-jsonl":
+        _out(ingest.ingest_jsonl(path, args.file, source=args.source)); return 0
+    if args.cmd == "sessions":
+        _out(ingest.build_sessions(path, friend=args.friend or None)); return 0
+    if args.cmd == "segment":
+        _out(ingest.segment_session(path, args.session, max_chars=args.max_chars)); return 0
+    if args.cmd == "ingest-stats":
+        _out(ingest.stats(path)); return 0
+    if args.cmd == "emoji-index":
+        _out(emoji.index_assets(path, args.dir)); return 0
+    if args.cmd == "emoji-profile":
+        _out(emoji_profile.build_profile(path)); return 0
+    if args.cmd == "emoji-stats":
+        _out(emoji.stats(path)); return 0
+    if args.cmd == "emoji-list":
+        _out(emoji.list_emojis(path)); return 0
+    if args.cmd == "emoji-use":
+        _out(emoji.record_use(path, args.name)); return 0
+    if args.cmd == "proposal-auto-gray":
+        _out(proposal_auto.auto_gray(path)); return 0
+    if args.cmd == "proposal-weekly":
+        _out(proposal_auto.weekly_stats(path)); return 0
+    if args.cmd == "ticker-once":
+        _out(ticker.run_once(path, Client())); return 0
+    if args.cmd == "proposals":
+        _out(proposals.list_proposals(path, args.status or None)); return 0
+    if args.cmd == "proposal-transition":
+        _out(proposals.transition(path, args.proposal_id, args.action)); return 0
+    if args.cmd == "scrub-pii":
+        clean, hits = pii.scrub_pii(args.text)
+        _out({"ok": True, "clean": clean, "hits": hits}); return 0
+    if args.cmd == "production-contacts":
+        _out(production_contacts.aggregate(days=args.days)); return 0
+    if args.cmd == "decision":
+        _out(decision.decide(args.success, args.n, score=args.score)); return 0
+    if args.cmd == "tools":
+        _out({"ok": True, "tools": tools.available()}); return 0
+    if args.cmd == "retrieve":
+        _out({"ok": True, "hits": retrieval.hybrid(path, args.query, k=args.k)}); return 0
+    if args.cmd == "grounding":
+        _out(grounding.audit(path)); return 0
+    if args.cmd == "drift":
+        _out(drift.detect(path)); return 0
+    if args.cmd == "nightly":
+        _out(nightly.run(path, Client(), force=args.force)); return 0
+    if args.cmd == "goals":
+        _out({"ok": True, "tree": goals.tree(path), "flat": goals.list_goals(path)}); return 0
+    if args.cmd == "goal-add":
+        _out(goals.add(path, args.title, parent_id=args.parent, priority=args.priority)); return 0
+    if args.cmd == "goal-update":
+        fields = {}
+        if args.status: fields["status"] = args.status
+        if args.progress >= 0: fields["progress"] = args.progress
+        _out(goals.update(path, args.goal_id, **fields)); return 0
+    if args.cmd == "quality":
+        _out(quality.report(path)); return 0
+    if args.cmd == "implicit-feedback":
+        _out(implicit_feedback.infer(path, limit=args.limit)); return 0
+    if args.cmd == "backfill-claims":
+        _out(backfill.claims_from_messages(path, Client(), limit=args.limit)); return 0
+    if args.cmd == "backfill-persona":
+        _out(backfill.persona_from_history(path, Client())); return 0
+    if args.cmd == "production":
+        if args.markdown:
+            print(production.markdown(path, days=args.days))
+        else:
+            _out(production.snapshot(path, days=args.days))
+        return 0
+    if args.cmd == "affect":
+        _out(affect.snapshot(path)); return 0
+    if args.cmd == "initiative":
+        _out(initiative.decide(path)); return 0
+    if args.cmd == "weak-status":
+        _out(weak_validation.status(path)); return 0
+    if args.cmd == "weak-schedule":
+        _out(weak_validation.schedule_recheck(path, args.skill, args.reason)); return 0
+    if args.cmd == "weak-recheck":
+        _out(weak_validation.run_recheck(path, args.skill, bool(args.passed) and not bool(args.failed), args.note)); return 0
+    if args.cmd == "wake-add":
+        _out({"ok": True, "id": wake.add(path, args.kind, args.text or "check in",
+                                         __import__("time").time() + args.after,
+                                         args.priority)}); return 0
+    if args.cmd == "wake-due":
+        _out(wake.due(path, budget=args.budget)); return 0
+    if args.cmd == "wake-run":
+        _out(wake.run_due(path, budget=args.budget)); return 0
+    if args.cmd == "score-bucket":
+        _out({"ok": True, "bucket": scoring.bucket_of(stage=args.stage, mood=args.mood, topic=args.topic),
+              "buckets": scoring.buckets()}); return 0
+    if args.cmd == "image-describe":
+        _out(image_understanding.describe_image(args.path, Client(), args.attachment,
+                                                 args.caption, db_path=path)); return 0
+    if args.cmd == "profile":
+        _out({"ok": True, "profile": profile.get_profile(path),
+              "render": profile.render_profile(path)}); return 0
+    if args.cmd == "profile-distill":
+        _out(profile.distill(path, Client())); return 0
+    if args.cmd == "learn-status":
+        _out(learn_loop.status(path, args.skill or None)); return 0
+    if args.cmd == "learn-gap":
+        _out({"ok": True, "task_id": learn_loop.open_gap(path, args.skill, args.goal)}); return 0
+    if args.cmd == "learn-source":
+        fetched = research.fetch_text(args.url)
+        if not fetched.get("ok"):
+            _out(fetched); return 1
+        quote = args.quote or research.extract_quote(fetched.get("text", ""), args.keyword)
+        if not quote:
+            _out({"ok": False, "error": "没有可用 quote；给 --quote 或 --keyword"}); return 1
+        _out(learn_loop.record_source(path, args.skill, fetched.get("url") or args.url,
+                                       args.title or fetched.get("title", ""), quote)); return 0
+    if args.cmd == "learn-card":
+        _out(learn_loop.write_card(path, args.skill, args.content, args.example)); return 0
+    if args.cmd == "learn-practice":
+        passed = bool(args.passed) and not bool(args.failed)
+        _out(learn_loop.record_practice(path, args.task, args.attempt or "manual", passed,
+                                        args.error)); return 0
+    if args.cmd == "learn-verify":
+        _out(learn_loop.verify_and_unlock(path, args.task, bool(args.passed), args.note)); return 0
+    if args.cmd == "learn-plan":
+        _out(learn_plan.apply(path, args.goal, Client())); return 0
+    if args.cmd == "blind-create":
+        _out(blind.create(path, args.skill, args.question,
+                          [x for x in args.terms.split(",") if x])); return 0
+    if args.cmd == "blind-answer":
+        _out(blind.grade(path, args.token, args.answer)); return 0
+    if args.cmd == "blind-verify":
+        _out(blind.verify_with_blind(path, args.task, args.token, args.answer)); return 0
+    if args.cmd == "learn-exercise":
+        _out(learn_practice.make_exercise({"content": args.content}, Client())); return 0
+    if args.cmd == "learn-answer":
+        _out(learn_practice.answer_practice(path, args.task, args.answer,
+                                            [x for x in args.terms.split(",") if x])); return 0
+    if args.cmd == "learn-from-url":
+        _out(learn_flow.learn_from_url(path, args.skill, args.url,
+                                        keyword=args.keyword, client=Client())); return 0
+    if args.cmd == "learn-fetch":
+        fetched = research.fetch_text(args.url)
+        if fetched.get("ok") and args.keyword:
+            fetched["quote"] = research.extract_quote(fetched.get("text", ""), args.keyword)
+        _out(fetched); return 0 if fetched.get("ok") else 1
+    if args.cmd == "intent":
+        if args.action == "add":
+            wake = __import__("time").time() + args.after
+            _out({"ok": True, "id": scheduler.add(path, args.kind, args.text or "check in", wake)})
+        elif args.action == "due":
+            _out(scheduler.due(path))
+        else:
+            _out(scheduler.list_intents(path))
+        return 0
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

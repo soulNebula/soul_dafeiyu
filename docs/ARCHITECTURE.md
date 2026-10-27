@@ -29,11 +29,16 @@ flowchart LR
 
 | 模块 | 职责 |
 |---|---|
-| `agi/wechat_gateway/receiver.py` | 从 wxauto4（UIA）读消息：白名单、去重、防抖、过期标记；识别撤回/引用/拍一拍的 system 与 text 变体、@提及 |
+| `agi/wechat_gateway/receiver.py` | 网关侧 wxauto4（UIA）接收适配器：白名单、去重、防抖、过期标记；识别撤回/引用/拍一拍的 system 与 text 变体、@提及 |
+| `wx_core/monitor.py` | **第二套采集后端** `MonitorBackend`：可启动 `db_source`（WCDB 解密直读）或 OCR 截图解析；对网关暴露统一 `events` 队列 |
+| `wx_core/db_source.py` | 数据库直读源（首选）：WCDB 解密到临时目录 → sqlite `mode=ro` → `Message`；文字/图片/表情/文件/语音精确对应，不需要 OCR |
+| `wx_core/extract.py` + `wx_core/ocr.py` | OCR 回退：PrintWindow 截图 + 布局识别 + 整区 OCR；WCDB 不可用或联系人不在库时使用 |
 | `agi/wechat_gateway/server.py` | 网关主进程（HTTP 801）：消息归一化（`[引用]`/`[拍一拍]`/`[对方@了你]`）、审核与发送闸门（STOP 文件、静默时段、小时/日上限、熔断）、引擎启停（`engine_enabled`）、以及各种调试接口 |
 | `agi/wechat_gateway/sender.py` / `sticker_native.py` | 文本/图片/贴纸发送；真实发送在 wxauto4 venv 子进程里执行（`agi/data/wechat/.venv`） |
 
-消息进入顺序：**receiver → 归一化 → 引擎/STOP 检查 → chat.send → 发送闸门 → wxauto4 子进程**。
+**双后端**：网关侧 `WeChatReceiver` 消费 wxauto4 事件；`MonitorBackend` 另一路可用 `db_source`（WCDB 直读，精确原文/媒体）或 OCR（截图回退）。两者最终都归一到同一 `Message`/`events` 队列，再进入网关归一化；不要只按单后端理解接入层。
+
+消息进入顺序：**receiver（双后端之一） → 归一化 → 引擎/STOP 检查 → chat.send → 发送闸门 → wxauto4 子进程**。
 
 ### 2. 对话核心（`agi/selflearn/chat.py`）
 
@@ -71,7 +76,7 @@ flowchart LR
 
 | 模块 | 何时 | 做什么 |
 |---|---|---|
-| `proactive_worker.py` | 每轮调度（静默 22–9 除外） | 主动消息：`pacing`（你我消息量对等）× `initiative`（关系熟悉度×心情×信任→主动度）× `urges`（内驱力队列优先发）→ 候选话题/分享 → 生成 → 护栏 → 发送 |
+| `proactive_worker.py` + `proactive.py` | 每轮调度（静默 22–9 除外） | **现役生成链是 `simple_tick`（`proactive_style=simple`）**，外层由 `pacing`（对等）× `initiative`（熟悉度×心情×信任→主动度）× `urges`（内驱力队列）做门控/选题，再走 simple 的硬检查与发送；`proactive.py` 的 legacy 生成路径只保留兜底/实验，不是主链 |
 | `surf.py` / `surf_worker.py` | 10:00–22:00，每 30 分钟投骰 | 骰子≥3 且 ×冲浪因子≥2.4 才冲浪；时长 3–12 分钟、条数 ≤20；产出 my_take → 兴趣库，并向内驱力队列 push |
 | `diary.py` | 每天 23:00 | 读当天对话/主动/冲浪/心情/兴趣，第一人称写 300–600 字日记 → `agi/data/diary/YYYY-MM-DD.txt` |
 | `self_narrative.py` | 每周日 23:30 | 汇总一周日记与心情 → 周记 → 提炼 ≤120 字"我是谁/我在意什么" → core 人格层 → 注入日常 prompt |
@@ -119,11 +124,12 @@ flowchart LR
 SoulAgent/
 ├── agi/                     # 核心包（selflearn/ inner/ llm/ integrations/ wechat_gateway/）
 │   └── data/                # 运行数据（DB、媒体、日记、训练语料、缓存）【git 忽略】
+├── app/                     # IDEA 工作台后端（服务/配置/Git/文件/Data Studio）
 ├── wx_core/                 # wxauto4 封装与监控
 ├── tools/                   # console / desktop / soul_serve / train / persona / bili_patch
 ├── tests/ ui/ webui/ Demo/  # 测试与旧前端/演示
 ├── docs/                    # 说明文稿、架构图、plans、specs、分析
-├── plans/                   # 迭代计划（按编号）
+├── docs/plans/              # 迭代计划（唯一目录；15–59，缺 17/27/55）
 ├── run.bat / 启动桌面版.bat   # 启动入口
 └── README.md
 ```
@@ -136,6 +142,8 @@ SoulAgent/
 | 802 | `python tools/console/server.py --port 802` | 控制台 |
 | 8123 | `llama-server -m soul_qwen25_05b_v1b-q4_k_m.gguf` | 内状态（潜意识） |
 | 8125 | `python tools/soul_serve/serve_local3b.py` | 本地 3B（提取/摘要） |
+| 8081 | `python web_app.py`（旧根网页 `/agi`） | **非主链/legacy**：旧 wx_box 网页，`agi.core` 已移除；仅供历史对照 |
+| 8082 | `python -m agi.selflearn.web` | **非主链/调试**：selflearn 自带网页（记忆统计/反馈），日常入口仍是 802 控制台 |
 
 ## 六、已知边界
 

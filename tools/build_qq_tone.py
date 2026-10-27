@@ -35,10 +35,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[1]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 from tools import build_human_tone as ht  # noqa: E402
 
-DEFAULT_EXPORT_DIR = Path(r"E:\agent\qq_export\c2c")
+DEFAULT_EXPORT_DIR = agent_path(r"qq_export\c2c")
 OUT_DIR = ROOT / "agi" / "eval_data" / "human_tone"
 WECHAT_PROFILE = OUT_DIR / "profile.md"
 CORPUS_NAME = "qq_corpus.jsonl"

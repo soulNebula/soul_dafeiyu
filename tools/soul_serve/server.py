@@ -15,7 +15,7 @@
     stop_server(proc)
 
 关键点：
-- 子进程环境里 ``PATH`` 前面加 ``E:/agent/venv312/Lib/site-packages/torch/lib``，
+- 子进程环境里 ``PATH`` 前面加 ``<AGENT_HOME>/venv312/Lib/site-packages/torch/lib``，
   否则 ggml-cuda.dll 加载失败（Windows 踩坑）；
 - 默认只带 ``--jinja``；JSON schema 约束走**请求级** response_format（b11857 的
   ``--json-schema-file`` 常驻模式在 Qwen jinja template 下会 400，见 README 踩坑）；
@@ -31,10 +31,17 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 ROOT = Path(__file__).resolve().parents[2]
-LLAMA_BIN = Path(r"E:\agent\llama\cuda")
-TORCH_LIB = Path(r"E:\agent\venv312\Lib\site-packages\torch\lib")
+LLAMA_BIN = agent_path(r"llama\cuda")
+TORCH_LIB = agent_path(r"venv312\Lib\site-packages\torch\lib")
 SCHEMA_PATH = ROOT / "agi" / "soul" / "inner_state_schema.json"
 
 

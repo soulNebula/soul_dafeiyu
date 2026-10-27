@@ -18,3 +18,19 @@ def test_hybrid_ranks_and_dedupes(tmp_path):
     assert all("tokens" not in h for h in hits)
     ctx = retrieval.context(p, "咖啡")
     assert "咖啡" in ctx
+
+
+def test_archived_message_ids_handles_sqlite_error(monkeypatch, tmp_path):
+    """P0-3 回归：DB 抛 sqlite3.Error 时不能 NameError（缺 import sqlite3）。"""
+    import sqlite3
+
+    class _BadConnection:
+        def execute(self, *args, **kwargs):
+            raise sqlite3.Error("simulated db error")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("agi.selflearn.db.memory_connect",
+                        lambda path: _BadConnection())
+    assert retrieval._archived_message_ids(tmp_path / "x.sqlite3", ["M-1"]) == {}

@@ -66,7 +66,7 @@ SoulAgent/
 ├── wx_core/               wxauto4 封装与监控
 ├── tests/                 测试
 ├── docs/                  说明文稿、架构图、plans、specs
-├── plans/                 迭代计划
+├── docs/plans/            迭代计划（唯一目录）
 └── README.md
 ```
 
@@ -104,5 +104,7 @@ SoulAgent/
 ## 文档
 
 - [架构说明](docs/ARCHITECTURE.md)
-- [迭代计划](plans/)
-- [历史决策与分析](docs/)
+- [文档总入口](docs/INDEX.md)
+- [迭代计划](docs/plans/)
+- [当前状态与测试数字](docs/STATUS.md)
+- [历史/归档](docs/archive/)

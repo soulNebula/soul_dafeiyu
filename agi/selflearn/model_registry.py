@@ -13,13 +13,13 @@
 ::
 
     {
-      "llama_bin": "E:/agent/llama/cuda",
-      "torch_lib": "E:/agent/venv312/Lib/site-packages/torch/lib",
+      "llama_bin": "<AGENT_HOME>/llama/cuda",
+      "torch_lib": "<AGENT_HOME>/venv312/Lib/site-packages/torch/lib",
       "models": [
         {"name":"soul-05b","base":"...","adapter":"...","gguf":"...",
          "port":8123,"role":"soul","status":"ready","purpose":"..."},
         {"name":"qwen15","base":"...","adapter":null,
-         "gguf":"E:/agent/output/gguf/soul_qwen25_15b_v1-q4_k_m.gguf",
+         "gguf":"<AGENT_HOME>/output/gguf/soul_qwen25_15b_v1-q4_k_m.gguf",
          "port":8124,"role":"reserved","status":"reserved","purpose":"..."}
       ],
       "extra_adapters": [
@@ -50,12 +50,19 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "agi" / "data" / "local_models.json"
 STATE_PATH = ROOT / "agi" / "data" / "local_models_state.json"
-DEFAULT_LLAMA_BIN = Path(r"E:\agent\llama\cuda")
-DEFAULT_TORCH_LIB = Path(r"E:\agent\venv312\Lib\site-packages\torch\lib")
+DEFAULT_LLAMA_BIN = agent_path(r"llama\cuda")
+DEFAULT_TORCH_LIB = agent_path(r"venv312\Lib\site-packages\torch\lib")
 
 _HEALTH_CACHE: dict[tuple[str, float], tuple[float, bool]] = {}
 _HEALTH_TTL = 5.0

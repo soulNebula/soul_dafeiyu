@@ -9,6 +9,13 @@ import re
 import sys
 import time
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 ROOT = Path(__file__).resolve().parents[2]
 EVAL_DIR = ROOT / "agi" / "eval_data"
@@ -21,7 +28,7 @@ from style_prompt import (  # noqa: E402
 )
 
 DATA_PATH = ROOT / "agi" / "eval_data" / "human_tone" / "style_sft_ai.jsonl"
-DEFAULT_MODEL = Path(r"E:\agent\models\Qwen2.5-0.5B-Instruct")
+DEFAULT_MODEL = agent_path(r"models\Qwen2.5-0.5B-Instruct")
 PAIRWISE_PROMPT = (
     "用户真实原话：{human}\n模型改写：{model}\n\n"
     "哪条更像用户本人平时在微信/QQ 里的说话方式（长度、标点、口语习惯）？\n"
@@ -167,12 +174,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="语气改写真实链路评测（anchors + 护栏）")
     parser.add_argument("--data", default=str(DATA_PATH))
     parser.add_argument("--model-path", default=str(DEFAULT_MODEL))
-    parser.add_argument("--adapter", default=r"E:\agent\output\tone_style_qwen05_v2")
+    parser.add_argument("--adapter", default=str(agent_path(r"output\tone_style_qwen05_v2")))
     parser.add_argument("--pairwise-n", type=int, default=20)
     parser.add_argument("--samples", type=int, default=8)
     parser.add_argument("--max-new-tokens", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--out", default=r"E:\agent\logs\tone_style_eval_v2.json")
+    parser.add_argument("--out", default=str(agent_path(r"logs\tone_style_eval_v2.json")))
     args = parser.parse_args(argv)
 
     rows = load_rows(Path(args.data))

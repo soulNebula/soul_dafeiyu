@@ -30,13 +30,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 SOUL_SERVE = ROOT / "tools" / "soul_serve"
 MERGE_SCRIPT = SOUL_SERVE / "merge_adapter.py"
 CONVERT_SCRIPT = SOUL_SERVE / "convert.py"
-DEFAULT_OUT_DIR = Path(r"E:\agent\output\gguf")
-DEFAULT_LLAMA_BIN = Path(r"E:\agent\llama\cuda")
-DEFAULT_CONVERT_DIR = Path(r"E:\agent\llama\convert")
+DEFAULT_OUT_DIR = agent_path(r"output\gguf")
+DEFAULT_LLAMA_BIN = agent_path(r"llama\cuda")
+DEFAULT_CONVERT_DIR = agent_path(r"llama\convert")
 
 
 def build_plan(adapter: Path, base: Path, name: str, out_dir: Path,
@@ -115,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     base = Path(args.base)
     out_dir = Path(args.out_dir)
     merged_dir = Path(args.merged_dir) if args.merged_dir else (
-        Path(r"E:\agent\output") / f"merged_{args.name}")
+        agent_path(r"output") / f"merged_{args.name}")
     plan = build_plan(adapter, base, args.name, out_dir, merged_dir, args.quant)
     plan["dry_run"] = bool(args.dry_run)
     failed = [key for key, ok in plan["checks"].items() if not ok]

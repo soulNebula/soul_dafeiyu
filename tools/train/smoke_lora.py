@@ -42,11 +42,18 @@ import random
 import sys
 import time
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_home
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA = ROOT / "agi" / "soul" / "data" / "soul_sft_v0.jsonl"
 # 环境、模型、输出、日志都放 E 盘（仓库外，避免大文件污染 git / C 盘用户目录）
-HOME_DIR = Path(os.environ.get("SOUL_TRAIN_HOME", r"E:\agent"))
+HOME_DIR = Path(os.environ.get("SOUL_TRAIN_HOME") or str(agent_home()))
 DEFAULT_MODEL_PATH = HOME_DIR / "models" / "Qwen3.5-2B"
 DEFAULT_OUTPUT_DIR = HOME_DIR / "output"
 DEFAULT_LOG_PATH = HOME_DIR / "logs" / "smoke_lora.jsonl"

@@ -10,13 +10,20 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(r"C:\Users\Administrator\Desktop\SoulAgent")
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 from agi.inner import render, schema  # noqa: E402
 
 VAL = ROOT / "agi" / "soul" / "data" / "soul_sft_v1_val.jsonl"
-SIZE = Path(r"E:\agent\logs\eval_v1_llama_05b.json")
+SIZE = agent_path(r"logs\eval_v1_llama_05b.json")
 
 PAT = {
     "mood": re.compile(r"mood=([0-9.]+)"),

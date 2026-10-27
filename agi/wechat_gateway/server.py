@@ -151,6 +151,20 @@ def _log(entry: dict, path: Path | None = None) -> None:
         pass
 
 
+_WEAK_ADMIN_TOKENS = ("8888", "admin", "123456", "password", "test", "token")
+
+
+def admin_token_warning(token: str) -> str:
+    """P0-2：弱 admin_token 告警文案（不泄露 token 本身）。"""
+    value = str(token or "")
+    if not value:
+        return ""
+    if value.strip().lower() in _WEAK_ADMIN_TOKENS or len(value) < 8:
+        return ("admin_token 过弱（默认口令或长度<8）；请改成随机长 token，"
+                "并只通过 X-Admin-Token 头携带（不再接受 ?token= query）")
+    return ""
+
+
 class Gateway:
     def __init__(self, cfg_obj: dict, *, stop_path: Path | str | None = None,
                  config_path: Path | str | None = None):
@@ -198,6 +212,17 @@ class Gateway:
         self.send_times = deque()
         self.sent_today = 0
         self.sent_day = time.strftime("%Y-%m-%d")
+        # P0-2：reactive 同文案 60s 去重；弱 admin_token 告警（启动时记一次）
+        self._reactive_dedupe: dict[tuple[str, str], float] = {}
+        self.admin_token_warning = admin_token_warning(
+            str(self.cfg.get("admin_token") or ""))
+        if self.admin_token_warning:
+            try:
+                self._record("admin_token_weak", {
+                    "token_len": len(str(self.cfg.get("admin_token") or "")),
+                    "warning": self.admin_token_warning})
+            except Exception:  # noqa: BLE001
+                pass
         # P0-2 死区哨兵：任何事件都会刷新 last_event_ts；长时间没有事件就写 gateway_stale
         self.last_event_ts = self.started_at
         self._last_stale_ts = 0.0
@@ -1195,9 +1220,21 @@ class Gateway:
             if not self.cfg.get("dry_run", True):
                 time.sleep(float(self.cfg.get("reply_delay") or 0))
 
+    def _effective_min_interval(self) -> float:
+        """P0-2：min_interval_s 强制生效；0 视为 1.5，仅 GATEWAY_DEBUG=1 可放开 0。"""
+        try:
+            raw = float(self.cfg.get("min_interval_s") or 0.0)
+        except (TypeError, ValueError):
+            raw = 0.0
+        debug = str(os.environ.get("GATEWAY_DEBUG", "")).strip().lower() in (
+            "1", "true", "yes", "on")
+        if raw <= 0 and not debug:
+            return 1.5
+        return raw
+
     def _send(self, contact: str, text: str, *, force: bool = False,
               reactive: bool = False, proactive: bool = False,
-              manual: bool = False) -> dict:
+              manual: bool = False, force_quiet: bool = False) -> dict:
         # P0-22：STOP 文件是最高优先级，先于任何发送判断（含 reactive/force）
         if self.stop_present():
             self._log_stopped()
@@ -1206,8 +1243,16 @@ class Gateway:
         # P18-A：engine 软停只拦自动回复/主动；人工接口（manual/force）仍允许调试发送
         if not self.engine_enabled and not (manual or force):
             self._log_engine_pause("send")
+            self._record("send_blocked", {"friend": contact,
+                                          "reason": "engine_stopped"})
             return {"ok": False, "status": "engine_stopped",
                     "error": "engine_stopped"}
+        # P0-2：白名单在最底层强制（reactive/proactive/manual/force 都不例外）
+        allowed = [str(x).strip() for x in (self.cfg.get("allowed_contacts") or [])
+                   if str(x).strip()]
+        if allowed and str(contact or "").strip() not in allowed:
+            self._record("send_blocked", {"friend": contact, "reason": "not_allowed"})
+            return {"ok": False, "status": "blocked", "error": "not_allowed"}
         # 纵深防御：出站文本里的微信内部 ID 一律摘掉（2026-10-24 引用事故）
         original = str(text or "")
         text = textguard.strip_internal_ids(original)
@@ -1238,18 +1283,62 @@ class Gateway:
             self._record("send_blocked", {"friend": contact, "reason": "stop_switch"})
             return {"ok": False, "status": "blocked", "error": "stop_switch"}
         now = time.time()
+        # P0-2：统一节流/上限闸门（所有直调 _send 都经过）
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        if day != self.sent_day:
+            self.sent_day = day
+            self.sent_today = 0
+        self.send_times = deque(t for t in self.send_times if now - t < 3600)
+        interval = self._effective_min_interval()
+        last_sent_at = max(self.send_times) if self.send_times else 0.0
+        # 被动回复必须能回用户（最小间隔只约束主动/自动发送，保持既有语义）
+        if (not reactive) and interval > 0 and last_sent_at > 0 \
+                and (now - last_sent_at) < interval:
+            self._record("send_blocked", {
+                "friend": contact, "reason": "min_interval",
+                "wait_s": round(interval - (now - last_sent_at), 2)})
+            return {"ok": False, "status": "blocked", "error": "min_interval"}
+        try:
+            hourly_limit = max(1, int(self.cfg.get("hourly_limit") or 30))
+        except (TypeError, ValueError):
+            hourly_limit = 30
+        if len(self.send_times) >= hourly_limit:
+            self._record("send_blocked", {"friend": contact,
+                                          "reason": "hourly_limit"})
+            return {"ok": False, "status": "blocked", "error": "hourly_limit"}
+        try:
+            daily_limit = max(1, int(self.cfg.get("daily_limit") or 200))
+        except (TypeError, ValueError):
+            daily_limit = 200
+        if self.sent_today >= daily_limit:
+            self._record("send_blocked", {"friend": contact,
+                                          "reason": "daily_limit"})
+            return {"ok": False, "status": "blocked", "error": "daily_limit"}
+        if reactive:
+            key = (str(contact or "").strip(), str(text or ""))
+            seen = self._reactive_dedupe.get(key)
+            if seen and (now - seen) < 60:
+                self._record("send_blocked", {
+                    "friend": contact, "reason": "dedupe",
+                    "dedupe_window_s": 60,
+                    "last_sent_ago_s": round(now - seen, 2)})
+                return {"ok": False, "status": "blocked", "error": "dedupe"}
         # P0-22：夜间静默硬保护（发送前最后一道；quiet_hours=[] 会回退默认 [23,8]，
         # 只有显式 proactive_override_quiet=true 且 24h 内才能放行）
         # P0-25：静默只约束主动消息——用户自己发消息过来（reactive / force 手动发送）必须回，
         # 否则凌晨聊天会被静默闸全部吞掉（2026-10-26 真机事故）。
         override_active, _just = self._quiet_override_active(now)
-        quiet_blocks = (not reactive) and (not force)
+        # P0-2：manual+force（人工批准）不再自动绕过静默；只有 reactive 或显式
+        # force_quiet。为兼容旧内部直调，``force=True 且 manual=False`` 保留历史
+        # 放行语义（管理 API 一律 manual=True，因此不享受该兼容）。
+        legacy_force = bool(force) and not bool(manual)
+        quiet_blocks = (not reactive) and (not force_quiet) and not legacy_force
         if quiet_blocks and self._quiet_blocked(now):
             self._record("send_blocked", {"friend": contact, "reason": "quiet_hours"})
             return {"ok": False, "status": "blocked", "error": "quiet_hours"}
         policy_cfg = self.cfg
-        if override_active or reactive or force:
-            # 覆盖期/被动回复/手动发送：把 policy 的静默临时置空（静默只拦主动）
+        if override_active or reactive or force_quiet or legacy_force:
+            # 覆盖期/被动回复/显式 force_quiet/旧内部 force：policy 静默临时置空
             policy_cfg = dict(self.cfg)
             policy_cfg["quiet_hours"] = [0, 0]
         day = time.strftime("%Y-%m-%d", time.localtime(now))
@@ -1274,6 +1363,9 @@ class Gateway:
             if not out.get("ok") and out.get("status") == "failed":
                 self._archive_failed_draft(contact, text,
                                            str(out.get("error") or "failed"))
+            if reactive and out.get("ok"):
+                self._reactive_dedupe[(str(contact or "").strip(),
+                                       str(text or ""))] = now
             return out
         if not WXAUTO_PYTHON.exists():
             return self._on_send_failure(contact, text, f"缺少 wxauto venv: {WXAUTO_PYTHON}")
@@ -1297,6 +1389,9 @@ class Gateway:
             if classification == sendclass.DELIVERED:
                 self.send_times.append(time.time())
                 self.sent_today += 1
+                if reactive:
+                    self._reactive_dedupe[(str(contact or "").strip(),
+                                           str(text or ""))] = now
             elif classification == sendclass.FAILED:
                 return self._on_send_failure(
                     contact, text,
@@ -1713,6 +1808,8 @@ class Gateway:
             "send_mode": control.send_mode(self.cfg),
             "drafts_pending": len(drafts.list_all(path=self.draft_path, limit=200)),
             "admin_token_set": bool(self.cfg.get("admin_token")),
+            "admin_token_weak": bool(getattr(self, "admin_token_warning", "")),
+            "admin_token_warning": str(getattr(self, "admin_token_warning", "") or ""),
             "policy": {"stop": bool(self.cfg.get("stop")),
                        "quiet_hours": self.cfg.get("quiet_hours"),
                        "rate_per_minute": self.cfg.get("rate_per_minute"),
@@ -1765,6 +1862,14 @@ def make_handler(gateway: Gateway):
                 return int(gateway.cfg.get("port") or 801)
 
         def _query_token(self) -> str:
+            """P0-2：默认拒绝 ?token=；仅 GATEWAY_ALLOW_QUERY_TOKEN=1 + 回环来源才读。"""
+            allow = str(os.environ.get("GATEWAY_ALLOW_QUERY_TOKEN", "")).strip().lower() in (
+                "1", "true", "yes", "on")
+            if not allow:
+                return ""
+            peer = str(getattr(self, "client_address", ("", 0))[0] or "")
+            if peer not in ("127.0.0.1", "::1"):
+                return ""
             try:
                 return (parse_qs(urlsplit(self.path).query).get("token") or [""])[0]
             except Exception:  # noqa: BLE001
@@ -1841,17 +1946,30 @@ def make_handler(gateway: Gateway):
                 if contact not in (gateway.cfg.get("allowed_contacts") or []) or not text:
                     self._json(400, {"ok": False, "error": "contact 不在白名单或 text 为空"})
                     return
-                self._json(200, gateway._send(contact, text, force=True, manual=True))
+                # P0-2：force 只允许 manual + 显式 confirm；不再自动绕过静默
+                if body.get("confirm") is not True:
+                    self._json(400, {"ok": False, "error": "confirm_required",
+                                     "detail": "批准发送必须显式 confirm=true"})
+                    return
+                self._json(200, gateway._send(
+                    contact, text, force=True, manual=True,
+                    force_quiet=bool(body.get("force_quiet"))))
                 return
 
             if path == "/api/draft/approve":
                 draft_id = str(body.get("id") or "").strip()
+                if body.get("confirm") is not True:
+                    self._json(400, {"ok": False, "error": "confirm_required",
+                                     "detail": "批准草稿必须显式 confirm=true"})
+                    return
                 item = drafts.discard(draft_id, path=gateway.draft_path)
                 if item is None:
                     self._json(404, {"ok": False, "error": "草稿不存在"})
                     return
                 out = gateway._send(str(item.get("contact") or ""),
-                                    str(item.get("text") or ""), force=True, manual=True)
+                                    str(item.get("text") or ""), force=True,
+                                    manual=True,
+                                    force_quiet=bool(body.get("force_quiet")))
                 gateway._record("draft_approved", {"draft_id": draft_id,
                                                    "friend": item.get("contact"),
                                                    "status": out.get("status")})
@@ -1917,8 +2035,11 @@ def make_handler(gateway: Gateway):
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
-            if path in ("/health", "/healthz"):
-                self._json(200, {"ok": True, "service": "wechat_gateway"})
+            if path in ("/health", "/healthz", "/api/health"):
+                warning = str(getattr(gateway, "admin_token_warning", "") or "")
+                self._json(200, {"ok": True, "service": "wechat_gateway",
+                                 "admin_token_weak": bool(warning),
+                                 "admin_token_warning": warning})
                 return
             if not self._guard():
                 return
@@ -2009,6 +2130,10 @@ def main(argv=None) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"admin_token 生成后写回配置失败：{exc}", flush=True)
         print(f"[gateway] 已生成管理 token（X-Admin-Token）：{token}", flush=True)
+    else:
+        warning = admin_token_warning(token)
+        if warning:
+            print(f"[gateway] 警告：{warning}", flush=True)
     gateway = Gateway(cfg_obj)
     gateway.start()
     port = int(cfg_obj.get("port") or 801)

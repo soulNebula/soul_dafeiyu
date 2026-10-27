@@ -1,8 +1,15 @@
 """分析评测结果：看各字段分布、混淆矩阵、以及"多数类基线"，判断是真学不会还是偏置问题。"""
 import json
 from collections import Counter, defaultdict
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
 
-EVAL = r"E:\agent\logs\eval_v1_llama_05b.json"
+
+EVAL = str(agent_path(r"logs\eval_v1_llama_05b.json"))
 DATA = r"C:\Users\Administrator\Desktop\SoulAgent\agi\soul\data\soul_sft_v1_val.jsonl"
 
 

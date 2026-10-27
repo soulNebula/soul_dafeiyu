@@ -44,7 +44,7 @@ DEFAULTS = {
     "rate_per_minute": 3,
     "reactive_rate_per_minute": 8,
     "daily_limit": 200,
-    "send_mode": "auto",
+    "send_mode": "auto",   # 历史兼容默认；control.send_mode 对缺省 key 兜底 confirm；生产 config.json=confirm
     "admin_token": "",
     "complaint_stop": True,
     "min_interval_s": 1.5,

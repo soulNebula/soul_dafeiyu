@@ -119,10 +119,16 @@ import sys
 import time
 from collections import Counter
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_home
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-HOME_DIR = Path(os.environ.get("SOUL_TRAIN_HOME", r"E:\agent"))
+HOME_DIR = Path(os.environ.get("SOUL_TRAIN_HOME") or str(agent_home()))
 DEFAULT_MODEL_PATH = HOME_DIR / "models" / "Qwen3.5-2B"
 DEFAULT_DATA = ROOT / "agi" / "soul" / "data" / "soul_sft_v0_val.jsonl"
 DEFAULT_OUT = HOME_DIR / "logs" / "eval_output.json"

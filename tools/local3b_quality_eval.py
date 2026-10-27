@@ -27,7 +27,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-SUBTITLE = Path(r"E:\agent\tmp\bili_subtitle_sample.txt")
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[1]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+SUBTITLE = agent_path(r"tmp\bili_subtitle_sample.txt")
 PROMPT_TEMPLATE = (
     "把下面这段视频字幕提炼成 JSON，只输出 JSON，不要解释：\n"
     '{"summary": "≤60字", "topics": ["3-5个"], "emotion": "整体情绪", '
@@ -36,7 +42,7 @@ PROMPT_TEMPLATE = (
 )
 LOCAL3B_URL = "http://127.0.0.1:8125/v1/chat/completions"
 LOCAL3B_MODEL = "qwen2.5-3b-instruct"
-MODEL_2B = Path(r"E:\agent\models\Qwen3.5-2B")
+MODEL_2B = agent_path(r"models\Qwen3.5-2B")
 
 
 def load_subtitle(max_chars: int = 3200) -> str:
@@ -188,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     payload = {"backend": args.backend, "runs": results,
                "summary": summarize(results),
                "prompt_chars": len(prompt), "subtitle_chars": len(subtitle)}
-    out = Path(args.out) if args.out else Path(rf"E:\agent\logs\local3b_quality_{args.backend}.json")
+    out = Path(args.out) if args.out else agent_path(f"logs/local3b_quality_{args.backend}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n",
                    encoding="utf-8")

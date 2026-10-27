@@ -53,13 +53,20 @@ import sys
 import tempfile
 from collections import Counter, OrderedDict
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[1]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "agi" / "eval_data" / "human_tone"
 CONTACTS_DIR = ROOT / "agi" / "data" / "selflearn" / "wechat_contacts"
 SCREENSHOT_DIR = Path(r"C:\Users\Administrator\Desktop\img")
-GIRL_PARTS_DIR = Path(r"E:\agent\tmp\girl_chat")
-OCR_CACHE = Path(r"E:\agent\tmp\ocr_lines.json")
+GIRL_PARTS_DIR = agent_path(r"tmp\girl_chat")
+OCR_CACHE = agent_path(r"tmp\ocr_lines.json")
 LONG_IMAGE = "8b9f2a84862977a59a2e1076cd567668.jpg"
 LANG = "zh"
 

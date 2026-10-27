@@ -24,9 +24,16 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
 
-DEFAULT_LLAMA_BIN = Path(r"E:\agent\llama\cuda")
-DEFAULT_CONVERT_DIR = Path(r"E:\agent\llama\convert")
+
+DEFAULT_LLAMA_BIN = agent_path(r"llama\cuda")
+DEFAULT_CONVERT_DIR = agent_path(r"llama\convert")
 DEFAULT_QUANT = "Q4_K_M"
 
 
@@ -43,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="HF dir -> f16 GGUF -> Q4_K_M GGUF")
     parser.add_argument("--hf-dir", required=True, help="合并后的 HF 目录")
     parser.add_argument("--name", required=True, help="产物文件名前缀，如 soul_qwen25_05b_v1")
-    parser.add_argument("--out-dir", default=r"E:\agent\output\gguf", help="GGUF 输出目录")
+    parser.add_argument("--out-dir", default=str(agent_path(r"output\gguf")), help="GGUF 输出目录")
     parser.add_argument("--llama-bin", default=str(DEFAULT_LLAMA_BIN), help="llama.cpp 二进制目录")
     parser.add_argument("--convert-dir", default=str(DEFAULT_CONVERT_DIR),
                         help="含 convert_hf_to_gguf.py / conversion/ / gguf-py/ 的目录")

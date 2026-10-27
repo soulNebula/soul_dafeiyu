@@ -12,6 +12,13 @@ import subprocess
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 ROOT = Path(__file__).resolve().parents[2]
 TRAIN_ROOT = ROOT / "agi" / "data" / "train"
@@ -19,7 +26,7 @@ DAILY_DIR = TRAIN_ROOT / "daily"
 STAGED_DIR = TRAIN_ROOT / "staged"
 HISTORY_PATH = TRAIN_ROOT / "history.jsonl"
 GOLDEN_PATH = ROOT / "agi" / "eval_data" / "golden_v1.jsonl"
-OUTPUT_ROOT = Path(r"E:\agent\output")
+OUTPUT_ROOT = agent_path(r"output")
 SMOKE_LORA = ROOT / "tools" / "train" / "smoke_lora.py"
 MIN_SAMPLES = 300
 MIN_DAYS = 3

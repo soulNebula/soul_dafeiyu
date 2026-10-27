@@ -28,12 +28,19 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 ROOT = Path(__file__).resolve().parents[2]
-MODEL = Path(r"E:\agent\models\Qwen2.5-3B-Instruct-GGUF\qwen2.5-3b-instruct-q4_k_m.gguf")
-LLAMA_BIN = Path(r"E:\agent\llama\cuda")
-TORCH_LIB = Path(r"E:\agent\venv312\Lib\site-packages\torch\lib")
-LOG_DIR = Path(r"E:\agent\logs")
+MODEL = agent_path(r"models\Qwen2.5-3B-Instruct-GGUF\qwen2.5-3b-instruct-q4_k_m.gguf")
+LLAMA_BIN = agent_path(r"llama\cuda")
+TORCH_LIB = agent_path(r"venv312\Lib\site-packages\torch\lib")
+LOG_DIR = agent_path(r"logs")
 PID_FILE = LOG_DIR / "local3b_8125.pid"
 LOG_FILE = LOG_DIR / "local3b_8125.log"
 PORT = 8125

@@ -13,6 +13,7 @@ import json
 import pytest
 
 from agi.eval_data import downstream as g3
+from agi.paths import agent_path
 
 GOLDEN_PATH = g3.ROOT / "agi" / "eval_data" / "golden_v1.jsonl"
 SOUL_VAL_PATH = g3.ROOT / "agi" / "soul" / "data" / "soul_sft_v1_val.jsonl"
@@ -90,7 +91,8 @@ def test_teacher_prompt_uses_annotation_prompt():
 def test_summarize_server_props():
     """llama-server /props → 记录实际加载的 GGUF（防止正式跑误用 v0 底座）。"""
     payload = {
-        "model_path": r"E:\agent\output\gguf\soul_qwen25_05b_v1-q4_k_m.gguf",
+        "model_path": str(agent_path("output", "gguf",
+                                          "soul_qwen25_05b_v1-q4_k_m.gguf")),
         "model_alias": "local-soul",
         "default_generation_settings": {"n_ctx": 2048},
         "total_slots": 1,
@@ -104,7 +106,7 @@ def test_summarize_server_props():
     assert g3.summarize_props(None) == {}
     assert g3.summarize_props({"unexpected": 1}) == {}
     assert g3._server_model_label({"local_server_props": props}).startswith(
-        r"E:\agent\output\gguf\soul_qwen25_05b_v1")
+        str(agent_path("output", "gguf", "soul_qwen25_05b_v1")))
     assert g3._server_model_label({}) == "-"
 
 

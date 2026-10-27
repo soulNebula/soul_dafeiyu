@@ -26,6 +26,13 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+import sys as _sys
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+from agi.paths import agent_path
+
 
 DEFAULT_REF = "701fd25b3"  # llama-server build 11857 的 commit
 PROXY = "https://gh-proxy.com/"
@@ -65,7 +72,7 @@ def list_dir(path: str, ref: str, dest: Path) -> list[dict]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="fetch llama.cpp converter sources at a commit")
-    parser.add_argument("--dest", default=r"E:\agent\llama\convert")
+    parser.add_argument("--dest", default=str(agent_path(r"llama\convert")))
     parser.add_argument("--ref", default=DEFAULT_REF,
                         help=f"git commit（默认 {DEFAULT_REF}，对应 build 11857；见 llama-server --version）")
     args = parser.parse_args(argv)

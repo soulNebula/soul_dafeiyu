@@ -36,6 +36,8 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:            # 以脚本方式启动时也能 import agi.*
+    sys.path.insert(0, str(ROOT))
 
 #: 单实例/归属状态：只记录"本启动器拉起"的 PID，--stop 只杀这些
 STATE_PATH = ROOT / "agi" / "data" / "desktop_state.json"
@@ -50,8 +52,9 @@ GATEWAY_HEALTH = f"http://{GATEWAY_HOST}:{GATEWAY_PORT}/health"
 CONSOLE_HEALTH = f"http://{GATEWAY_HOST}:{CONSOLE_PORT}/api/health"
 WINDOW_SIZE = "1440,900"
 
-#: E:\agent\logs 是约定位置（和训练/评测日志放一起）；不可写时回退仓库内目录
-DEFAULT_LOG_DIR = Path(os.environ.get("WXBOX_DESKTOP_LOG_DIR") or r"E:\agent\logs")
+#: <AGENT_HOME>\logs 是约定位置（和训练/评测日志放一起）；不可写时回退仓库内目录
+from agi.paths import logs_dir
+DEFAULT_LOG_DIR = Path(os.environ.get("WXBOX_DESKTOP_LOG_DIR") or str(logs_dir()))
 FALLBACK_LOG_DIR = ROOT / "agi" / "data" / "desktop_logs"
 
 EDGE_PATHS = (

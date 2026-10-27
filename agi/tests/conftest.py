@@ -64,6 +64,29 @@ def _isolate_contact_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_gateway_config(tmp_path, monkeypatch):
+    """F1：把网关 ``CONFIG_PATH`` 重定向到 tmp，测试永不写生产 config.json。
+
+    事故（2026-10-27 审计）：部分测试构造 ``Gateway`` 时未传 ``config_path``，
+    于是 ``Gateway.__init__`` 用 ``gw_config.CONFIG_PATH``（生产
+    ``agi/data/wechat/config.json``）作为引擎开关持久化/热加载路径，跑测试会改
+    生产配置 mtime，甚至静默丢 ``db_keys``。
+
+    - 显式传 ``config_path=`` 的测试不受影响；
+    - ``test_config_hot_reload`` / ``test_stop_isolation`` 自己 monkeypatch
+      ``CONFIG_PATH`` 的用例仍以自己注入的路径为准；
+    - ``DATA_DIR`` 一并指到 tmp 的同级目录，保持「STOP 与 config.json 同目录」
+      语义（``test_stop_isolation`` 依赖 CONFIG_PATH 落在 DATA_DIR 下）。
+    """
+    from agi.wechat_gateway import config as gw_config
+
+    isolated_root = tmp_path / "agi" / "data" / "wechat"
+    monkeypatch.setattr(gw_config, "DATA_DIR", isolated_root)
+    monkeypatch.setattr(gw_config, "CONFIG_PATH", isolated_root / "config.json")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_stop_path(tmp_path, monkeypatch):
     """P0-22b：把 STOP 路径重定向到 tmp，保证测试永远读不到生产 STOP 文件。
 

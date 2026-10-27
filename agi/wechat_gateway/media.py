@@ -32,16 +32,24 @@ STICKER_DIR = ROOT / "media" / "stickers"
 INBOUND_MEDIA_DIR = ROOT / "agi" / "data" / "selflearn" / "media"
 
 #: 默认白名单目录（顺序即解析优先级）
-DEFAULT_MEDIA_DIRS: tuple[Path, ...] = (EMOJI_ASSET_DIR, STICKER_DIR, INBOUND_MEDIA_DIR)
+MEDIA_ROOT_DIR = ROOT / "media"          # 工作台媒体目录（文档/图片/贴纸素材）
+DEFAULT_MEDIA_DIRS: tuple[Path, ...] = (EMOJI_ASSET_DIR, STICKER_DIR, INBOUND_MEDIA_DIR,
+                                       MEDIA_ROOT_DIR)
 
-MEDIA_TYPES: tuple[str, ...] = ("text", "emoji_text", "image", "gif", "sticker")
+MEDIA_TYPES: tuple[str, ...] = ("text", "emoji_text", "image", "gif", "sticker", "file")
 TEXT_TYPES = frozenset({"text", "emoji_text"})
 FILE_TYPES = frozenset({"image", "gif", "sticker"})
 ALLOWED_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+#: P0-144 文档类：PDF/Word/Excel/PPT/压缩包/文本等（file 类型专用）
+FILE_EXTS = frozenset({
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".txt", ".md", ".zip", ".rar", ".7z", ".tar", ".gz", ".csv", ".json",
+})
 #: 微信专有贴纸格式：可以存，但不能当文件发给对方
 UNSENDABLE_EXTS = frozenset({".wxgf"})
 
 DEFAULT_MAX_MB = 10.0
+DEFAULT_FILE_MAX_MB = 50.0
 DEFAULT_INTERVAL_MS = 120
 MIN_INTERVAL_MS = 80
 MAX_INTERVAL_MS = 150
@@ -90,6 +98,15 @@ def max_bytes(cfg: dict | None = None) -> int:
     return int(max(0.001, mb) * 1024 * 1024)
 
 
+def file_max_bytes(cfg: dict | None = None) -> int:
+    """文档（type=file）大小上限：``media_file_max_mb`` 默认 50MB。"""
+    try:
+        mb = float(_cfg_get(cfg, "media_file_max_mb", DEFAULT_FILE_MAX_MB))
+    except (TypeError, ValueError):
+        mb = DEFAULT_FILE_MAX_MB
+    return int(max(0.001, mb) * 1024 * 1024)
+
+
 def send_interval_s(cfg: dict | None = None) -> float:
     """气泡间隔（秒）：配置毫秒钳制在 [80, 150]ms，避免抢焦点。"""
     try:
@@ -123,6 +140,7 @@ def capabilities(cfg: dict | None = None) -> dict[str, Any]:
         "unicode_emoji": True,      # SendMsg 直接支持 Unicode emoji 字符
         "image": True,              # SendFiles(png/jpg/...)
         "gif": True,                # SendFiles(.gif)，客户端渲染为动图
+        "file": True,               # SendFiles(pdf/doc/zip/...)，失败不降级图片
         "sticker_native": False,    # 预留：wxauto4 无贴纸面板 API
         "sticker_as_image": True,   # 降级：贴纸图当图片发
         "mixed": True,              # 多气泡按顺序逐条发
@@ -214,7 +232,8 @@ def validate_item(item: Any, *, cfg: dict | None = None) -> tuple[bool, str]:
     ext = found.suffix.lower()
     if ext in UNSENDABLE_EXTS:
         return False, "wxgf_unsupported"
-    if ext not in ALLOWED_EXTS:
+    allowed_exts = FILE_EXTS if kind == "file" else ALLOWED_EXTS
+    if ext not in allowed_exts:
         return False, "bad_ext"
     if not _is_inside(found, media_dirs(cfg)):
         return False, "outside_dirs"
@@ -224,7 +243,8 @@ def validate_item(item: Any, *, cfg: dict | None = None) -> tuple[bool, str]:
         size = found.stat().st_size
     except OSError:
         return False, "not_found"
-    if size > max_bytes(cfg):
+    limit = file_max_bytes(cfg) if kind == "file" else max_bytes(cfg)
+    if size > limit:
         return False, "too_large"
     if size <= 0:
         return False, "empty_file"

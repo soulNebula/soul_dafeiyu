@@ -60,6 +60,7 @@ DEFAULTS = {
     "media_enabled": False,
     "media_dirs": [],              # 追加白名单目录（默认三个目录见 agi/wechat_gateway/media.py）
     "media_max_mb": 10,            # 单文件大小上限（MB）
+    "media_file_max_mb": 50,       # P0-144：文档（file）大小上限（MB）
     "media_send_interval_ms": 120,  # mixed 多气泡间隔；实现钳制在 80–150ms
     "sticker_fallback_emoji": "😄",  # 贴纸当图片失败后的 emoji 降级
     "proactive_enabled": False,

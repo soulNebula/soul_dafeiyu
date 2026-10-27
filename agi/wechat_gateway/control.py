@@ -27,10 +27,18 @@ def is_complaint(text: str) -> bool:
     return bool(COMPLAINT.search(str(text or "")))
 
 
+#: 已知默认/弱口令：命中后启动时强制轮换（F3）。
+WEAK_ADMIN_TOKENS = ("8888", "admin", "123456", "password", "test", "token", "")
+
+
 def ensure_admin_token(cfg: dict[str, Any]) -> tuple[str, bool]:
-    """确保有管理 token；返回 (token, 是否新生成)。调用方负责写回配置。"""
+    """确保有管理 token；返回 (token, 是否新生成/轮换)。调用方负责写回配置。
+
+    F3：空 token 或命中已知弱口令时，**自动轮换成 32 位随机 token**，
+    避免"弱口令只告警不拦截"。
+    """
     token = str(cfg.get("admin_token") or "").strip()
-    if token:
+    if token and token.lower() not in WEAK_ADMIN_TOKENS:
         return token, False
     token = secrets.token_hex(16)
     cfg["admin_token"] = token

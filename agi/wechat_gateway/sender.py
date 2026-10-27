@@ -49,6 +49,7 @@ _RESILIENCE_DEFAULTS = {
     "media_enabled": False,
     "media_dirs": [],
     "media_max_mb": 10,
+    "media_file_max_mb": 50,
     "media_send_interval_ms": 120,
     "sticker_fallback_emoji": "😄",
     "media_audit": True,
@@ -686,6 +687,18 @@ class WxAutoSender:
         ok, detail = self._send_succeeded(response)
         return ok, "" if ok else f"发送结果不明确或失败：{detail}"
 
+    def _send_file(self, wx: Any, item: dict,
+                   cfg: dict) -> tuple[bool, str, str | None, list[str]]:
+        """P0-144：文档（type=file）→ SendFiles；失败不降级图片/贴纸。
+
+        返回 ``(ok, error, used, fallback_used)``；成功 used="file"。
+        """
+        found = media_mod.find_file(item.get("path") or item.get("name"), cfg)
+        if found is None:
+            return False, "not_found", None, []
+        ok, error = self._send_file_raw(wx, str(found))
+        return ok, error, ("file" if ok else None), []
+
     def _log_media(self, cfg: dict, data: dict) -> None:
         """每条 item 的 send_media 审计；Gateway 走 _record 时可用 env 关掉本层。"""
         if not bool(cfg.get("media_audit", True)):
@@ -850,6 +863,10 @@ class WxAutoSender:
                 ok, error = self._send_text_raw(wx, str(item.get("text")))
             elif kind == "sticker":
                 ok, error, used, fallback_used = self._sticker_bubbles(
+                    wx, item, effective)
+            elif kind == "file":
+                # P0-144：文档走 SendFiles；失败就是失败，绝不降级成图片
+                ok, error, used, fallback_used = self._send_file(
                     wx, item, effective)
             else:                             # image / gif
                 found = media_mod.find_file(item.get("path") or item.get("name"),

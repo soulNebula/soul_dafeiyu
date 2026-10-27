@@ -151,7 +151,7 @@ def _log(entry: dict, path: Path | None = None) -> None:
         pass
 
 
-_WEAK_ADMIN_TOKENS = ("8888", "admin", "123456", "password", "test", "token")
+from .control import WEAK_ADMIN_TOKENS as _WEAK_ADMIN_TOKENS  # F3：弱口令清单统一
 
 
 def admin_token_warning(token: str) -> str:
@@ -1304,7 +1304,11 @@ class Gateway:
         # P0-2：白名单在最底层强制（reactive/proactive/manual/force 都不例外）
         allowed = [str(x).strip() for x in (self.cfg.get("allowed_contacts") or [])
                    if str(x).strip()]
-        if allowed and str(contact or "").strip() not in allowed:
+        # F2：空白名单 = 全放行是漏洞，改为 fail-closed（必须显式配置白名单）
+        if not allowed:
+            self._record("send_blocked", {"friend": contact, "reason": "no_allowlist"})
+            return {"ok": False, "status": "blocked", "error": "no_allowlist"}
+        if str(contact or "").strip() not in allowed:
             self._record("send_blocked", {"friend": contact, "reason": "not_allowed"})
             return {"ok": False, "status": "blocked", "error": "not_allowed"}
         # 纵深防御：出站文本里的微信内部 ID 一律摘掉（2026-10-24 引用事故）
@@ -1497,6 +1501,7 @@ class Gateway:
             "WECHAT_MEDIA_ENABLED": "1" if media_mod.media_enabled(self.cfg) else "0",
             "WECHAT_MEDIA_DIRS": json.dumps(media_dirs, ensure_ascii=False),
             "WECHAT_MEDIA_MAX_MB": str(self.cfg.get("media_max_mb", 10)),
+            "WECHAT_MEDIA_FILE_MAX_MB": str(self.cfg.get("media_file_max_mb", 50)),
             "WECHAT_MEDIA_INTERVAL_MS": str(self.cfg.get("media_send_interval_ms", 120)),
             "WECHAT_STICKER_FALLBACK_EMOJI": str(
                 self.cfg.get("sticker_fallback_emoji") or "😄"),
@@ -1754,15 +1759,23 @@ class Gateway:
                         fb = uia_sender.send_to_contact(
                             contact_name, str(item.get("text") or ""), self.cfg)
                         method = "uia_text"
-                    else:
+                    elif kind in ("image", "gif", "sticker"):
                         fb = uia_sender.send_media(contact_name, item, self.cfg)
                         method = "uia_media"
+                    else:
+                        # P0-144：file 文档不参与 UIA 媒体兜底（失败即 failed 落审计）
+                        fb = None
+                        method = ""
                     if isinstance(fb, dict) and fb.get("ok"):
                         result = {**result, **fb}
                         result["error"] = ""
                         result["error_key"] = ""
                         result["fallback_used"] = list(
                             result.get("fallback_used") or []) + [method]
+                        # 兜底通道无法确认送达：标记 unverified，避免"报成功其实没到"
+                        result["unverified"] = True
+                        result["verified"] = False
+                        result["warning"] = "fallback_send_unverified"
                         self._record("fallback", {
                             "friend": contact_name, "status": fb.get("status"),
                             "ok": True, "method": method,
@@ -1772,7 +1785,8 @@ class Gateway:
                     pass
             # ⑨b 窗口级兜底：wxauto4 失败时用剪贴板粘贴图片/文字（默认开启才走）
             if (not result.get("ok") and self.cfg.get("fallback_enabled")
-                    and str(self.cfg.get("fallback_mode") or "").strip().lower() == "auto"):
+                    and str(self.cfg.get("fallback_mode") or "").strip().lower() == "auto"
+                    and str(item.get("type") or "").strip().lower() in ("image", "gif", "sticker")):
                 try:
                     from . import win_send as _win_send
                     fb = _win_send.send_media_via_window(contact_name, item, self.cfg)
@@ -1780,6 +1794,9 @@ class Gateway:
                         result = {**result, **fb}
                         result["error"] = ""
                         result["error_key"] = ""
+                        result["unverified"] = True
+                        result["verified"] = False
+                        result["warning"] = "fallback_send_unverified"
                         self._record("fallback", {
                             "friend": contact_name,
                             "status": fb.get("status"),

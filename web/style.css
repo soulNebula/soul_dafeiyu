@@ -329,3 +329,27 @@ select:focus, input:focus, textarea:focus { border-color: var(--accent); }
 .row-actions .btn { padding: 1px 7px; font-size: 11px; }
 .mono { font-family: Consolas, monospace; }
 @media (max-width: 1100px) { .m3-cols { grid-template-columns: 1fr; } }
+
+/* ================= M2 对话工作室 ================= */
+.chat-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.chat-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+.chat-tab { background: var(--bg-input); border: 1px solid #454545; border-radius: 3px;
+  padding: 3px 10px; color: var(--text-dim); cursor: pointer; font-size: 12px; }
+.chat-tab.active { border-color: var(--accent); color: #fff; background: var(--accent-btn); }
+.chat-editor { width: 100%; min-height: 180px; font-family: Consolas, monospace; font-size: 12px;
+  line-height: 1.5; resize: vertical; }
+.chat-error { border: 1px solid #6b2f2f; background: #2a1b1b; color: #ffb4ad;
+  border-radius: 5px; padding: 8px 10px; margin-bottom: 10px; font-size: 12px; white-space: pre-wrap; }
+.chat-setting { grid-template-columns: 1fr 260px; align-items: center; }
+.chat-setting-value { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.chat-setting-value input[type=text], .chat-setting-value input[type=number] { width: 100px; }
+.mini-chat-save { padding: 1px 7px; font-size: 11px; }
+.chat-guard { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+  padding: 7px 0; border-bottom: 1px solid #2c2c38; }
+.chat-result { display: flex; flex-direction: column; gap: 6px; }
+.chat-result-meta { display: flex; gap: 14px; color: var(--text-dim); font-size: 12px; }
+.chat-reply { background: #1c2430; border: 1px solid #2f4358; border-radius: 5px;
+  padding: 8px 10px; white-space: pre-wrap; }
+.chat-trace-row { cursor: pointer; }
+.chat-trace-detail { margin-top: 10px; border-top: 1px solid #2c2c38; padding-top: 8px; }
+@media (max-width: 1000px) { .chat-cols { grid-template-columns: 1fr; } }

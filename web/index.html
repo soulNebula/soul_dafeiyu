@@ -48,7 +48,8 @@
     <button class="ab-item" data-view="mem" title="记忆工作室">🧠</button>
     <button class="ab-item" data-view="train" title="训练工厂">🧪</button>
     <button class="ab-item" data-view="models" title="模型中心">🧰</button>
-    <button class="ab-item" data-view="drafts" title="微信草稿箱（confirm 模式）">💬</button>
+    <button class="ab-item" data-view="chat" title="对话工作室">💬</button>
+    <button class="ab-item" data-view="drafts" title="微信草稿箱（confirm 模式）">🗨</button>
     <button class="ab-item" data-view="run" title="运行/调试">▶</button>
     <button class="ab-item" data-view="services" title="服务">⚙</button>
     <button class="ab-item" data-view="config" title="设置">🎛</button>
@@ -147,6 +148,14 @@
         <button class="btn primary full" id="models-open">打开模型中心</button>
       </div>
       <div id="models-side-summary" class="muted small" style="padding:0 12px"></div>
+    </div>
+
+    <div id="side-chat" class="side-view">
+      <div class="side-title">对话工作室</div>
+      <div class="side-sub">
+        <button class="btn primary full" id="chat-open">打开对话工作室</button>
+      </div>
+      <div id="chat-side-summary" class="muted small" style="padding:0 12px"></div>
     </div>
 
     <div id="side-overview" class="side-view">
@@ -336,7 +345,7 @@ document.addEventListener('click', e=>{
 });
 
 /* ================= 活动栏 / 侧栏 ================= */
-const VIEWS = ['explorer','git','data','mem','train','models','run','services','config','overview'];
+const VIEWS = ['explorer','git','data','mem','train','models','chat','run','services','config','overview'];
 function showView(name) {
   S.pageView = name;
   if (name !== 'train' && S.train && S.train.timer) { clearInterval(S.train.timer); S.train.timer = null; }
@@ -347,6 +356,7 @@ function showView(name) {
   if (name==='mem') loadMemSidebar();
   if (name==='train') loadTrainSide();
   if (name==='models') loadModelsSide();
+  if (name==='chat') loadChatSide();
   if (name==='services') loadServices();
   if (name==='drafts') loadDrafts();
   if (name==='config') loadConfig();
@@ -358,6 +368,7 @@ $('#ab-settings').onclick = ()=> openConnectDialog();
 $('#mem-open').onclick = ()=> { showView('mem'); openMemStudio(); };
 $('#train-open').onclick = ()=> { showView('train'); openTrainPage(); };
 $('#models-open').onclick = ()=> { showView('models'); loadModelsPage(); };
+$('#chat-open').onclick = ()=> { showView('chat'); openChatStudio(); };
 
 /* ================= 解释器 ================= */
 async function loadInterpreters() {
@@ -1113,6 +1124,7 @@ if (_startView && VIEWS.includes(_startView)) {
     if (_startView === 'data') openFirstDataFromUrl();
     if (_startView === 'train') openTrainPage();
     if (_startView === 'models') loadModelsPage();
+    if (_startView === 'chat') openChatStudio();
   }, 1400);
 }
 setInterval(()=>{ if (S.services.length) loadServices().catch(()=>{}); }, 15000);
@@ -2064,6 +2076,284 @@ function bindModelsPage() {
     try { const r = await api('/api/wb/models/convert', { method: 'POST', body }); m.result = r; toast(r.ok ? '已转 GGUF：' + (r.path || '') : '转换失败：' + (r.error || ''), r.ok ? 'ok' : 'err'); await loadModelsPage(); }
     catch (e) { toast('转换失败：' + e.message, 'err'); }
   };
+}
+
+
+/* ================= M2：对话工作室 ================= */
+S.chat = { persona: null, file: 'profile', prompt: null, promptKey: '',
+  pipeline: null, guard: null, traces: null, trace: null, test: null,
+  testing: false, errors: [], tab: 'profile' };
+
+const CHAT_PERSONA_FILES = [['profile', 'profile'], ['values', 'values'],
+  ['fewshot', 'fewshot'], ['self_narrative', 'self_narrative']];
+
+async function loadChatSide() {
+  const el = $('#chat-side-summary');
+  if (!el) return;
+  try {
+    const [persona, traces] = await Promise.all([
+      api('/api/wb/chat/persona').catch(() => null),
+      api('/api/wb/chat/traces?limit=1').catch(() => null),
+    ]);
+    const traceCount = traces ? (traces.count ?? (traces.items || []).length) : '?';
+    el.innerHTML = `<div class="muted small">人格：${persona ? '已加载' : '—'} · trace：${traceCount}</div>`;
+  } catch (err) {
+    el.innerHTML = `<div class="warn small">后端未就绪：${esc(err.message)}</div>`;
+  }
+}
+
+function openChatStudio() {
+  loadChatPage();
+}
+
+async function loadChatPage() {
+  const c = S.chat;
+  const errors = [];
+  const tryApi = async (fn, label) => { try { return await fn(); } catch (e) { errors.push(label + ': ' + e.message); return null; } };
+  c.persona = await tryApi(() => api('/api/wb/chat/persona'), '人格') || c.persona;
+  c.prompt = await tryApi(() => api('/api/wb/chat/prompt'), '提示词') || c.prompt;
+  c.pipeline = await tryApi(() => api('/api/wb/chat/pipeline'), '流水线') || c.pipeline;
+  c.guard = await tryApi(() => api('/api/wb/chat/guard'), '护栏') || c.guard;
+  c.traces = await tryApi(() => api('/api/wb/chat/traces?limit=20'), 'trace') || c.traces;
+  c.errors = errors;
+  openChatTab();
+}
+
+function chatPersonaFiles(data) {
+  const rows = {};
+  if (!data) return rows;
+  const source = data.files || data.persona || data;
+  if (source && typeof source === 'object' && !Array.isArray(source)) {
+    for (const [key, value] of Object.entries(source)) {
+      if (typeof value === 'string') rows[key] = value;
+      else if (value && typeof value === 'object' && typeof value.text === 'string') rows[key] = value.text;
+    }
+  }
+  const items = data.items || data.files_list || (Array.isArray(data.files) ? data.files : []);
+  if (Array.isArray(items)) {
+    for (const item of items) {
+      const key = item.file || item.key || item.name;
+      if (key) rows[key] = String(item.text ?? item.content ?? '');
+    }
+  }
+  return rows;
+}
+
+function chatPrompts(data) {
+  const rows = {};
+  if (!data) return rows;
+  const source = data.prompts || data.items || data;
+  if (Array.isArray(source)) {
+    for (const item of source) {
+      const key = item.key || item.name;
+      if (key) rows[key] = String(item.text ?? item.value ?? item.content ?? '');
+    }
+  } else if (source && typeof source === 'object') {
+    for (const [key, value] of Object.entries(source)) {
+      if (typeof value === 'string') rows[key] = value;
+      else if (value && typeof value === 'object' && typeof value.text === 'string') rows[key] = value.text;
+    }
+  }
+  return rows;
+}
+
+function chatPipelineItems(data) {
+  if (!data) return [];
+  const source = data.items || data.pipeline || data.rules || data;
+  if (Array.isArray(source)) return source.filter(item => item && (item.key || item.name));
+  if (source && typeof source === 'object') {
+    return Object.entries(source).map(([key, value]) => ({ key, value,
+      label: key, type: typeof value === 'boolean' ? 'bool' : (typeof value === 'number' ? 'number' : 'text') }));
+  }
+  return [];
+}
+
+function chatGuardRules(data) {
+  if (!data) return [];
+  const source = data.rules || data.items || data.guard || data;
+  if (Array.isArray(source)) return source;
+  if (source && typeof source === 'object') return Object.entries(source).map(([key, value]) => ({ key, value }));
+  return [];
+}
+
+function chatPageHtml() {
+  const c = S.chat;
+  const persona = chatPersonaFiles(c.persona);
+  const tab = c.file || 'profile';
+  const personaText = persona[tab] ?? '';
+  const prompts = chatPrompts(c.prompt);
+  const promptKeys = Object.keys(prompts);
+  if (!c.promptKey && promptKeys.length) c.promptKey = promptKeys[0];
+  const promptText = prompts[c.promptKey] ?? '';
+  const pipeline = chatPipelineItems(c.pipeline);
+  const guard = chatGuardRules(c.guard);
+  const traces = (c.traces && (c.traces.items || c.traces.traces)) || [];
+  const test = c.test;
+  const detail = c.trace;
+  return `<div class="studio-page"><h2>对话工作室</h2>
+    ${(c.errors || []).length ? `<div class="chat-error">后端未就绪：${esc(c.errors.join('；'))}</div>` : ''}
+    <div class="chat-cols">
+      <div class="studio-card">
+        <div class="studio-card-title">人格编辑</div>
+        <div class="chat-tabs">${CHAT_PERSONA_FILES.map(([key, label]) => `<button class="chat-tab ${tab === key ? 'active' : ''}" data-chat-persona="${key}">${label}</button>`).join('')}</div>
+        <textarea id="chat-persona-text" class="chat-editor" rows="10" placeholder="（人格文件为空/后端未就绪）">${esc(personaText)}</textarea>
+        <div class="studio-toolbar"><span class="muted small">文件：${esc(tab)}.jsonl</span><span class="grow"></span>
+          <button class="btn primary" id="chat-persona-save">保存人格</button></div>
+      </div>
+      <div class="studio-card">
+        <div class="studio-card-title">提示词编辑</div>
+        <div class="studio-toolbar">
+          <select id="chat-prompt-key">${promptKeys.map(key => `<option value="${esc(key)}" ${key === c.promptKey ? 'selected' : ''}>${esc(key)}</option>`).join('') || '<option value="">（无提示词/未就绪）</option>'}</select>
+          <span class="muted small">${promptKeys.length} 个 key</span>
+        </div>
+        <textarea id="chat-prompt-text" class="chat-editor" rows="10" placeholder="（提示词为空/后端未就绪）">${esc(promptText)}</textarea>
+        <div class="studio-toolbar"><span class="grow"></span><button class="btn primary" id="chat-prompt-save">保存提示词</button></div>
+      </div>
+    </div>
+    <div class="chat-cols">
+      <div class="studio-card">
+        <div class="studio-card-title">流水线开关（保存后下一轮生效）</div>
+        ${pipeline.length ? pipeline.map(item => `<div class="setting-row chat-setting">
+          <div><b>${esc(item.label || item.key)}</b><div class="muted small">${esc(item.key)}${item.desc ? ' · ' + esc(item.desc) : ''}</div></div>
+          <div class="chat-setting-value">${chatPipelineInput(item)}<button class="btn mini-chat-save" data-chat-pipeline="${esc(item.key)}">保存</button></div>
+        </div>`).join('') : '<div class="muted small">流水线接口未就绪</div>'}
+      </div>
+      <div class="studio-card">
+        <div class="studio-card-title">护栏规则（只读）</div>
+        ${guard.length ? guard.map((item, index) => `<div class="chat-guard">
+          <div><b>${esc(item.key || item.name || ('规则 ' + (index + 1)))}</b>
+          <div class="muted small">${esc(typeof item.value === 'string' ? item.value : (item.desc || item.text || JSON.stringify(item.value ?? item)))}</div></div>
+          ${item.enabled === false ? '<span class="badge">关</span>' : ''}
+        </div>`).join('') : '<div class="muted small">护栏接口未就绪</div>'}
+      </div>
+    </div>
+    <div class="studio-card">
+      <div class="studio-card-title">试跑（走真实生成链路）</div>
+      <div class="studio-toolbar">
+        <input id="chat-test-text" placeholder="输入用户消息，例如：今天好累" value="${esc(c.testInput || '')}" style="flex:1">
+        <button class="btn primary" id="chat-test-btn" ${c.testing ? 'disabled' : ''}>${c.testing ? '生成中…' : '发送试跑'}</button>
+        ${c.testing ? '<span class="muted small">最长等待 60s…</span>' : ''}
+      </div>
+      ${test ? `<div class="chat-result">
+        ${test.ok === false ? `<div class="chat-error">试跑失败：${esc(test.error || '')}</div>` : `
+        <div class="chat-result-meta"><span>延迟 ${esc(test.latency_ms ?? test.elapsed_ms ?? '—')}ms</span>
+          <span>${test.guard ? '护栏：' + esc(JSON.stringify(test.guard)) : ''}</span>
+          <span>${test.memories ? '记忆命中 ' + ((test.memories.items || test.memories).length ?? '') + ' 条' : ''}</span></div>
+        <div class="chat-reply">${esc(test.reply || test.text || test.final_reply || '(无回复)')}</div>
+        ${test.memories ? `<pre class="studio-pre">${esc(JSON.stringify(test.memories, null, 2))}</pre>` : ''}
+        ${test.reasoning ? `<details><summary>reasoning / 原始输出</summary><pre class="studio-pre">${esc(test.reasoning)}</pre></details>` : ''}`}
+      </div>` : '<div class="muted small">还没试跑。发送后会显示 reply / 延迟 / 护栏 / 记忆命中。</div>'}
+    </div>
+    <div class="studio-card">
+      <div class="studio-card-title">最近 Trace（点行看详情）</div>
+      <div class="ds-table-wrap"><table class="ds-table"><thead><tr><th>时间</th><th>用户</th><th>回复</th><th>延迟</th><th>护栏</th></tr></thead>
+        <tbody>${traces.length ? traces.map(item => `<tr class="chat-trace-row" data-chat-trace="${esc(item.id || item.turn_id || '')}">
+          <td class="muted small">${item.ts || item.created_at ? new Date((item.ts || item.created_at) * 1000).toLocaleString() : ''}</td>
+          <td>${esc(String(item.user_text || item.user || '').slice(0, 50))}</td>
+          <td>${esc(String(item.reply || item.final_reply || item.reply_text || '').slice(0, 50))}</td>
+          <td>${esc(item.latency_ms ?? '')}</td>
+          <td>${item.guard ? esc(JSON.stringify(item.guard).slice(0, 40)) : (item.blocked ? '拦截' : '')}</td></tr>`).join('') :
+          '<tr><td colspan="5" class="muted">暂无 trace（接口未就绪或还没有对话）</td></tr>'}</tbody></table></div>
+      ${detail ? `<div class="chat-trace-detail"><div class="studio-row"><b>trace ${esc(detail.id || '')}</b><span class="grow"></span>
+        <span class="muted small">${esc(detail.latency_ms ?? '')}ms</span></div>
+        <pre class="studio-pre">${esc(JSON.stringify(detail, null, 2))}</pre></div>` : ''}
+    </div>
+  </div>`;
+}
+
+function chatPipelineInput(item) {
+  const value = item.value;
+  if (item.type === 'bool' || typeof value === 'boolean') return `<input type="checkbox" data-chat-pipeline-input="${esc(item.key)}" ${value ? 'checked' : ''}>`;
+  if (item.type === 'number' || typeof value === 'number') return `<input type="number" data-chat-pipeline-input="${esc(item.key)}" value="${esc(value ?? '')}">`;
+  return `<input type="text" data-chat-pipeline-input="${esc(item.key)}" value="${esc(value ?? '')}">`;
+}
+
+function openChatTab() {
+  const key = 'chat:studio';
+  let tab = S.tabs.find(t => t.rel === key);
+  if (!tab) { tab = { rel: key, root: 'chat', name: '对话工作室', text: '', dirty: false }; S.tabs.push(tab); }
+  tab.html = chatPageHtml();
+  S.activeTab = key;
+  showHtmlTab(tab);
+  renderTabs();
+  bindChatPage();
+}
+
+function bindChatPage() {
+  const root = $('#editors .html-tab:not([style*="display: none"])') || document;
+  const c = S.chat;
+  $$('[data-chat-persona]', root).forEach(btn => {
+    btn.onclick = () => { c.file = btn.dataset.chatPersona; openChatTab(); };
+  });
+  const personaSave = $('#chat-persona-save', root);
+  if (personaSave) personaSave.onclick = async () => {
+    const text = $('#chat-persona-text', root).value;
+    try {
+      const r = await api('/api/wb/chat/persona', { method: 'POST', body: { file: c.file, text } });
+      toast(r.ok === false ? '保存失败：' + (r.error || '') : '人格已保存', r.ok === false ? 'err' : 'ok');
+      if (r.ok !== false) { c.persona = await api('/api/wb/chat/persona'); openChatTab(); }
+    } catch (e) { toast('保存失败：' + e.message, 'err'); }
+  };
+  const promptKey = $('#chat-prompt-key', root);
+  if (promptKey) promptKey.onchange = () => { c.promptKey = promptKey.value; openChatTab(); };
+  const promptSave = $('#chat-prompt-save', root);
+  if (promptSave) promptSave.onclick = async () => {
+    const text = $('#chat-prompt-text', root).value;
+    try {
+      const r = await api('/api/wb/chat/prompt', { method: 'POST', body: { key: c.promptKey, text } });
+      toast(r.ok === false ? '保存失败：' + (r.error || '') : '提示词已保存', r.ok === false ? 'err' : 'ok');
+      if (r.ok !== false) { c.prompt = await api('/api/wb/chat/prompt'); openChatTab(); }
+    } catch (e) { toast('保存失败：' + e.message, 'err'); }
+  };
+  $$('[data-chat-pipeline]', root).forEach(btn => {
+    btn.onclick = async () => {
+      const key = btn.dataset.chatPipeline;
+      const input = root.querySelector(`[data-chat-pipeline-input="${CSS.escape(key)}"]`);
+      if (!input) return;
+      let value = input.type === 'checkbox' ? input.checked : input.value;
+      if (input.type === 'number') value = Number(value);
+      try {
+        const r = await api('/api/wb/chat/pipeline', { method: 'POST', body: { key, value } });
+        toast(r.ok === false ? '保存失败：' + (r.error || '') : '已保存 ' + key, r.ok === false ? 'err' : 'ok');
+        if (r.ok !== false) { c.pipeline = await api('/api/wb/chat/pipeline'); openChatTab(); }
+      } catch (e) { toast('保存失败：' + e.message, 'err'); }
+    };
+  });
+  const testInput = $('#chat-test-text', root);
+  if (testInput) testInput.oninput = () => { c.testInput = testInput.value; };
+  const testBtn = $('#chat-test-btn', root);
+  if (testBtn) testBtn.onclick = () => runChatTest(root);
+  $$('[data-chat-trace]', root).forEach(row => {
+    row.onclick = async () => {
+      const id = row.dataset.chatTrace;
+      try { c.trace = await api('/api/wb/chat/trace/' + encodeURIComponent(id)); openChatTab(); }
+      catch (e) { toast('读取 trace 失败：' + e.message, 'err'); }
+    };
+  });
+}
+
+async function runChatTest(root) {
+  const c = S.chat;
+  const text = ($('#chat-test-text', root) || {}).value?.trim() || (c.testInput || '').trim();
+  if (!text) { toast('先输入用户消息', 'err'); return; }
+  c.testInput = text; c.testing = true; openChatTab();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  try {
+    const res = await fetch('/api/wb/chat/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Token': S.token },
+      body: JSON.stringify({ text }),
+      signal: controller.signal,
+    });
+    let data; try { data = await res.json(); } catch { data = { ok: false, error: 'bad_json' }; }
+    if (!res.ok) throw new Error(data.detail || data.error || ('HTTP ' + res.status));
+    c.test = data;
+  } catch (err) {
+    c.test = { ok: false, error: controller.signal.aborted ? '超时：60s 内未返回（模型可能正在加载/训练）' : err.message };
+  } finally {
+    clearTimeout(timer); c.testing = false; openChatTab();
+  }
 }
 
 </script>

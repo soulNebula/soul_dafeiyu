@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 import sys
 import time
@@ -32,10 +33,27 @@ STRENGTH_BUCKETS = ("0-0.2", "0.2-0.5", "0.5-0.8", "0.8-1")
 
 # ------------------------------------------------------------------ SoulAgent
 def _soul():
-    """把被管理的 SoulAgent 加入 sys.path，返回其 db/memory_decay 模块。"""
-    root = paths.soulagent_home()
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    """把被管理的 SoulAgent 加入 sys.path，返回其 db/memory_decay 模块。
+
+    测试会把 soulagent_home 指到 tmp（不带 agi/），此时回退到真实仓库根，
+    避免 import agi.selflearn 失败。
+    """
+    root = Path(paths.soulagent_home())
+    if not (root / "agi" / "selflearn").is_dir():
+        real = Path(os.environ.get("SOULAGENT_HOME")
+                    or (Path.home() / "Desktop" / "SoulAgent"))
+        if (real / "agi" / "selflearn").is_dir():
+            root = real
+    root_s = str(root)
+    if root_s in sys.path:
+        sys.path.remove(root_s)
+    sys.path.insert(0, root_s)
+    # 若 agi 包已被别处（如测试临时目录）以 namespace package 形式导入，
+    # 其 __path__ 只指向那个目录；这里补上真实仓库的 agi 路径。
+    real_agi = str(Path(root_s) / "agi")
+    pkg = sys.modules.get("agi")
+    if pkg is not None and hasattr(pkg, "__path__") and real_agi not in list(pkg.__path__):
+        pkg.__path__.append(real_agi)
     from agi.selflearn import db, memory_decay  # type: ignore
     return db, memory_decay
 

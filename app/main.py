@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audit, config_store, datastudio, files_api, gitstudio, memstudio, modelstudio, paths, services, trainstudio, wechat_proxy
+from . import audit, chatstudio, config_store, datastudio, files_api, gitstudio, memstudio, modelstudio, paths, services, trainstudio, wechat_proxy
 
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
 
@@ -674,6 +674,74 @@ def models_convert(body: dict):
                                     quant=str(body.get("quant") or "Q4_K_M"),
                                     name=body.get("name") or None,
                                     out_dir=body.get("out_dir") or None)
+
+
+# ------------------------------------------------------------------ 对话工作室（M2）
+@app.get("/api/wb/chat/persona", dependencies=[Depends(require_token)])
+def chat_persona():
+    return chatstudio.persona_view()
+
+
+@app.post("/api/wb/chat/persona", dependencies=[Depends(require_token)])
+def chat_persona_update(body: dict):
+    out = chatstudio.update_persona(str(body.get("persona") or "xiaoyu"),
+                                    str(body.get("file") or ""),
+                                    str(body.get("text") or ""))
+    if out.get("ok"):
+        audit.record("chat.persona_update", str(body.get("file")), actor="workbench")
+    return out
+
+
+@app.get("/api/wb/chat/prompt", dependencies=[Depends(require_token)])
+def chat_prompt():
+    return chatstudio.prompts_view()
+
+
+@app.post("/api/wb/chat/prompt", dependencies=[Depends(require_token)])
+def chat_prompt_update(body: dict):
+    out = chatstudio.update_prompt(str(body.get("key") or ""), str(body.get("text") or ""))
+    if out.get("ok"):
+        audit.record("chat.prompt_update", str(body.get("key")), actor="workbench")
+    return out
+
+
+@app.get("/api/wb/chat/pipeline", dependencies=[Depends(require_token)])
+def chat_pipeline():
+    return chatstudio.pipeline_view()
+
+
+@app.post("/api/wb/chat/pipeline", dependencies=[Depends(require_token)])
+def chat_pipeline_update(body: dict):
+    out = chatstudio.update_pipeline_switch(str(body.get("key") or ""), body.get("value"))
+    if out.get("ok"):
+        audit.record("chat.switch_update", str(body.get("key")), actor="workbench")
+    return out
+
+
+@app.get("/api/wb/chat/guard", dependencies=[Depends(require_token)])
+def chat_guard():
+    return chatstudio.guard_rules()
+
+
+@app.get("/api/wb/chat/citation", dependencies=[Depends(require_token)])
+def chat_citation():
+    return chatstudio.citation_rules()
+
+
+@app.post("/api/wb/chat/test", dependencies=[Depends(require_token)])
+def chat_test(body: dict):
+    return chatstudio.run_trial(str(body.get("text") or ""))
+
+
+@app.get("/api/wb/chat/traces", dependencies=[Depends(require_token)])
+def chat_traces(limit: int = Query(default=20, ge=1, le=200), db: str | None = None,
+                contact: str = "", mode: str = ""):
+    return chatstudio.traces(db, limit=limit, contact=contact, mode=mode)
+
+
+@app.get("/api/wb/chat/trace/{turn_id}", dependencies=[Depends(require_token)])
+def chat_trace(turn_id: str, db: str | None = None):
+    return chatstudio.trace_detail(turn_id, db)
 
 
 # ------------------------------------------------------------------ 审计

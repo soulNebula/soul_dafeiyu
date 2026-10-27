@@ -1790,7 +1790,11 @@ class Gateway:
         try:
             from . import win_send
             mode = str(self.cfg.get("fallback_mode") or "manual").strip().lower()
-            if mode == "auto" and str(self.cfg.get("fallback_send_mode") or "").lower() == "contact":
+            backend = str(self.cfg.get("fallback_send_mode") or "").strip().lower()
+            if backend == "uia":
+                from . import uia_sender
+                out = uia_sender.send_to_contact(contact, text, self.cfg)
+            elif mode == "auto" and backend == "contact":
                 out = win_send.send_to_contact(contact, text, self.cfg)
             else:
                 out = win_send.send_via_window(text, self.cfg)

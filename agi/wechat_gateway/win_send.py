@@ -227,6 +227,36 @@ def _verify_chat_open(win, info, contact: str) -> str:
     except Exception:  # noqa: BLE001
         return "unknown"
 
+
+def _ocr_lines(win, info):
+    from wx_core.ocr import OCRWorker
+    img = win.capture(info)
+    if img is None:
+        return [], (0, 0)
+    with OCRWorker() as worker:
+        lines = worker.ocr(img)
+    return lines, img.size
+
+
+def _find_contact_in_list(win, info, contact: str):
+    """在左侧会话列表里 OCR 定位联系人名，返回点击坐标（画面坐标）或 None。"""
+    lines, (w, h) = _ocr_lines(win, info)
+    target = str(contact).replace(" ", "")
+    for ln in lines:
+        box = getattr(ln, "box", None) or (0, 0, 0, 0)
+        text = str(getattr(ln, "text", "") or "").replace(" ", "")
+        if not text or target not in text:
+            continue
+        # 左侧会话列表：x 在 10%~33%，y 在 8%~92%
+        if box[0] < w * 0.10 or box[2] > w * 0.34:
+            continue
+        if box[1] < h * 0.08 or box[1] > h * 0.92:
+            continue
+        cx = (box[0] + box[2]) // 2
+        cy = (box[1] + box[3]) // 2
+        return cx, cy
+    return None
+
 def _open_chat(win, info, contact: str, cfg: dict, settle: float = 0.5) -> tuple[bool, str]:
     """把微信切前台并打开 ``contact`` 会话（搜索框 → 粘贴 → 回车）。"""
     loaded, _err = _load()
@@ -240,6 +270,18 @@ def _open_chat(win, info, contact: str, cfg: dict, settle: float = 0.5) -> tuple
         return False, "前台不是微信窗口"
     img = win.capture(info)
     w, h = (img.size if img else (960, 900))
+    # 优先：直接在左侧会话列表里点联系人（比搜索框可靠，且不依赖聚焦）
+    spot = _find_contact_in_list(win, info, contact)
+    if spot:
+        win.real_click(info, int(spot[0]), int(spot[1]))
+        time.sleep(1.2)
+        state = _verify_chat_open(win, info, contact)
+        if state != "ok":
+            time.sleep(0.8)
+            state = _verify_chat_open(win, info, contact)
+        if state == "ok":
+            return True, ""
+        # 点击没打开正确会话 → 继续走搜索兜底
     sb = cfg.get("window_search_box") or [0.17, 0.066]
     try:
         win.real_click(info, int(w * float(sb[0])), int(h * float(sb[1])))
@@ -274,8 +316,11 @@ def _open_chat(win, info, contact: str, cfg: dict, settle: float = 0.5) -> tuple
         win.press_key(VK_RETURN)
         time.sleep(1.0)
     state = _verify_chat_open(win, info, contact)
-    if state == "mismatch":
-        return False, "当前会话与联系人名不匹配（已中止发送）"
+    if state == "unknown":
+        time.sleep(0.8)
+        state = _verify_chat_open(win, info, contact)
+    if state != "ok":
+        return False, "当前会话与联系人名不匹配或无法确认（已中止发送）"
     return True, ""
 
 

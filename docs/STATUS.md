@@ -51,8 +51,9 @@
 
 1. 根 `tests/test_webui.py` 的 9 条旧 `/agi` 用例已 `skipif`（依赖已移除的 `agi.core`）；如需恢复需重写为 802 控制台。
 2. 8081/8082 仅保留历史/调试用途，不写入主链文档的操作步骤。
-3. 真实发送（2026-10-28 03:20 结论）：
-   - **wxauto4 41.1.7 的 UIA 绑定在本机失效**：`WeChat()` 报「未找到已登录的客户端主窗口」；用 .NET UIA（PowerShell）能正常看到微信主窗口 `mmui::MainWindow`，但 wxauto4 的 comtypes UIA 枚举返回空（根桌面 0 子元素）。重建 venv（python 3.13）、降级 comtypes 均无效 → 判定为 wxauto4 在当前环境的兼容问题，非微信状态问题。
-   - **已启用窗口级兜底发送**：`fallback_enabled=true` / `fallback_mode=auto` / `fallback_send_mode=contact`，wxauto 失败后自动切到 `win_send.send_to_contact()`（搜索联系人 → 打开会话 → 粘贴 → 回车），并截图验证过 03:21 / 03:30 两条真发成功。
-   - 风险：窗口兜底 `verified=false`（不校验会话名），可能发错人；结果归类为 `unverified`（不计入 sent 统计）。生产建议保持 `send_mode=confirm`，人工抽查草稿后再批准。
+3. 真实发送（2026-10-28 04:05 更新）：
+   - **wxauto4 41.1.7 的 UIA 通道在本机不可用**：`WeChat()` 报「未找到已登录的客户端主窗口」；重启电脑、重建 venv、降级 comtypes、受限权限运行均无效。系统 .NET UIA（PowerShell）能正常看到微信窗口（`mmui::MainWindow`）与控件树。
+   - **替代方案（已验证可用）**：`tools/wechat_uia/query.ps1`（.NET UIA 只读查询）+ `agi/wechat_gateway/uia_sender.py`：定位会话列表 `mmui::ChatSessionCell` 矩形 → 点击 → 校验标题 `mmui::ChatTitleBarChatSingleView` → 点输入框 → 粘贴 → 回车；标题不匹配直接中止。实测网关 `/api/approve` 成功送达（`method=uia, verified=true, classification=delivered`）。
+   - 配置：`fallback_enabled=true` / `fallback_mode=auto` / `fallback_send_mode=uia`；`send_mode` 仍为 `confirm`（草稿需人工批准）。
+   - 旧 OCR 坐标兜底（`win_send.send_to_contact`）保留但不再默认使用（会因搜索框聚焦失败发错人）。
 

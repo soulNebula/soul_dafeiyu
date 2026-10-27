@@ -282,7 +282,7 @@ def test_requires_injected_backend_and_callback():
         WeChatReceiver(FakeBackend(), {"小明"}, None)
 
 
-def test_recall_and_quote_system_messages_are_forwarded(receiver_factory):
+def test_recall_quote_and_pat_system_messages_are_forwarded(receiver_factory):
     backend, receiver, messages = receiver_factory()
     receiver.start()
     backend.events.put(message(kind="system", text="对方撤回了一条消息", msg_id="sys-recall"))
@@ -290,6 +290,6 @@ def test_recall_and_quote_system_messages_are_forwarded(receiver_factory):
     backend.events.put(message(kind="system", text="拍了拍你", msg_id="sys-pat"))
     backend.events.put(message(kind="emoji", text="", msg_id="emoji-empty"))
 
-    assert wait_for(lambda: len(messages) == 3)
+    assert wait_for(lambda: len(messages) == 4)
     ids = [m["id"] for m in messages]
-    assert ids == ["sys-recall", "sys-quote", "emoji-empty"]
+    assert ids == ["sys-recall", "sys-quote", "sys-pat", "emoji-empty"]

@@ -19,10 +19,14 @@
 
 1. ``type == "message"``；
 2. ``data.sender == "friend"``（自己发的不算来信）；
-3. ``data.kind == "text"``（图片/表情/文件/语音等一律不转发）；
+3. ``data.kind == "text"`` 或 ``system``（图片/表情/文件/语音等一律不转发）；
+   - ``system`` 只放行撤回 / 引用 / 拍了拍（P22），由网关 server 统一转写成标记；
 4. ``data.friend`` 在白名单内；
 5. ``data.text`` 非空白；
 6. 按 ``data.id`` 去重（同一条消息只回调一次；没有 id 时用 friend/text/ts 兜底去重）。
+
+P22：文本里出现 ``@配置昵称``（``mention_name``）时，在回调的 data 上打
+``mention=True`` 标记（不改原文），网关 server 据此加 ``[对方@了你]`` 前缀。
 
 线程模型
 --------
@@ -53,6 +57,19 @@ def _clean(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+#: system 消息里允许放行的关键词（P22：撤回/引用/拍一拍）
+SYSTEM_PASSTHROUGH_HINTS = ("撤回", "引用消息", "拍了拍")
+
+
+def is_mention(text: object, mention_name: object) -> bool:
+    """P22：私聊文本里是否 @ 了配置的机器人昵称（``@昵称``）。"""
+    value = _clean(text)
+    name = _clean(mention_name)
+    if not value or not name or "@" not in value:
+        return False
+    return f"@{name}" in value
+
+
 class WeChatReceiver:
     """消费微信网关 backend 事件、只回调入站文本消息的接收适配器。
 
@@ -78,6 +95,9 @@ class WeChatReceiver:
         去重表最多保留多少条 id（FIFO 淘汰），避免长跑进程内存无限增长。
     thread_name:
         后台线程名，便于排查问题。
+    mention_name:
+        P22：机器人微信昵称；文本含 ``@昵称`` 时在回调 data 上打 ``mention=True``。
+        空字符串（默认）= 不识别。
     """
 
     def __init__(
@@ -90,6 +110,7 @@ class WeChatReceiver:
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         max_seen_ids: int = DEFAULT_MAX_SEEN_IDS,
         thread_name: str = "wechat-receiver",
+        mention_name: str = "",
     ):
         events = getattr(backend, "events", None)
         if events is None or not callable(getattr(events, "get", None)):
@@ -113,6 +134,8 @@ class WeChatReceiver:
         self.last_error = ""
         self.received = 0   # 已回调的消息数
         self.ignored = 0    # 被过滤/去重丢弃的消息数
+        # P22：私聊 @昵称 识别（空 = 不识别；匹配后在消息上打 mention=True 标记）
+        self.mention_name = _clean(mention_name)
 
         self._queue = events
         self._poll_interval = interval
@@ -335,6 +358,12 @@ class WeChatReceiver:
         if reason:
             self._mark_filtered(reason)
             return None
+        # P22：@提及标记（不改原文，由 server 统一加 [对方@了你] 前缀）
+        data = dict(data)
+        if _clean(data.get("kind")) == KIND_TEXT and is_mention(
+                data.get("text"), self.mention_name):
+            data["mention"] = True
+            data["mention_name"] = self.mention_name
         return data
 
     def _reject_reason(self, data: dict) -> str:
@@ -353,7 +382,9 @@ class WeChatReceiver:
 
         text = data.get("text")
         if kind == "system":
-            if not isinstance(text, str) or not any(k in text for k in ("撤回", "引用消息")):
+            # P22：撤回 / 引用 / 拍了拍 是**事件**不是用户说的话，需要放行给 server 转写
+            if not isinstance(text, str) or not any(
+                    k in text for k in SYSTEM_PASSTHROUGH_HINTS):
                 return "system"
         elif kind == "text":
             if not isinstance(text, str) or not text.strip():

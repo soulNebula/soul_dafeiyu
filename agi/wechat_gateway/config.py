@@ -29,6 +29,9 @@ DEFAULTS = {
     "dry_run": True,
     "monitored_contacts": [],
     "allowed_contacts": [],
+    # P22：机器人微信昵称；私聊文本含「@昵称」时识别为 @提及，server 加 [对方@了你] 前缀。
+    # 留空 = 不识别（群聊 @ 需要真实 group 支持，暂不处理）。
+    "mention_name": "",
     "max_chars": 500,
     "reply_delay": 0.3,
     "stop": False,

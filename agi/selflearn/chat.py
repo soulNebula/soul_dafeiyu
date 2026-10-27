@@ -483,6 +483,11 @@ class SelfLearnAgent:
             live_ingest.record_message(self.path, "user", display, message_id=user_id)
         except Exception:  # noqa: BLE001
             pass
+        # P22：拍一拍只是"拍了一下"，不是一句话；最多回一个字/表情，不走正常生成
+        if "[拍一拍]" in text:
+            st = state.load(self.path)
+            return self._simple_reply(user_id, "嗯", st, None,
+                                      had_image=False, t0=t0)
         if "撤回" in text and ("消息" in text or "刚才" in text):
             st = state.load(self.path)
             return self._simple_reply(user_id, "看到了，你撤回了刚才那条。", st, None,

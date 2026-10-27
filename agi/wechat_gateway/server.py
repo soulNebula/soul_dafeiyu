@@ -23,9 +23,43 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import config as cfg
 from . import control, drafts, media as media_mod, policy, sendclass
-from .receiver import WeChatReceiver
+from .receiver import WeChatReceiver, is_mention
 from .sender import WxAutoSender
 from .. import textguard
+
+#: P22：拍一拍 system 消息的方向归一化（机器人视角：我=机器人，你/对方=好友）
+_PAT_RE = re.compile(r"([^\s，,。！!？?、]{0,24}?)拍了拍([^\s，,。！!？?、]{0,24})")
+_PAT_STRIP_CHARS = "「」『』\"'“”‘’（）()[]【】 \t"
+_BOT_WORDS = ("我", "自己", "机器人")
+_FRIEND_WORDS = ("你", "对方", "好友")
+
+
+def _clean_pat_side(value: str) -> str:
+    return str(value or "").strip().strip(_PAT_STRIP_CHARS).strip()
+
+
+def format_pat_message(text: str) -> str:
+    """P22：把微信「拍了拍」system 消息转成带方向的中文标记。
+
+    - ``「小明」拍了拍我`` → ``[拍一拍] 对方拍了拍你``（好友拍了机器人）
+    - ``我拍了拍「小明」`` → ``[拍一拍] 你拍了拍对方``（机器人拍了好友）
+    - ``你拍了拍X`` / ``X拍了拍你`` / ``对方拍了拍你`` 等变体按"谁拍谁"归一。
+    """
+    raw = str(text or "")
+    match = _PAT_RE.search(raw)
+    if not match:
+        return "[拍一拍] 对方拍了拍你"
+    left = _clean_pat_side(match.group(1))
+    right = _clean_pat_side(match.group(2))
+    if left in _BOT_WORDS:
+        return "[拍一拍] 你拍了拍对方"
+    if right in _BOT_WORDS:
+        return "[拍一拍] 对方拍了拍你"
+    if left in _FRIEND_WORDS or right in _FRIEND_WORDS:
+        return "[拍一拍] 对方拍了拍你"
+    if left:  # 两边都是昵称：好友拍了对方，保留对象名
+        return f"[拍一拍] 对方（{left}）拍了拍你"
+    return "[拍一拍] 对方拍了拍你"
 
 _REACTION_WORDS = {
     "good": "good", "好": "good", "好评": "good", "不错": "good", "赞": "good", "满意": "good",
@@ -163,7 +197,9 @@ class Gateway:
         except Exception as exc:  # noqa: BLE001
             self.start_error = f"{type(exc).__name__}: {exc}"
             return
-        self.receiver = WeChatReceiver(backend, allowed, self.on_inbound, since=time.time())
+        self.receiver = WeChatReceiver(
+            backend, allowed, self.on_inbound, since=time.time(),
+            mention_name=str(self.cfg.get("mention_name") or ""))
         self.receiver.start()
         self.worker = threading.Thread(target=self._work, name="gateway-worker", daemon=True)
         self.worker.start()
@@ -746,8 +782,17 @@ class Gateway:
         if kind == "system":
             if "撤回" in text:
                 text = "[对方撤回了一条消息]"
+            elif "拍了拍" in text:
+                text = format_pat_message(text)
             elif "引用消息" in text:
-                text = text.replace("[引用消息]", "对方引用了这条消息：", 1)
+                quoted = text.replace("[引用消息]", "对方引用了这条消息：", 1).strip()
+                quoted = quoted.replace("： ", "：")
+                text = "[引用] " + quoted
+        # P22：@提及（receiver 已标 mention；这里也防御性识别一次，幂等不重复加前缀）
+        mention_name = str(self.cfg.get("mention_name") or "").strip()
+        if (msg.get("mention") or is_mention(text, mention_name)) \
+                and not text.startswith("[对方@了你]"):
+            text = "[对方@了你] " + text
         image_data = ""
         if kind in ("image", "emoji"):
             image_data = self._image_data_url(str(msg.get("media_path") or ""))

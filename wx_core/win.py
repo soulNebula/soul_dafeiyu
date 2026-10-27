@@ -407,14 +407,46 @@ def capture_region(win: WinInfo, box: tuple[int, int, int, int], verify: bool = 
 
 
 def bring_to_front(win: WinInfo) -> bool:
-    """把微信窗口切到前台（需要时才用，避免打扰用户）。"""
+    """把微信窗口切到前台（需要时才用，避免打扰用户）。
+
+    Windows 前台锁会阻止后台进程 SetForegroundWindow；这里用
+    "模拟 Alt 键 + AttachThreadInput" 的标准绕过手法，并校验最终前台窗口。
+    """
     if not win or not win.alive:
         return False
     try:
-        # 用 ShowWindow(SW_SHOW) 而不是 maximize，保持窗口大小
-        user32.ShowWindow(win.hwnd, 9)  # SW_RESTORE
-        user32.SetForegroundWindow(win.hwnd)
-        return True
+        hwnd = win.hwnd
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+        # 前台锁绕过：Alt 键 + 附加输入线程
+        user32.keybd_event(0x12, 0, 0, 0)  # VK_MENU down
+        user32.keybd_event(0x12, 0, 2, 0)  # VK_MENU up
+        cur_tid = kernel32.GetCurrentThreadId()
+        fg_hwnd = user32.GetForegroundWindow()
+        fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
+        tgt_tid = user32.GetWindowThreadProcessId(hwnd, None)
+        attached: list[int] = []
+        for tid in (fg_tid, tgt_tid):
+            if tid and tid != cur_tid:
+                try:
+                    if user32.AttachThreadInput(cur_tid, tid, True):
+                        attached.append(tid)
+                except Exception:  # noqa: BLE001
+                    pass
+        try:
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            user32.SetFocus(hwnd)
+            time.sleep(0.2)
+        finally:
+            for tid in attached:
+                try:
+                    user32.AttachThreadInput(cur_tid, tid, False)
+                except Exception:  # noqa: BLE001
+                    pass
+        return user32.GetForegroundWindow() == hwnd
     except Exception:
         return False
 

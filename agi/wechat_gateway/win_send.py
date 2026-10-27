@@ -120,12 +120,23 @@ def send_to_contact(contact: str, text: str, cfg: dict[str, Any], *,
         return _result(False, "failed", error=f"{type(exc).__name__}: {exc}")
     if info is None:
         return _result(False, "failed", error="没找到微信窗口")
+    prev_fg = None
     try:
-        if not win.bring_to_front(info):
-            return _result(False, "failed", error="微信窗口无法切到前台")
-        time.sleep(settle)
-        if not win.is_foreground(info):
-            return _result(False, "failed", error="前台不是微信窗口")
+        import ctypes as _ct
+        prev_fg = _ct.windll.user32.GetForegroundWindow()
+    except Exception:  # noqa: BLE001
+        prev_fg = None
+    try:
+        activated = False
+        for _ in range(3):
+            if win.bring_to_front(info) or win.is_foreground(info):
+                time.sleep(settle)
+                if win.is_foreground(info):
+                    activated = True
+                    break
+            time.sleep(0.4)
+        if not activated:
+            return _result(False, "failed", error="前台不是微信窗口（切换到前台失败）")
         img = win.capture(info)
         w, h = (img.size if img else (960, 900))
         # ① 搜索框（比例坐标，默认 0.17w / 0.066h）
@@ -152,5 +163,11 @@ def send_to_contact(contact: str, text: str, cfg: dict[str, Any], *,
         time.sleep(0.6)
     except Exception as exc:  # noqa: BLE001
         return _result(False, "failed", error=f"{type(exc).__name__}: {exc}")
+    try:
+        import ctypes as _ct
+        if prev_fg:
+            _ct.windll.user32.SetForegroundWindow(prev_fg)
+    except Exception:  # noqa: BLE001
+        pass
     return _result(True, "sent",
                    warning="窗口级发送（搜索打开会话）无法校验会话，请人工抽查")

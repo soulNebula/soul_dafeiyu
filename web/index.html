@@ -26,7 +26,7 @@
     <span class="tb-title">IDEA 工作台</span>
     <span class="tb-sub" id="tb-project">SoulAgent</span>
   </div>
-  <div class="tb-center"><input id="cmd-input" placeholder="搜索/命令（Ctrl+P 文件，Ctrl+Shift+P 命令）" autocomplete="off"></div>
+  <div class="tb-center"></div>
   <div class="tb-right">
     <input id="token" type="password" placeholder="令牌 8888">
     <button id="connect" class="tb-btn">连接</button>
@@ -43,8 +43,6 @@
     <button class="ab-item" data-view="services" title="服务">⚙</button>
     <button class="ab-item" data-view="config" title="设置">🎛</button>
     <button class="ab-item" data-view="overview" title="总览">🏠</button>
-    <button class="ab-item" data-view="train" title="训练工厂（M3）">🧪</button>
-    <button class="ab-item" data-view="data" title="数据工作室（M1）">🗄</button>
     <div class="ab-spacer"></div>
     <button class="ab-item" id="ab-settings" title="令牌/连接">🔑</button>
   </div>
@@ -103,15 +101,6 @@
       <div id="overview-mini" class="muted small"></div>
     </div>
 
-    <div id="side-train" class="side-view">
-      <div class="side-title">训练工厂</div>
-      <div class="muted small">M3 里程碑：数据→清洗→标注→蒸馏→训练→评测→导出。<br>现在可先用「资源管理器」打开 <code>tools/train/</code> 里的脚本，点运行。</div>
-    </div>
-
-    <div id="side-data" class="side-view">
-      <div class="side-title">数据工作室</div>
-      <div class="muted small">M1 里程碑：SQLite 浏览/编辑/SQL/备份。<br>当前可在「终端」里跑 <code>python</code> 脚本。</div>
-    </div>
   </div>
 
   <!-- ================= 编辑区 ================= -->
@@ -130,7 +119,7 @@
             <div class="wc" data-cmd="services"><b>服务</b><span>启停网关/控制台/模型</span></div>
             <div class="wc" data-cmd="overview"><b>总览</b><span>项目/环境/状态</span></div>
           </div>
-          <div class="welcome-tip muted small">Ctrl+P 快速打开文件 · Ctrl+Shift+P 命令 · Ctrl+S 保存 · Ctrl+Enter 提交</div>
+          <div class="welcome-tip muted small">左侧文件树打开文件 · Ctrl+S 保存 · Git 侧栏 Ctrl+Enter 提交</div>
         </div>
       </div>
     </div>
@@ -249,7 +238,7 @@ async function connect() {
 }
 
 /* ================= 活动栏 / 侧栏 ================= */
-const VIEWS = ['explorer','git','run','services','config','overview','train','data'];
+const VIEWS = ['explorer','git','run','services','config','overview'];
 function showView(name) {
   $$('#activitybar .ab-item').forEach(b=>b.classList.toggle('active', b.dataset.view===name));
   $$('.side-view').forEach(v=>v.classList.toggle('active', v.id==='side-'+name));
@@ -828,29 +817,7 @@ async function loadAudit() {
 /* ================= 命令面板（简化） ================= */
 document.addEventListener('keydown', e=>{
   if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='s') { e.preventDefault(); saveActive(); }
-  if ((e.ctrlKey||e.metaKey) && e.shiftKey && e.key.toLowerCase()==='p') { e.preventDefault(); $('#cmd-input').focus(); }
 });
-$('#cmd-input').onkeydown = async e=>{
-  if (e.key!=='Enter') return;
-  const text = e.target.value.trim(); if (!text) return;
-  e.target.value='';
-  const hit = S.tabs.find(t=>t.rel.includes(text)) || null;
-  if (hit) { S.activeTab=hit.rel; openEditorForTab(hit.rel); return; }
-  // 搜索文件树
-  const r = await api(`/api/wb/files/tree?root=${S.root}&depth=4`);
-  const files = flattenFiles(r.items||[]);
-  const match = files.find(f=>f.toLowerCase().includes(text.toLowerCase()));
-  if (match) { await openFile(match); return; }
-  toast('没找到：'+text,'err');
-};
-function flattenFiles(items) {
-  const out=[];
-  for (const it of items) {
-    if (it.type==='file') out.push(it.rel);
-    else if (it.children) out.push(...flattenFiles(it.children));
-  }
-  return out;
-}
 
 /* ================= 初始化 ================= */
 $('#token').value = S.token;

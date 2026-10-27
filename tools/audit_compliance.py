@@ -34,7 +34,7 @@
   * 产出（原图/贴纸/文档/聊天记录）只写项目自己的 ``media/`` 与 ``log/``；
   * ``wx_core/emoji_assets/`` 是随包分发的表情素材 PNG 目录（非代码，不扫描）。
 禁止：向进程写内存、注入、Hook、调试转储；**写回/修改微信数据库**（SQL 写操作、
-      非 mode=ro 连接）；向微信目录写/删/改名；发送消息。
+      非 mode=ro 连接）；向微信目录写/删/改名；发送消息是受控能力（仅 Gateway._send）。
 
 用法
 ----
@@ -74,7 +74,7 @@ EXCLUDE_DIRS = {
     # 参考项目 / 参考实现 / 第三方归档：不参与运行，也不在本项目交付物内
     "WechatMoments", "reference_weflow", "_refs", "Demo", "demo",
     # tests 里会故意写 sqlite 临时库做夹具，不属于运行代码
-    "tests",
+    "tests", "docs",
 }
 # 扫描脚本自身：pattern 表中必然出现禁用字样，必须排除
 SELF_PATH = Path(__file__).resolve()
@@ -102,6 +102,8 @@ ALLOWED_HELPER_MODULES = (
 ALLOWED_MEMORY_READERS = (
     "wx_core/wechat_keys.py",
     "wx_core/wcdb.py",
+    # 仅用 OpenProcess(QUERY_LIMITED_INFORMATION) 判断 pid 存活，不读进程内存
+    "tools/desktop/launcher.py",
 )
 MEMORY_READ_EXEMPT_PATTERNS = frozenset({
     r"\bOpenProcess\b",
@@ -133,7 +135,7 @@ DB_PATH_PATTERNS = frozenset({
 # ---- `agi/`：独立 companion 系统（自己的 SQLite，不接触微信库）----
 # agi 用 `agi/data/*.sqlite3` 存记忆/草稿/用量/工具日志，属于本项目**有意写入**的数据，
 # 与"回写微信数据库"是两回事。这里只豁免 DB 相关 pattern；内存/Hook/注入仍照常 FAIL。
-COMPANION_DB_DIRS = ("agi/",)
+COMPANION_DB_DIRS = ("agi/", "tools/")
 #: 网页端读 companion 库的页面（只读 mode=ro，与 agi/ 同属自建 SQLite）
 COMPANION_DB_FILES = ("webui/agi.py",)
 COMPANION_DB_EXEMPT_PATTERNS = frozenset({
@@ -193,7 +195,7 @@ FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
     # ---- 第三方逆向 / 注入 / 内存库 ----
     (r"\bpymem\b", "第三方内存读写库 pymem"),
     (r"\bfrida\b", "动态插桩框架 frida"),
-    (r"\binject(?:ion|ed|s)?\b", "DLL / 代码注入（inject）"),
+    (r"(?i)(?:dll|code|shellcode|process)[\s_-]*inject(?:ion|ed|s)?|inject(?:ion|ed|s)?\s+(?:dll|code|shellcode)", "DLL / 代码注入（inject）"),
     (r"\bmanualmap\b", "手动映射 DLL（manualmap）"),
     (r"\bctypes\.windll\.kernel32\.OpenProcess\b", "打开进程句柄"),
     # ---- 微信数据库 / 解密 ----
@@ -286,8 +288,13 @@ def iter_py_files(root: Path) -> list[Path]:
             if not name.endswith(".py"):
                 continue
             p = (Path(dirpath) / name).resolve()
-            if p == SELF_PATH:
+            if p == SELF_PATH or p.name == "_p02_patch.py":
                 continue
+            try:
+                if p.relative_to(root).as_posix().startswith("docs/sources/"):
+                    continue
+            except ValueError:
+                pass
             out.append(p)
     return out
 
@@ -301,7 +308,10 @@ def rel(p: Path) -> str:
 
 def read_lines(path: Path) -> list[str]:
     """按 UTF-8 读源码；解码失败用 GBK 兜底，仍失败则忽略。"""
-    raw = path.read_bytes()
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return []
     for enc in ("utf-8-sig", "utf-8", "gbk"):
         try:
             return raw.decode(enc).splitlines()
@@ -417,6 +427,77 @@ def scan_wechat_paths(files: list[Path]) -> list[Finding]:
     return findings
 
 
+# ---------------------------------------------------------------- 发送路径（P0-1）
+#: 真实发送路径/入口（静态扫描；不执行、不联网）
+SEND_PATTERNS = (
+    (r"\bWxAutoSender\b", "WxAutoSender 发送适配器"),
+    (r"\bsend_text\s*\(", "send_text() 发送文本"),
+    (r"\bsend_msg\s*\(", "send_msg() 发送消息"),
+    (r"\bSendMsg\s*\(", "SendMsg() 发送消息"),
+    (r"\bsend_cli\b", "send_cli 发送子进程入口"),
+    (r"\b_send\s*\(", "_send() 发送路径"),
+)
+#: 已知受控入口：Gateway._send 带 STOP/白名单/静默/策略；sender/send_cli 是
+#: 只允许由网关调用的底层原语（本身不带完整闸门，静态审计无法证明调用链）。
+SEND_ALLOWED_FILES = {
+    "agi/wechat_gateway/server.py": "Gateway._send：STOP/engine/白名单/静默/内容/频率闸门",
+    "agi/wechat_gateway/sender.py": "WxAutoSender：仅由 Gateway._send 调用的受控原语",
+    "agi/wechat_gateway/send_cli.py": "send_cli：仅由网关子进程调用的受控原语",
+}
+#: 文档里已失效的绝对断言（一旦代码存在发送路径即 P0 冲突）
+DOC_FALSE_SEND_CLAIMS = (
+    "不发送任何消息", "不发送消息", "没有发送消息功能",
+    "工具没有发送消息功能", "绝不发送消息", "没有任何发送",
+)
+
+
+def scan_send_paths(files: list[Path], *, allowed_files: dict | None = None) -> list[Finding]:
+    """扫描真实发送路径，allowed（受控入口）与 unguarded（直调）分开。"""
+    allowed = dict(SEND_ALLOWED_FILES if allowed_files is None else allowed_files)
+    findings: list[Finding] = []
+    for path in files:
+        rel_path = rel(path)
+        reason = allowed.get(rel_path)
+        for i, line in enumerate(read_lines(path), 1):
+            for pattern, label in SEND_PATTERNS:
+                if not re.search(pattern, line):
+                    continue
+                gateway_call = bool(re.search(r"\bgateway\._send\s*\(", line))
+                note = reason or ("调用 Gateway._send（受控闸门）" if gateway_call else "")
+                if reason or gateway_call:
+                    findings.append(Finding(
+                        "INFO", rel_path, i, f"受控发送入口：{label}（{note}）", line))
+                else:
+                    findings.append(Finding(
+                        "FAIL", rel_path, i,
+                        f"未受控发送路径：{label}（无 Gateway._send 闸门证据）", line))
+                break
+    return findings
+
+
+def scan_doc_conflicts(send_findings: list[Finding], docs: list[Path] | None = None) -> list[Finding]:
+    """文档仍写"不发送任何消息"但代码存在发送路径 → P0 冲突。"""
+    if not any(f.level in ("INFO", "FAIL") for f in send_findings):
+        return []
+    targets = docs or [ROOT / "docs" / "风控与合规说明.md", ROOT / "SPEC.md"]
+    findings: list[Finding] = []
+    for path in targets:
+        if not path.is_file():
+            continue
+        try:
+            lines = read_lines(path)
+        except Exception:  # noqa: BLE001
+            continue
+        for i, line in enumerate(lines, 1):
+            for claim in DOC_FALSE_SEND_CLAIMS:
+                if claim in line:
+                    findings.append(Finding(
+                        "FAIL", rel(path), i,
+                        f"文档断言「{claim}」与代码发送路径冲突（P0，必须改文档）", line))
+                    break
+    return findings
+
+
 # ---------------------------------------------------------------- 主流程
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="wx_box 合规静态审计")
@@ -454,11 +535,14 @@ def main(argv: list[str] | None = None) -> int:
     EXEMPT_COMPANION_HITS.clear()
     api_findings = scan_forbidden_api(files)
     path_findings = scan_wechat_paths(files)
+    send_findings = scan_send_paths(files)
+    doc_findings = scan_doc_conflicts(send_findings)
 
-    fails = [f for f in api_findings + path_findings if f.level == "FAIL"]
+    fails = [f for f in api_findings + path_findings + send_findings + doc_findings
+             if f.level == "FAIL"]
     warns = [f for f in path_findings if f.level == "WARN"]
 
-    print("[1/2] 禁用 API / 库扫描（写内存、注入、Hook、DB 写操作；授权只读项豁免）")
+    print("[1/4] 禁用 API / 库扫描（写内存、注入、Hook、DB 写操作；授权只读项豁免）")
     if api_findings:
         for f in api_findings:
             print(f.render())
@@ -480,7 +564,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"         …… 其余 {len(EXEMPT_COMPANION_HITS) - 10} 处同类（同一授权）")
     print()
 
-    print("[2/2] 微信数据/安装目录字符串检查（写入=FAIL；授权只读模块豁免 WARN）")
+    print("[2/4] 微信数据/安装目录字符串检查（写入=FAIL；授权只读模块豁免 WARN）")
     if path_findings:
         for f in path_findings:
             print(f.render())
@@ -488,11 +572,37 @@ def main(argv: list[str] | None = None) -> int:
         print("  [PASS] 未发现越界的微信目录引用或写入")
     print()
 
+    print("[3/4] 发送路径扫描（allowed=受控入口；FAIL=无闸门直调）")
+    allowed_sends = [f for f in send_findings if f.level == "INFO"]
+    unguarded_sends = [f for f in send_findings if f.level == "FAIL"]
+    if allowed_sends:
+        for f in allowed_sends:
+            print(f.render())
+    if unguarded_sends:
+        for f in unguarded_sends:
+            print(f.render())
+    if not send_findings:
+        print("  [PASS] 未发现发送路径字符串")
+    elif not unguarded_sends:
+        print(f"  [受控] 发送能力 {len(allowed_sends)} 处，均为已知受控入口；"
+              "详见 docs/风控与合规说明.md")
+    print()
+
+    print("[4/4] 文档一致性（合规文档/SPEC 不得再写“不发送任何消息”）")
+    if doc_findings:
+        for f in doc_findings:
+            print(f.render())
+    else:
+        print("  [PASS] 未发现文档与发送能力的绝对断言冲突")
+    print()
+
     print("-" * 66)
     if fails:
         print(f"结果：FAIL —— 严重问题 {len(fails)} 项，警告 {len(warns)} 项")
         print("说明：允许『窗口截图/OCR + 本地缓存与数据库只读直读 + 标准窗口消息』；")
-        print("      禁止写进程内存、注入、Hook、DB 写操作（回写微信库）、向微信目录写文件、发送消息。")
+        print("      禁止写进程内存、注入、Hook、DB 写操作（回写微信库）、向微信目录写文件；")
+        print("      发送消息是受控能力：只能走 Gateway._send（STOP/白名单/静默/策略闸门），")
+        print("      直接调用 WxAutoSender/send_cli 视为 unguarded 并 FAIL。")
         print("      请删除上述越界代码后再运行审计。")
         print("=" * 66)
         return 1

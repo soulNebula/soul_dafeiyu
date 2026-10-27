@@ -357,7 +357,8 @@ $('#dialog-ok').onclick = async ()=>{
 /* ================= 新建文件 ================= */
 function newFileDialog() {
   const rel = prompt('新文件路径（相对当前文件夹）：', 'scratch/new_file.py');
-  if (!rel) return;
+  if (rel === null) return;                        // 取消
+  if (!rel.trim()) { toast('路径不能为空','err'); return; }
   createFile(rel);
 }
 async function createFile(rel) {
@@ -860,8 +861,10 @@ $('#run-template').onclick = async ()=>{
   const t = await api('/api/wb/files/templates');
   const list = t.items||[];
   const pick = prompt('选择模板：\n'+list.map((x,i)=>`${i+1}. ${x.title} — ${x.desc}`).join('\n'), '1');
-  const idx = Math.max(0, parseInt(pick||'1',10)-1);
-  const tpl = list[idx]; if (!tpl) return;
+  if (pick === null) return;                       // 点取消：什么都不做
+  const n = parseInt(pick, 10);
+  if (!Number.isFinite(n) || n < 1 || n > list.length) { toast('无效的模板序号','err'); return; }
+  const tpl = list[n-1]; if (!tpl) return;
   const rel = 'scratch/'+tpl.name;
   const r = await api('/api/wb/files/write',{method:'POST',body:{root:'soulagent', rel, text:tpl.code}});
   if (!r.ok) { toast('创建失败：'+r.error,'err'); return; }

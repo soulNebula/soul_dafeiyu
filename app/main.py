@@ -10,7 +10,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audit, chatstudio, config_store, datastudio, files_api, gitstudio, memstudio, modelstudio, paths, services, trainstudio, wechat_proxy
+from . import (audit, chatstudio, config_store, datastudio, files_api, gitstudio, memstudio,
+               modelstudio, moments_analysis, momentsstudio, paths, services, trainstudio, wechat_proxy)
 
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
 
@@ -742,6 +743,58 @@ def chat_traces(limit: int = Query(default=20, ge=1, le=200), db: str | None = N
 @app.get("/api/wb/chat/trace/{turn_id}", dependencies=[Depends(require_token)])
 def chat_trace(turn_id: str, db: str | None = None):
     return chatstudio.trace_detail(turn_id, db)
+
+
+# ------------------------------------------------------------------ 朋友圈（Moments）
+@app.post("/api/wb/moments/refresh", dependencies=[Depends(require_token)])
+def moments_refresh(limit: int = Query(default=50, ge=1, le=500)):
+    out = momentsstudio.fetch(limit)
+    audit.record("moments.fetch", "wechat", actor="workbench",
+                 meta={"count": out.get("count"), "ok": out.get("ok")})
+    return out
+
+
+@app.get("/api/wb/moments/media", dependencies=[Depends(require_token)])
+def moments_media(md5: str):
+    from fastapi.responses import FileResponse as _FR
+    path = momentsstudio.media_path(md5)
+    if path is None:
+        raise HTTPException(status_code=404, detail="media_not_found")
+    return _FR(str(path))
+
+
+@app.post("/api/wb/moments/analyze", dependencies=[Depends(require_token)])
+def moments_analyze(body: dict):
+    tids = body.get("tids")
+    out = moments_analysis.analyze_and_cache(
+        question=str(body.get("question") or ""),
+        limit=int(body.get("limit") or 30),
+        tids=tids if isinstance(tids, list) else None)
+    if out.get("ok"):
+        audit.record("moments.analyze", str(out.get("name") or ""), actor="workbench")
+    return out
+
+
+@app.get("/api/wb/moments/analyses", dependencies=[Depends(require_token)])
+def moments_analyses(limit: int = Query(default=20, ge=1, le=100)):
+    return moments_analysis.list_analyses(limit)
+
+
+@app.get("/api/wb/moments/analysis/{name}", dependencies=[Depends(require_token)])
+def moments_analysis_get(name: str):
+    return moments_analysis.get_analysis(name)
+
+
+@app.get("/api/wb/moments", dependencies=[Depends(require_token)])
+def moments_list(limit: int = Query(default=50, ge=1, le=500), keyword: str = "",
+                 since: int | None = None, refresh: bool = False):
+    return momentsstudio.list_moments(limit=limit, keyword=keyword, since=since,
+                                      refresh=refresh)
+
+
+@app.get("/api/wb/moments/{tid}", dependencies=[Depends(require_token)])
+def moments_detail(tid: str):
+    return momentsstudio.detail(tid)
 
 
 # ------------------------------------------------------------------ 审计

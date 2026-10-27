@@ -353,3 +353,31 @@ select:focus, input:focus, textarea:focus { border-color: var(--accent); }
 .chat-trace-row { cursor: pointer; }
 .chat-trace-detail { margin-top: 10px; border-top: 1px solid #2c2c38; padding-top: 8px; }
 @media (max-width: 1000px) { .chat-cols { grid-template-columns: 1fr; } }
+
+/* ================= Moments 朋友圈 ================= */
+.moments-toolbar { position: sticky; top: 0; z-index: 2; background: var(--bg-editor, #1e1e27); }
+.moments-cols { grid-template-columns: minmax(0, 1fr) 420px; }
+.moments-list { display: flex; flex-direction: column; gap: 8px; }
+.moment-card { display: flex; gap: 8px; border: 1px solid #2c2c38; border-radius: 6px;
+  padding: 9px 10px; background: #1b1b24; }
+.moment-card:hover { border-color: #4a4d58; }
+.moment-check { padding-top: 2px; }
+.moment-body { min-width: 0; flex: 1; }
+.moment-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 4px; }
+.moment-text { white-space: pre-wrap; font-size: 13px; line-height: 1.45; cursor: pointer; }
+.moment-text:hover { color: #fff; }
+.moment-text-full { white-space: pre-wrap; font-size: 13px; line-height: 1.5; margin: 6px 0; }
+.moment-images { display: flex; gap: 5px; flex-wrap: wrap; margin: 7px 0; }
+.moment-images img { width: 92px; height: 92px; object-fit: cover; border-radius: 4px; background: #111; }
+.moment-stats { display: flex; align-items: center; gap: 14px; color: var(--text-dim); font-size: 12px; margin-top: 6px; }
+.moment-stats .btn { margin-left: auto; }
+.moments-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.moments-analysis { display: flex; flex-direction: column; gap: 8px; }
+.moments-summary { background: #1c2430; border: 1px solid #2f4358; border-radius: 5px;
+  padding: 8px 10px; white-space: pre-wrap; }
+.moments-analysis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.moments-analysis-grid .m-full { grid-column: 1 / -1; }
+.moments-topics { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.moments-analyses .tree-row { display: flex; justify-content: space-between; gap: 8px; }
+.m-list-item { padding: 1px 0; }
+@media (max-width: 1200px) { .moments-cols { grid-template-columns: 1fr; } }

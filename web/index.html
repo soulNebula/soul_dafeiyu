@@ -49,6 +49,7 @@
     <button class="ab-item" data-view="train" title="训练工厂">🧪</button>
     <button class="ab-item" data-view="models" title="模型中心">🧰</button>
     <button class="ab-item" data-view="chat" title="对话工作室">💬</button>
+    <button class="ab-item" data-view="moments" title="朋友圈">🌀</button>
     <button class="ab-item" data-view="drafts" title="微信草稿箱（confirm 模式）">🗨</button>
     <button class="ab-item" data-view="run" title="运行/调试">▶</button>
     <button class="ab-item" data-view="services" title="服务">⚙</button>
@@ -156,6 +157,14 @@
         <button class="btn primary full" id="chat-open">打开对话工作室</button>
       </div>
       <div id="chat-side-summary" class="muted small" style="padding:0 12px"></div>
+    </div>
+
+    <div id="side-moments" class="side-view">
+      <div class="side-title">朋友圈</div>
+      <div class="side-sub">
+        <button class="btn primary full" id="moments-open">打开朋友圈</button>
+      </div>
+      <div id="moments-side-summary" class="muted small" style="padding:0 12px"></div>
     </div>
 
     <div id="side-overview" class="side-view">
@@ -345,7 +354,7 @@ document.addEventListener('click', e=>{
 });
 
 /* ================= 活动栏 / 侧栏 ================= */
-const VIEWS = ['explorer','git','data','mem','train','models','chat','run','services','config','overview'];
+const VIEWS = ['explorer','git','data','mem','train','models','chat','moments','run','services','config','overview'];
 function showView(name) {
   S.pageView = name;
   if (name !== 'train' && S.train && S.train.timer) { clearInterval(S.train.timer); S.train.timer = null; }
@@ -357,6 +366,7 @@ function showView(name) {
   if (name==='train') loadTrainSide();
   if (name==='models') loadModelsSide();
   if (name==='chat') loadChatSide();
+  if (name==='moments') loadMomentsSide();
   if (name==='services') loadServices();
   if (name==='drafts') loadDrafts();
   if (name==='config') loadConfig();
@@ -369,6 +379,7 @@ $('#mem-open').onclick = ()=> { showView('mem'); openMemStudio(); };
 $('#train-open').onclick = ()=> { showView('train'); openTrainPage(); };
 $('#models-open').onclick = ()=> { showView('models'); loadModelsPage(); };
 $('#chat-open').onclick = ()=> { showView('chat'); openChatStudio(); };
+$('#moments-open').onclick = ()=> { showView('moments'); openMomentsStudio(); };
 
 /* ================= 解释器 ================= */
 async function loadInterpreters() {
@@ -1125,6 +1136,7 @@ if (_startView && VIEWS.includes(_startView)) {
     if (_startView === 'train') openTrainPage();
     if (_startView === 'models') loadModelsPage();
     if (_startView === 'chat') openChatStudio();
+    if (_startView === 'moments') openMomentsStudio();
   }, 1400);
 }
 setInterval(()=>{ if (S.services.length) loadServices().catch(()=>{}); }, 15000);
@@ -2353,6 +2365,271 @@ async function runChatTest(root) {
     c.test = { ok: false, error: controller.signal.aborted ? '超时：60s 内未返回（模型可能正在加载/训练）' : err.message };
   } finally {
     clearTimeout(timer); c.testing = false; openChatTab();
+  }
+}
+
+
+/* ================= Moments：朋友圈 ================= */
+S.moments = { items: null, keyword: '', selected: new Set(), analyses: null,
+  analysis: null, detail: null, analyzing: false, errors: [], refreshed: '' };
+
+function momentsFormatTime(value) {
+  if (!value) return '';
+  let date;
+  if (typeof value === 'number') date = new Date(value < 1e12 ? value * 1000 : value);
+  else date = new Date(value);
+  if (isNaN(date.getTime())) return String(value);
+  const now = new Date();
+  const startOf = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const day = 86400000;
+  const diff = startOf(now) - startOf(date);
+  const hm = date.toTimeString().slice(0, 5);
+  if (diff === 0) return '今天 ' + hm;
+  if (diff === day) return '昨天 ' + hm;
+  if (diff === 2 * day) return '前天 ' + hm;
+  return date.toLocaleDateString('zh-CN') + ' ' + hm;
+}
+
+function momentsItemId(item) {
+  return String(item.tid ?? item.id ?? item.tweet_id ?? item.moment_id ?? '');
+}
+function momentsImages(item) {
+  const raw = item.images ?? item.media ?? item.attachments ?? [];
+  if (!Array.isArray(raw)) return [];
+  return raw.map((media) => {
+    if (typeof media === 'string') return { md5: media };
+    return { md5: media.md5 || media.hash || media.url || '', raw: media };
+  }).filter(media => media.md5);
+}
+function momentsCount(item, key) {
+  const value = item[key + '_count'] ?? item[key] ?? (Array.isArray(item[key + 's']) ? item[key + 's'].length : 0);
+  return typeof value === 'number' ? value : (Array.isArray(value) ? value.length : 0);
+}
+function momentsText(item) {
+  return item.content || item.text || item.body || item.caption || '';
+}
+function momentsNickname(item) {
+  return item.nickname || item.author || item.name || item.user || '未知';
+}
+
+async function loadMomentsSide() {
+  const el = $('#moments-side-summary');
+  if (!el) return;
+  try {
+    const list = await api('/api/wb/moments?limit=1');
+    const items = list.items || list.moments || [];
+    el.innerHTML = `<div class="muted small">已同步 ${list.count ?? items.length} 条</div>`;
+  } catch (err) {
+    el.innerHTML = `<div class="warn small">后端未就绪：${esc(err.message)}</div>`;
+  }
+}
+
+function openMomentsStudio() { loadMomentsPage(); }
+
+async function loadMomentsPage() {
+  const m = S.moments;
+  const errors = [];
+  const tryApi = async (fn, label) => { try { return await fn(); } catch (e) { errors.push(label + ': ' + e.message); return null; } };
+  m.items = await tryApi(() => api('/api/wb/moments' + (m.keyword ? '?keyword=' + encodeURIComponent(m.keyword) : '')), '朋友圈') || m.items;
+  m.analyses = await tryApi(() => api('/api/wb/moments/analyses?limit=10'), '历史分析') || m.analyses;
+  m.errors = errors;
+  // 选择集合只保留仍存在的 tid
+  const alive = new Set(((m.items && (m.items.items || m.items.moments)) || []).map(momentsItemId));
+  m.selected = new Set([...m.selected].filter(id => alive.has(id)));
+  openMomentsTab();
+}
+
+async function refreshMoments() {
+  const m = S.moments;
+  try {
+    const r = await api('/api/wb/moments/refresh', { method: 'POST', body: { limit: 50 } });
+    if (r.ok === false) throw new Error(r.error || '刷新失败');
+    toast('已刷新朋友圈', 'ok');
+    m.refreshed = new Date().toLocaleTimeString();
+    await loadMomentsPage();
+  } catch (err) { toast('刷新失败：' + err.message, 'err'); }
+}
+
+async function searchMoments() {
+  const input = $('#moments-search');
+  if (input) S.moments.keyword = input.value.trim();
+  await loadMomentsPage();
+}
+
+async function openMomentsDetail(item) {
+  const m = S.moments;
+  const tid = momentsItemId(item);
+  if (!tid) { toast('缺少 tid，无法打开详情', 'err'); return; }
+  try { m.detail = await api('/api/wb/moments/' + encodeURIComponent(tid)); }
+  catch (err) { toast('详情失败：' + err.message, 'err'); return; }
+  openMomentsTab();
+}
+
+function momentsAnalysisHtml(data) {
+  if (!data) return '';
+  if (data.ok === false) return `<div class="chat-error">分析失败：${esc(data.error || '')}</div>`;
+  const source = data.analysis || data.result || data;
+  const summary = source.summary || source.overview || '';
+  const topics = source.topics || source.tags || [];
+  const mood = source.mood || source.emotion || '';
+  const signals = source.social_signals || source.social || {};
+  const notable = source.notable || source.highlights || [];
+  const suggestions = source.suggestions || source.advice || [];
+  const renderList = (value) => {
+    if (!value) return '<span class="muted small">—</span>';
+    if (Array.isArray(value)) return value.map(item => `<div class="m-list-item">• ${esc(typeof item === 'object' ? JSON.stringify(item) : String(item))}</div>`).join('');
+    if (typeof value === 'object') return `<pre class="studio-pre">${esc(JSON.stringify(value, null, 2))}</pre>`;
+    return `<div>${esc(String(value))}</div>`;
+  };
+  return `<div class="moments-analysis">
+    ${summary ? `<div class="moments-summary">${esc(summary)}</div>` : ''}
+    <div class="moments-analysis-grid">
+      <div><div class="muted small">topics</div><div class="moments-topics">${Array.isArray(topics) && topics.length ? topics.map(topic => `<span class="badge">${esc(typeof topic === 'object' ? (topic.name || topic.topic || JSON.stringify(topic)) : String(topic))}</span>`).join('') : '—'}</div></div>
+      <div><div class="muted small">mood</div><div>${esc(typeof mood === 'object' ? JSON.stringify(mood) : String(mood || '—'))}</div></div>
+      <div><div class="muted small">social_signals</div>${renderList(signals)}</div>
+      <div><div class="muted small">notable</div>${renderList(notable)}</div>
+      <div class="m-full"><div class="muted small">suggestions</div>${renderList(suggestions)}</div>
+    </div>
+    <details><summary>原始返回</summary><pre class="studio-pre">${esc(JSON.stringify(data, null, 2))}</pre></details>
+  </div>`;
+}
+
+function momentsPageHtml() {
+  const m = S.moments;
+  const items = (m.items && (m.items.items || m.items.moments)) || [];
+  const analyses = (m.analyses && (m.analyses.items || m.analyses.analyses || m.analyses)) || [];
+  const detail = m.detail && (m.detail.item || m.detail.moment || m.detail);
+  const allSelected = items.length > 0 && items.every(item => m.selected.has(momentsItemId(item)));
+  return `<div class="studio-page"><h2>朋友圈</h2>
+    ${(m.errors || []).length ? `<div class="chat-error">后端未就绪：${esc(m.errors.join('；'))}</div>` : ''}
+    <div class="studio-toolbar moments-toolbar">
+      <button class="btn primary" id="moments-refresh">刷新朋友圈</button>
+      <input id="moments-search" placeholder="搜索关键词…" value="${esc(m.keyword)}" style="width:220px">
+      <button class="btn" id="moments-search-btn">搜索</button>
+      <button class="btn" id="moments-analyze">AI 分析${m.selected.size ? '（选中 ' + m.selected.size + '）' : '（全部）'}</button>
+      ${m.analyzing ? '<span class="muted small">分析中…最长 120s</span>' : ''}
+      <span class="grow"></span>
+      <span class="muted small">${items.length} 条${m.refreshed ? ' · 刷新于 ' + esc(m.refreshed) : ''}</span>
+    </div>
+    <div class="chat-cols moments-cols">
+      <div class="studio-card">
+        <div class="studio-card-title"><label class="check small"><input type="checkbox" id="moments-select-all" ${allSelected ? 'checked' : ''}> 全选</label>
+          <span class="muted small">（多选后 AI 分析只跑选中的）</span></div>
+        <div class="moments-list">
+          ${items.length ? items.map(item => {
+            const id = momentsItemId(item);
+            return `<div class="moment-card">
+              <label class="moment-check"><input type="checkbox" data-moment-select="${esc(id)}" ${m.selected.has(id) ? 'checked' : ''}></label>
+              <div class="moment-body">
+                <div class="moment-head"><b>${esc(momentsNickname(item))}</b><span class="muted small">${esc(momentsFormatTime(item.time || item.ts || item.created_at || item.timestamp))}</span></div>
+                <div class="moment-text" data-moment-detail="${esc(id)}">${esc(momentsText(item))}</div>
+                ${momentsImages(item).length ? `<div class="moment-images">${momentsImages(item).map(media => `<img src="/api/wb/moments/media?md5=${encodeURIComponent(media.md5)}" loading="lazy" onerror="this.style.display='none'">`).join('')}</div>` : ''}
+                <div class="moment-stats"><span>👍 ${momentsCount(item, 'like')}</span><span>💬 ${momentsCount(item, 'comment')}</span>
+                  <button class="btn mini-chat-save" data-moment-detail="${esc(id)}">查看详情</button></div>
+              </div>
+            </div>`;
+          }).join('') : '<div class="muted small">还没有朋友圈数据（后端未就绪或尚未刷新）</div>'}
+        </div>
+      </div>
+      <div class="moments-side">
+        ${detail ? `<div class="studio-card"><div class="studio-row"><b>详情 ${esc(detail.tid || detail.id || '')}</b><span class="grow"></span><button class="btn mini-chat-save" id="moments-detail-close">关闭</button></div>
+          <div class="moment-head"><b>${esc(momentsNickname(detail))}</b><span class="muted small">${esc(momentsFormatTime(detail.time || detail.ts || detail.created_at))}</span></div>
+          <div class="moment-text-full">${esc(momentsText(detail))}</div>
+          ${momentsImages(detail).length ? `<div class="moment-images">${momentsImages(detail).map(media => `<img src="/api/wb/moments/media?md5=${encodeURIComponent(media.md5)}" loading="lazy" onerror="this.style.display='none'">`).join('')}</div>` : ''}
+          <div class="muted small">点赞 ${(detail.likes || []).length} · 评论 ${(detail.comments || []).length}</div>
+          <details open><summary>点赞/评论全量</summary><pre class="studio-pre">${esc(JSON.stringify({ likes: detail.likes || [], comments: detail.comments || [] }, null, 2))}</pre></details>
+        </div>` : `<div class="studio-card"><div class="muted small">点卡片正文看详情（含点赞/评论全量）</div></div>`}
+        ${m.analysis ? `<div class="studio-card"><div class="studio-card-title">AI 分析结果</div>${momentsAnalysisHtml(m.analysis)}</div>` : ''}
+        <div class="studio-card"><div class="studio-card-title">历史分析（最近 10 次）</div>
+          ${analyses.length ? `<div class="moments-analyses">${analyses.map(item => `<div class="tree-row" data-moment-analysis="${esc(item.name || item.id || '')}">${esc(item.name || item.id || '')}
+            <span class="muted small">${esc(momentsFormatTime(item.created_at || item.ts || item.time))}</span></div>`).join('')}</div>` :
+            '<div class="muted small">暂无历史分析</div>'}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function openMomentsTab() {
+  const key = 'moments:page';
+  let tab = S.tabs.find(t => t.rel === key);
+  if (!tab) { tab = { rel: key, root: 'moments', name: '朋友圈', text: '', dirty: false }; S.tabs.push(tab); }
+  tab.html = momentsPageHtml();
+  S.activeTab = key;
+  showHtmlTab(tab);
+  renderTabs();
+  bindMomentsPage();
+}
+
+function bindMomentsPage() {
+  const root = $('#editors .html-tab:not([style*="display: none"])') || document;
+  const m = S.moments;
+  const reload = () => openMomentsTab();
+  const refresh = $('#moments-refresh', root);
+  if (refresh) refresh.onclick = refreshMoments;
+  const search = $('#moments-search-btn', root);
+  if (search) search.onclick = searchMoments;
+  const input = $('#moments-search', root);
+  if (input) input.onkeydown = (event) => { if (event.key === 'Enter') searchMoments(); };
+  const analyze = $('#moments-analyze', root);
+  if (analyze) analyze.onclick = runMomentsAnalyze;
+  const selectAll = $('#moments-select-all', root);
+  if (selectAll) selectAll.onchange = () => {
+    const items = (m.items && (m.items.items || m.items.moments)) || [];
+    if (selectAll.checked) items.forEach(item => m.selected.add(momentsItemId(item)));
+    else m.selected.clear();
+    reload();
+  };
+  $$('[data-moment-select]', root).forEach(box => {
+    box.onchange = () => {
+      const id = box.dataset.momentSelect;
+      if (box.checked) m.selected.add(id); else m.selected.delete(id);
+      reload();
+    };
+  });
+  $$('[data-moment-detail]', root).forEach(node => {
+    node.onclick = (event) => {
+      event.stopPropagation();
+      const items = (m.items && (m.items.items || m.items.moments)) || [];
+      const item = items.find(candidate => momentsItemId(candidate) === node.dataset.momentDetail);
+      if (item) openMomentsDetail(item);
+    };
+  });
+  const close = $('#moments-detail-close', root);
+  if (close) close.onclick = () => { m.detail = null; reload(); };
+  $$('[data-moment-analysis]', root).forEach(row => {
+    row.onclick = async () => {
+      try { m.analysis = await api('/api/wb/moments/analysis/' + encodeURIComponent(row.dataset.momentAnalysis)); }
+      catch (err) { toast('读取分析失败：' + err.message, 'err'); return; }
+      reload();
+    };
+  });
+}
+
+async function runMomentsAnalyze() {
+  const m = S.moments;
+  if (m.analyzing) return;
+  m.analyzing = true; openMomentsTab();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120000);
+  try {
+    const body = m.selected.size ? { tids: [...m.selected], limit: 30 } : { limit: 30 };
+    const res = await fetch('/api/wb/moments/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Token': S.token },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    let data; try { data = await res.json(); } catch { data = { ok: false, error: 'bad_json' }; }
+    if (!res.ok) throw new Error(data.detail || data.error || ('HTTP ' + res.status));
+    m.analysis = data;
+    m.analysis.keyword = m.keyword;
+    try { m.analyses = await api('/api/wb/moments/analyses?limit=10'); } catch { /* 历史列表失败不阻塞 */ }
+  } catch (err) {
+    m.analysis = { ok: false, error: controller.signal.aborted
+      ? '超时：120s 内未返回（分析可能仍在后台执行）' : err.message };
+  } finally {
+    clearTimeout(timer); m.analyzing = false; openMomentsTab();
   }
 }
 

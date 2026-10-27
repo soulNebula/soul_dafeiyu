@@ -1,5 +1,7 @@
 # 10 · 训练工厂（TrainLab）：开源前要补的那一块
 
+> 本模块是「工作台（Workbench）」的功能域之一：见 `docs/specs/11-工作台-Workbench.md`。
+
 > 起因：项目要开源。现在"训练相关"的能力散落在 `tools/train/`、`agi/soul/`、`agi/eval_data/`、`tools/soul_serve/` 里：
 > 有的能跑、有的是实验脚本、路径硬编码在 `E:\agent`、没有统一入口、没有数据卡/模型卡、也没有可复现的 manifest。
 > **TrainLab = 把「语料 → 清洗 → 标注 → 蒸馏 → 训练 → 评测 → 导出 → 推理」收成一个可配置、可复现、可开源的流水线。**

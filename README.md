@@ -1,5 +1,9 @@
 # IDEA · SoulAgent 工作台（Workbench）
 
+[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-blue.svg)](.github/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](https://www.python.org/)
+
 > 项目的「IDE」：在浏览器里管理 SoulAgent 的服务、配置、数据库、记忆、对话流水线、训练工厂与 Git。
 > 设计文档见 SoulAgent 仓库：`docs/specs/11-工作台-Workbench.md`、`docs/specs/10-训练工厂-TrainLab.md`。
 

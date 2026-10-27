@@ -275,7 +275,8 @@ async function connect(tokenOverride) {
     $('#sb-token').textContent = '已连接';
     $('#sb-env').textContent = `python ${env.python}${env.torch? ' · torch '+env.torch+(env.cuda?' (cuda)':''):''}`;
     await Promise.all([loadRoots(), loadServices(), loadGit(), loadConfig(), loadInterpreters(),
-      loadDataDbs().catch(()=>{}), loadMemSidebar().catch(()=>{}), loadGitSettings().catch(()=>{})]);
+      loadDataDbs().catch(()=>{}), loadMemSidebar().catch(()=>{}), loadGitSettings().catch(()=>{}),
+      loadOverview().catch(()=>{})]);
     toast('已连接','ok');
   } catch(e) {
     $('#conn-label').textContent = '连接失败';
@@ -985,10 +986,9 @@ document.addEventListener('keydown', e=>{
 /* ================= 初始化 ================= */
 $('#sb-token').onclick = ()=> openConnectDialog();
 $('#conn-label').onclick = ()=> openConnectDialog();
-if (S.token) connect(S.token);
 initMonaco();
 showView('explorer');
-if (S.token) connect();
+if (S.token) connect(S.token);
 /* 开发/截图用：?view=explorer|git|data|mem|... 直接打开对应视图 */
 const _startView = new URLSearchParams(location.search).get('view');
 if (_startView && VIEWS.includes(_startView)) {

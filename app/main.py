@@ -231,6 +231,21 @@ def files_jobs():
     return {"ok": True, "items": files_api.jobs()}
 
 
+@app.get("/api/wb/files/browse", dependencies=[Depends(require_token)])
+def files_browse(path: str = ""):
+    return files_api.browse(path)
+
+
+@app.post("/api/wb/files/roots/add", dependencies=[Depends(require_token)])
+def files_add_root(body: dict):
+    return files_api.add_root(str(body.get("name") or ""), str(body.get("path") or ""))
+
+
+@app.post("/api/wb/files/roots/remove", dependencies=[Depends(require_token)])
+def files_remove_root(body: dict):
+    return files_api.remove_root(str(body.get("name") or ""))
+
+
 @app.get("/api/wb/files/interpreters", dependencies=[Depends(require_token)])
 def files_interpreters():
     return {"ok": True, "items": files_api.interpreters()}

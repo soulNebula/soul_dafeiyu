@@ -10,9 +10,21 @@
 <!-- ================= 标题栏 ================= -->
 <div id="titlebar">
   <div class="tb-left">
+    <button id="menu-btn" class="tb-btn ghost" title="菜单">☰</button>
+    <div id="menu-dropdown" class="dropdown hidden">
+      <div class="dd-item" data-menu="open-folder">📂 打开文件夹…</div>
+      <div class="dd-item" data-menu="new-file">📄 新建文件…</div>
+      <div class="dd-item" data-menu="save">💾 保存当前文件 <span class="muted">Ctrl+S</span></div>
+      <div class="dd-sep"></div>
+      <div class="dd-item" data-menu="services">⚙ 服务管理</div>
+      <div class="dd-item" data-menu="settings">🎛 设置</div>
+      <div class="dd-item" data-menu="connect">🔑 连接 / 令牌…</div>
+      <div class="dd-sep"></div>
+      <div class="dd-item" data-menu="about">ℹ 关于 IDEA 工作台</div>
+    </div>
     <span class="logo">◈</span>
-    <span class="tb-title">IDEA · SoulAgent Workbench</span>
-    <span class="tb-sub">M0</span>
+    <span class="tb-title">IDEA 工作台</span>
+    <span class="tb-sub" id="tb-project">SoulAgent</span>
   </div>
   <div class="tb-center"><input id="cmd-input" placeholder="搜索/命令（Ctrl+P 文件，Ctrl+Shift+P 命令）" autocomplete="off"></div>
   <div class="tb-right">
@@ -42,11 +54,9 @@
     <div id="side-explorer" class="side-view active">
       <div class="side-title">资源管理器</div>
       <div class="side-sub">
-        <select id="root-select">
-          <option value="soulagent">SoulAgent</option>
-          <option value="idea">idea（工作台自身）</option>
-        </select>
+        <select id="root-select"></select>
         <button class="mini-btn" id="tree-refresh" title="刷新">⟳</button>
+        <button class="mini-btn" id="tree-open-folder" title="打开文件夹">📂</button>
       </div>
       <div id="file-tree" class="tree"></div>
     </div>
@@ -150,6 +160,35 @@
   <span id="sb-token">未连接</span>
 </div>
 
+<div id="dialog" class="dialog hidden">
+  <div class="dialog-box">
+    <div class="dialog-title"><span id="dialog-title">打开文件夹</span><button id="dialog-close" class="mini-btn">✕</button></div>
+    <div class="dialog-path"><button id="dialog-up" class="mini-btn">↑ 上一级</button>
+      <input id="dialog-path-input" readonly>
+    </div>
+    <div id="dialog-dirs" class="dialog-list"></div>
+    <div id="dialog-text-wrap" class="hidden"><input id="dialog-text" placeholder="输入文件路径（相对当前文件夹）"></div>
+    <div class="dialog-actions">
+      <button id="dialog-cancel" class="btn">取消</button>
+      <button id="dialog-ok" class="btn primary">选择此文件夹</button>
+    </div>
+  </div>
+</div>
+
+<div id="connect-dialog" class="dialog hidden">
+  <div class="dialog-box small-box">
+    <div class="dialog-title">连接工作台<button id="cd-close" class="mini-btn">✕</button></div>
+    <div class="cd-body">
+      <label>管理令牌<input id="cd-token" type="password" placeholder="默认 8888"></label>
+      <div class="muted small">令牌来自后端环境变量 IDEA_TOKEN（默认 8888）。</div>
+    </div>
+    <div class="dialog-actions">
+      <button id="cd-cancel" class="btn">取消</button>
+      <button id="cd-ok" class="btn primary">连接</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 <script>
 
@@ -221,7 +260,7 @@ function showView(name) {
   if (name==='run') loadJobs();
 }
 $$('#activitybar .ab-item[data-view]').forEach(b=> b.onclick = ()=> showView(b.dataset.view));
-$('#ab-settings').onclick = ()=> { $('#token').focus(); };
+$('#ab-settings').onclick = ()=> openConnectDialog();
 
 /* ================= 解释器 ================= */
 async function loadInterpreters() {
@@ -233,11 +272,88 @@ async function loadInterpreters() {
   } catch {}
 }
 
+/* ================= 菜单 ================= */
+$('#menu-btn').onclick = (e)=>{ e.stopPropagation(); $('#menu-dropdown').classList.toggle('hidden'); };
+document.addEventListener('click', ()=> $('#menu-dropdown').classList.add('hidden'));
+$$('#menu-dropdown .dd-item').forEach(it=> it.onclick = ()=>{
+  $('#menu-dropdown').classList.add('hidden');
+  const cmd = it.dataset.menu;
+  if (cmd==='open-folder') openFolderDialog();
+  if (cmd==='new-file') newFileDialog();
+  if (cmd==='save') saveActive();
+  if (cmd==='services') showView('services');
+  if (cmd==='settings') showView('config');
+  if (cmd==='connect') openConnectDialog();
+  if (cmd==='about') toast('IDEA 工作台 · SoulAgent 的 IDE（M0.1）','ok');
+});
+
+/* ================= 文件夹选择器 ================= */
+let FOLDER_DIALOG_MODE = 'root';   // root=打开文件夹; newfile=新建文件
+async function openFolderDialog() {
+  FOLDER_DIALOG_MODE = 'root';
+  $('#dialog-title').textContent = '打开文件夹';
+  $('#dialog-text-wrap').classList.add('hidden');
+  $('#dialog-ok').textContent = '选择此文件夹';
+  $('#dialog').classList.remove('hidden');
+  await browseTo('');
+}
+async function browseTo(path) {
+  try {
+    const r = await api('/api/wb/files/browse?path='+encodeURIComponent(path||''));
+    if (!r.ok) { toast('读取目录失败：'+r.error,'err'); return; }
+    $('#dialog-path-input').value = r.path;
+    $('#dialog-path-input').dataset.path = r.path;
+    $('#dialog-up').dataset.parent = r.parent || '';
+    $('#dialog-up').disabled = !r.parent;
+    $('#dialog-dirs').innerHTML = (r.dirs||[]).map(d=>
+      `<div class="dlg-dir" data-path="${esc(d.path)}">📁 ${esc(d.name)}</div>`).join('')
+      || '<div class="muted small">（没有子文件夹）</div>';
+    $$('#dialog-dirs .dlg-dir').forEach(el=> el.onclick = ()=> browseTo(el.dataset.path));
+  } catch(e) { toast(e.message,'err'); }
+}
+$('#dialog-up').onclick = ()=> browseTo($('#dialog-up').dataset.parent || '');
+$('#dialog-close').onclick = $('#dialog-cancel').onclick = ()=> $('#dialog').classList.add('hidden');
+$('#dialog-ok').onclick = async ()=>{
+  const path = $('#dialog-path-input').dataset.path;
+  if (FOLDER_DIALOG_MODE==='newfile') return;
+  const name = path.split(/[\/]/).filter(Boolean).pop() || 'folder';
+  const r = await api('/api/wb/files/roots/add',{method:'POST',body:{name, path}});
+  if (!r.ok) { toast('添加失败：'+r.error,'err'); return; }
+  $('#dialog').classList.add('hidden');
+  S.root = name;
+  await loadRoots();           // 刷新 select + 文件树
+  toast('已打开文件夹：'+name,'ok');
+};
+
+/* ================= 新建文件 ================= */
+function newFileDialog() {
+  const rel = prompt('新文件路径（相对当前文件夹）：', 'scratch/new_file.py');
+  if (!rel) return;
+  createFile(rel);
+}
+async function createFile(rel) {
+  const r = await api('/api/wb/files/write',{method:'POST',body:{root:S.root, rel, text:''}});
+  if (!r.ok) { toast('创建失败：'+r.error,'err'); return; }
+  await loadTree(); await openFile(rel); toast('已创建 '+rel,'ok');
+}
+
+/* ================= 连接弹窗 ================= */
+function openConnectDialog() {
+  $('#cd-token').value = S.token || '';
+  $('#connect-dialog').classList.remove('hidden');
+}
+$('#cd-close').onclick = $('#cd-cancel').onclick = ()=> $('#connect-dialog').classList.add('hidden');
+$('#cd-ok').onclick = ()=>{ $('#token').value = $('#cd-token').value; $('#connect-dialog').classList.add('hidden'); connect(); };
+
 /* ================= 文件树 ================= */
 async function loadRoots() {
   const r = await api('/api/wb/files/roots');
   S.roots = {}; for (const it of r.items||[]) S.roots[it.name]=it.path;
-  $('#root-select').value = S.root;
+  const names = Object.keys(S.roots);
+  if (!names.includes(S.root)) S.root = names[0] || 'soulagent';
+  $('#root-select').innerHTML = names.map(n=>
+    `<option value="${esc(n)}" ${n===S.root?'selected':''}>${esc(n)}</option>`).join('');
+  $('#tb-project').textContent = S.root;
   await loadTree();
 }
 async function loadTree() {
@@ -262,7 +378,8 @@ function bindTree() {
     }
   });
 }
-$('#root-select').onchange = e=> { S.root=e.target.value; loadTree(); };
+$('#root-select').onchange = e=> { S.root=e.target.value; $('#tb-project').textContent=S.root; loadTree(); };
+$('#tree-open-folder').onclick = openFolderDialog;
 $('#tree-refresh').onclick = loadTree;
 
 /* ================= 编辑器（Monaco） ================= */

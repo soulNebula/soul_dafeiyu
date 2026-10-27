@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -26,11 +27,87 @@ _JOBS: dict[str, dict] = {}
 _LOCK = threading.Lock()
 
 
+ROOTS_FILE = IDEA_ROOT / ".data" / "roots.json"
+
+
+def _default_roots() -> dict[str, str]:
+    return {"soulagent": str(paths.soulagent_home()), "idea": str(IDEA_ROOT)}
+
+
 def roots() -> dict[str, str]:
-    return {
-        "soulagent": str(paths.soulagent_home()),
-        "idea": str(IDEA_ROOT),
-    }
+    """工作台可浏览的根目录：默认两个 + 用户添加的（.data/roots.json）。"""
+    result = _default_roots()
+    try:
+        extra = json.loads(ROOTS_FILE.read_text(encoding="utf-8"))
+        if isinstance(extra, dict):
+            for name, path in extra.items():
+                if isinstance(path, str) and Path(path).is_dir():
+                    result[str(name)] = path
+    except Exception:  # noqa: BLE001
+        pass
+    return result
+
+
+def add_root(name: str, path: str) -> dict:
+    name = str(name or "").strip()[:40]
+    path = str(Path(path).expanduser().resolve())
+    if not name or not Path(path).is_dir():
+        return {"ok": False, "error": "invalid_name_or_path"}
+    extra = {}
+    try:
+        extra = json.loads(ROOTS_FILE.read_text(encoding="utf-8"))
+        if not isinstance(extra, dict):
+            extra = {}
+    except Exception:  # noqa: BLE001
+        extra = {}
+    extra[name] = path
+    ROOTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ROOTS_FILE.write_text(json.dumps(extra, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "name": name, "path": path}
+
+
+def remove_root(name: str) -> dict:
+    if name in _default_roots():
+        return {"ok": False, "error": "cannot_remove_default"}
+    try:
+        extra = json.loads(ROOTS_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        extra = {}
+    if not isinstance(extra, dict) or name not in extra:
+        return {"ok": False, "error": "root_not_found"}
+    extra.pop(name)
+    ROOTS_FILE.write_text(json.dumps(extra, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "name": name}
+
+
+def browse(path: str = "") -> dict:
+    """列出某个目录的子文件夹（用于「打开文件夹」选择器）。"""
+    if path:
+        base = Path(path).expanduser().resolve()
+    else:
+        base = Path.home() / "Desktop"
+        if not base.is_dir():
+            base = Path.home()
+    if not base.is_dir():
+        return {"ok": False, "error": "not_a_dir", "path": str(base)}
+    skip = {"$recycle.bin", "system volume information", "node_modules", ".git", ".venv",
+            "__pycache__", "windows", "program files", "program files (x86)",
+            "programdata", "appdata"}
+    dirs = []
+    try:
+        for e in sorted(base.iterdir(), key=lambda x: x.name.lower()):
+            if not e.is_dir():
+                continue
+            if e.name.lower() in skip or e.name.startswith("."):
+                continue
+            try:
+                dirs.append({"name": e.name, "path": str(e)})
+            except OSError:
+                continue
+    except OSError as exc:
+        return {"ok": False, "error": str(exc), "path": str(base)}
+    parent = str(base.parent) if base.parent != base else ""
+    return {"ok": True, "path": str(base), "parent": parent, "dirs": dirs}
 
 
 def _resolve(root: str, rel: str) -> Path:

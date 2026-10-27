@@ -1259,6 +1259,19 @@ class Gateway:
                 self.failed += 1
             if not self.cfg.get("dry_run", True):
                 time.sleep(float(self.cfg.get("reply_delay") or 0))
+        # P5-b/P19：把模型指令解析出的媒体气泡发出去（此前只发文字，贴纸/图片被丢弃）
+        media_plan = result.get("media")
+        if isinstance(media_plan, dict):
+            media_items = [dict(item) for item in (media_plan.get("bubbles") or [])
+                           if isinstance(item, dict)]
+            if media_items and self.cfg.get("media_enabled", False):
+                try:
+                    batch = self.send_media_batch(contact, media_items, reactive=True)
+                    self._record("outbound_media", {
+                        "friend": contact, "items": media_items, "result": batch})
+                except Exception as exc:  # noqa: BLE001 - 媒体失败不影响文本回复
+                    self._record("outbound_media_failed", {
+                        "friend": contact, "error": f"{type(exc).__name__}: {exc}"[:200]})
 
     def _effective_min_interval(self) -> float:
         """P0-2：min_interval_s 强制生效；0 视为 1.5，仅 GATEWAY_DEBUG=1 可放开 0。"""

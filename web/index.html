@@ -1659,9 +1659,9 @@ async function loadTrainSide() {
     S.train.datasets = data.items || [];
     if (!el) return;
     el.innerHTML = S.train.datasets.length ? S.train.datasets.map((item, index) => `
-      <div class="tree-row file" data-train-dataset="${index}">${esc(item.name || item.path)}
-        <span class="muted small">${item.rows ?? item.count ?? ''}</span></div>`).join('') :
-      '<div class="muted small">还没有数据集（可在训练工厂里过滤生成）</div>';
+      <div class="tree-row file" data-train-dataset="${index}" title="${esc(item.path)}">${esc(item.rel || item.name || item.path)}
+        <span class="muted small">${item.rows ?? item.count ?? ''} 行</span></div>`).join('') :
+      '<div class="muted small">还没有数据集</div>';
     $$('#train-dataset-list .tree-row').forEach(row => {
       row.onclick = () => openTrainPage(S.train.datasets[Number(row.dataset.trainDataset)]);
     });
@@ -1681,7 +1681,7 @@ async function loadTrainPage() {
   const ds = t.dataset || (t.datasets || [])[0] || null;
   t.dataset = ds;
   if (ds) {
-    try { t.preview = await api('/api/wb/train/preview?path=' + encodeURIComponent(ds.path || ds.name || '')); }
+    try { t.preview = await api('/api/wb/train/preview?path=' + encodeURIComponent(ds.path || ds.name || '') + '&limit=50'); }
     catch (e) { errors.push('preview: ' + e.message); t.preview = { ok: false, error: e.message }; }
   }
   t.errors = errors;
@@ -1709,7 +1709,7 @@ function trainPageHtml() {
     <div class="studio-card">
       <div class="studio-card-title">数据集预览（前 50 行）${preview.error ? ' · ' + esc(preview.error) : ''}</div>
       <div class="ds-table-wrap"><table class="ds-table"><thead><tr>${columns.map(c => `<th>${esc(c)}</th>`).join('') || '<th>--</th>'}</tr></thead>
-        <tbody>${rows.length ? rows.map(row => `<tr>${columns.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`).join('') :
+        <tbody>${rows.length ? rows.map(row => `<tr>${columns.map(c => `<td>${esc(trainCell(row[c]))}</td>`).join('')}</tr>`).join('') :
         '<tr><td colspan="' + Math.max(1, columns.length) + '" class="muted">暂无预览（数据集接口未就绪或为空）</td></tr>'}</tbody></table></div>
     </div>
     <div class="m3-cols">
@@ -1720,6 +1720,7 @@ function trainPageHtml() {
           <label><span class="muted small">最短长度</span><input type="number" id="train-filter-min" value="4" min="1"></label>
           <label><span class="muted small">最长长度</span><input type="number" id="train-filter-max" value="500" min="1"></label>
           <label class="m3-wide"><span class="muted small">黑名单关键词（逗号分隔）</span><input id="train-filter-blacklist" placeholder="例如：广告,二维码"></label>
+          <label class="m3-wide"><span class="muted small">新数据集名称（可选）</span><input id="train-filter-name" placeholder="留空自动生成"></label>
           <button class="btn primary m3-wide" id="train-filter-run">过滤并生成新数据集</button>
         </div>
         ${t.filterResult ? `<pre class="studio-pre">${esc(JSON.stringify(t.filterResult, null, 2))}</pre>` : ''}
@@ -1727,8 +1728,8 @@ function trainPageHtml() {
       <div class="studio-card"><div class="studio-card-title">新建训练任务</div>
         <div class="m3-form">
           <label class="m3-wide"><span class="muted small">数据集</span><input id="train-job-dataset" value="${esc(ds.path || ds.name || '')}"></label>
-          <label><span class="muted small">base_model</span><input id="train-job-base" value="Qwen2.5-0.5B-Instruct"></label>
-          <label><span class="muted small">out_name</span><input id="train-job-out" value="soul_lora_$(date)"></label>
+          <label><span class="muted small">base_model（本地路径）</span><input id="train-job-base" value="E:/agent/models/Qwen2.5-0.5B-Instruct"></label>
+          <label><span class="muted small">out_name</span><input id="train-job-out" value="soul_lora_v1"></label>
           <label><span class="muted small">steps</span><input type="number" id="train-job-steps" value="300"></label>
           <label><span class="muted small">lr</span><input type="number" step="0.00001" id="train-job-lr" value="0.0002"></label>
           <label><span class="muted small">lora_r</span><input type="number" id="train-job-r" value="8"></label>
@@ -1736,29 +1737,35 @@ function trainPageHtml() {
           <label><span class="muted small">max_len</span><input type="number" id="train-job-maxlen" value="512"></label>
           <label><input type="checkbox" id="train-job-4bit" checked> load_4bit</label>
           <button class="btn primary m3-wide" id="train-job-create">创建训练任务</button>
+          <div class="muted small m3-wide">创建后任务为 created；到下方任务表点「开始」启动训练。</div>
         </div>
       </div>
     </div>
-    <div class="studio-card"><div class="studio-card-title">训练任务</div>
-      <div class="ds-table-wrap"><table class="ds-table"><thead><tr><th>ID</th><th>状态</th><th>base</th><th>out</th><th>steps</th><th>进度</th><th>操作</th></tr></thead>
-        <tbody>${jobs.length ? jobs.map(item => `<tr>
+    <div class="studio-card"><div class="studio-card-title">训练任务（${jobs.length}）</div>
+      <div class="ds-table-wrap"><table class="ds-table"><thead><tr><th>ID</th><th>状态</th><th>数据集</th><th>adapter</th><th>pid</th><th>steps</th><th>操作</th></tr></thead>
+        <tbody>${jobs.length ? jobs.map(item => {
+          const status = String(item.status || 'unknown');
+          const running = status === 'running';
+          const finished = ['done', 'failed', 'stopped'].includes(status);
+          return `<tr>
           <td class="mono small">${esc(item.id || item.name || '')}</td>
-          <td>${studioBadge(item.status || 'unknown', item.status === 'running' ? 'on' : '')}</td>
-          <td>${esc(item.base_model || item.base || '')}</td>
-          <td>${esc(item.out_name || item.out || '')}</td>
-          <td>${esc(item.steps ?? '')}</td>
-          <td>${esc(item.progress ?? item.percent ?? '')}</td>
+          <td>${studioBadge(status, running ? 'on' : '')}</td>
+          <td class="mono small">${esc(item.dataset || item.params?.dataset || '')}</td>
+          <td class="mono small">${esc(item.adapter || '')}</td>
+          <td>${esc(item.pid ?? '')}</td>
+          <td>${esc(item.params?.steps ?? item.steps ?? '')}</td>
           <td class="row-actions">
             <button class="btn" data-train-log="${esc(item.id || '')}">日志</button>
-            <button class="btn" data-train-start="${esc(item.id || '')}">开始</button>
-            <button class="btn danger" data-train-stop="${esc(item.id || '')}">停止</button>
-            <button class="btn" data-train-export="${esc(item.id || '')}">导出</button>
-          </td></tr>`).join('') :
-          '<tr><td colspan="7" class="muted">暂无任务（后端未就绪或还没创建）</td></tr>'}</tbody></table></div>
+            ${!finished ? `<button class="btn" data-train-start="${esc(item.id || '')}" ${running ? 'disabled' : ''}>开始</button>` : ''}
+            ${!finished ? `<button class="btn danger" data-train-stop="${esc(item.id || '')}">停止</button>` : ''}
+            ${item.adapter ? `<button class="btn" data-train-export="${esc(item.id || '')}" data-adapter="${esc(item.adapter)}">导出 GGUF</button>` : ''}
+          </td></tr>`;
+        }).join('') :
+          '<tr><td colspan="7" class="muted">暂无训练任务（创建后点「开始」运行）</td></tr>'}</tbody></table></div>
     </div>
     ${job ? `<div class="studio-card"><div class="studio-row"><b>任务日志 · ${esc(job.id || '')}</b>
         <span class="grow"></span>${studioBadge(job.status || '')}${t.log && t.log.metrics ? `<span class="muted small">${esc(JSON.stringify(t.log.metrics))}</span>` : ''}</div>
-      <pre class="studio-pre log-pre">${esc((t.log && (t.log.log || t.log.tail || t.log.logs)) || '(等待日志…)')}</pre></div>` : ''}
+      <pre class="studio-pre log-pre">${esc(trainLogText(t.log))}</pre></div>` : ''}
   </div>`;
 }
 function openTrainTab() {
@@ -1782,20 +1789,32 @@ function bindTrainPage() {
   if (filter) filter.onclick = async () => {
     const ds = t.dataset;
     if (!ds) { toast('先选数据集', 'err'); return; }
+    let filterName = ($('#train-filter-name', root).value || '').trim();
+    if (!filterName) {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      filterName = 'filtered_' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate())
+        + '_' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
+    }
     const body = { path: ds.path || ds.name || '',
-      remove_empty: $('#train-filter-empty', root).checked,
+      name: filterName,
       dedupe: $('#train-filter-dedup', root).checked,
-      min_len: parseInt($('#train-filter-min', root).value, 10) || 1,
-      max_len: parseInt($('#train-filter-max', root).value, 10) || 500,
+      min_chars: parseInt($('#train-filter-min', root).value, 10) || 0,
+      max_chars: parseInt($('#train-filter-max', root).value, 10) || 0,
       blacklist: ($('#train-filter-blacklist', root).value || '').split(/[,，]/).map(x => x.trim()).filter(Boolean) };
-    try { t.filterResult = await api('/api/wb/train/filter', { method: 'POST', body }); toast('已生成新数据集', 'ok'); await loadTrainPage(); }
-    catch (e) { toast('过滤失败：' + e.message, 'err'); }
+    try {
+      t.filterResult = await api('/api/wb/train/filter', { method: 'POST', body });
+      if (t.filterResult.ok) {
+        toast('已生成：' + (t.filterResult.path || '') + '（' + (t.filterResult.count ?? 0) + ' 行）', 'ok');
+        await loadTrainSide(); await loadTrainPage();
+      } else { toast('过滤失败：' + (t.filterResult.error || ''), 'err'); }
+    } catch (e) { toast('过滤失败：' + e.message, 'err'); }
   };
   const create = $('#train-job-create', root);
   if (create) create.onclick = async () => {
     const body = {
       dataset: $('#train-job-dataset', root).value.trim(),
-      base_model: $('#train-job-base', root).value.trim(),
+      model_path: $('#train-job-base', root).value.trim(),
       out_name: $('#train-job-out', root).value.trim(),
       steps: parseInt($('#train-job-steps', root).value, 10) || 300,
       lr: parseFloat($('#train-job-lr', root).value) || 0.0002,
@@ -1804,7 +1823,7 @@ function bindTrainPage() {
       load_4bit: $('#train-job-4bit', root).checked,
       max_len: parseInt($('#train-job-maxlen', root).value, 10) || 512,
     };
-    try { const r = await api('/api/wb/train/create', { method: 'POST', body }); toast(r.ok ? '任务已创建：' + (r.id || '') : '创建失败：' + (r.error || ''), r.ok ? 'ok' : 'err'); await loadTrainPage(); }
+    try { const r = await api('/api/wb/train/create', { method: 'POST', body }); toast(r.ok ? '任务已创建：' + (r.job || '') : '创建失败：' + (r.error || ''), r.ok ? 'ok' : 'err'); await loadTrainPage(); }
     catch (e) { toast('创建失败：' + e.message, 'err'); }
   };
   $$('[data-train-log]', root).forEach(btn => {
@@ -1824,12 +1843,7 @@ function bindTrainPage() {
     };
   });
   $$('[data-train-export]', root).forEach(btn => {
-    btn.onclick = async () => {
-      const quant = prompt('导出量化类型（q4_k_m / q5_k_m / q8_0 / f16）', 'q4_k_m');
-      if (!quant) return;
-      try { const r = await api('/api/wb/train/export', { method: 'POST', body: { id: btn.dataset.trainExport, quant } }); toast(r.ok ? '已导出：' + (r.path || r.output || '') : '导出失败：' + (r.error || ''), r.ok ? 'ok' : 'err'); }
-      catch (e) { toast('导出失败：' + e.message, 'err'); }
-    };
+    btn.onclick = () => openTrainExportDialog(btn.dataset.adapter || '', btn.dataset.trainExport || '');
   });
 }
 async function startTrainLog(id) {
@@ -1853,6 +1867,48 @@ async function startTrainLog(id) {
   }, 3000);
 }
 
+function trainCell(value) {
+  if (value === null || value === undefined) return 'NULL';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function trainLogText(log) {
+  if (!log) return '（等待日志…）';
+  const tail = log.tail || log.lines;
+  if (Array.isArray(tail)) return tail.map(line => String(line)).join(String.fromCharCode(10)) || '（日志为空）';
+  if (typeof tail === 'string') return tail;
+  if (typeof log.log === 'string') return log.log;
+  return JSON.stringify(log, null, 2);
+}
+
+function openTrainExportDialog(adapter, jobId) {
+  const base = 'E:/agent/models/Qwen2.5-0.5B-Instruct';
+  const name = String(adapter || '').split(/[\/]/).filter(Boolean).pop() || ('export_' + jobId);
+  studioDialog('导出 GGUF（adapter → merge → quantize）',
+    `<div class="m3-form">
+      <label class="m3-wide"><span class="muted small">adapter 目录</span><input id="train-export-adapter" value="${esc(adapter)}"></label>
+      <label class="m3-wide"><span class="muted small">base 模型目录</span><input id="train-export-base" value="${esc(base)}"></label>
+      <label><span class="muted small">名称</span><input id="train-export-name" value="${esc(name)}"></label>
+      <label><span class="muted small">量化</span><select id="train-export-quant">
+        <option value="Q4_K_M">Q4_K_M</option><option value="Q5_K_M">Q5_K_M</option>
+        <option value="Q8_0">Q8_0</option><option value="F16">F16</option></select></label>
+      <div class="muted small m3-wide">导出在后台线程执行；可在任务表用「日志」查看进度。</div>
+    </div>`,
+    async (mask) => {
+      const body = {
+        adapter: mask.querySelector('#train-export-adapter').value.trim(),
+        base: mask.querySelector('#train-export-base').value.trim(),
+        name: mask.querySelector('#train-export-name').value.trim(),
+        quant: mask.querySelector('#train-export-quant').value,
+      };
+      const r = await api('/api/wb/train/export', { method: 'POST', body });
+      if (!r.ok) throw new Error(r.error || '导出启动失败');
+      toast('导出已启动：' + (r.job || ''), 'ok');
+      await loadTrainPage();
+    }, '开始导出');
+}
+
 /* ---------- 模型中心 ---------- */
 async function loadModelsSide() {
   const el = $('#models-side-summary');
@@ -1865,8 +1921,9 @@ async function loadModelsSide() {
     S.models.disk = disk;
     if (el) {
       const items = running.items || running.models || [];
-      el.innerHTML = `<div class="muted small">运行中 ${items.length} 个</div>
-        ${disk ? `<div class="muted small">磁盘 ${esc(formatBytes(disk.used ?? disk.total_used ?? disk.bytes ?? 0))} / ${esc(formatBytes(disk.total ?? 0))}</div>` : ''}`;
+      const runningCount = running.running ?? items.filter(item => item.running).length;
+      el.innerHTML = `<div class="muted small">运行中 ${runningCount} 个</div>
+        ${disk ? `<div class="muted small">模型目录合计 ${esc(formatBytes(disk.total ?? 0))}</div>` : ''}`;
     }
   } catch (err) {
     if (el) el.innerHTML = `<div class="warn small">后端未就绪：${esc(err.message)}</div>`;
@@ -1885,7 +1942,8 @@ async function loadModelsPage() {
   const tryApi = async (fn, label) => { try { return await fn(); } catch (e) { errors.push(label + ': ' + e.message); return null; } };
   m.running = await tryApi(() => api('/api/wb/models/running'), 'running') || m.running;
   m.disk = await tryApi(() => api('/api/wb/models/disk'), 'disk') || m.disk;
-  m.list = await tryApi(() => api('/api/wb/models/list'), 'list')
+  m.list = await tryApi(() => api('/api/wb/models'), 'models')
+    || await tryApi(() => api('/api/wb/models/list'), 'list')
     || await tryApi(() => api('/api/wb/models/inventory'), 'inventory')
     || null;
   m.errors = errors;
@@ -1895,16 +1953,24 @@ function modelsPageHtml() {
   const m = S.models;
   const list = m.list || {};
   const groups = list.groups || list.items || list.models || [];
-  const running = (m.running && (m.running.items || m.running.models || m.running.running)) || [];
+  const running = ((m.running && (m.running.items || m.running.models || m.running.running)) || [])
+    .filter(item => item && item.running !== false);
   const disk = m.disk || {};
   const normGroups = Array.isArray(groups) ? groups : [];
   return `<div class="studio-page"><h2>模型中心</h2>
     ${(m.errors || []).length ? `<div class="warn small">部分接口未就绪：${esc(m.errors.join('；'))}</div>` : ''}
     <div class="mem-cards">
       <div class="ov-card"><div class="muted small">运行中</div><div class="big-num">${running.length}</div></div>
-      <div class="ov-card"><div class="muted small">磁盘已用 / 总量</div><div class="big-num">${esc(formatBytes(disk.used ?? disk.total_used ?? 0))} / ${esc(formatBytes(disk.total ?? 0))}</div></div>
-      <div class="ov-card"><div class="muted small">模型清单</div><div class="big-num">${normGroups.length}</div></div>
+      <div class="ov-card"><div class="muted small">模型清单</div><div class="big-num">${list.count ?? normGroups.length}</div>
+        <div class="muted small">base ${list.counts?.base ?? 0} · gguf ${list.counts?.gguf ?? 0} · adapter ${list.counts?.adapter ?? 0}</div></div>
+      <div class="ov-card"><div class="muted small">磁盘合计</div><div class="big-num">${esc(formatBytes(disk.total ?? 0))}</div></div>
+      <div class="ov-card"><div class="muted small">llama runtime</div><div class="small">${list.runtime?.llama_server_exists ? '✅ llama-server' : '❌ llama-server'}</div>
+        <div class="muted small">${list.runtime?.convert_dir_exists ? '✅ convert' : '❌ convert'}</div></div>
     </div>
+    ${(disk.items || []).length ? `<div class="studio-card"><div class="studio-card-title">磁盘明细</div>
+      <div class="ds-table-wrap"><table class="ds-table"><thead><tr><th>类型</th><th>目录</th><th>大小</th><th>文件数</th></tr></thead>
+      <tbody>${disk.items.map(row => `<tr><td>${esc(row.kind)}</td><td class="mono small">${esc(row.dir)}</td>
+        <td>${esc(formatBytes(row.size || 0))}</td><td>${esc(row.files ?? 0)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
     <div class="studio-card"><div class="studio-card-title">清单（base / gguf / adapter）</div>
       <div class="ds-table-wrap"><table class="ds-table"><thead><tr><th>分组</th><th>名称/路径</th><th>大小</th><th>mtime</th></tr></thead>
         <tbody>${normGroups.length ? normGroups.map(row => `<tr><td>${studioBadge(row.group || row.kind || row.type || '')}</td>
@@ -1915,24 +1981,35 @@ function modelsPageHtml() {
     <div class="m3-cols">
       <div class="studio-card"><div class="studio-card-title">启动 GGUF（端口 8100-8199）</div>
         <div class="m3-form">
-          <label class="m3-wide"><span class="muted small">GGUF 路径</span><input id="model-start-path" placeholder="E:/agent/output/gguf/....gguf"></label>
+          <label class="m3-wide"><span class="muted small">GGUF 路径</span><input id="model-start-path" list="model-gguf-picks" placeholder="E:/agent/output/gguf/....gguf">
+            <datalist id="model-gguf-picks">${normGroups.filter(item => item.kind === 'gguf').map(item => `<option value="${esc(item.path)}">${esc(item.name)}</option>`).join('')}</datalist></label>
           <label><span class="muted small">端口</span><input type="number" id="model-start-port" value="8100" min="8100" max="8199"></label>
           <label><span class="muted small">ngl</span><input type="number" id="model-start-ngl" value="99"></label>
           <label><span class="muted small">ctx</span><input type="number" id="model-start-ctx" value="2048"></label>
           <button class="btn primary m3-wide" id="model-start-btn">启动模型</button>
         </div>
         <div class="studio-card-title" style="margin-top:10px">运行中</div>
-        <div id="model-running-list">${running.length ? running.map(item => `<div class="studio-row"><span class="mono small">:${esc(item.port ?? '')} ${esc(item.name || item.path || '')}</span>
-          <span class="grow"></span><button class="btn danger" data-model-stop="${esc(item.port ?? '')}">停止</button></div>`).join('') : '<div class="muted small">没有运行中的模型</div>'}</div>
+        <div id="model-running-list">${running.length ? running.map(item => {
+          const port = Number(item.port || 0);
+          const protectedPort = [8123, 8125].includes(port);
+          const canStop = port >= 8100 && port <= 8199 && !protectedPort;
+          return `<div class="studio-row">
+            <span class="mono small">:${esc(port)} PID ${esc(item.pid ?? '-')}</span>
+            <span class="muted small mono" style="overflow:hidden;text-overflow:ellipsis;max-width:420px">${esc(item.model_path || '（未记录模型路径）')}</span>
+            <span class="grow"></span>
+            ${protectedPort ? '<span class="muted small">受保护（不在页面启停）</span>' : ''}
+            <button class="btn danger" data-model-stop="${esc(port)}" ${canStop ? '' : 'disabled'} title="${canStop ? '停止该测试端口模型' : '仅允许停止 8100-8199 的测试端口（8123/8125 受保护）'}">停止</button>
+          </div>`;
+        }).join('') : '<div class="muted small">没有运行中的模型</div>'}</div>
       </div>
       <div class="studio-card"><div class="studio-card-title">adapter 合并 / 转 GGUF</div>
         <div class="m3-form">
-          <label class="m3-wide"><span class="muted small">adapter 路径</span><input id="model-merge-adapter"></label>
-          <label class="m3-wide"><span class="muted small">base 路径</span><input id="model-merge-base"></label>
-          <label><span class="muted small">out_name</span><input id="model-merge-out" value="merged_$(date)"></label>
-          <button class="btn m3-wide" id="model-merge-btn">合并 adapter</button>
-          <label class="m3-wide"><span class="muted small">模型路径（转 GGUF）</span><input id="model-convert-path"></label>
-          <label><span class="muted small">out_name</span><input id="model-convert-out" value="gguf_$(date)"></label>
+          <label class="m3-wide"><span class="muted small">adapter 路径</span><input id="model-merge-adapter" placeholder="E:/agent/output/adapters/... 或 output/..."></label>
+          <label class="m3-wide"><span class="muted small">base 路径（留空读 adapter_config）</span><input id="model-merge-base" placeholder="E:/agent/models/Qwen2.5-0.5B-Instruct"></label>
+          <label><span class="muted small">out 目录（留空自动 output/merged_*）</span><input id="model-merge-out" placeholder="留空自动"></label>
+          <button class="btn m3-wide" id="model-merge-btn">合并 adapter（CPU，可能较慢）</button>
+          <label class="m3-wide"><span class="muted small">合并后模型目录（转 GGUF）</span><input id="model-convert-path" placeholder="E:/agent/output/merged_..."></label>
+          <label><span class="muted small">GGUF 名称（留空取目录名）</span><input id="model-convert-out" placeholder="留空自动"></label>
           <label><span class="muted small">quant</span><select id="model-convert-quant"><option>q4_k_m</option><option>q5_k_m</option><option>q8_0</option><option>f16</option></select></label>
           <button class="btn m3-wide" id="model-convert-btn">转 GGUF</button>
         </div>
@@ -1972,13 +2049,18 @@ function bindModelsPage() {
   });
   const merge = $('#model-merge-btn', root);
   if (merge) merge.onclick = async () => {
-    const body = { adapter: $('#model-merge-adapter', root).value.trim(), base: $('#model-merge-base', root).value.trim(), out_name: $('#model-merge-out', root).value.trim() };
+    const body = { adapter: $('#model-merge-adapter', root).value.trim(),
+      base: $('#model-merge-base', root).value.trim(),
+      out: $('#model-merge-out', root).value.trim() || null,
+      device: 'cpu', dtype: 'float16' };
     try { const r = await api('/api/wb/models/merge', { method: 'POST', body }); m.result = r; toast(r.ok ? '已合并：' + (r.path || '') : '合并失败：' + (r.error || ''), r.ok ? 'ok' : 'err'); await loadModelsPage(); }
     catch (e) { toast('合并失败：' + e.message, 'err'); }
   };
   const convert = $('#model-convert-btn', root);
   if (convert) convert.onclick = async () => {
-    const body = { path: $('#model-convert-path', root).value.trim(), out_name: $('#model-convert-out', root).value.trim(), quant: $('#model-convert-quant', root).value };
+    const body = { merged_dir: $('#model-convert-path', root).value.trim(),
+      name: $('#model-convert-out', root).value.trim() || null,
+      quant: $('#model-convert-quant', root).value };
     try { const r = await api('/api/wb/models/convert', { method: 'POST', body }); m.result = r; toast(r.ok ? '已转 GGUF：' + (r.path || '') : '转换失败：' + (r.error || ''), r.ok ? 'ok' : 'err'); await loadModelsPage(); }
     catch (e) { toast('转换失败：' + e.message, 'err'); }
   };

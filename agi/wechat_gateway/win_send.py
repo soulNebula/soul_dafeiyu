@@ -97,3 +97,60 @@ def send_via_window(text: str, cfg: dict[str, Any], *,
         return _result(False, "failed", error=f"{type(exc).__name__}: {exc}")
     return _result(True, "sent",
                    warning="窗口级发送无法校验会话，请人工抽查是否发对")
+
+def send_to_contact(contact: str, text: str, cfg: dict[str, Any], *,
+                    settle: float = 0.5) -> dict[str, Any]:
+    """窗口级"按联系人发送"（wxauto4/UIA 失效时的兜底）。
+
+    步骤：微信置前 → 点搜索框 → 粘贴联系人名 → 回车打开会话 → 点输入框 →
+    粘贴正文 → 回车发送。坐标按窗口尺寸比例计算（可用配置覆盖），
+    **无法校验会话名**，结果一律 ``verified=False``。
+    """
+    value = str(text or "").strip()
+    who = str(contact or "").strip()
+    if not value or not who:
+        return _result(False, "failed", error="contact/text 为空")
+    loaded, err = _load()
+    if loaded is None:
+        return _result(False, "failed", error=f"wx_core 不可用：{err}")
+    win, clipboard = loaded
+    try:
+        info = win.find_wechat_window()
+    except Exception as exc:  # noqa: BLE001
+        return _result(False, "failed", error=f"{type(exc).__name__}: {exc}")
+    if info is None:
+        return _result(False, "failed", error="没找到微信窗口")
+    try:
+        if not win.bring_to_front(info):
+            return _result(False, "failed", error="微信窗口无法切到前台")
+        time.sleep(settle)
+        if not win.is_foreground(info):
+            return _result(False, "failed", error="前台不是微信窗口")
+        img = win.capture(info)
+        w, h = (img.size if img else (960, 900))
+        # ① 搜索框（比例坐标，默认 0.17w / 0.066h）
+        sb = cfg.get("window_search_box") or [0.17, 0.066]
+        win.post_click(info, int(w * float(sb[0])), int(h * float(sb[1])))
+        time.sleep(0.3)
+        if not clipboard.set_text(who):
+            return _result(False, "failed", error="写剪贴板失败")
+        time.sleep(0.15)
+        _ctrl_v()
+        time.sleep(0.5)
+        win.press_key(VK_RETURN)
+        time.sleep(1.0)
+        # ② 输入框（比例坐标，默认 0.68w / 0.93h）
+        ib = cfg.get("fallback_input_box") or [0.68, 0.93]
+        win.post_click(info, int(w * float(ib[0])), int(h * float(ib[1])))
+        time.sleep(0.4)
+        if not clipboard.set_text(value):
+            return _result(False, "failed", error="写剪贴板失败")
+        time.sleep(0.15)
+        _ctrl_v()
+        time.sleep(0.5)
+        win.press_key(VK_RETURN)
+        time.sleep(0.6)
+    except Exception as exc:  # noqa: BLE001
+        return _result(False, "failed", error=f"{type(exc).__name__}: {exc}")
+    return _result(True, "sent",
+                   warning="窗口级发送（搜索打开会话）无法校验会话，请人工抽查")

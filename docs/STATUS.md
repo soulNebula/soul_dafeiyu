@@ -51,8 +51,8 @@
 
 1. 根 `tests/test_webui.py` 的 9 条旧 `/agi` 用例已 `skipif`（依赖已移除的 `agi.core`）；如需恢复需重写为 802 控制台。
 2. 8081/8082 仅保留历史/调试用途，不写入主链文档的操作步骤。
-3. 真实发送依赖本机微信窗口可被 wxauto4 附着：
-   - 2026-10-28 02:33 / 03:08 实测连续失败，`WeChat()` 报「未找到已登录的客户端主窗口」
-   - 现场：Weixin.exe 5 个进程、可见主窗口 1 个（title=微信, class=Qt51514QWindowIcon, 960×871）、另有一个同名隐藏窗口；wxauto4 最新版 41.1.7（PyPI 无更新）
-   - 失败内容自动落草稿，不会丢；建议完全退出微信（托盘退出）后只开一个标准主窗口重试
-   - 排查记录：`docs/plans/` 未记；本条为当前状态
+3. 真实发送（2026-10-28 03:20 结论）：
+   - **wxauto4 41.1.7 的 UIA 绑定在本机失效**：`WeChat()` 报「未找到已登录的客户端主窗口」；用 .NET UIA（PowerShell）能正常看到微信主窗口 `mmui::MainWindow`，但 wxauto4 的 comtypes UIA 枚举返回空（根桌面 0 子元素）。重建 venv（python 3.13）、降级 comtypes 均无效 → 判定为 wxauto4 在当前环境的兼容问题，非微信状态问题。
+   - **已启用窗口级兜底发送**：`fallback_enabled=true` / `fallback_mode=auto` / `fallback_send_mode=contact`，wxauto 失败后自动切到 `win_send.send_to_contact()`（搜索联系人 → 打开会话 → 粘贴 → 回车），并截图验证过 03:21 / 03:30 两条真发成功。
+   - 风险：窗口兜底 `verified=false`（不校验会话名），可能发错人；结果归类为 `unverified`（不计入 sent 统计）。生产建议保持 `send_mode=confirm`，人工抽查草稿后再批准。
+

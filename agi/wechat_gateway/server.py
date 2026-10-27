@@ -175,6 +175,10 @@ class Gateway:
         self._stop_path = Path(stop_path) if stop_path is not None else None
         # P18-A：engine_enabled 持久化路径（默认生产 config.json；测试传 tmp）
         self.config_path = Path(config_path) if config_path is not None else Path(cfg.CONFIG_PATH)
+        try:
+            self._cfg_mtime = int(self.config_path.stat().st_mtime_ns)
+        except OSError:
+            self._cfg_mtime = 0
         # P18-A：引擎软开关（监听+自动回复+主动）；默认 true
         self.engine_enabled = bool(self.cfg.get("engine_enabled", True))
         self.engine_since = time.time()
@@ -372,6 +376,17 @@ class Gateway:
             return {"reloaded": False, "changes": {}, "warning": "hot_reload_off"}
         try:
             from . import config as gw_cfg
+            # 只热加载"生产 config.json"；测试用 tmp 路径时不要越界读真实配置
+            if str(getattr(self, "config_path", "")) and                     Path(self.config_path) != Path(gw_cfg.CONFIG_PATH):
+                return {"reloaded": False, "changes": {}, "warning": "custom_config_path"}
+            # 只有启动之后文件被改过才重载（避免测试/显式 cfg 被磁盘配置覆盖）
+            try:
+                mtime = int(Path(self.config_path).stat().st_mtime_ns)
+            except OSError:
+                return {"reloaded": False, "changes": {}, "warning": "config_missing"}
+            if mtime == getattr(self, "_cfg_mtime", 0):
+                return {"reloaded": False, "changes": {}, "warning": ""}
+            self._cfg_mtime = mtime
             fresh, changes, warning = gw_cfg.hot_reload(self.cfg)
         except Exception as exc:  # noqa: BLE001
             return {"reloaded": False, "changes": {}, "warning": f"{type(exc).__name__}: {exc}"}
@@ -1756,7 +1771,11 @@ class Gateway:
             return None
         try:
             from . import win_send
-            out = win_send.send_via_window(text, self.cfg)
+            mode = str(self.cfg.get("fallback_mode") or "manual").strip().lower()
+            if mode == "auto" and str(self.cfg.get("fallback_send_mode") or "").lower() == "contact":
+                out = win_send.send_to_contact(contact, text, self.cfg)
+            else:
+                out = win_send.send_via_window(text, self.cfg)
         except Exception as exc:  # noqa: BLE001
             out = {"ok": False, "status": "failed",
                    "error": f"{type(exc).__name__}: {exc}"}

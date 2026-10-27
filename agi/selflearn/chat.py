@@ -582,9 +582,10 @@ class SelfLearnAgent:
             return self._simple_reply(user_id, sk_gate["message"], st, attachment,
                                       skill_gate=sk_gate, had_image=bool(image), t0=t0)
         # 情绪差时，对无明确要求的短消息可以选择不回
+        # 2026-10-27 用户拍板：门槛从 0.32 降到 0.20（几乎不触发，避免"已读不回"）
         direct = bool(re.search(r"[?？]|吗|什么|怎么|为什么|帮|写|要不要|能不能|该不该", text))
         if (not direct and len(text) <= 8 and
-                float(st["self"].get("mood", 0.55)) < 0.32 and
+                float(st["self"].get("mood", 0.55)) < 0.20 and
                 (self.rng or random).random() < 0.5):
             # P15-A：skip 早退也记一条 trace（只读采集，失败静默）
             try:

@@ -27,7 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(ts);
 def _connect(db: Path | None = None) -> sqlite3.Connection:
     paths.ensure_data_dir()
     con = sqlite3.connect(str(db or paths.AUDIT_DB))
-    con.execute(SCHEMA)
+    con.executescript(SCHEMA)
     con.commit()
     return con
 

@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audit, config_store, datastudio, files_api, gitstudio, memstudio, paths, services, wechat_proxy
+from . import audit, config_store, datastudio, files_api, gitstudio, memstudio, modelstudio, paths, services, trainstudio, wechat_proxy
 
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
 
@@ -497,6 +497,183 @@ def wechat_set_send_mode(body: dict):
         audit.record("wechat.send_mode", "config", actor="workbench",
                      meta={"mode": out.get("mode"), "contacts": out.get("contact_modes")})
     return out
+
+
+# ------------------------------------------------------------------ 训练工厂（M3-A）
+@app.get("/api/wb/train/discover", dependencies=[Depends(require_token)])
+def train_discover():
+    return trainstudio.discover()
+
+
+@app.get("/api/wb/train/datasets", dependencies=[Depends(require_token)])
+def train_datasets():
+    return trainstudio.list_datasets()
+
+
+@app.get("/api/wb/train/assets", dependencies=[Depends(require_token)])
+def train_assets():
+    return trainstudio.list_assets()
+
+
+@app.get("/api/wb/train/preview", dependencies=[Depends(require_token)])
+def train_preview(path: str, limit: int = Query(default=20, ge=1, le=200)):
+    return trainstudio.preview_dataset(path, limit=limit)
+
+
+@app.post("/api/wb/train/filter", dependencies=[Depends(require_token)])
+def train_filter(body: dict):
+    return trainstudio.filter_dataset(
+        str(body.get("path") or ""), name=str(body.get("name") or ""),
+        min_chars=int(body.get("min_chars") or 0),
+        max_chars=int(body.get("max_chars") or 0),
+        blacklist=body.get("blacklist") or [],
+        dedupe=bool(body.get("dedupe", True)))
+
+
+@app.post("/api/wb/train/create", dependencies=[Depends(require_token)])
+def train_create(body: dict):
+    out = trainstudio.create_training_job(
+        str(body.get("dataset") or ""),
+        model_path=str(body.get("model_path") or ""),
+        out_name=str(body.get("out_name") or ""),
+        steps=int(body.get("steps") or 0),
+        lr=float(body.get("lr") or 2e-4),
+        lora_r=int(body.get("lora_r") or 16),
+        lora_alpha=int(body.get("lora_alpha") or 32),
+        load_4bit=bool(body.get("load_4bit", False)),
+        max_len=int(body.get("max_len") or 512),
+        epochs=int(body.get("epochs") or 1))
+    if out.get("ok"):
+        audit.record("train.create", str(out.get("job", {}).get("id") or ""), actor="workbench",
+                     meta={"dataset": body.get("dataset")})
+    return out
+
+
+@app.post("/api/wb/train/start", dependencies=[Depends(require_token)])
+def train_start(body: dict):
+    out = trainstudio.start_job(str(body.get("id") or ""))
+    if out.get("ok"):
+        audit.record("train.start", str(body.get("id")), actor="workbench")
+    return out
+
+
+@app.post("/api/wb/train/stop", dependencies=[Depends(require_token)])
+def train_stop(body: dict):
+    out = trainstudio.stop_job(str(body.get("id") or ""))
+    if out.get("ok"):
+        audit.record("train.stop", str(body.get("id")), actor="workbench")
+    return out
+
+
+@app.get("/api/wb/train/jobs", dependencies=[Depends(require_token)])
+def train_jobs(limit: int = Query(default=30, ge=1, le=200)):
+    return trainstudio.list_jobs(limit=limit)
+
+
+@app.get("/api/wb/train/job/{job_id}", dependencies=[Depends(require_token)])
+def train_job(job_id: str, tail: int = Query(default=80, ge=0, le=5000)):
+    return trainstudio.job_status(job_id, tail=tail)
+
+
+@app.get("/api/wb/train/job/{job_id}/log", dependencies=[Depends(require_token)])
+def train_job_log(job_id: str, lines: int = Query(default=100, ge=1, le=5000)):
+    return trainstudio.tail_log(job_id, lines=lines)
+
+
+@app.post("/api/wb/train/export/preview", dependencies=[Depends(require_token)])
+def train_export_preview(body: dict):
+    return trainstudio.export_plan(str(body.get("adapter") or ""),
+                                   str(body.get("base") or ""),
+                                   str(body.get("name") or ""),
+                                   out_dir=str(body.get("out_dir") or "") or trainstudio.DEFAULT_GGUF_DIR,
+                                   merged_dir=str(body.get("merged_dir") or ""),
+                                   quant=str(body.get("quant") or "Q4_K_M"))
+
+
+@app.post("/api/wb/train/export", dependencies=[Depends(require_token)])
+def train_export(body: dict):
+    out = trainstudio.start_export(str(body.get("adapter") or ""),
+                                   str(body.get("base") or ""),
+                                   str(body.get("name") or ""),
+                                   out_dir=str(body.get("out_dir") or "") or trainstudio.DEFAULT_GGUF_DIR,
+                                   merged_dir=str(body.get("merged_dir") or ""),
+                                   quant=str(body.get("quant") or "Q4_K_M"))
+    if out.get("ok"):
+        audit.record("train.export", str(out.get("job", {}).get("id") or ""), actor="workbench")
+    return out
+
+
+# ------------------------------------------------------------------ 模型中心（M3-B）
+@app.get("/api/wb/models", dependencies=[Depends(require_token)])
+def models_list():
+    return modelstudio.list_models()
+
+
+@app.get("/api/wb/models/list", dependencies=[Depends(require_token)])
+def models_list_alias():
+    return modelstudio.list_models()
+
+
+@app.get("/api/wb/models/inventory", dependencies=[Depends(require_token)])
+def models_inventory_alias():
+    return modelstudio.list_models()
+
+
+@app.get("/api/wb/models/running", dependencies=[Depends(require_token)])
+def models_running():
+    return modelstudio.running_models()
+
+
+@app.get("/api/wb/models/adapters", dependencies=[Depends(require_token)])
+def models_adapters():
+    return modelstudio.list_adapters()
+
+
+@app.get("/api/wb/models/disk", dependencies=[Depends(require_token)])
+def models_disk():
+    return modelstudio.disk_usage()
+
+
+@app.get("/api/wb/models/status", dependencies=[Depends(require_token)])
+def models_status():
+    return modelstudio.status()
+
+
+@app.post("/api/wb/models/start", dependencies=[Depends(require_token)])
+def models_start(body: dict):
+    out = modelstudio.start_model(str(body.get("path") or ""),
+                                  int(body.get("port") or 0),
+                                  ngl=int(body.get("ngl") or 99),
+                                  ctx=int(body.get("ctx") or 4096))
+    if out.get("ok"):
+        audit.record("model.start", str(out.get("model_path") or body.get("path")),
+                     actor="workbench", meta={"port": out.get("port")})
+    return out
+
+
+@app.post("/api/wb/models/stop", dependencies=[Depends(require_token)])
+def models_stop(body: dict):
+    out = modelstudio.stop_model(int(body.get("port") or 0))
+    if out.get("ok"):
+        audit.record("model.stop", str(body.get("port")), actor="workbench")
+    return out
+
+
+@app.post("/api/wb/models/merge", dependencies=[Depends(require_token)])
+def models_merge(body: dict):
+    return modelstudio.merge_adapter(str(body.get("adapter") or ""),
+                                     out=body.get("out") or None,
+                                     base=body.get("base") or None,
+                                     device=str(body.get("device") or "cpu"),
+                                     dtype=str(body.get("dtype") or "float16"))
+
+
+@app.post("/api/wb/models/convert", dependencies=[Depends(require_token)])
+def models_convert(body: dict):
+    return modelstudio.convert_gguf(str(body.get("merged_dir") or ""),
+                                    quant=str(body.get("quant") or "Q4_K_M"),
+                                    name=body.get("name") or None,
+                                    out_dir=body.get("out_dir") or None)
 
 
 # ------------------------------------------------------------------ 审计

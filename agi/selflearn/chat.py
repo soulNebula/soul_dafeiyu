@@ -502,9 +502,9 @@ class SelfLearnAgent:
             if quoted:
                 if "wxid_" in quoted or re.search(r"\d{10,}:\d+:\d+:[0-9a-f]+", quoted):
                     quoted = "[消息]"
-                msg = f"你引用的是「{quoted[:60]}」，想接着说什么？"
+                msg = f"你引用的那句“{quoted[:60]}”，想说什么"
             else:
-                msg = "看到了，你引用了一条消息，想接着说什么？"
+                msg = "看到了，你引用了一条消息，想说什么"
             return self._simple_reply(user_id, msg, st, None, had_image=False, t0=t0)
         correction_info = None
         try:

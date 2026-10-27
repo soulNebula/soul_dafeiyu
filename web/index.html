@@ -437,6 +437,7 @@ function createEditor() {
   if (S.monacoReady === 'fallback') return;
   const container = document.createElement('div');
   container.id = 'monaco';
+  container.style.display = 'none';   // 默认隐藏，打开文件时才显示，避免盖住欢迎页
   $('#editors').appendChild(container);
   S.editor = monaco.editor.create(container, {
     value: '', language: 'python', theme: 'vs-dark', automaticLayout: true,

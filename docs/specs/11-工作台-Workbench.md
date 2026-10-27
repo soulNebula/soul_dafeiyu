@@ -63,7 +63,7 @@ flowchart TB
 
 > 关键：**前端只依赖 HTTP API**；桌面壳换的是"外壳 + 进程管理"，不是重写业务。Python 后端（含现有网关/控制台/训练管线）作为边车统一拉起。
 
-## 三、工作台的功能域（12 个模块）
+## 三、工作台的功能域（13 个模块）
 
 ### 1. Shell（外壳）
 - 登录/token、多主题（亮/暗）、语言、快捷键
@@ -132,7 +132,27 @@ flowchart TB
 - 自定义 API 路由（受限）
 - 扩展市场占位（本地目录 + manifest）
 
-### 12. Observability（可观测）
+### 12. Git Studio（内置 Git）
+- **状态**：working tree、staged/unstaged、最近提交、当前分支、ahead/behind、冲突提示
+- **diff**：文件级/行级 diff；配置/人设/流水线/UI 变更可直接看出"改了什么"
+- **提交**：写提交信息（自动生成"改了什么"摘要）、选择文件、提交、**自动推送**
+- **分支**：创建/切换/合并/删除；推荐工作流——Workbench 的每次"大改"落到 `wb/<日期>-<主题>` 分支，验收后合并回主线
+- **自动提交（默认开、可关）**：
+  - 触发：配置保存 / 数据库写 / 记忆规则 / 流水线 / 人设 / 护栏词表 / UI 布局主题 / 训练产物 manifest
+  - 提交信息模板：`wb: <模块> <操作> <摘要>` + 变更项列表 + 操作者 + 时间
+  - 合并策略：同一次操作内的多次写合并成一个 commit（防碎片化）
+- **自动上传（可选，默认关）**：
+  - 配置 `git.auto_push=true` + `git.remote=origin` + `git.branch_mode=fixed|daily|per-change`
+    - `fixed`：推到指定分支（如 `main` 或 `wb-workbench`）
+    - `daily`：自动建/复用 `wb/2026-10-28`，当天所有变更推这个分支
+    - `per-change`：每次大改新分支，便于 review
+  - 推送前检查：有远程、有凭证（token 从本机配置/环境变量读，**不写进仓库**）、先 fetch 防冲突
+  - 失败处理：本地 commit 一定保留；推送失败进重试队列并在 UI 提示（网络/凭证/冲突）
+- **回滚**：按 commit / 按配置版本 / 按时间点；回滚前自动建 `backup/pre-rollback-<ts>` 分支
+- **安全**：`.env`/密钥/`agi/data/`/模型文件默认 gitignore；提交前扫描密钥与超大文件，命中则阻止并提示
+- **与 audit 的关系**：audit 记录"谁改了什么"（细到字段），git 记录"代码/配置/数据结构的版本"（可 diff、可回滚、可协作）
+
+### 13. Observability（可观测）
 - 指标：延迟 P50/P95、token 用量与预算、通过率、护栏命中、记忆命中率
 - 日志检索、审计日志（谁在什么时候改了什么、前后 diff）
 - 告警：预算超限、连续失败、服务掉线（本机通知）
@@ -148,6 +168,7 @@ flowchart TB
 | 人设/护栏词表 | prompt_store / guard 规则表 | audit | 版本快照 |
 | 页面/主题 | UI Studio → ui.json | audit | 版本快照 |
 | 模型/训练产物 | TrainLab → manifest | 产物 sha256 | 保留旧版本 |
+| **任意变更** | **Git Studio：自动 commit（可选自动 push）** | git 历史 + audit | `git revert` / checkout 版本 |
 
 原则：**任何写操作 = 备份 + 审计 + 可回滚**；批量/危险操作需输入确认短语。
 
@@ -186,6 +207,14 @@ POST /api/wb/ui/pages
 GET  /api/wb/ui/theme
 POST /api/wb/ui/theme
 
+GET  /api/wb/git/status                    # 分支/ahead/behind/变更
+GET  /api/wb/git/diff?file=
+POST /api/wb/git/commit                    # {message, files, push?}
+POST /api/wb/git/branch                    # {action: create|switch|merge, name}
+POST /api/wb/git/push                      # {remote, branch}
+GET  /api/wb/git/log?limit=
+POST /api/wb/git/rollback                  # {commit|version}
+
 POST /api/wb/train/{stage}                 # 透传 TrainLab
 GET  /api/wb/audit?limit=
 ```
@@ -205,8 +234,8 @@ GET  /api/wb/audit?limit=
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| **M0 骨架** | FastAPI 803 + 前端壳 + 登录 + 服务卡片 + 配置中心（schema/校验/热加载/审计） | 浏览器能开、能启停服务、能改开关 |
-| **M1 数据** | Data Studio（浏览/编辑/SQL/备份）+ Memory Studio（写入规则/存储/衰减/时间线） | 改一条记忆规则并生效；改一行数据可回滚 |
+| **M0 骨架** | FastAPI 803 + 前端壳 + 登录 + 服务卡片 + 配置中心（schema/校验/热加载/审计）+ **Git Studio 最小版（status/diff/commit/自动提交）** | 浏览器能开、能启停服务、改配置后自动产生一次本地 commit |
+| **M1 数据** | Data Studio（浏览/编辑/SQL/备份）+ Memory Studio（写入规则/存储/衰减/时间线）+ **Git 自动推送（可选）** | 改一条记忆规则并生效；改一行数据可回滚；开启 auto_push 后分支自动上传 |
 | **M2 对话** | Chat Studio（流水线编辑器 + 人设/护栏 + 试跑 8 段链路） | 关掉某一步/改词表，试跑立即反映 |
 | **M3 模型+训练** | Model Center + TrainLab（data/label/distill/train/eval/export） | 0.5B 全链路：数据→训练→导出→服务 |
 | **M4 UI Studio** | 页面/布局/主题编辑、组件白名单、主题包 | 自定义一个页面并保存 |

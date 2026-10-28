@@ -28,6 +28,7 @@
     <button class="ab-item" data-view="data" title="数据工作室">🗄<span>数据</span></button>
     <button class="ab-item" data-view="train" title="训练工厂">🧪<span>训练</span></button>
     <button class="ab-item" data-view="corpus" title="语料清洗">🧹<span>语料</span></button>
+    <button class="ab-item" data-view="annotate" title="用户标注">🏷<span>标注</span></button>
     <button class="ab-item" data-view="models" title="模型中心">🧰<span>模型</span></button>
   </nav>
 
@@ -179,6 +180,25 @@
       </div>
     </section>
 
+    <section id="view-annotate" class="view">
+      <div class="page-head"><div><h2>用户标注</h2><p class="muted">给「我」的回复标注 InnerState：滑杆/下拉/星标 → 保存为 soul 训练数据集。</p></div><button class="btn" id="annot-reload">刷新</button></div>
+      <div class="panel">
+        <div class="panel-head"><h3>数据源</h3><span class="muted small" id="annot-source-meta"></span></div>
+        <div class="form-grid">
+          <label class="field"><span>语料任务</span><select id="annot-job"></select></label>
+          <label class="field"><span>或 messages JSONL 路径</span><input id="annot-path" placeholder="E:/.../chat.jsonl（后端支持时）"></label>
+          <label class="field"><span>上下文窗口</span><input id="annot-window" type="number" value="6" min="1" max="20"></label>
+          <label class="field"><span>最低星标（min_score）</span><input id="annot-min-score" type="number" value="1" min="0" max="5"></label>
+          <label class="field"><span>验证集比例</span><input id="annot-split" type="number" value="0.1" min="0" max="0.9" step="0.05"></label>
+          <label class="field"><span>输出名（可空）</span><input id="annot-out"></label>
+          <label class="field"><span>system（可选，会写进 context）</span><input id="annot-system" placeholder="留空则不加 system"></label>
+        </div>
+        <div class="actions"><button class="btn" id="annot-path-load">按路径加载</button><button class="btn primary" id="annot-save">保存标注并生成数据集</button><span class="muted small" id="annot-save-hint"></span></div>
+        <div id="annot-result" class="muted small"></div>
+      </div>
+      <div id="annot-list" class="annot-list"><div class="muted small">加载中…</div></div>
+    </section>
+
     <section id="view-models" class="view">
       <div class="page-head"><div><h2>模型中心</h2><p class="muted">清单（格式/来源/用途）· 离线导入 · 在线下载 · 回收站删除。</p></div><button class="btn" id="models-refresh">刷新</button></div>
       <div class="cards" id="models-cards"></div>
@@ -233,6 +253,9 @@ const S = {
   train: { datasets: [], jobs: [], selected: '', selectedJob: '' }, models: null, cfg: null,
   corpus: { jobs: [], job: null, files: [], parsed: null, selected: new Set(),
             filterRole: '', search: '', result: null, busy: '', error: '' },
+  annotate: { jobs: [], source: '', window: 6, items: [], targets: {}, scores: {},
+              tags: {}, notes: {}, annotated: new Set(), selected: '', filter: 'all',
+              path: '', result: null, busy: '', error: '' },
   timer: null, dlTimer: null, dlTab: 'direct', dlJob: '', modelFilter: 'all'
 };
 const $ = (sel, root=document) => root.querySelector(sel);
@@ -295,7 +318,7 @@ function term(text, target='') {
   openTerminal(true);
 }
 function showView(name) {
-  const allowed = ['welcome','overview','services','config','data','train','corpus','models'];
+  const allowed = ['welcome','overview','services','config','data','train','corpus','annotate','models'];
   if (!allowed.includes(name)) name = 'welcome';
   S.view = name;
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
@@ -312,6 +335,7 @@ function showView(name) {
   if (name === 'data') loadDatabases();
   if (name === 'train') loadTrain();
   if (name === 'corpus') loadCorpus();
+  if (name === 'annotate') loadAnnotate();
   if (name === 'models') loadModels();
 }
 function connect() {
@@ -689,6 +713,217 @@ async function saveCorpus() {
   } catch (e) { c.error = '保存失败：' + e.message; }
   finally { c.busy = ''; renderCorpusPage(); }
 }
+async function loadAnnotate() {
+  const a = S.annotate;
+  a.error = '';
+  try {
+    const jobs = await api('/api/wb/corpus/jobs');
+    a.jobs = jobs.items || jobs.jobs || [];
+    if (!a.source && a.jobs.length) a.source = a.jobs[0].id || a.jobs[0].job_id;
+  } catch (e) {
+    a.error = '后端未就绪：' + e.message;
+    a.jobs = [];
+  }
+  if (a.source) await loadAnnotateSource(a.source, false);
+  else renderAnnotatePage();
+}
+async function loadAnnotateSource(jobId, render = true) {
+  const a = S.annotate;
+  a.busy = 'load';
+  if (render) renderAnnotatePage();
+  try {
+    const d = await api('/api/wb/annot/source/' + encodeURIComponent(jobId) + '?window=' + (a.window || 6));
+    a.source = jobId;
+    a.items = d.items || [];
+    if (d.window) a.window = d.window;
+    a.targets = {}; a.scores = {}; a.tags = {}; a.notes = {};
+    a.annotated = new Set(); a.selected = '';
+    a.items.forEach(item => {
+      const id = String(item.id);
+      const target = Object.assign({}, (item.suggestion && item.suggestion.target) || {});
+      a.targets[id] = target;
+      a.scores[id] = 5;
+      a.tags[id] = ''; a.notes[id] = '';
+    });
+    if (a.items.length) a.selected = String(a.items[0].id);
+    a.error = '';
+  } catch (e) {
+    a.items = []; a.targets = {};
+    a.error = String(e.message || '').startsWith('后端未就绪') ? e.message : ('后端未就绪：' + e.message);
+  } finally { a.busy = ''; renderAnnotatePage(); }
+}
+function annotTarget(id) { return S.annotate.targets[id] || {}; }
+function annotStars(id, score) {
+  let html = '';
+  for (let i = 1; i <= 5; i++) {
+    html += `<button class="annot-star ${i <= score ? 'on' : ''}" data-annot-score="${esc(id)}" data-value="${i}" title="${i} 星">★</button>`;
+  }
+  return html;
+}
+function annotEnumSelect(id, field, values, current) {
+  return `<select data-annot-field="${esc(field)}" data-annot-id="${esc(id)}">${values.map(v => `<option ${v === current ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+}
+function annotVisibleItems() {
+  const a = S.annotate;
+  return a.items.filter(item => {
+    const id = String(item.id);
+    if (a.filter === 'unannotated' && a.annotated.has(id)) return false;
+    if (a.filter === 'low' && (a.scores[id] ?? 5) >= 4) return false;
+    return true;
+  });
+}
+function annotItemHtml(item, index) {
+  const a = S.annotate;
+  const id = String(item.id);
+  const t = annotTarget(id);
+  const sug = (item.suggestion && item.suggestion.target) || {};
+  const reasons = (item.suggestion && item.suggestion.reasons) || [];
+  return `<div class="annot-editor">
+    <div class="panel-head"><h3>#${index + 1} · 我 <span class="muted small">${esc(item.source || '')}</span></h3>
+      <div class="annot-stars">${annotStars(id, a.scores[id] ?? 5)}<button class="btn small" data-annot-reset="${esc(id)}">用建议值</button>
+        <button class="btn small primary" id="annot-save-one">保存本条</button></div></div>
+    <div class="annot-ctx"><div><b>你：</b>${esc(item.prev_user_text || '（无上一条）')}</div>
+      ${(item.context || []).length ? `<details><summary class="muted small">上下文 ${item.context.length} 条</summary><pre class="annot-context">${esc(item.context.map(c => (c.role === 'user' ? '你' : '我') + '：' + c.text).join('\n'))}</pre></details>` : ''}</div>
+    <div class="annot-reply">${esc(item.text || '')}</div>
+    <div class="annot-grid">
+      ${[['mood','情绪'],['energy','精力'],['sharing','分享欲'],['battery','电量'],['trust','信任']].map(([key,label]) => `
+        <label class="annot-slider"><span>${label} <b data-annot-num="${esc(id)}:${key}">${Number(t[key] ?? 0.5).toFixed(2)}</b></span>
+          <input type="range" min="0" max="1" step="0.01" value="${esc(t[key] ?? 0.5)}" data-annot-slider="${esc(id)}" data-annot-key="${key}"></label>`).join('')}
+      <label class="field"><span>关系阶段</span>${annotEnumSelect(id, 'stage', ['陌生','初识','熟悉','亲近','信任'], t.stage || '初识')}</label>
+      <label class="field"><span>态度</span>${annotEnumSelect(id, 'stance', ['平和','温和','简短直接','客气','克制','有点累','先照顾人'], t.stance || '平和')}</label>
+      <label class="field"><span>意图</span>${annotEnumSelect(id, 'intent', ['自然接话','自然接话，可以多聊一句','先听对方说完','不追问，答完就好','简短回应，不展开','接住对方的话，给一句具体建议','确认收到，追问一句进度','先确认对方安全'], t.intent || '自然接话')}</label>
+      <label class="field annot-wide"><span>内心独白（≤40字）</span><input data-annot-field="monologue" data-annot-id="${esc(id)}" value="${esc(t.monologue || '')}" maxlength="40"></label>
+      <label class="field"><span>长度</span>${annotEnumSelect(id, 'behavior.length', ['short','normal','long'], (t.behavior || {}).length || 'normal')}</label>
+      <label class="field"><span>emoji</span>${annotEnumSelect(id, 'behavior.emoji', ['偶尔','不用'], (t.behavior || {}).emoji || '不用')}</label>
+      <label class="check"><input type="checkbox" data-annot-field="behavior.ask" data-annot-id="${esc(id)}" ${(t.behavior || {}).ask ? 'checked' : ''}> 会反问</label>
+      <label class="check"><input type="checkbox" data-annot-field="behavior.advice" data-annot-id="${esc(id)}" ${(t.behavior || {}).advice ? 'checked' : ''}> 给建议</label>
+      <label class="field"><span>标签（逗号分隔）</span><input data-annot-field="tags" data-annot-id="${esc(id)}" value="${esc(a.tags[id] || '')}"></label>
+      <label class="field annot-wide"><span>备注</span><input data-annot-field="note" data-annot-id="${esc(id)}" value="${esc(a.notes[id] || '')}"></label>
+    </div>
+    ${reasons.length ? `<details class="annot-reasons"><summary class="muted small">为什么建议这些值（${reasons.length}）</summary><div>${reasons.map(r => `<div class="muted small">• ${esc(r)}</div>`).join('')}</div></details>` : ''}
+    <div class="muted small">建议值：mood ${esc(sug.mood)} · energy ${esc(sug.energy)} · ${esc((sug.behavior || {}).length || '')}；可任意改。</div>
+  </div>`;
+}
+function renderAnnotatePage() {
+  const a = S.annotate;
+  const jobSel = $('#annot-job');
+  if (jobSel) {
+    jobSel.innerHTML = a.jobs.map(j => `<option value="${esc(j.id || j.job_id)}" ${String(j.id || j.job_id) === String(a.source) ? 'selected' : ''}>${esc(j.name || j.id || j.job_id)} · ${esc(j.counts ? (j.counts.me || 0) + ' 个我' : '')}</option>`).join('') || '<option value="">暂无语料任务</option>';
+  }
+  const meta = $('#annot-source-meta');
+  if (meta) meta.textContent = a.items.length ? `可标注 ${a.items.length} 条 · 已标记 ${a.annotated.size} 条` : (a.error ? '' : '暂无可标注回复');
+  const list = $('#annot-list');
+  if (!list) return;
+  const visible = annotVisibleItems();
+  const selectedId = a.selected || (visible[0] && String(visible[0].id)) || '';
+  const selected = a.items.find(item => String(item.id) === String(selectedId));
+  const selectedIndex = selected ? a.items.indexOf(selected) : 0;
+  list.innerHTML = `${a.error ? `<div class="card"><div class="error-text">${esc(a.error)}</div></div>` : ''}
+    ${a.items.length ? `<div class="annot-stats">
+      <span>已标记 <b>${a.annotated.size}</b> / 可标注 <b>${a.items.length}</b></span>
+      <button class="btn small ${a.filter === 'all' ? 'primary' : ''}" data-annot-filter="all">全部</button>
+      <button class="btn small ${a.filter === 'unannotated' ? 'primary' : ''}" data-annot-filter="unannotated">未标注</button>
+      <button class="btn small ${a.filter === 'low' ? 'primary' : ''}" data-annot-filter="low">低分（&lt;4★）</button>
+      <span class="grow"></span><span class="muted small">左侧选一条「我」的回复，右侧编辑。</span></div>
+    <div class="annot-split">
+      <div class="annot-conv">${visible.map((item, idx) => {
+        const id = String(item.id);
+        const marked = a.annotated.has(id);
+        return `<button class="annot-conv-row ${String(id) === String(selectedId) ? 'active' : ''}" data-annot-select="${esc(id)}">
+          <div><span class="annot-conv-role">我</span> <span class="annot-conv-text">${esc(String(item.text || '').slice(0, 80))}</span></div>
+          <div class="muted small">${marked ? '✓ 已标记' : '未标记'} · ${a.scores[id] ?? 5}★</div></button>`;
+      }).join('')}</div>
+      <div class="annot-editor-wrap">${selected ? annotItemHtml(selected, selectedIndex) : '<div class="panel"><div class="muted small">筛选后没有条目。</div></div>'}</div>
+    </div>` : `<div class="panel"><div class="muted small">暂无可标注的「我」回复；请先在「语料清洗」页创建任务、上传并清洗，或在上方填 JSONL 路径。</div></div>`}
+    ${a.result ? `<div class="panel"><b>已保存：</b>${esc(a.result.out || '')} · 训练 ${a.result.rows || 0} 行 / 验证 ${a.result.val_rows || 0} 行
+      <button class="btn small primary" id="annot-go-train">去训练</button></div>` : ''}`;
+  bindAnnotateInputs();
+}
+function bindAnnotateInputs() {
+  const a = S.annotate;
+  const jobSel = $('#annot-job');
+  if (jobSel) jobSel.onchange = () => { a.source = jobSel.value; loadAnnotateSource(jobSel.value); };
+  $$('[data-annot-filter]').forEach(btn => btn.onclick = () => { a.filter = btn.dataset.annotFilter; renderAnnotatePage(); });
+  $$('[data-annot-select]').forEach(row => row.onclick = () => { a.selected = row.dataset.annotSelect; renderAnnotatePage(); });
+  const saveOne = $('#annot-save-one');
+  if (saveOne) saveOne.onclick = () => {
+    const id = a.selected;
+    if (!id) return;
+    a.annotated.add(String(id));
+    toast('已标记本条（最后统一保存数据集）', 'ok');
+    renderAnnotatePage();
+  };
+  $$('[data-annot-slider]').forEach(slider => {
+    slider.oninput = () => {
+      const id = slider.dataset.annotSlider, key = slider.dataset.annotKey;
+      a.targets[id][key] = parseFloat(slider.value);
+      const label = $(`[data-annot-num="${id}:${key}"]`);
+      if (label) label.textContent = Number(slider.value).toFixed(2);
+    };
+  });
+  $$('[data-annot-field]').forEach(el => {
+    const field = el.dataset.annotField, id = el.dataset.annotId;
+    const apply = () => {
+      if (field === 'tags') { a.tags[id] = el.value; return; }
+      if (field === 'note') { a.notes[id] = el.value; return; }
+      if (!a.targets[id]) return;
+      if (field === 'monologue') { a.targets[id].monologue = el.value; return; }
+      const [parent, child] = field.split('.');
+      if (child) {
+        a.targets[id][parent] = Object.assign({}, a.targets[id][parent] || {});
+        a.targets[id][parent][child] = el.type === 'checkbox' ? el.checked : el.value;
+      } else {
+        a.targets[id][parent] = el.type === 'checkbox' ? el.checked : el.value;
+      }
+    };
+    el.oninput = apply; el.onchange = apply;
+  });
+  $$('[data-annot-score]').forEach(btn => {
+    btn.onclick = () => { a.scores[btn.dataset.annotScore] = parseInt(btn.dataset.value, 10); renderAnnotatePage(); };
+  });
+  $$('[data-annot-reset]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.annotReset;
+      const item = a.items.find(x => String(x.id) === id);
+      if (item && item.suggestion) a.targets[id] = Object.assign({}, item.suggestion.target);
+      renderAnnotatePage();
+    };
+  });
+  const goTrain = $('#annot-go-train');
+  if (goTrain) goTrain.onclick = () => { showView('train'); loadTrain(); };
+}
+async function saveAnnotations() {
+  const a = S.annotate;
+  if (!a.source) { toast('先选语料任务', 'err'); return; }
+  if (!a.items.length) { toast('没有可保存的标注', 'err'); return; }
+  a.busy = 'save'; $('#annot-save').disabled = true;
+  try {
+    const sourceItems = a.annotated.size
+      ? a.items.filter(item => a.annotated.has(String(item.id)))
+      : a.items;
+    if (!sourceItems.length) { toast('没有已标记的条目', 'err'); a.busy = ''; $('#annot-save').disabled = false; return; }
+    const annotations = sourceItems.map(item => {
+      const id = String(item.id);
+      return { item_id: id, target: a.targets[id], score: a.scores[id] ?? 5,
+        tags: String(a.tags[id] || '').split(/[,，]/).map(x => x.trim()).filter(Boolean),
+        note: String(a.notes[id] || '') };
+    });
+    const d = await api('/api/wb/annot/save', { method: 'POST', body: {
+      source: a.source, annotations, window: parseInt($('#annot-window').value, 10) || 6,
+      out_name: $('#annot-out').value.trim(), min_score: parseInt($('#annot-min-score').value, 10) || 0,
+      split: parseFloat($('#annot-split').value) || 0, system: $('#annot-system').value.trim(),
+    }});
+    if (!d.ok) throw new Error(d.error || '保存失败');
+    a.result = d;
+    $('#annot-save-hint').textContent = '训练 ' + d.rows + ' 行 / 验证 ' + d.val_rows + ' 行';
+    toast('已保存 soul 数据集：' + (d.out || ''), 'ok');
+    renderAnnotatePage();
+  } catch (e) {
+    a.error = '保存失败：' + e.message;
+    renderAnnotatePage();
+    toast('保存失败：' + e.message, 'err');
+  } finally { a.busy = ''; $('#annot-save').disabled = false; }
+}
 async function loadTrain() {
   try {
     const d = await api('/api/wb/train/datasets');
@@ -973,6 +1208,14 @@ $('#db-prev').onclick = () => { if (S.data.table && S.data.page > 1) loadRows(S.
 $('#db-next').onclick = () => { if (S.data.table && S.data.page < S.data.pages) loadRows(S.data.table, S.data.page + 1); };
 $('#db-run').onclick = runSql;
 $('#db-backup').onclick = backupDb;
+$('#annot-reload').onclick = () => loadAnnotateSource(S.annotate.source || '');
+$('#annot-path-load').onclick = () => {
+  const path = $('#annot-path').value.trim();
+  if (!path) { toast('先填 JSONL 路径', 'err'); return; }
+  loadAnnotateSource(path);
+};
+$('#annot-window').addEventListener('change', () => { S.annotate.window = parseInt($('#annot-window').value, 10) || 6; if (S.annotate.source) loadAnnotateSource(S.annotate.source); });
+$('#annot-save').onclick = saveAnnotations;
 $('#corpus-refresh').onclick = loadCorpus;
 $('#corpus-new').onclick = createCorpusJob;
 $('#corpus-parse').onclick = parseCorpus;

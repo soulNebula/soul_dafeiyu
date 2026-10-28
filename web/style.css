@@ -259,3 +259,37 @@ body.term-resizing #shell { transition: none; }
 .corpus-text { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
 .row-tools { display: flex; align-items: center; gap: 8px; }
 .corpus-error { margin-bottom: 12px; }
+
+/* ---------- 用户标注 ---------- */
+.annot-list { display: flex; flex-direction: column; gap: 12px; }
+.annot-card { margin-bottom: 0; }
+.annot-stars { display: flex; align-items: center; gap: 2px; }
+.annot-star { background: none; border: 0; color: #4a5262; font-size: 20px; line-height: 1; padding: 0 1px; }
+.annot-star.on { color: #f7b955; }
+.annot-star:hover { color: #ffd27a; }
+.annot-ctx { background: #121720; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12px; }
+.annot-context { margin: 6px 0 0; max-height: 180px; overflow: auto; white-space: pre-wrap; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.annot-reply { margin: 8px 0; font-size: 14px; color: #fff; background: #152234; border-left: 3px solid var(--accent); padding: 8px 10px; border-radius: 0 6px 6px 0; white-space: pre-wrap; }
+.annot-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px; margin-top: 10px; }
+.annot-slider { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.annot-slider input[type=range] { width: 100%; accent-color: var(--accent); }
+.annot-wide { grid-column: 1 / -1; }
+.annot-reasons { margin-top: 8px; }
+@media (max-width: 1100px) { .annot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* 标注左右布局 */
+.annot-stats { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.annot-stats .grow { flex: 1; }
+.annot-split { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 12px; align-items: start; }
+.annot-conv { max-height: 72vh; overflow: auto; display: flex; flex-direction: column; gap: 5px;
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px; background: #121720; }
+.annot-conv-row { width: 100%; text-align: left; background: none; border: 1px solid transparent;
+  border-radius: 6px; padding: 7px 8px; color: var(--text); }
+.annot-conv-row:hover { background: #1a2029; }
+.annot-conv-row.active { border-color: var(--accent); background: #162434; }
+.annot-conv-role { display: inline-block; background: #2f7d5a; color: #fff; border-radius: 9px;
+  font-size: 10px; padding: 0 6px; margin-right: 2px; }
+.annot-conv-text { font-size: 12px; }
+.annot-editor-wrap { min-width: 0; }
+.annot-editor { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+@media (max-width: 1100px) { .annot-split { grid-template-columns: 1fr; } .annot-conv { max-height: 240px; } }

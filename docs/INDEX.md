@@ -16,7 +16,7 @@
 | [`architecture/README.md`](architecture/README.md) | 设计规格索引（00–14，含 TrainLab 10 / Workbench 11） | 查产品语义与边界 |
 | [`architecture/PLAN.md`](architecture/PLAN.md) | 设计规格的施工图入口 | 实现前对照规格 |
 | [`architecture/SPEC.md`](architecture/SPEC.md) | 项目规格总表 | 查完整需求/接口 |
-| [`architecture/小鱼-AI伴侣-技术与实践.md`](architecture/小鱼-AI伴侣-技术与实践.md) | 项目技术文章（设计、实现、实测数字） | 对外介绍/答辩 |
+| [`architecture/小鱼-AI伴侣-技术与实践.pdf`](architecture/小鱼-AI伴侣-技术与实践.pdf) | 项目技术文章（PDF，含 7 张配图；源文件在 `architecture/source/`） | 对外介绍/答辩 |
 | [`architecture/architecture.png`](architecture/architecture.png) | 架构图 | 快速理解分层 |
 
 ### 使用与运维（guides）

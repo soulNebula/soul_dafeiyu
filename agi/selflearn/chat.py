@@ -207,6 +207,83 @@ def _recent_assistant_texts(path: Path | str, limit: int = 5) -> list[str]:
     return texts[-max(1, int(limit)):]
 
 
+#: 送达状态取值（写 turns.delivery_status；'' = 未标记/旧库）。
+#: sent       全部气泡真正送达
+#: unverified 有气泡"发了但没证据"（窗口/UIA 兜底）→ 不计 sent
+#: blocked    STOP/白名单/静默/限流等闸门拦下（对方根本没收到）
+#: failed     发送后端明确失败（且兜底也没成）
+#: partial    部分送达
+#: planned    dry-run 只计划；draft 落在待确认草稿
+DELIVERY_STATUSES = ("", "sent", "unverified", "blocked", "failed",
+                     "partial", "planned", "draft")
+#: 这些状态表示"这句话没发出去"→ 该 turn 的 assistant 消息必须 delivered=0
+HIDDEN_DELIVERY_STATUSES = frozenset({"blocked", "failed"})
+
+
+def mark_turn_delivery(path: Path | str, turn_id: str, status: str,
+                       detail: str = "") -> dict[str, Any]:
+    """回填一轮回复的**真实送达状态**（"先落库后发送"的补偿动作）。
+
+    为什么必须有：``send()`` 在调用模型时就已经把 assistant 回复写进
+    ``messages``/``turns``（否则下一轮没有上下文），但这句话有没有真的到对方手机上
+    是之后由网关决定的。白名单/STOP/静默/发送失败拦下时，文本从没离开过本机，
+    读侧若仍当"我说过"就是虚构既成事实——模型会顺着一个没发生的对话继续演。
+
+    行为（默认向后兼容）：
+    - 只更新 ``turns.delivery_status``；``status`` 为 blocked/failed 时才把该 turn 的
+      assistant 消息 ``messages.delivered=0``（读侧见 :func:`memory.recent_messages`）；
+    - 其它状态（sent/unverified/partial/planned/draft/''）不动 delivered（默认 1 可见）；
+    - 写一条 ``raw_events(kind='delivery')`` 审计，便于控制台/排障对账；
+    - 任何异常都静默返回 ``ok=False``：送达标记绝不能反过来打断发送主链。
+
+    返回 ``{ok, turn_id, status, messages_marked}``。
+    """
+    value = str(status or "").strip().lower()
+    tid = str(turn_id or "").strip()
+    result: dict[str, Any] = {"ok": False, "turn_id": tid, "status": value,
+                              "messages_marked": 0}
+    if not tid:
+        return result
+    hide = value in HIDDEN_DELIVERY_STATUSES
+    try:
+        con = db.connect(path)
+        try:
+            con.execute("UPDATE turns SET delivery_status=? WHERE id=?", (value, tid))
+            row = con.execute(
+                "SELECT assistant_message_id FROM turns WHERE id=?", (tid,)).fetchone()
+            assistant_id = str((row[0] if row else "") or "")
+            if hide and assistant_id:
+                cur = con.execute("UPDATE messages SET delivered=0 WHERE id=?",
+                                  (assistant_id,))
+                result["messages_marked"] = int(cur.rowcount or 0)
+            con.commit()
+            result["ok"] = True
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001 - 补偿失败不影响发送主链
+        return result
+    # 审计：失败不影响返回值（raw_events 只是观测）
+    try:
+        now = time.time()
+        payload = {"turn_id": tid, "status": value,
+                   "detail": str(detail or "")[:200],
+                   "messages_marked": int(result.get("messages_marked") or 0)}
+        rid = _id("RE-", "delivery", tid, value, payload["detail"])
+        con = db.connect(path)
+        try:
+            con.execute(
+                "INSERT OR IGNORE INTO raw_events(id,source,source_id,friend,sender,"
+                "kind,text,ts,meta_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                (rid, "delivery", tid, "", "system", "delivery", value, now,
+                 json.dumps(payload, ensure_ascii=False)))
+            con.commit()
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001
+        pass
+    return result
+
+
 def _pick_line(pool, recent: list[str] | None = None) -> str:
     """从话术池里挑一条不在最近回复里的；都撞了就返回第一条。"""
     recent_set = set(recent or [])

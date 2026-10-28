@@ -610,8 +610,15 @@ def build_items(limit: int = 300, *, golden_path: Path | str | None = None,
     builder = _ItemBuilder()
 
     # 1) 真实 context × state_profile：同一 context 的变体永远同侧（split 已定）
+    # 2026-10-28 修：context 数 × 7 档远大于 limit 时先按来源均匀抽样 context 子集，
+    # 否则 round-major 截断只会拿到全 default 行（数据变多后线上生成器/测试同时暴露）。
+    selected_contexts = contexts
+    if limit >= len(profiles) * 2 and len(contexts) > max(1, limit // len(profiles)):
+        k = max(1, limit // len(profiles))
+        step = max(1, len(contexts) // k)
+        selected_contexts = contexts[::step][:k]
     for round_index in range(len(profiles)):
-        for ci, context in enumerate(contexts):
+        for ci, context in enumerate(selected_contexts):
             profile = profile_sequence(ci, len(profiles))[round_index]
             state = profile_state(profile, context["bucket"])
             builder.add(context["tag"], context["source"], {
@@ -629,17 +636,20 @@ def build_items(limit: int = 300, *, golden_path: Path | str | None = None,
         for seed in synthetic_seeds():
             if remaining <= 0:
                 break
-            # synthetic 的 7 档 profile 要覆盖全；val context 必须是 default（gate 用）
-            if seed["split"] == "val":
-                profile = "default"
-            else:
-                profile = profiles[index % len(profiles)]
-                index += 1
-            state = profile_state(profile, seed["bucket"])
-            if builder.add("Y", "synthetic", {
-                **seed, "state_profile": profile, "state": state,
-            }, dedupe_user_msg=True):
-                remaining -= 1
+            # synthetic 的 7 档 profile 要覆盖全；val context 必须是 default（gate 用）。
+            # 2026-10-28 修：每个 synthetic context 至少有一条 default，
+            # 否则同一 context 只有非 default 档（测试/下游按 context 断言会挂）。
+            rotated = profiles[index % len(profiles)]
+            index += 1
+            seed_profiles = ["default"] if seed["split"] == "val" else ["default", rotated]
+            for profile in seed_profiles:
+                if remaining <= 0:
+                    break
+                state = profile_state(profile, seed["bucket"])
+                if builder.add("Y", "synthetic", {
+                    **seed, "state_profile": profile, "state": state,
+                }, dedupe_user_msg=True):
+                    remaining -= 1
     return builder.items[:limit]
 
 
@@ -1169,7 +1179,7 @@ def generate(items: list[dict], teacher: Any, out_path: Path | str | None = None
                 progress(
                     f"[soul] 进度 {index}/{len(items)} 新增={written} 失败={failed} "
                     f"跳过={skipped} 用时={time.time() - started:.0f}s "
-                    f"成本≈¥{usage_cost(usage, price_in=price_in, price_out=price_out):.2f}"
+                    f"成本≈{usage_cost(usage, price_in=price_in, price_out=price_out):.2f}元"
                 )
             # 预算闸门
             if budget_cny is not None:

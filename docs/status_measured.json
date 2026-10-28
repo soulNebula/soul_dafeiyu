@@ -1,0 +1,17 @@
+{
+ "suites": {
+  "tests": {
+   "command": "python scripts/agentb_verify.py",
+   "exit_code": 0,
+   "measured_at": "2026-10-29T03:16:37+0800",
+   "wall_seconds": 61.1,
+   "pytest_seconds": 61.1,
+   "passed": 298,
+   "failed": 0,
+   "skipped": 0,
+   "errors": 0,
+   "source": "scripts/agentb_verify.py"
+  }
+ },
+ "updated_at": "2026-10-29T03:17:58"
+}

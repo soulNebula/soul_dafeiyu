@@ -39,6 +39,10 @@ _WECHAT_HEAD_RE = re.compile(
 _SYS_RE = re.compile(r"撤回了一条消息|拍了拍|加入了群聊|领取了|邀请.*加入|消息已发出|以上是打招呼")
 _URL_RE = re.compile(r"^https?://\S+$")
 #: 截图里的状态栏/标题/时间戳/电池等噪声（2026-10-29 用户截图实测）
+_EMOJI_RE = re.compile(r"[🌀-🫿☀-➿]")
+#: 聊天记录里常见的媒体占位符（文本导出时出现）
+_MEDIA_PLACEHOLDERS = {"[表情]", "[图片]", "[动画表情]", "[视频]", "[文件]", "[语音]", "[链接]",
+                       "[表情包]", "[sticker]", "[image]"}
 _NOISE_RE = re.compile(
     r"^(\d{1,2}:\d{2}|\d{1,2}月\d{1,2}日.*\d{1,2}:\d{2}|"
     r"(昨天|今天|前天|星期[一二三四五六日天])?\s*\d{1,2}:\d{2}$|"
@@ -203,6 +207,12 @@ def _clean_text(text: Any) -> str:
         return ""
     if _NOISE_RE.match(value):
         return ""
+    # 媒体占位符保留（后续可训练"发表情包/图片"的时机）
+    if value.strip().lower() in _MEDIA_PLACEHOLDERS:
+        return value.strip()[:MAX_TEXT_CHARS]
+    # 纯 emoji 消息要保留（之前被当噪声丢了）；emoji 直接作为文本可被模型学习
+    if _EMOJI_RE.search(value):
+        return value[:MAX_TEXT_CHARS]
     # 纯符号/单字（多为头像、按钮、状态图标）不算语料
     if len(value) < 2 and not value.isascii():
         return ""

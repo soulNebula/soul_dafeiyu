@@ -171,3 +171,14 @@ def test_async_parse_reports_progress(root):
     assert state.get("percent") == 100 and state.get("has_items") is True
     items = cs.load_items(jid, root=root)
     assert items and len(items) >= 2
+
+def test_parse_keeps_emoji_and_media_placeholders(root):
+    jid = _job(root)
+    lines = ["我：😄", "你：哈哈", "我：[表情]", "你：这个可爱", "我：[图片]"]
+    sample = chr(10).join(lines) + chr(10)
+    _upload(jid, root, sample)
+    parsed = cs.parse_job(jid, root=root)
+    assert parsed["ok"]
+    texts = [i["text"] for i in parsed["items"]]
+    assert "😄" in texts
+    assert "[表情]" in texts and "[图片]" in texts

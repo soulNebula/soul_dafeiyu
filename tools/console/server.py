@@ -459,6 +459,294 @@ def memory_strength() -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# 上网记录 / B站档案（只读）
+# --------------------------------------------------------------------------- #
+def _all_memory_dbs() -> list[Path]:
+    paths: list[Path] = []
+    try:
+        paths.extend(sorted(Path(CONTACTS_DIR).glob("*.memory.sqlite3")))
+    except OSError:
+        pass
+    paths.append(SELFLEARN_DIR / "selflearn.memory.sqlite3")
+    return [path for path in paths if path.is_file()]
+
+
+def web_records(limit: int = 100, q: str = "") -> dict:
+    """所有联系人库的 research_sources，按时间倒序；只读。"""
+    try:
+        limit = max(1, min(500, int(limit)))
+    except (TypeError, ValueError):
+        limit = 100
+    needle = str(q or "").strip()
+    items: list[dict] = []
+    for path in _all_memory_dbs():
+        try:
+            con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=5)
+            con.row_factory = sqlite3.Row
+            try:
+                if not con.execute("SELECT 1 FROM sqlite_master WHERE name='research_sources'").fetchone():
+                    continue
+                sql = "SELECT id,ts,query,url,title,snippet,turn_id FROM research_sources"
+                params: list = []
+                if needle:
+                    sql += " WHERE query LIKE ? OR title LIKE ? OR url LIKE ? OR snippet LIKE ?"
+                    like = f"%{needle}%"
+                    params = [like, like, like, like]
+                sql += " ORDER BY ts DESC LIMIT ?"
+                rows = con.execute(sql, (*params, limit)).fetchall()
+                for row in rows:
+                    item = dict(row)
+                    item["db"] = path.name
+                    items.append(item)
+            finally:
+                con.close()
+        except sqlite3.Error:
+            continue
+    items.sort(key=lambda item: float(item.get("ts") or 0), reverse=True)
+    items = items[:limit]
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+def _contact_label(db_name: str) -> str:
+    """把联系人库文件名映射成用户看得懂的名字（不暴露哈希）。"""
+    name = str(db_name or "")
+    if name == "selflearn.memory.sqlite3":
+        return "主库"
+    try:
+        cfg = json.loads(Path(GATEWAY_CONFIG).read_text(encoding="utf-8"))
+        aliases = []
+        for key in ("proactive_contacts", "monitored_contacts", "allowed_contacts"):
+            for alias in (cfg.get(key) or []):
+                if alias and alias not in aliases:
+                    aliases.append(alias)
+        for alias in aliases:
+            if hashlib.sha1(str(alias).encode("utf-8")).hexdigest()[:14] in name:
+                return str(alias)
+    except Exception:  # noqa: BLE001
+        pass
+    return "本机记录"
+
+
+def web_research(limit: int = 100, q: str = "") -> dict:
+    """上网检索记录（前端 /api/web/research）：补时间、域名、联系人与 total。"""
+    base = web_records(limit=limit, q=q)
+    items = []
+    for item in base.get("items", []):
+        try:
+            domain = urlsplit(str(item.get("url") or "")).hostname or ""
+        except Exception:  # noqa: BLE001
+            domain = ""
+        ts = float(item.get("ts") or 0)
+        items.append({
+            "ts": ts,
+            "time": time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "",
+            "query": item.get("query") or "",
+            "title": item.get("title") or "",
+            "url": item.get("url") or "",
+            "domain": domain,
+            "snippet": item.get("snippet") or "",
+            "contact": _contact_label(item.get("db") or ""),
+        })
+    return {"ok": True, "items": items, "total": len(items)}
+
+
+def _bili_impressions(limit: int = 100, q: str = "") -> dict:
+    try:
+        limit = max(1, min(500, int(limit)))
+    except (TypeError, ValueError):
+        limit = 100
+    needle = str(q or "").strip()
+    merged: dict[str, dict] = {}
+    for path in _all_memory_dbs():
+        try:
+            con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=5)
+            con.row_factory = sqlite3.Row
+            try:
+                if not con.execute("SELECT 1 FROM sqlite_master WHERE name='bili_impressions'").fetchone():
+                    continue
+                sql = "SELECT * FROM bili_impressions"
+                params: list = []
+                if needle:
+                    sql += " WHERE title LIKE ? OR summary LIKE ? OR why LIKE ? OR owner LIKE ?"
+                    like = f"%{needle}%"
+                    params = [like, like, like, like]
+                sql += " ORDER BY created_at DESC LIMIT ?"
+                for row in con.execute(sql, (*params, limit)).fetchall():
+                    item = dict(row)
+                    try:
+                        item["topics"] = json.loads(item.pop("topics_json", "[]") or "[]")
+                    except (TypeError, ValueError):
+                        item["topics"] = []
+                    item["db"] = path.name
+                    old = merged.get(str(item.get("bvid") or ""))
+                    if old is None or float(item.get("created_at") or 0) > float(old.get("created_at") or 0):
+                        merged[str(item.get("bvid") or "")] = item
+            finally:
+                con.close()
+        except sqlite3.Error:
+            continue
+    items = list(merged.values())
+    items.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
+    items = items[:limit]
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+def bili_feed(limit: int = 100, filter: str = "all", q: str = "") -> dict:
+    """B站刷到的视频（前端 /api/bili/feed）；filter=all/shared/skipped。"""
+    mode = str(filter or "all").strip().lower()
+    if mode not in ("all", "shared", "skipped"):
+        mode = "all"
+    raw = _bili_impressions(limit=1000, q=q)
+    items = []
+    for item in raw.get("items", []):
+        shared = bool(item.get("shared"))
+        if mode == "shared" and not shared:
+            continue
+        if mode == "skipped" and shared:
+            continue
+        ts = float(item.get("created_at") or 0)
+        row = dict(item)
+        row.update({
+            "ts": ts,
+            "time": time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "",
+            "shared": shared,
+            "topics": item.get("topics") or [],
+        })
+        items.append(row)
+    items = items[:max(1, min(500, int(limit or 100)))]
+    return {"ok": True, "items": items, "total": len(items), "filter": mode}
+
+
+def _bili_md_list(directory: Path) -> list[dict]:
+    items = []
+    try:
+        files = sorted(directory.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        files = []
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            stat = path.stat()
+        except OSError:
+            continue
+        preview = ""
+        for line in text.splitlines():
+            line = line.strip().lstrip("#").strip()
+            if line:
+                preview = line[:60]
+                break
+        items.append({"name": path.name, "chars": len(text.strip()),
+                      "preview": preview, "mtime": stat.st_mtime})
+    return items
+
+
+def bili_digests(name: str = "") -> dict:
+    directory = bili_home() / "digest"
+    if not name:
+        items = _bili_md_list(directory)
+        return {"ok": True, "items": items, "count": len(items)}
+    return _bili_md_read(directory, name)
+
+
+def bili_reports(name: str = "") -> dict:
+    directory = bili_home() / "reports"
+    if not name:
+        items = _bili_md_list(directory)
+        return {"ok": True, "items": items, "count": len(items)}
+    return _bili_md_read(directory, name)
+
+
+def bili_reports_index() -> dict:
+    """视频报告清单：name/bvid/date/size/mtime（前端 /api/bili/reports）。"""
+    directory = bili_home() / "reports"
+    items = []
+    try:
+        files = sorted(directory.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        files = []
+    for path in files:
+        name = path.name
+        match = re.match(r"^(BV[0-9A-Za-z]+)-(\d{4}-\d{2}-\d{2})\.md$", name)
+        bvid = match.group(1) if match else ""
+        date = match.group(2) if match else ""
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        items.append({"name": name, "bvid": bvid, "date": date,
+                      "size": stat.st_size, "mtime": stat.st_mtime})
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+def bili_digest() -> dict:
+    """解析 digest/*.md 的结构化摘要行；解析失败保留原文行。"""
+    directory = bili_home() / "digest"
+    items: list[dict] = []
+    try:
+        files = sorted(directory.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        files = []
+    for path in files:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line.startswith("- "):
+                continue
+            body = line[2:].strip()
+            parts = [part.strip() for part in body.split(" · ")]
+            if len(parts) >= 6:
+                url = parts[-1]
+                items.append({"date": parts[0], "bvid": parts[1], "title": parts[2],
+                              "owner": parts[3],
+                              "reason": " · ".join(parts[4:-1]), "url": url,
+                              "line": body, "file": path.name})
+            else:
+                items.append({"date": "", "bvid": "", "title": body,
+                              "owner": "", "reason": "", "url": "",
+                              "line": body, "file": path.name})
+    items.sort(key=lambda item: (item.get("date") or "", item.get("bvid") or ""), reverse=True)
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+def _bili_md_read(directory: Path, name: str) -> dict:
+    raw = str(name or "").strip()
+    if not raw or Path(raw).name != raw or not raw.lower().endswith(".md"):
+        return {"ok": False, "error": "invalid_name"}
+    target = (directory / raw).resolve()
+    try:
+        target.relative_to(directory.resolve())
+    except ValueError:
+        return {"ok": False, "error": "invalid_name"}
+    if not target.is_file():
+        return {"ok": False, "error": "not_found"}
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "name": raw, "text": text, "chars": len(text.strip())}
+
+
+def bili_duty_log(lines: int = 200) -> dict:
+    try:
+        lines = max(1, min(1000, int(lines)))
+    except (TypeError, ValueError):
+        lines = 200
+    path = bili_home() / "duty.log"
+    if not path.is_file():
+        return {"ok": True, "lines": [], "count": 0, "path": str(path),
+                "note": "日志文件不存在"}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    tail = text.splitlines()[-lines:]
+    return {"ok": True, "lines": tail, "count": len(tail), "path": str(path)}
+
+
+# --------------------------------------------------------------------------- #
 # 日记（只读）
 # --------------------------------------------------------------------------- #
 _DIARY_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -3956,10 +4244,12 @@ def bili_status() -> dict:
     }
 
 
-def bili_report(date: str = "") -> dict:
+def bili_report(date: str = "", name: str = "") -> dict:
     home_error = _bili_home_error()
     if home_error:
         return home_error
+    if name:
+        return _bili_md_read(bili_home() / "reports", name)
     day = str(date or "").strip() or time.strftime("%Y-%m-%d")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
         return {"ok": False, "error": "bad_date", "hint": "date 需要 YYYY-MM-DD"}
@@ -4560,6 +4850,40 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(png.read_bytes()); return
+            if path in ("/api/web/research", "/api/web/records"):
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, web_research(
+                    self._limit(query, 100),
+                    str((query.get("q") or [""])[0] or ""))); return
+            if path in ("/api/bili/feed", "/api/bili/videos"):
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, bili_feed(
+                    self._limit(query, 100),
+                    str((query.get("filter") or ["all"])[0] or "all"),
+                    str((query.get("q") or [""])[0] or ""))); return
+            if path == "/api/bili/digest":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, bili_digest()); return
+            if path == "/api/bili/digests":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, bili_digests(
+                    str((query.get("name") or [""])[0] or ""))); return
+            if path == "/api/bili/reports":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, bili_reports_index()); return
+            if path == "/api/bili/log":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                try:
+                    tail = int((query.get("tail") or ["200"])[0] or 200)
+                except (TypeError, ValueError):
+                    tail = 200
+                self._json(200, bili_duty_log(tail)); return
             if path == "/api/bili/status":
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
@@ -4572,7 +4896,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
                 self._json(200, bili_report(
-                    str((query.get("date") or [""])[0] or ""))); return
+                    str((query.get("date") or [""])[0] or ""),
+                    str((query.get("name") or [""])[0] or ""))); return
             if path == "/api/bili/login/poll":
                 # 不强制 token：这是只读状态轮询（成功登录仍需用户真机扫码），
                 # 避免旧页面没有 token 时轮询 401、界面卡在"等待扫码"。

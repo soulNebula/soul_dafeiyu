@@ -479,3 +479,64 @@ table td input[type="number"], table td select { padding: 3px 6px; font-size: 12
 .diary-body-head { display: flex; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 18px; font-size: 16px; }
 .diary-text { white-space: pre-wrap; line-height: 1.9; font-size: 15px; color: #e6e9ef; }
 @media (max-width: 900px) { .diary-layout { grid-template-columns: 1fr; } .diary-list { max-height: 260px; } }
+
+/* task-166 上网记录 */
+.web-search { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
+.web-search input { flex: 0 0 360px; max-width: 60%; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; color: var(--text); }
+.web-list { display: flex; flex-direction: column; gap: 8px; }
+.web-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.web-time { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.web-query { font-weight: 600; margin-bottom: 3px; }
+.web-title { color: var(--text); margin-bottom: 3px; }
+.web-snippet { color: var(--dim); font-size: 12px; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.web-url { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.web-url a { color: var(--primary); }
+@media (max-width: 900px) { .web-row { grid-template-columns: 1fr; } }
+
+/* task-166 B站 4 个数据 Tab */
+.bili-tabs { display: flex; gap: 6px; margin: 4px 0 12px; flex-wrap: wrap; }
+.bili-tab { background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; padding: 6px 14px; color: var(--dim); cursor: pointer; }
+.bili-tab.active { color: var(--text); border-color: var(--primary); background: rgba(91,164,212,.14); }
+.bili-data-panel { margin-bottom: 14px; }
+.bili-data-list { display: flex; flex-direction: column; gap: 8px; }
+.bili-data-row { display: flex; gap: 12px; justify-content: space-between; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+.bili-data-main { min-width: 0; }
+.bili-data-title { color: var(--text); font-weight: 600; }
+.bili-data-title:hover { color: var(--primary); }
+.bili-data-summary { color: var(--dim); font-size: 12px; margin-top: 5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.bili-data-side { color: var(--dim); white-space: nowrap; font-size: 12px; }
+.bili-file-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 12px; align-items: start; }
+.bili-file-list { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.bili-file-item { display: flex; justify-content: space-between; gap: 8px; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; color: var(--text); cursor: pointer; font-size: 12px; }
+.bili-file-item.active { border-color: var(--primary); background: rgba(91,164,212,.12); }
+.bili-file-body { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; }
+.bili-file-head { font-weight: 600; margin-bottom: 8px; }
+.bili-file-text { white-space: pre-wrap; max-height: 340px; overflow: auto; margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--text); font-family: "Cascadia Code", "Consolas", monospace; }
+.bili-log { white-space: pre-wrap; max-height: 340px; overflow: auto; background: #1b1c1e; border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 11.5px; line-height: 1.6; color: #c8d3e4; margin: 0; }
+@media (max-width: 900px) { .bili-file-layout { grid-template-columns: 1fr; } }
+
+/* task-166 上网/B站数据 */
+.web-meta { color: var(--dim); font-size: 11.5px; margin-bottom: 3px; }
+.web-domain { color: var(--primary); }
+.bili-feed-filters { display: flex; gap: 6px; margin-bottom: 10px; }
+.bili-filter { background: var(--surface-2); border: 1px solid var(--border); color: var(--dim); border-radius: 14px; padding: 3px 12px; font-size: 12px; cursor: pointer; }
+.bili-filter.active { color: var(--text); border-color: var(--primary); background: rgba(91,164,212,.15); }
+.bili-video-list { display: flex; flex-direction: column; gap: 10px; }
+.bili-video-card { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 12px; }
+.bili-cover { width: 176px; aspect-ratio: 16 / 9; background: #1b1c1e; border-radius: 7px; overflow: hidden; display: grid; place-items: center; }
+.bili-cover img { width: 100%; height: 100%; object-fit: cover; }
+.bili-video-main { min-width: 0; }
+.bili-video-title { color: var(--text); font-weight: 600; font-size: 14px; }
+.bili-video-title:hover { color: var(--primary); }
+.bili-video-meta { color: var(--dim); font-size: 12px; margin: 5px 0; }
+.bili-video-text { color: var(--dim); font-size: 12.5px; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.bili-video-why { color: var(--dim); font-size: 12px; margin-top: 4px; }
+.bili-video-why b { color: var(--text); font-weight: 500; }
+.bili-video-foot { display: flex; justify-content: space-between; gap: 10px; margin-top: 7px; font-size: 11px; }
+.bili-digest-list { display: flex; flex-direction: column; gap: 5px; max-height: 360px; overflow: auto; }
+.bili-digest-row { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 12px; padding: 7px 9px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; }
+.bili-digest-date { color: var(--dim); font-size: 12px; }
+.bili-digest-title { color: var(--text); font-size: 13px; }
+.bili-digest-title:hover { color: var(--primary); }
+.badge.green { color: var(--success); border-color: rgba(82,196,26,.4); }
+@media (max-width: 900px) { .bili-video-card { grid-template-columns: 1fr; } .bili-cover { width: 100%; } }

@@ -2046,3 +2046,142 @@ def test_diary_date_validation_and_missing(tmp_path, monkeypatch):
         assert result["ok"] is False and result["error"] == "invalid_date"
     missing = console.diary_get("2026-10-29")
     assert missing["ok"] is False and missing["error"] == "not_found"
+
+
+# ============================================================ 上网/B站档案（task-166）
+def _web_db(path: Path) -> Path:
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE research_sources(id TEXT PRIMARY KEY, ts REAL, query TEXT, "
+                "url TEXT, title TEXT, snippet TEXT, turn_id TEXT)")
+    con.executemany("INSERT INTO research_sources VALUES(?,?,?,?,?,?,?)", [
+        ("RS-1", 100.0, "今天天气", "https://weather.example/a", "天气", "晴", "T-1"),
+        ("RS-2", 200.0, "最近新闻", "https://news.example/b", "新闻", "头条", "T-2"),
+    ])
+    con.commit()
+    con.close()
+    return path
+
+
+def test_web_records_order_and_search(tmp_path, monkeypatch):
+    contacts = tmp_path / "contacts"
+    contacts.mkdir()
+    _web_db(contacts / "a.memory.sqlite3")
+    monkeypatch.setattr(console, "CONTACTS_DIR", contacts)
+    monkeypatch.setattr(console, "SELFLEARN_DIR", tmp_path / "missing")
+    data = console.web_records(limit=10)
+    assert data["ok"] is True and data["count"] == 2
+    assert [item["id"] for item in data["items"]] == ["RS-2", "RS-1"]
+    searched = console.web_records(q="天气")
+    assert searched["count"] == 1 and searched["items"][0]["title"] == "天气"
+
+
+def test_bili_impressions_aggregate_and_filter(tmp_path, monkeypatch):
+    contacts = tmp_path / "contacts"
+    contacts.mkdir()
+    db = contacts / "a.memory.sqlite3"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE bili_impressions(bvid TEXT PRIMARY KEY, title TEXT, owner TEXT, "
+                "duration_s REAL, cover_url TEXT, summary TEXT, topics_json TEXT, emotion TEXT, "
+                "value REAL, why TEXT, my_take TEXT, created_at REAL)")
+    con.execute("INSERT INTO bili_impressions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("BV1", "猫猫视频", "UP主", 60, "", "一只猫", '["猫"]', "开心", 0.8,
+                 "喜欢猫", "可爱", 100.0))
+    con.commit()
+    con.close()
+    monkeypatch.setattr(console, "CONTACTS_DIR", contacts)
+    monkeypatch.setattr(console, "SELFLEARN_DIR", tmp_path / "missing")
+    data = console._bili_impressions(10)
+    assert data["ok"] is True and data["count"] == 1
+    item = data["items"][0]
+    assert item["bvid"] == "BV1" and item["topics"] == ["猫"]
+    assert console._bili_impressions(q="猫")["count"] == 1
+    assert console._bili_impressions(q="不存在")["count"] == 0
+
+
+def _bili_home(tmp_path: Path) -> Path:
+    home = tmp_path / "bili"
+    (home / "digest").mkdir(parents=True, exist_ok=True)
+    (home / "reports").mkdir(exist_ok=True)
+    (home / "digest" / "2026-10.md").write_text("# 十月摘要\n今天看了猫。", encoding="utf-8")
+    (home / "reports" / "BV1-2026-10-28.md").write_text("# 视频报告\n内容不错。", encoding="utf-8")
+    (home / "duty.log").write_text("line1\nline2\nline3\n", encoding="utf-8")
+    return home
+
+
+def test_bili_digests_list_and_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(console, "bili_home", lambda: _bili_home(tmp_path))
+    listing = console.bili_digests()
+    assert listing["ok"] is True and listing["count"] == 1
+    assert listing["items"][0]["name"] == "2026-10.md"
+    detail = console.bili_digests("2026-10.md")
+    assert detail["ok"] is True and "今天看了猫" in detail["text"]
+    assert console.bili_digests("../duty.log")["error"] == "invalid_name"
+
+
+def test_bili_reports_list_read_and_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(console, "bili_home", lambda: _bili_home(tmp_path))
+    listing = console.bili_reports()
+    assert listing["count"] == 1
+    assert listing["items"][0]["name"] == "BV1-2026-10-28.md"
+    assert "内容不错" in console.bili_reports("BV1-2026-10-28.md")["text"]
+    assert console.bili_reports("missing.md")["error"] == "not_found"
+
+
+def test_bili_duty_log_tail(tmp_path, monkeypatch):
+    monkeypatch.setattr(console, "bili_home", lambda: _bili_home(tmp_path))
+    data = console.bili_duty_log(lines=2)
+    assert data["ok"] is True and data["lines"] == ["line2", "line3"]
+    assert data["count"] == 2
+
+
+def test_web_research_contract(tmp_path, monkeypatch):
+    contacts = tmp_path / "contacts"
+    contacts.mkdir()
+    _web_db(contacts / "a.memory.sqlite3")
+    monkeypatch.setattr(console, "CONTACTS_DIR", contacts)
+    monkeypatch.setattr(console, "SELFLEARN_DIR", tmp_path / "missing")
+    data = console.web_research(limit=10)
+    assert data["ok"] is True and data["total"] == 2
+    item = data["items"][0]
+    assert item["domain"] == "news.example"
+    assert item["time"] and item["contact"]
+
+
+def test_bili_feed_filter_contract(tmp_path, monkeypatch):
+    contacts = tmp_path / "contacts"
+    contacts.mkdir()
+    con = sqlite3.connect(contacts / "a.memory.sqlite3")
+    con.execute("CREATE TABLE bili_impressions(bvid TEXT PRIMARY KEY, title TEXT, owner TEXT, "
+                "duration_s REAL, cover_url TEXT, summary TEXT, topics_json TEXT, emotion TEXT, "
+                "value REAL, why TEXT, my_take TEXT, share_line TEXT, created_at REAL, "
+                "shared INTEGER DEFAULT 0, shared_at REAL)")
+    con.executemany("INSERT INTO bili_impressions(bvid,title,topics_json,created_at,shared) "
+                    "VALUES(?,?,?,?,?)", [
+        ("BV-A", "已分享视频", '["猫"]', 300.0, 1),
+        ("BV-B", "未分享视频", '[]', 200.0, 0),
+    ])
+    con.commit()
+    con.close()
+    monkeypatch.setattr(console, "CONTACTS_DIR", contacts)
+    monkeypatch.setattr(console, "SELFLEARN_DIR", tmp_path / "missing")
+    all_data = console.bili_feed(10, "all")
+    assert all_data["total"] == 2 and all_data["items"][0]["shared"] is True
+    shared = console.bili_feed(10, "shared")
+    assert shared["total"] == 1 and shared["items"][0]["bvid"] == "BV-A"
+    skipped = console.bili_feed(10, "skipped")
+    assert skipped["total"] == 1 and skipped["items"][0]["bvid"] == "BV-B"
+
+
+def test_bili_digest_contract(tmp_path, monkeypatch):
+    home = _bili_home(tmp_path)
+    (home / "digest" / "2026-10.md").write_text(
+        "# 摘要\n\n- 2026-10-27 · BV1abc · 一个视频 · UP主 · 挑了：还行 · https://www.bilibili.com/video/BV1abc\n"
+        "- 无法解析的一行\n", encoding="utf-8")
+    monkeypatch.setattr(console, "bili_home", lambda: home)
+    data = console.bili_digest()
+    assert data["ok"] is True and data["count"] == 2
+    parsed = next(item for item in data["items"] if item["bvid"] == "BV1abc")
+    assert parsed["title"] == "一个视频" and parsed["owner"] == "UP主"
+    assert parsed["url"].endswith("BV1abc")
+    report = console.bili_reports_index()
+    assert report["ok"] is True and report["items"][0]["bvid"] == "BV1"

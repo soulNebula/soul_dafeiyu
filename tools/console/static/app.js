@@ -30,6 +30,7 @@ const state = {
   trace: null,
   moments: null,
   diary: null,
+  web: null,
   sendMode: null,
   library: null,
   status: null,
@@ -56,6 +57,7 @@ const PAGES = {
   bili: 'B站',
   moments: '朋友圈',
   diary: '日记',
+  web: '上网记录',
   settings: '设置',
 };
 
@@ -2456,6 +2458,109 @@ function biliLoginCard(status, login) {
     </div>`);
 }
 
+const BILI_DATA_TABS = [
+  ['videos', '刷到的视频'], ['digests', '每日摘要'],
+  ['reports', '视频报告'], ['log', '运行日志'],
+];
+function biliTabsHtml() {
+  const active = state.bili && state.bili.tab ? state.bili.tab : 'videos';
+  return `<div class="bili-tabs">${BILI_DATA_TABS.map(([key, label]) =>
+    `<button class="bili-tab ${key === active ? 'active' : ''}" data-bili-tab="${key}">${label}</button>`).join('')}</div>`;
+}
+function bindBiliTabs() {
+  $$('[data-bili-tab]').forEach((btn) => {
+    btn.onclick = () => {
+      if (state.bili) state.bili.tab = btn.dataset.biliTab;
+      $$('[data-bili-tab]').forEach((b) => b.classList.toggle('active', b === btn));
+      loadBiliTab(btn.dataset.biliTab);
+    };
+  });
+}
+function fmtDuration(seconds) {
+  const value = Number(seconds || 0);
+  if (!value) return '—';
+  const m = Math.floor(value / 60);
+  const s = Math.round(value % 60);
+  return m ? `${m}:${String(s).padStart(2, '0')}` : `${s} 秒`;
+}
+function biliFeedFilterHtml() {
+  const current = (state.bili && state.bili.feedFilter) || 'all';
+  return `<div class="bili-feed-filters">${[['all', '全部'], ['shared', '已分享'], ['skipped', '未分享']].map(([key, label]) =>
+    `<button class="bili-filter ${key === current ? 'active' : ''}" data-bili-filter="${key}">${label}</button>`).join('')}</div>`;
+}
+async function loadBiliTab(tab) {
+  const panel = $('#bili-data-panel');
+  if (!panel) return;
+  tab = tab || 'videos';
+  panel.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    if (tab === 'videos') {
+      if (!state.bili.feedFilter) state.bili.feedFilter = 'all';
+      const d = await api('/api/bili/feed?limit=200&filter=' + encodeURIComponent(state.bili.feedFilter));
+      const items = (d && d.items) || [];
+      const cards = items.map((item) => {
+        const shared = !!item.shared;
+        const link = item.bvid ? `https://www.bilibili.com/video/${encodeURIComponent(item.bvid)}` : (item.url || '');
+        return `<div class="bili-video-card">
+          <div class="bili-cover">${item.cover_url ? `<img src="${esc(item.cover_url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">` : '<span class="muted small">无封面</span>'}</div>
+          <div class="bili-video-main">
+            <a class="bili-video-title" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(item.title || item.bvid || '未命名视频')}</a>
+            <div class="bili-video-meta">${esc(item.owner || '未知UP')} · ${fmtDuration(item.duration_s)} · ${esc(item.emotion || '未标注情绪')} · 价值 ${num(item.value)} <span class="badge ${shared ? 'green' : ''}">${shared ? '已分享' : '未分享'}</span></div>
+            ${item.summary ? `<div class="bili-video-text">${esc(item.summary)}</div>` : ''}
+            ${item.why ? `<div class="bili-video-why"><b>选中理由：</b>${esc(item.why)}</div>` : ''}
+            ${item.my_take ? `<div class="bili-video-why"><b>我的看法：</b>${esc(item.my_take)}</div>` : ''}
+            <div class="bili-video-foot"><span class="hint">${esc(item.time || fmtDateTime(item.ts))}</span>${item.share_line ? `<span class="hint">分享文案：${esc(item.share_line)}</span>` : ''}</div>
+          </div>
+        </div>`;
+      }).join('');
+      panel.innerHTML = `${biliFeedFilterHtml()}${cards ? `<div class="bili-video-list">${cards}</div>` : '<div class="empty">还没有刷到的视频记录。后台刷B站后会自动出现在这里。</div>'}`;
+      $$('[data-bili-filter]').forEach((btn) => {
+        btn.onclick = () => {
+          state.bili.feedFilter = btn.dataset.biliFilter;
+          loadBiliTab('videos');
+        };
+      });
+    } else if (tab === 'digests') {
+      const d = await api('/api/bili/digest');
+      const items = (d && d.items) || [];
+      panel.innerHTML = items.length ? `<div class="bili-digest-list">${items.map((item) => `<div class="bili-digest-row">
+        <div class="bili-digest-date">${esc(item.date || '—')}</div>
+        <div class="bili-digest-main">
+          ${item.url ? `<a class="bili-digest-title" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title || item.bvid || '未命名视频')}</a>` : `<div class="bili-digest-title">${esc(item.title || item.bvid || '未解析行')}</div>`}
+          <div class="hint">${esc(item.bvid || '')}${item.owner ? ' · ' + esc(item.owner) : ''}${item.reason ? ' · ' + esc(item.reason) : ''}</div>
+        </div>
+      </div>`).join('')}</div>` : '<div class="empty">还没有每日摘要。插件跑完一天后会写 digest。</div>';
+    } else if (tab === 'reports') {
+      const d = await api('/api/bili/reports');
+      const items = (d && d.items) || [];
+      if (!items.length) {
+        panel.innerHTML = '<div class="empty">还没有视频报告。</div>';
+        return;
+      }
+      let selected = state.bili.fileSel.reports || items[0].name;
+      if (!items.some((item) => item.name === selected)) selected = items[0].name;
+      state.bili.fileSel.reports = selected;
+      const detail = await api('/api/bili/report?name=' + encodeURIComponent(selected));
+      panel.innerHTML = `<div class="bili-file-layout">
+        <aside class="bili-file-list">${items.map((item) => `<button class="bili-file-item ${item.name === selected ? 'active' : ''}" data-bili-file="${esc(item.name)}"><span>${esc(item.name)}</span><span class="hint">${item.date ? esc(item.date) : ''}</span></button>`).join('')}</aside>
+        <section class="bili-file-body"><div class="bili-file-head">${esc(selected)}</div><pre class="bili-file-text">${esc((detail && detail.text) || (detail && detail.hint) || '（读取失败）')}</pre></section>
+      </div>`;
+      $$('[data-bili-file]').forEach((btn) => {
+        btn.onclick = async () => {
+          state.bili.fileSel.reports = btn.dataset.biliFile;
+          loadBiliTab('reports');
+        };
+      });
+    } else if (tab === 'log') {
+      const d = await api('/api/bili/log?tail=300');
+      const lines = (d && d.lines) || [];
+      panel.innerHTML = lines.length ? `<pre class="bili-log">${esc(lines.join('\n'))}</pre>` : '<div class="empty">日志为空，或插件尚未运行。</div>';
+    }
+  } catch (e) {
+    panel.innerHTML = `<div class="error-text">读取失败：${esc(e.message)}</div>`;
+  }
+}
+
 async function renderBili() {
   $('#app').innerHTML = '<div class="empty">加载 B站…</div>';
   if (!state.token) {
@@ -2478,6 +2583,9 @@ async function renderBili() {
     loginState: prev.loginState || '',
     polledAt: prev.polledAt || 0,
     loginExpired: prev.loginExpired || false,
+    tab: (new URLSearchParams(location.search).get('tab') || prev.tab || 'videos'),
+    fileSel: prev.fileSel || {},
+    feedFilter: prev.feedFilter || 'all',
   };
   if (!status && !configState) {
     $('#app').innerHTML = card('B站', `<div class="error-text">${esc(errors.join('；'))}</div>`);
@@ -2498,6 +2606,8 @@ async function renderBili() {
   $('#app').innerHTML = `
     ${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
     ${biliLoginCard(biliStatus, login)}
+    ${biliTabsHtml()}
+    <div id="bili-data-panel" class="bili-data-panel"><div class="empty">加载中…</div></div>
     <div class="grid cols-3">
       ${card('今日状态', `<div class="kv">
         <span class="k">日期</span><span class="v">${esc(stateInfo.day || '—')}</span>
@@ -2534,6 +2644,9 @@ async function renderBili() {
   if (save) save.onclick = saveBiliConfig;
   const reportFull = $('#bili-report-full');
   if (reportFull) reportFull.onclick = showBiliReport;
+  if (!BILI_DATA_TABS.some(([key]) => key === state.bili.tab)) state.bili.tab = 'videos';
+  bindBiliTabs();
+  loadBiliTab(state.bili.tab);
   if (state.bili.qr && !state.bili.timer) startBiliPoll();
 }
 
@@ -3275,6 +3388,46 @@ function bindSendMode() {
   });
 }
 
+/* ---------------- 上网记录（只读） ---------------- */
+async function renderWeb() {
+  $('#app').innerHTML = '<div class="empty">加载上网记录…</div>';
+  if (!state.web || typeof state.web !== 'object') state.web = { q: '', items: [] };
+  try {
+    const d = await api('/api/web/research?limit=200&q=' + encodeURIComponent(state.web.q || ''));
+    state.web.items = d.items || [];
+    state.web.total = d.total || 0;
+    const rows = state.web.items.map((item) => `<div class="web-row">
+      <div class="web-time">${esc(item.time || fmtDateTime(item.ts))}</div>
+      <div class="web-main">
+        <div class="web-query">${esc(item.query || '（无查询词）')}</div>
+        <div class="web-title">${item.title ? esc(item.title) : '<span class="muted">未取到标题</span>'}</div>
+        ${item.snippet ? `<div class="web-snippet">${esc(item.snippet)}</div>` : ''}
+        <div class="web-meta"><span class="web-domain">${esc(item.domain || '未知站点')}</span><span class="muted"> · ${esc(item.contact || '本机记录')}</span></div>
+        <div class="web-url">${item.url ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.url)}</a>` : '<span class="muted">无链接</span>'}</div>
+      </div>
+    </div>`).join('');
+    $('#app').innerHTML = `
+      <div class="page-head"><div><h2>上网记录</h2><p class="muted">她主动联网查过的内容，按时间倒序；只读。</p></div><button class="btn" id="web-refresh">刷新</button></div>
+      <div class="web-search">
+        <input id="web-q" placeholder="搜索关键词 / 标题 / 网址" value="${esc(state.web.q || '')}">
+        <button class="btn primary" id="web-search">搜索</button>
+        <span class="hint">共 ${num(state.web.total ?? state.web.items.length)} 条</span>
+      </div>
+      ${rows ? `<div class="web-list">${rows}</div>` : '<div class="empty">还没有上网记录。她遇到需要实时信息的问题时会自己查，查完记录在这里。</div>'}`;
+    const search = $('#web-search');
+    if (search) search.onclick = () => {
+      state.web.q = $('#web-q').value.trim();
+      renderWeb();
+    };
+    const refresh = $('#web-refresh');
+    if (refresh) refresh.onclick = () => renderWeb();
+    const input = $('#web-q');
+    if (input) input.onkeydown = (event) => { if (event.key === 'Enter') search.click(); };
+  } catch (e) {
+    $('#app').innerHTML = card('上网记录', `<div class="error-text">上网记录加载失败：${esc(e.message)}</div>`);
+  }
+}
+
 /* ---------------- 日记（只读） ---------------- */
 async function renderDiary() {
   $('#app').innerHTML = '<div class="empty">加载日记…</div>';
@@ -3563,6 +3716,7 @@ const RENDERERS = {
   bili: renderBili,
   moments: renderMoments,
   diary: renderDiary,
+  web: renderWeb,
   settings: renderSettings,
 };
 

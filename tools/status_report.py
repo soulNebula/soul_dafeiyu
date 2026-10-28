@@ -37,8 +37,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-STATUS_MD = ROOT / "docs" / "STATUS.md"
-MEASURED_JSON = ROOT / "docs" / "status_measured.json"
+STATUS_MD = ROOT / "docs" / "quality" / "STATUS.md"
+MEASURED_JSON = ROOT / "docs" / "quality" / "status_measured.json"
 
 SUITES: dict[str, str] = {
     "tests": "tests",
@@ -312,8 +312,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _setup_console()
     ROOT = Path(args.root).resolve()
-    STATUS_MD = ROOT / "docs" / "STATUS.md"
-    MEASURED_JSON = ROOT / "docs" / "status_measured.json"
+    STATUS_MD = ROOT / "docs" / "quality" / "STATUS.md"
+    MEASURED_JSON = ROOT / "docs" / "quality" / "status_measured.json"
 
     if args.from_agentb:
         source = Path(args.from_agentb)

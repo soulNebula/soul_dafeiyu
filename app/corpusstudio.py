@@ -38,6 +38,12 @@ _WECHAT_HEAD_RE = re.compile(
     r"^\s*(.{1,40}?)\s+(\d{4}[-/]\d{1,2}[-/]\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?)\s*$")
 _SYS_RE = re.compile(r"撤回了一条消息|拍了拍|加入了群聊|领取了|邀请.*加入|消息已发出|以上是打招呼")
 _URL_RE = re.compile(r"^https?://\S+$")
+#: 截图里的状态栏/标题/时间戳/电池等噪声（2026-10-29 用户截图实测）
+_NOISE_RE = re.compile(
+    r"^(\d{1,2}:\d{2}|\d{1,2}月\d{1,2}日.*\d{1,2}:\d{2}|"
+    r"(昨天|今天|前天|星期[一二三四五六日天])?\s*\d{1,2}:\d{2}$|"
+    r"\d{1,3}%|\d{1,3}$|微信|WeChat|信号|WiFi|5G|4G|LTE|"
+    r"[+\-·•.。…\s]+)$")
 _TIME_PREFIX_RE = re.compile(r"^\s*\[?\d{1,2}:\d{2}(?::\d{2})?\]?\s*")
 _SAFE_NAME_RE = re.compile(r"[^\w\u4e00-\u9fff.\-]+")
 
@@ -194,6 +200,13 @@ def _clean_text(text: Any) -> str:
     if _URL_RE.match(value):
         return ""
     if _SYS_RE.search(value):
+        return ""
+    if _NOISE_RE.match(value):
+        return ""
+    # 纯符号/单字（多为头像、按钮、状态图标）不算语料
+    if len(value) < 2 and not value.isascii():
+        return ""
+    if not re.search(r"[一-鿿A-Za-z0-9]", value):
         return ""
     return value[:MAX_TEXT_CHARS]
 
@@ -382,14 +395,24 @@ def _parse_image_file(path: Path, *, timeout: float = 120.0) -> list[dict]:
     if not script.is_file():
         return []
     cmd = [_ocr_python(), str(script), "--image", str(path), "--infer-role"]
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     try:
         proc = subprocess.run(cmd, cwd=str(Path(paths.soulagent_home())),
-                              capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=timeout)
+                              capture_output=True, timeout=timeout, env=env)
     except (subprocess.TimeoutExpired, OSError):
         return []
+
+    def _decode(raw: bytes) -> str:
+        for encoding in ("utf-8", "gbk"):
+            try:
+                return raw.decode(encoding)
+            except (UnicodeDecodeError, LookupError):
+                continue
+        return raw.decode("utf-8", errors="replace")
+
+    stdout = _decode(proc.stdout or b"")
     payload: dict[str, Any] = {}
-    for line in reversed((proc.stdout or "").splitlines()):
+    for line in reversed(stdout.splitlines()):
         try:
             candidate = json.loads(line)
         except ValueError:
@@ -402,6 +425,12 @@ def _parse_image_file(path: Path, *, timeout: float = 120.0) -> list[dict]:
         if not isinstance(result, dict):
             continue
         bubbles = [b for b in (result.get("bubble_lines") or []) if isinstance(b, dict)]
+        height = float(result.get("height") or 0)
+        if height:
+            # 聊天截图顶部 ~80px 是状态栏/会话标题，底部 ~70px 是输入栏
+            bubbles = [b for b in bubbles
+                       if not (isinstance(b.get("cy"), (int, float))
+                               and (float(b["cy"]) < 80 or float(b["cy"]) > height - 70))]
         if bubbles:
             for bubble in bubbles:
                 role = ROLE_ME if str(bubble.get("role")).lower() == "me" else ROLE_YOU

@@ -19,7 +19,7 @@ _refs/
 #   star/             冲浪/星标功能的原始抓取产物（只保留 *.md 报告）
 #   agi/data/desktop_profile/  桌面版画像/训练派生数据（已在 agi/data/ 下，这里显式标注）
 .data/
-Desktop/
+/Desktop/
 pip-*
 pip_*
 star/*

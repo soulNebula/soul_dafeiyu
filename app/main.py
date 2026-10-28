@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (annotstudio, audit, config_store, corpusstudio, datastudio,
-               modelstudio, paths, services, trainstudio)
+               distillstudio, modelstudio, paths, services, trainstudio)
 
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
 app = FastAPI(title="IDEA · SoulAgent Workbench", version="0.2.0")
@@ -208,6 +208,47 @@ def db_backup(body: DbRefBody):
 def db_backups(limit: int = Query(default=50, ge=1, le=500)):
     return datastudio.list_backups(limit)
 
+
+
+# ------------------------------------------------------------------ 蒸馏语义数据
+@app.get("/api/wb/distill/datasets", dependencies=[Depends(require_token)])
+def distill_datasets():
+    return distillstudio.list_datasets()
+
+
+@app.get("/api/wb/distill/jobs", dependencies=[Depends(require_token)])
+def distill_jobs(limit: int = 20):
+    return distillstudio.list_jobs(limit=limit)
+
+
+@app.post("/api/wb/distill/create", dependencies=[Depends(require_token)])
+def distill_create(body: dict | None = None):
+    body = body or {}
+    out = distillstudio.create_job(
+        limit=body.get("limit") or 300, real=bool(body.get("real")),
+        out_name=body.get("out_name") or "", budget_cny=body.get("budget_cny") or 3.05,
+        split=bool(body.get("split")), max_variants=body.get("max_variants") or 7,
+        confirm=body.get("confirm") or "", overwrite=bool(body.get("overwrite")))
+    if out.get("ok"):
+        audit.record("distill.create", (out.get("job") or {}).get("id") or "",
+                     actor="workbench",
+                     meta={"limit": body.get("limit"), "real": bool(body.get("real"))})
+    return out
+
+
+@app.get("/api/wb/distill/job/{job_id}", dependencies=[Depends(require_token)])
+def distill_job(job_id: str):
+    return distillstudio.get_job(job_id)
+
+
+@app.get("/api/wb/distill/job/{job_id}/log", dependencies=[Depends(require_token)])
+def distill_job_log(job_id: str, tail: int = 200):
+    return distillstudio.read_log(job_id, tail=tail)
+
+
+@app.post("/api/wb/distill/job/{job_id}/cancel", dependencies=[Depends(require_token)])
+def distill_job_cancel(job_id: str):
+    return distillstudio.cancel_job(job_id)
 
 # ------------------------------------------------------------------ 训练工厂
 @app.get("/api/wb/train/discover", dependencies=[Depends(require_token)])

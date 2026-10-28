@@ -24,6 +24,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from agi.paths import data_dir as _default_data_dir
 
 from . import usage as usage_mod
 from .deepseek import DeepSeekBackend
@@ -31,8 +32,8 @@ from .openai_local import OpenAILocalBackend
 from .rule import RuleBackend
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG_PATH = ROOT / "agi" / "data" / "llm_router.json"
-DEFAULT_USAGE_PATH = ROOT / "agi" / "data" / "llm_usage.jsonl"
+DEFAULT_CONFIG_PATH = _default_data_dir() / "llm_router.json"
+DEFAULT_USAGE_PATH = _default_data_dir() / "llm_usage.jsonl"
 KINDS = ("openai", "deepseek", "rule")
 BACKEND_CLASSES = {"openai": OpenAILocalBackend, "deepseek": DeepSeekBackend,
                    "rule": RuleBackend}

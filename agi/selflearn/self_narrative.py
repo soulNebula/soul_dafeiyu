@@ -19,15 +19,16 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from agi.paths import data_dir as _default_data_dir
 
 from . import db, persona_layers
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = db.DB_PATH
-DEFAULT_DIARY_DIR = ROOT / "agi" / "data" / "diary"
+DEFAULT_DIARY_DIR = _default_data_dir() / "diary"
 DEFAULT_WEEKLY_DIR = DEFAULT_DIARY_DIR / "weekly"
-DEFAULT_HISTORY_PATH = ROOT / "agi" / "data" / "selflearn" / "narrative_history.jsonl"
-DEFAULT_DAILY_CORPUS_DIR = ROOT / "agi" / "data" / "train" / "daily"
+DEFAULT_HISTORY_PATH = _default_data_dir() / "selflearn" / "narrative_history.jsonl"
+DEFAULT_DAILY_CORPUS_DIR = _default_data_dir() / "train" / "daily"
 MAX_NARRATIVE_CHARS = 120
 MAX_INJECT_CHARS = 80
 WEEK_SECONDS = 7 * 86400

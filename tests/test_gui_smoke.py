@@ -46,6 +46,11 @@ from wx_core.models import (  # noqa: E402
 from ui.dev_backend import DevBackend  # noqa: E402
 from ui.main_window import MainWindow  # noqa: E402
 
+# Tk 桌面窗口冒烟：需要 Windows 图形会话（CI 是 headless linux）。
+# 用 marker 而不是 --ignore：SOULAGENT_CI=1 或非 Windows 时 conftest 统一 skip，
+# skip 条数/原因在报告里可见；本机 Windows 上照常全跑。
+pytestmark = pytest.mark.windows_only
+
 
 # ---------------------------------------------------------------------------
 # 素材 & 辅助

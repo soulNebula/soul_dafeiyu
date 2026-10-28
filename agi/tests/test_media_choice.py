@@ -572,6 +572,13 @@ def test_regen_failed_classified(monkeypatch, tmp_path):
 
 def test_validation_script_dry_is_offline_and_repeatable():
     from agi.selflearn import validate_p6c
+
+    # 可移植性（P0-24）：validate_p6c 的「真机上下文库」是 agi/data 下被 gitignore 的
+    # 本机数据（4260fd…sqlite3），干净 checkout / CI 里没有。没有数据就精确 skip：
+    # 该脚本本身只能在有真机数据的机器上验证，硬跑只会 FileNotFoundError 假红。
+    if not validate_p6c.CONTACT_DB.exists():
+        pytest.skip(f"需要本机真机上下文库 {validate_p6c.CONTACT_DB}（gitignore，CI 无此文件）")
+
     payload = validate_p6c.run_validation(dry=True, repeats=1)
     assert payload["stats"]["count"] == 4
     assert all(row["available"] or row["reason"] for row in payload["results"])

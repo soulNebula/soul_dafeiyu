@@ -16,7 +16,11 @@ CREATE TABLE IF NOT EXISTS messages(
   id TEXT PRIMARY KEY, role TEXT NOT NULL, text TEXT NOT NULL, ts REAL NOT NULL,
   proactive INTEGER NOT NULL DEFAULT 0,
   -- P1-d：>90 天原文冷归档标记（只标记，不删不改写；旧库 connect() 幂等 ALTER）
-  archived_at REAL
+  archived_at REAL,
+  -- 送达标记（旧库由 connect() 幂等 ALTER 补列，默认 1=可见）：
+  -- 0 = 这条 assistant 消息所在的 turn 被明确标成 blocked/failed（没发出去），
+  -- 读侧（memory.recent_messages）必须过滤，不能当"我说过"的既成事实。
+  delivered INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS user_memories(
   id TEXT PRIMARY KEY, scope TEXT NOT NULL DEFAULT 'user', kind TEXT NOT NULL,
@@ -167,7 +171,10 @@ CREATE TABLE IF NOT EXISTS conflicts(
 CREATE TABLE IF NOT EXISTS turns(
   id TEXT PRIMARY KEY, user_message_id TEXT NOT NULL, assistant_message_id TEXT NOT NULL,
   reply TEXT NOT NULL, skill_id TEXT, variant_id TEXT, feedback TEXT, score REAL,
-  latency_ms REAL, created_at REAL NOT NULL
+  latency_ms REAL, created_at REAL NOT NULL,
+  -- 送达状态（''=旧库/未标记；sent/unverified/blocked/failed/partial/planned/draft）。
+  -- 先落库后发送：回复文本到期就写进来，真正有没有发出去由 chat.mark_turn_delivery 回填。
+  delivery_status TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS pairs(
   id TEXT PRIMARY KEY,
@@ -549,10 +556,17 @@ def _ensure_columns(con: sqlite3.Connection, persona: sqlite3.Connection) -> Non
         con.execute("ALTER TABLE messages ADD COLUMN proactive INTEGER NOT NULL DEFAULT 0")
     if "archived_at" not in mcols:
         con.execute("ALTER TABLE messages ADD COLUMN archived_at REAL")
+    if "delivered" not in mcols:
+        # 旧库：默认 1 = 历史消息全部照旧可见（向后兼容红线；只有新链路
+        # mark_turn_delivery(blocked/failed) 才会把个别行改成 0）
+        con.execute("ALTER TABLE messages ADD COLUMN delivered INTEGER NOT NULL DEFAULT 1")
     con.execute("CREATE INDEX IF NOT EXISTS ix_messages_archived ON messages(archived_at)")
     tcols = {r[1] for r in con.execute("PRAGMA table_info(turns)").fetchall()}
     if "latency_ms" not in tcols:
         con.execute("ALTER TABLE turns ADD COLUMN latency_ms REAL")
+    if "delivery_status" not in tcols:
+        # 旧库：默认 '' = 未标记（读侧不因此改变任何行为）
+        con.execute("ALTER TABLE turns ADD COLUMN delivery_status TEXT NOT NULL DEFAULT ''")
     icols = {r[1] for r in con.execute("PRAGMA table_info(inner_states)").fetchall()}
     for col, ddl in (("latency_ms", "latency_ms REAL"),
                      ("fallback", "fallback TEXT NOT NULL DEFAULT ''"),
@@ -568,10 +582,38 @@ def _ensure_columns(con: sqlite3.Connection, persona: sqlite3.Connection) -> Non
     con.commit()
 
 
+#: SQLite 并发加固（幂等，旧库第一次 connect 时自动升级）：
+#:
+#: * ``journal_mode=WAL``：读写不再互斥。网关有多个线程/进程各开连接（worker、
+#:   proactive、控制台、日记…），默认 DELETE 日志模式下「一个写 + 任意读」就会
+#:   ``database is locked``（真机 queue/flush 时踩过）。
+#: * ``busy_timeout=5000``：遇到写锁等 5s 再抛错，而不是立刻失败丢数据。
+#: * ``synchronous=NORMAL``：WAL 下不必每次事务 fsync；进程崩溃最多丢最后一个
+#:   事务，但不会损坏库。这里的写入是聊天/审计，不是账本，可以接受。
+#:
+#: 都在**每个新连接**上执行（PRAGMA 是连接级的，不写盘）；重复执行无副作用。
+_SQLITE_PRAGMAS = (
+    "PRAGMA journal_mode=WAL",
+    "PRAGMA busy_timeout=5000",
+    "PRAGMA synchronous=NORMAL",
+)
+
+
+def _apply_pragmas(con: sqlite3.Connection) -> None:
+    """给连接打上并发加固 PRAGMA；失败只告警（只读库/老 SQLite 不应炸主链）。"""
+    for statement in _SQLITE_PRAGMAS:
+        try:
+            con.execute(statement)
+        except sqlite3.Error as exc:  # noqa: BLE001 - 加固失败不能拦住业务
+            logger.warning("db_pragma_failed sql=%s error=%s", statement, exc)
+
+
 def _schema_con(path: Path, schema: str) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
+    # PRAGMA 必须在建表事务之前执行（journal_mode=WAL 在事务里会失败）
+    _apply_pragmas(con)
     con.executescript(schema)
     con.commit()
     return con
@@ -778,6 +820,7 @@ def memory_connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         connect(base)
     con = sqlite3.connect(memory_path(base))
     con.row_factory = sqlite3.Row
+    _apply_pragmas(con)
     return con
 
 
@@ -788,6 +831,7 @@ def persona_connect(path: Path | str = DB_PATH) -> sqlite3.Connection:
         connect(base)
     con = sqlite3.connect(persona_path(base))
     con.row_factory = sqlite3.Row
+    _apply_pragmas(con)
     return con
 
 

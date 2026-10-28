@@ -493,9 +493,24 @@ def test_prompt_token_ids_match_smoke_with_tokenizer():
 # --------------------------------------------------------------------------- #
 # dry-run（不加载模型权重）
 # --------------------------------------------------------------------------- #
+def _require_local_model() -> None:
+    """dry-run 仍要读模型目录的 config.json（判模型族/模板）；没有就精确 skip。
+
+    可移植性（P0-24）：`MODEL_PATH` 在 agent_home（默认 E:\\agent）下，是**本机模型
+    资产、不在仓库里**，干净 checkout / CI 没有。缺目录时 evaluate.main 按设计返回 2
+    （"模型目录缺 config.json"），那是环境前提不满足，不是被测行为回归——与本文件
+    ``test_prompt_token_ids_match_smoke_with_tokenizer`` 的 skip 口径保持一致。
+    """
+    if not (MODEL_PATH / "config.json").exists():
+        pytest.skip(
+            f"需要本机模型目录 {MODEL_PATH}（agent_home 下，不入库；"
+            f"干净 checkout/CI 无此目录）")
+
+
 def test_dry_run_base_path(tmp_path):
     if not VAL_PATH.exists():
         pytest.skip(f"缺 v0_val：{VAL_PATH}")
+    _require_local_model()
     code = evaluate.main([
         "--data", str(VAL_PATH), "--limit", "2", "--dry-run",
         "--out", str(tmp_path / "dry.json"),
@@ -507,6 +522,7 @@ def test_dry_run_base_path(tmp_path):
 def test_dry_run_rejects_bad_adapter(tmp_path, capsys):
     if not VAL_PATH.exists():
         pytest.skip(f"缺 v0_val：{VAL_PATH}")
+    _require_local_model()
     code = evaluate.main([
         "--data", str(VAL_PATH), "--limit", "2", "--dry-run",
         "--adapter", str(tmp_path / "not_exist"),
@@ -566,6 +582,7 @@ def test_dry_run_limit_zero_path(tmp_path):
     """--limit 0（全量）不能在建 prompt 阶段崩；正式 v1 评估要走这条。"""
     if not VAL_PATH.exists():
         pytest.skip(f"缺 v0_val：{VAL_PATH}")
+    _require_local_model()
     code = evaluate.main([
         "--data", str(VAL_PATH), "--limit", "0", "--dry-run",
         "--out", str(tmp_path / "dry.json"),

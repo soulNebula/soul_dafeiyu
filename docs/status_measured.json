@@ -1,0 +1,29 @@
+{
+ "suites": {
+  "tests": {
+   "command": "python scripts/agentb_verify.py",
+   "exit_code": 0,
+   "measured_at": "2026-10-29T04:13:20+0800",
+   "wall_seconds": 59.5,
+   "pytest_seconds": 59.5,
+   "passed": 301,
+   "failed": 0,
+   "skipped": 0,
+   "errors": 0,
+   "source": "scripts/agentb_verify.py"
+  },
+  "agi": {
+   "command": "python scripts/agentb_verify.py",
+   "exit_code": 0,
+   "measured_at": "2026-10-29T04:13:20+0800",
+   "wall_seconds": 532.6,
+   "pytest_seconds": 532.6,
+   "passed": 2185,
+   "failed": 0,
+   "skipped": 13,
+   "errors": 0,
+   "source": "scripts/agentb_verify.py"
+  }
+ },
+ "updated_at": "2026-10-29T04:23:31"
+}

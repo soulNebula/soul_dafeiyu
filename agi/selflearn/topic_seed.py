@@ -12,9 +12,10 @@ import re
 import time
 from pathlib import Path
 from typing import Any
+from agi.paths import data_dir as _default_data_dir
 
 ROOT = Path(__file__).resolve().parents[2]
-WECHAT_CONFIG = ROOT / "agi" / "data" / "wechat" / "config.json"
+WECHAT_CONFIG = _default_data_dir() / "wechat" / "config.json"
 MAX_CANDIDATES = 3
 MAX_CHARS = 30
 RECENT_DAYS = 7

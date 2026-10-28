@@ -1,75 +1,100 @@
 # 当前状态（docs/STATUS）
 
-> 最后实测：2026-10-28 02:50（本地 Windows，Python 3.14）。
-> **真实数字以本页为准**；README/旧文档里的历史数字（如 78 / 166 passed）已过期，不再作为口径。
+> 本页只放**可以现场复算**的事实。测试数字分两个口径，不要混用：
+> - **collect 数**：`pytest --collect-only` 收集到的用例数，与运行环境无关，用来判断「测试面有没有缩水」；
+> - **实测结果**（通过/失败/跳过/耗时）：真的跑一遍后的结果，会随机器/并发有所波动，必须带命令与时间。
+>
+> 表格列与 `scripts/agentb_verify.py` 的输出一致（套件 | 通过 | 失败 | 跳过 | 耗时 | 结果）。
+> **全量终验以 `python scripts/agentb_verify.py` 为准**（它同时跑两套测试 + 静态检查 +
+> 生产文件未被污染校验），其 JSON 可用 `python tools/status_report.py --from-agentb <json>` 导入；
+> 自动区块本身由 `python tools/status_report.py --refresh/--run` 生成，
+> `--check` 校验数字是否过期。**不要手改 `STATUS:AUTO` 区块里的数字**；正文只写方法与结论。
 
-## 1. 测试（实测）
+## 0. 测试与代码规模（自动生成）
 
-| 套件 | 命令 | 结果 | 说明 |
+<!-- STATUS:AUTO:BEGIN（由 tools/status_report.py 生成，勿手改）-->
+
+最后生成：2026-10-29T04:23:36（Python 3.14.7）
+
+| 套件 | 通过 | 失败 | 跳过 | 耗时 | 结果 |
+| --- | --- | --- | --- | --- | --- |
+| `tests/` | 301 | 0 | 0 | 59.50s | PASS |
+| `agi/tests/` | 2185 | 0 | 13 | 532.60s | PASS |
+
+collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不代表通过数）：`tests/`=301、`agi/tests/`=2198。
+
+数据来源：`python scripts/agentb_verify.py`（全量终验，两套 + 静态检查 + 生产文件未被污染）或 `python tools/status_report.py --run`（单套件实测）；`--from-agentb` 可直接导入前者的 JSON，不手抄。
+
+代码规模（同一命令可复算）：Python 模块 444 个（agi 146 / selflearn 94 / agi/tests 180）；计划文档 43 份；legacy 归档 37 个文件 / 9151 行。
+
+<!-- STATUS:AUTO:END -->
+
+## 1. 服务与端口（主链 / 非主链）
+
+| 端口 | 进程 | 定位 | 代码依据 |
 | --- | --- | --- | --- |
-| 根 `tests/` | `python -m pytest tests -q` | **244 passed / 9 skipped**（43.34s） | 9 条 `tests/test_webui.py` 旧 `/agi` 用例依赖已移除的 `agi.core`，已加 `skipif` 跳过（legacy 8081，非主链） |
-| `agi/tests/` | `python -m pytest agi/tests -q` | **2002 passed / 1 skipped**（840.99s ≈14min） | 全绿；此前记录的 `test_proactive_budget` 抖动本次未复现 |
+| **801** | `python -m agi.wechat_gateway.server` | **主链**：微信网关（收/发/状态/调试 API） | `agi/wechat_gateway/config.py` DEFAULTS `"port": 801` |
+| **802** | `python tools/console/server.py --port 802` | **主链**：控制台单页应用（日常唯一操作入口） | `tools/console/server.py` `--port` 默认 802 |
+| 8123 | `llama-server ... --port 8123` | 可选：本地 0.5B 内状态（shadow） | `agi/selflearn/mood_judge.py` 默认地址 |
+| 8125 | `python tools/soul_serve/serve_local3b.py` | 可选：本地 3B（摘要/关键词/提取） | `tools/soul_serve/serve_local3b.py` |
+| 8081 | `python web_app.py` | **legacy/非主链**：旧 wx_box 网页端 | `web_app.py` DEFAULT_PORT=8081 |
+| 8082 | `python -m agi.selflearn.cli serve --port 8082` | **legacy/非主链**：selflearn 调试网页 | `agi/selflearn/cli.py` serve → `web.py` |
 
-- 测试数字与 `docs/plans` 旧记录中的 600/678/166/78 不同是正常的：项目已合并、测试集扩大。
-- 发布前最低要求：**两套都绿**（根 `tests` 9 skipped 为 legacy、不算主链）。
+- 主链只有 801（真实收发）+ 802（操作台）；8081/8082 仅历史对照/调试，不要写入操作步骤。
+- 桌面 GUI：`python app.py`（`--fake` 假后端演示）；一键启动：`启动桌面版.bat`。
 
-## 2. 服务与端口（主链 / 非主链）
+## 2. 当前架构一句话
 
-| 端口 | 进程 | 定位 |
-| --- | --- | --- |
-| **801** | `python -m agi.wechat_gateway.server` | 主链：微信网关（收发/状态/调试 API） |
-| **802** | `python tools/console/server.py --port 802` | 主链：控制台/工作台 UI |
-| 8123 | `llama-server ... soul_qwen25_05b_v1b-q4_k_m.gguf` | 可选：本地 0.5B 内状态（shadow） |
-| 8125 | `python tools/soul_serve/serve_local3b.py` | 可选：本地 3B（摘要/提取） |
-| 8081 | `python web_app.py`（旧根网页 `/agi`） | **非主链/legacy**：`agi.core` 已移除，仅历史对照 |
-| 8082 | `python -m agi.selflearn.web` | **非主链/调试**：selflearn 自带网页，日常入口是 802 |
-
-## 3. 当前架构一句话
-
-微信消息经**双后端**（wxauto4 receiver；或 wx_core MonitorBackend 的 WCDB 直读 + OCR 回退）→ 801 网关归一化/闸门 → `agi.selflearn.chat`（记忆/心情/内状态/人格/护栏）→ DeepSeek API 生成 → 发送。
+微信消息经**双后端**（wxauto4 `WeChatReceiver`；或 `wx_core.MonitorBackend` 的 WCDB 直读 + OCR 回退）
+→ 801 网关归一化/发送闸门 → `agi/selflearn/chat.py`（记忆/心情/内状态/人格/护栏）→ LLM（DeepSeek API 主）
+→ `Gateway._send` → sender 子进程。自主层的主链是网关常驻主动循环，登记表见 `agi/proactive_registry.py`。
 详见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
 
-## 4. 里程碑（简表）
+## 3. 里程碑（简表；细节看对应 plans 编号）
 
 | 阶段 | 状态 | 代表产物 |
 | --- | --- | --- |
-| W1–W4 | 已完成 | 内状态、四臂/六臂实验、灵魂线、LoRA 与评估 |
-| P 系列（P0–P38） | 大部分完成 | 网关护栏、媒体/贴纸、B站、主动节奏、引擎/模型启停、每日语料、日记/自我叙事、记忆衰减 |
-| M0 工作台 | 完成 | 服务/配置/Git/文件 API + 802 控制台 |
-| M1 Data Studio / 验收 | 完成 | SQLite 浏览/SQL/行编辑/备份（工作台 803 已接线并实测；idea 仓库 34 tests） |
-| 文档收口 P1-1 | 本次完成 | `docs/INDEX.md`、`docs/STATUS.md`、plans 合并、快照、链接检查 |
+| W1–W4 | 已完成 | 内状态实验、灵魂线、LoRA smoke（20 步）、评测脚本 |
+| P 系列（P0–P38） | 大部分完成 | 网关护栏、媒体/贴纸、B站摄取、主动节奏、引擎/模型启停、每日语料、日记/自我叙事、记忆衰减 |
+| M0 工作台 802 | 完成 | 服务/配置/日志/素材/推理过程等 API + 单页控制台 |
+| 架构收口（本次） | 完成 | 死代码归档（legacy/）、架构守卫 `tools/check_architecture.py`、主动链登记表、文档按代码重写 |
+| 训练闭环 | **未开始（只到语料+门禁）** | 96/300 可训练样本、`last_training=null`；无自动训练/自动上线 |
 
-## 5. 文档现状
+## 4. 文档现状
 
-- **唯一入口**：[`INDEX.md`](INDEX.md)；计划看 [`plans/README.md`](plans/README.md)（42 份，15–59，缺 17/27/55）。
-- 根 `plans/` 已并入 `docs/plans/`；根 `agi/*.md` 笔记已移入 `docs/archive/agi-notes/`。
-- 收口前全量快照：`docs/archive/20261028-docs-snapshot/`（含 MANIFEST.json）。
-- 旧 `docs/README-legacy.md` 已移入 archive；根 README/usage 中的过期测试数字已改为引用本页。
-- 链接检查：`python tools/check_docs_links.py`（当前 active docs 0 broken；`--fix` 可修 `plans/` → `docs/plans/`）。
+- **唯一入口**：[`INDEX.md`](INDEX.md)；计划看 [`plans/README.md`](plans/README.md)（**43 份**，15–60，缺 17/27/55）。
+- 根 `plans/` 已并入 `docs/plans/`；旧文档在 `docs/archive/`（含 2026-10-28 全量快照）。
+- 死代码归档区：[`../legacy/README.md`](../legacy/README.md)（36 个归档文件 / 9078 行，只 mv 不删、可搬回；
+  该 README 不计入；`tools/status_report.py` 统计整个目录会比它多 1 个文件）。
+- 链接检查：`python tools/check_docs_links.py`（`docs/` 内 0 断链才退出 0）。
+- 架构守卫：`python tools/check_architecture.py`（死代码回归 / import 环 / 行数预算 / 分层，0=通过）。
 
-## 6. 已知问题 / 待办
+## 5. 已知问题 / 待办（与代码一致）
 
-1. 根 `tests/test_webui.py` 的 9 条旧 `/agi` 用例已 `skipif`（依赖已移除的 `agi.core`）；如需恢复需重写为 802 控制台。
-2. 8081/8082 仅保留历史/调试用途，不写入主链文档的操作步骤。
-3. 真实发送（2026-10-28 05:40 更新）：
-   - **换用 wechatauto-replica（Apache-2.0，1.2.8.1）作为发送后端**：`send_backend=sender` + `send_module=wechatauto`，`wxauto_python=E:/agent/venv_wx312/Scripts/python.exe`。
-   - 原因：Python 3.13 下 comtypes/UIA 枚举返回空（wxauto4 内置 uia 失效）；**Python 3.12 下 uiautomation 2.0.29 正常**，因此 wechatauto 需要独立 3.12 venv。
-   - 实测：体检账号识别、16/16 数据库可解密、控件树已物化；CLI `发` 与网关 `/api/approve` 均真实送达（`status=sent, module=wechatauto, chat_name=文件传输助手`）。
-   - wxauto4 代码与配置保留：改回 `send_module=wxauto4` + 原 venv 即可（等 wxauto 更新）。
-   - 旧 UIA 自研后端（uia_sender）保留为 `send_backend=uia` 备选。
+1. **训练没真正开始**：语料门禁 `MIN_SAMPLES=300`，2026-10-27 记录 96/300、`last_training=null`；
+   `tools/train/train_gate.py` 默认只做计划，真训练需人工 `--execute`，且只产出 `candidate` 不切线上。
+2. **发送兜底语义**：`unverified` 只表示无送达证据，不等于送达（`agi/wechat_gateway/sendclass.py`）。
+3. **8081/8082 仅历史/调试**；`/agi/core*` 在 `webui/server.py` 返回 410（`agi_core_removed`）。
+4. **外部依赖**：B站能力依赖仓库外 `~/.dsh/bili-duty` 插件；主对话依赖 DeepSeek API key；
+   发送依赖独立 Python 3.12 venv。缺失时分别降级，不代表功能已完成。
+5. 大文件待拆：`tools/console/server.py`、`agi/selflearn/proactive.py`、`agi/wechat_gateway/server.py`
+   已列入架构守卫的行数预算（基线不再增长，鼓励拆分）。
 
-## 7. 记忆引用闭环（P1-3）
+## 6. 怎么更新本页
 
-prompt 里实际注入的记忆行带稳定短引用，模型回复可引用、guard 再校验，形成防幻觉闭环：
+```bat
+:: 全量终验（两套测试 + 静态检查 + 生产文件未被污染），并落 JSON 证据
+C:\Python314\python.exe scripts\agentb_verify.py --json docs\agentb_verify_result.json
 
-- **注入**：`agi/selflearn/chat.py::_prompt` 在 `memory.render_memories` 的行首加
-  `[M-<hash8>]`（hash 自 memory 表 id，稳定、不泄露完整 id；最多注入 10 条，只注入实际进 prompt 的）；
-  示例：`- [M-4c0f75d0] [user/preference] 我喜欢晚上写东西（依据：…）`
-- **校验**：`agi/selflearn/guard.py::check(..., citation_ids=...)` 调用
-  `citation.validate_citations`；本次注入的短 id 视为有效，回复里指向不存在/未注入的
-  `[M-xxx]` 按 citation 原策略**删除引用**（不删整句），并写 `raw_events(kind="citation_invalid")` 审计。
-- **开关**：`memory_citation_enabled`（默认 true；env `MEMORY_CITATION_ENABLED` 优先）——
-  关闭时不注入 id、不调用 inject、不写新的 citation 审计，prompt 与旧逻辑一致。
-- **测试**：`agi/tests/test_memory_citation.py`（11 条：短 id 稳定、≤10 注入、
-  allowed 校验、无效引用删除+审计、开关关闭无注入/无新审计）；
-  回归：`pytest agi/tests -q -k "chat or guard or citation or memory"` → **354 passed**。
+:: 把终验 JSON 导入本文档的 STATUS:AUTO 区块（不手抄数字）
+C:\Python314\python.exe tools\status_report.py --from-agentb docs\agentb_verify_result.json
+
+:: 只刷新 collect 数/代码规模/归档量（秒级）
+C:\Python314\python.exe tools\status_report.py --refresh
+
+:: 真跑两套测试并回填实测结果（agi/tests 约 14~20 分钟）
+C:\Python314\python.exe tools\status_report.py --run
+
+:: 校验本页数字是否过期（过期退出 1）
+C:\Python314\python.exe tools\status_report.py --check
+```

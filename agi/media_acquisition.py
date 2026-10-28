@@ -22,9 +22,10 @@ from typing import Any
 
 from agi.selflearn import config
 from agi.selflearn import emoji as emoji_archive
+from agi.paths import data_dir as _default_data_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-WISH_FILE = ROOT / "agi" / "data" / "media_wishes.jsonl"
+WISH_FILE = _default_data_dir() / "media_wishes.jsonl"
 LIBRARY_DIR = ROOT / "media" / "stickers"
 ALLOWED_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 MAX_BYTES = 10 * 1024 * 1024
@@ -101,9 +102,9 @@ def add_to_library(path: Path | str, name: str, tags: list[str] | None = None) -
 # --------------------------------------------------------------------------- #
 # P5-e-B：本地导入（不联网）
 # --------------------------------------------------------------------------- #
-IMPORT_DIR = ROOT / "agi" / "data" / "selflearn" / "media"
-MEDIA_SOURCES_PATH = ROOT / "agi" / "data" / "media_sources.json"
-WISH_STATUS_FILE = ROOT / "agi" / "data" / "media_wishes_status.json"
+IMPORT_DIR = _default_data_dir() / "selflearn" / "media"
+MEDIA_SOURCES_PATH = _default_data_dir() / "media_sources.json"
+WISH_STATUS_FILE = _default_data_dir() / "media_wishes_status.json"
 #: 路径导入白名单（可 monkeypatch；桌面目录兼容英文 Desktop）
 IMPORT_PATH_ROOTS: tuple[Path, ...] = (
     IMPORT_DIR,

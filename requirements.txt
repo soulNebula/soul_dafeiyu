@@ -1,10 +1,14 @@
 # wx_box 运行时依赖
-# 本机实测环境：Windows 10/11 x64 + Python 3.14（C:\Python314\python.exe）
-# 安装：C:\Python314\python.exe -m pip install -r requirements.txt
+# 支持环境：Windows 10/11 x64 + Python 3.12+（本项目在 3.12 与 3.14 上均验证过；
+#   训练/网页端若用独立 venv，建议单独建 3.12 venv，见 docs/PATHS.md「换机迁移清单」）
+# 安装（不写死解释器路径，换机/换 venv 直接可用）：
+#   python -m pip install -r requirements.txt
 # 国内网络慢可加：-i https://pypi.tuna.tsinghua.edu.cn/simple
 #
-# 下面是"本机已实测版本"（2026-10-22）。若在其他 Python 版本上 pip 解析失败，
-# 可把 == 放宽成 >=（例如 Pillow>=10.0），或单独升级对应包。
+# 版本口径（2026-10-29 用 PyPI JSON API 逐条核对：下面每个 == pin 都在 PyPI 上真实存在）：
+#   Pillow 12.3.0 / psutil 7.2.2 / numpy 2.5.2 / rapidocr-onnxruntime 1.2.3
+#   imageio-ffmpeg 0.6.0 / zstandard 0.24.0（仅 <3.14 需要）/ pycryptodome >=3.20,<5
+# 若在其他 Python 版本上 pip 解析失败，可把 == 放宽成 >=（例如 Pillow>=10.0），或单独升级对应包。
 #
 # Tkinter 是 Python 标准库，不需要在这里安装（官方安装包默认自带）。
 Pillow==12.3.0
@@ -16,6 +20,8 @@ rapidocr-onnxruntime==1.2.3
 # 默认流程会用"一次性只读提取"的密钥解密图片/贴纸缓存，因此属于运行时依赖。
 # P0-3：原来写死 ==4.1.0（审计在 PyPI 上装不到；本机实测 4.1.0/4.2.0 可用），
 # 改成范围 `>=3.20,<5`：3.20+ 的 AES/CBC API 都兼容（已 pip download 验证 4.2.0 可装）。
+# 2026-10-29 复核：PyPI 最新 4.2.0，落在区间内；4.3+ 若破坏兼容也已被 <5 允许，
+# 需要重新验证时把上界收紧（例如 <4.3）即可，不会静默跳到未验证的大版本。
 pycryptodome>=3.20,<5
 # 用于把表情包解密出的 wxgf（微信 HEVC 动画容器）转成动画 GIF；
 # 自带 ffmpeg 7.1 二进制（无需额外安装 ffmpeg）。不装时只保留原始 .wxgf、无 GIF 预览。
@@ -31,7 +37,7 @@ imageio-ffmpeg==0.6.0
 #          pywin32 / uiautomation 只在早期 recon/ 探测脚本里用过，已不参与运行。
 #
 # ---- 开发/测试依赖（运行时不需要，按需手动安装）----
-# pytest==9.1.1      # 运行 tests/ 离线测试：C:\Python314\python.exe -m pip install pytest
+# pytest==9.1.1      # 运行 tests/ 离线测试：python -m pip install pytest
 
 # Python < 3.14 时用于解压数据库里的 zstd 消息内容（3.14+ 用标准库 compression.zstd）
 zstandard==0.24.0; python_version < "3.14"

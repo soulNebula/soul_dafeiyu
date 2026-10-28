@@ -19,6 +19,12 @@ DEFAULT_PATH = ROOT / "agi" / "data" / "wechat" / "drafts.jsonl"
 #: 避免 drafts.jsonl 无限堆积（2026-10-29 线上有 90 条 4 天前的 pending）。
 TTL_S = int(float(os.environ.get("DRAFTS_TTL_S") or 24 * 3600))
 
+#: 草稿默认保留天数（配置 ``draft_ttl_days`` 可覆盖）。
+#: 为什么要有 TTL：confirm 模式下每条被拦下的回复都会落一条草稿，长期不清会导致
+#: ``drafts.jsonl`` 无限长（读改写成本线性上升），也会让人工审批页被陈年草稿淹没。
+#: 7 天足够覆盖「周末不在电脑前」的场景，再久的草稿基本已经失去时效（对话早翻篇）。
+DEFAULT_TTL_DAYS = 7.0
+
 _LOCK = threading.Lock()
 
 
@@ -82,8 +88,14 @@ def _write_all(path: Path, rows: list[dict]) -> None:
 
 
 def add(contact: str, text: str, reason: str = "confirm",
-        *, path: Path | str | None = None) -> dict:
-    """新增一条草稿；返回草稿本身（含 id/ts）。"""
+        *, path: Path | str | None = None,
+        ttl_days: float | None = None) -> dict:
+    """新增一条草稿；返回草稿本身（含 id/ts）。
+
+    写入前顺手 prune 一次（默认 7 天）：调用方（网关/发送失败兜底）不需要记得清理，
+    草稿文件不会因为长期运行无限增长。``ttl_days=None`` 用
+    :data:`DEFAULT_TTL_DAYS`；传 0/负数表示关闭 prune（调试/测试用）。
+    """
     target = _path(path)
     item = {
         "id": "D-" + time.strftime("%Y%m%d%H%M%S") + "-" + secrets.token_hex(3),
@@ -93,18 +105,45 @@ def add(contact: str, text: str, reason: str = "confirm",
         "reason": str(reason or "confirm"),
         "status": "pending",
     }
+    days = DEFAULT_TTL_DAYS if ttl_days is None else float(ttl_days)
     with _LOCK:
-        rows = [row for row in _read_all(target)
-                if not _expired(row, time.time(), TTL_S)]
+        rows = _read_all(target)
+        if days > 0:
+            cutoff = item["ts"] - days * 86400.0
+            rows = [row for row in rows
+                    if float(row.get("ts") or 0) >= cutoff]
+
         rows.append(item)
         _write_all(target, rows[-200:])
     return item
 
 
-def list_all(*, path: Path | str | None = None, limit: int = 50) -> list[dict]:
+def prune(*, max_age_days: float = DEFAULT_TTL_DAYS,
+          path: Path | str | None = None,
+          now: float | None = None) -> int:
+    """删除超过 TTL 的草稿，返回删除条数（幂等；空文件/缺失文件返回 0）。
+
+    - 只按 ``ts`` 判断，不区分 reason/status：草稿都是「等人工决定」的待办；
+    - 没有 ``ts`` 的坏行按 0 处理（视为很老）→ 会被清掉，避免坏行永远留着；
+    - ``max_age_days <= 0`` 表示不清理，直接返回 0。
+    """
+    days = float(max_age_days)
+    if days <= 0:
+        return 0
     target = _path(path)
-    purge(path=target)                      # 读之前先清过期
-    rows = _read_all(target)
+    stamp = time.time() if now is None else float(now)
+    cutoff = stamp - days * 86400.0
+    with _LOCK:
+        rows = _read_all(target)
+        kept = [row for row in rows if float(row.get("ts") or 0) >= cutoff]
+        removed = len(rows) - len(kept)
+        if removed:
+            _write_all(target, kept)
+    return removed
+
+
+def list_all(*, path: Path | str | None = None, limit: int = 50) -> list[dict]:
+    rows = _read_all(_path(path))
     return rows[-max(1, int(limit)):]
 
 

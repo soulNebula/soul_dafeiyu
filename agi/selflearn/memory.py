@@ -89,10 +89,19 @@ def store_message(path: Path | str, role: str, text: str, now: float | None = No
 
 
 def recent_messages(path: Path | str = DB_PATH, limit: int = 12) -> list[dict]:
+    """最近消息（升序返回）；**没发出去的 assistant 消息不算既成事实**。
+
+    delivered=0 只由 :func:`agi.selflearn.chat.mark_turn_delivery` 在「turn 被明确
+    标成 blocked/failed」时写入（例如白名单/STOP/静默拦下，这句话从没到对方手机上）。
+    如果读侧仍把它当"我说过"，模型下一轮会顺着一个没发生的对话继续演。
+    旧库迁移后 delivered 默认 1，历史消息全部照旧可见（向后兼容红线）。
+    """
     con = db.connect(path)
     try:
         return [dict(r) for r in con.execute(
-            "SELECT * FROM messages ORDER BY ts DESC,id DESC LIMIT ?", (int(limit),)).fetchall()][::-1]
+            "SELECT * FROM messages "
+            "WHERE role <> 'assistant' OR COALESCE(delivered, 1) != 0 "
+            "ORDER BY ts DESC,id DESC LIMIT ?", (int(limit),)).fetchall()][::-1]
     finally:
         con.close()
 

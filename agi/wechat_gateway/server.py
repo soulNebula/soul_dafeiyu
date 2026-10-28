@@ -111,6 +111,29 @@ def parse_feedback(text: str) -> str | None:
 
 ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = ROOT / "agi" / "data" / "wechat" / "gateway.log"
+
+
+def _default_log_path() -> Path:
+    """网关日志的默认路径（**调用时**解析，不在 import 时写死）。
+
+    为什么必须延迟解析：日志路径若在 import 时定死，测试/多实例就无法用
+    ``SOULAGENT_LOG_DIR``/``SOULAGENT_DATA_DIR`` 把日志挪走（fixture 改不动
+    已经求值的模块常量），结果测试会往真实 ``agi/data/wechat/gateway.log``
+    里追加事件——既污染生产证据链，也让用例之间互相串写。
+
+    优先级：
+    1. ``SOULAGENT_LOG_DIR``（测试/多实例隔离用，日志落在该目录）；
+    2. ``agi.paths.data_dir()/wechat``（默认即 ``agi/data/wechat``，生产零变化）；
+    3. 历史常量 ``LOG_PATH``（paths 不可用时的兜底）。
+    """
+    log_root = str(os.environ.get("SOULAGENT_LOG_DIR") or "").strip()
+    if log_root:
+        return Path(log_root) / "gateway.log"
+    try:
+        from agi import paths as agi_paths   # 延迟 import：避免循环且让 env 生效
+        return agi_paths.data_dir() / "wechat" / "gateway.log"
+    except Exception:  # noqa: BLE001 - 兜底保证旧行为
+        return LOG_PATH
 WXAUTO_PYTHON = ROOT / "agi" / "data" / "wechat" / ".venv" / "Scripts" / "python.exe"
 
 # P0-16 死区哨兵阈值：主动调度间隔是 uniform(60, 7200)，最长一次正常等待 2h，
@@ -131,6 +154,9 @@ STOP_LOG_INTERVAL_S = 600.0        # proactive_stopped 每 10 分钟最多 1 条
 QUIET_OVERRIDE_S = 86400.0         # proactive_override_quiet 24h 后自动失效
 # P18-A：引擎暂停时，engine_paused_skip 审计节流（避免每条来信刷屏）
 ENGINE_PAUSE_LOG_INTERVAL_S = 60.0
+#: P0-AB2：debounce 攒批消息的冲刷重试上限。到上限仍失败就落盘 pending_lost.jsonl
+#: 并记 flush_dropped（有损但可观测/可捞回），不再无限重试也不静默丢。
+FLUSH_RETRY_MAX = 3
 
 # P0-24：死区哨兵只在"应该有事发生"时才有意义。下面三种状态都是
 # **预期不发送**（本来就不会有活动），此时报 gateway_stale 是纯噪音：
@@ -142,7 +168,7 @@ STALE_SUPPRESS_GRACE = "grace"
 
 
 def _log(entry: dict, path: Path | None = None) -> None:
-    target = Path(path) if path else LOG_PATH
+    target = Path(path) if path else _default_log_path()
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as fh:
@@ -165,12 +191,44 @@ def admin_token_warning(token: str) -> str:
     return ""
 
 
+def _delivery_status_from_classes(classes: list[str]) -> str:
+    """把一轮回复的逐气泡分类汇总成 ``turns.delivery_status``（纯函数）。
+
+    优先级：unverified > 全 delivered(sent) > partial > planned/draft > blocked > failed。
+    为什么要单独一个纯函数：打印日志/测试/控制台都按同一个口径，避免再次出现
+    "各处自己判是否送达"的语义漂移（见 sendclass 的教训）。
+    """
+    values = [str(x or "") for x in (classes or [])]
+    if not values:
+        return ""
+    if sendclass.UNVERIFIED in values:
+        return "unverified"
+    if all(x == sendclass.DELIVERED for x in values):
+        return "sent"
+    if sendclass.DELIVERED in values:
+        return "partial"
+    if all(x in (sendclass.PLANNED, sendclass.DRAFT) for x in values):
+        # dry-run / confirm 草稿：没尝试真发，也不算被拦，单独标注
+        return "draft" if sendclass.DRAFT in values else "planned"
+    if all(x in (sendclass.BLOCKED, sendclass.FAILED) for x in values):
+        # 一个气泡都没送达：闸门拦下（blocked）优先于后端失败，方便对账
+        return "blocked" if sendclass.BLOCKED in values else "failed"
+    return "partial"
+
+
 class Gateway:
     def __init__(self, cfg_obj: dict, *, stop_path: Path | str | None = None,
                  config_path: Path | str | None = None):
         self.cfg = dict(cfg_obj)
         self.draft_path = self.cfg.get("drafts_path") or drafts.DEFAULT_PATH
-        self.log_path = Path(self.cfg.get("log_path") or LOG_PATH)
+        # P0-AB：日志路径「调用时」解析（env SOULAGENT_LOG_DIR → 数据目录），
+        # 不在 import 时写死，否则测试隔离/多实例都改不动它。
+        self.log_path = Path(self.cfg.get("log_path") or _default_log_path())
+        # 「冲刷到上限仍失败」的消息落盘路径（绝不静默丢）：默认与 gateway.log 同目录，
+        # 生产即 agi/data/wechat/pending_lost.jsonl；测试用 tmp log_path 自动隔离。
+        self.pending_lost_path = Path(
+            self.cfg.get("pending_lost_path")
+            or (self.log_path.parent / "pending_lost.jsonl"))
         # P0-22b：STOP 路径显式注入（None = 走 config.stop_path()，可被测试隔离）
         self._stop_path = Path(stop_path) if stop_path is not None else None
         # P18-A：engine_enabled 持久化路径（默认生产 config.json；测试传 tmp）
@@ -186,14 +244,30 @@ class Gateway:
         self.receiver = None
         self.backend = None
         self.sender = WxAutoSender(module_name=str(self.cfg.get("send_module") or "wechatauto"))
-        self.wxauto_python = Path(os.environ.get("WECHAT_WXAUTO_PYTHON") or
-                                  self.cfg.get("wxauto_python") or WXAUTO_PYTHON)
         self.queue: "queue.Queue[dict]" = queue.Queue(maxsize=200)
         self.worker = None
         self.stop_event = threading.Event()
         self.lock = threading.Lock()
+        # P0-AB1：全局发送锁（RLock）。
+        # 为什么必须全局：reactive worker 与 proactive 线程会同时调用真实发送后端，
+        # 而 wxauto/UIA 都是"抢前台窗口"的全局资源——两边同时切会话会互相打断，
+        # 轻则失败重试，重则把 A 的话发到 B 的窗口（真机事故形态）。
+        # 为什么用 RLock：_send → _on_send_failure → 兜底发送（以及 _reply →
+        # send_media_batch）在**同一线程内**嵌套，普通 Lock 会自锁死。
+        # 锁粒度：覆盖"发送后端调用 + send_times/sent_today 记账"，也就是所有真实外发
+        # 路径；纯闸门判断（STOP/白名单/静默）也在锁内，代价可忽略。
+        self._send_lock = threading.RLock()
         self.started_at = time.time()
         self.recent = deque(maxlen=50)
+        # P0-AB6：入站队列满时丢弃计数（/status 暴露；不允许静默丢消息）
+        self.dropped_inbound = 0
+        # P0-AB-B：当前 worker 正在为哪个联系人跑 LLM/发送（单 worker，观测队列头阻塞）
+        self.in_flight_contact = ""
+        # P0-AB2：冲刷重试/最终丢弃计数（/status 与审计用）
+        self.flush_retry = 0
+        self.flush_dropped = 0
+        # P0-AB8：本次启动清理掉的过期草稿数
+        self.drafts_pruned = 0
         self.ready = False
         self.start_error = ""
         self.sent = 0          # 只统计 delivered（sendclass）
@@ -246,6 +320,40 @@ class Gateway:
         # P18-A：engine 审计/暂停日志节流 + 状态写锁
         self._engine_lock = threading.Lock()
         self._last_engine_pause_log = 0.0
+        # P0-AB9：弱口令硬闸。启动时就把"弱/空 admin_token"的状态定下来，
+        # 管理 API 一律 403（不再只是 /health 告警）。真正生效见 Handler._guard。
+        # 注意空 token 也要算"弱"：admin_token_warning("") 返回空串（它只管告警文案），
+        # 但"没配 token"对管理 API 来说是最弱的一种配置。
+        _token_value = str(self.cfg.get("admin_token") or "").strip()
+        self.admin_token_weak_blocked = (not _token_value) or bool(
+            self.admin_token_warning)
+        # P0-AB8：启动时清一次过期草稿（draft_ttl_days 覆盖默认 7 天）。
+        # 草稿只增不减会让 confirm 模式下的审批页被陈年内容淹没，也拖慢读改写。
+        try:
+            ttl_days = float(self.cfg.get("draft_ttl_days", drafts.DEFAULT_TTL_DAYS))
+        except (TypeError, ValueError):
+            ttl_days = float(drafts.DEFAULT_TTL_DAYS)
+        try:
+            self.drafts_pruned = int(drafts.prune(max_age_days=ttl_days,
+                                                  path=self.draft_path))
+        except Exception:  # noqa: BLE001 - 清理失败不影响启动
+            self.drafts_pruned = 0
+        try:
+            self._record("drafts_pruned", {"pruned": self.drafts_pruned,
+                                           "ttl_days": ttl_days})
+        except Exception:  # noqa: BLE001
+            pass
+
+    @property
+    def wxauto_python(self) -> Path:
+        """wxauto venv 解释器路径（**每次读取时**重算）。
+
+        为什么不在 __init__ 里定死：① 运维轮换 venv / 改 ``WECHAT_WXAUTO_PYTHON``
+        后不用重启网关；② 测试里 monkeypatch ``server.WXAUTO_PYTHON`` 才能生效
+        （旧实现构造时快照，跑测试会一直指向真实 venv，间接依赖生产数据目录）。
+        """
+        return Path(os.environ.get("WECHAT_WXAUTO_PYTHON")
+                    or self.cfg.get("wxauto_python") or WXAUTO_PYTHON)
 
     def start(self) -> None:
         if not self.cfg.get("enabled"):
@@ -843,8 +951,16 @@ class Gateway:
         try:
             self.queue.put_nowait(msg)
         except queue.Full:
+            # P0-AB6：队列满 = 入站消息被丢弃。旧实现只记一条 queue_full + failed++，
+            # 没有累计口径，运营看不出"丢了多少条"。这里显式计数并暴露到 /status。
+            # 取舍：宁可丢入站消息（对方会看到没回），也不能无界缓存把内存吃爆；
+            # 丢弃是有损的，所以必须可观测 + 有计数，不能静默。
+            self.dropped_inbound += 1
             self.failed += 1
             self._record("queue_full", {"friend": msg.get("friend")})
+            self._record("queue_overflow", {"friend": msg.get("friend"),
+                                            "queue_size": self.queue.qsize(),
+                                            "dropped_inbound": self.dropped_inbound})
 
     def _proactive_loop(self) -> None:
         """M5：常驻主动调度（间隔 60–7200s 均匀随机 = 1–120 分钟，P0-12）。"""
@@ -880,13 +996,12 @@ class Gateway:
                 self.stop_event.wait(min(1.0, max(0.0, deadline - time.time())))
 
     def _proactive_cycle(self) -> dict:
-        # P18-A：直接调用（测试/其它入口）也受引擎开关约束
-        if not self.engine_enabled:
-            return {"ok": True, "ran": False, "reason": "engine_stopped",
-                    "contacts": 0, "sent": 0, "drafts": 0, "deduped": 0,
-                    "clipboard": 0, "skipped": []}
-        from . import proactive_worker
-        return proactive_worker.run_cycle(self)
+        # P18-A：直接调用（测试/其它入口）也受引擎开关约束。
+        # P0-AB6（架构收口）：实现委托给 agi.proactive_registry.run_proactive_tick ——
+        # 「代码里真正在跑的主动链」与登记表/架构文档从此是同一件事。
+        # 行为逐字节等价：引擎关 → ran=False/engine_stopped；否则 run_cycle。
+        from agi import proactive_registry
+        return proactive_registry.run_proactive_tick(self)
 
     def _surf_loop(self) -> None:
         """P25：网上冲浪常驻调度（窗口/投骰在 surf_worker 里；不碰发送）。"""
@@ -1074,6 +1189,20 @@ class Gateway:
                              {"error": f"{type(exc).__name__}: {exc}"[:200]})
 
     def _work(self) -> None:
+        """单 worker 主循环：取一条入站 → 反馈分流 / 攒话 / 回复 → 冲刷 pending。
+
+        已知取舍（P0-AB-B，如实记录，不改并发模型）：
+        * 全网关**只有一个** worker 线程（``gateway-worker``）。``_buffer_inbound`` 在
+          没有 debounce 时会直接调 ``_reply``，而 ``_reply`` 里是真正的 LLM 调用
+          （最坏 ~60s 超时）+ 真实发送。这段时间里**其它联系人的入站消息只能排队**
+          （队列上限 200，满了丢并计 ``dropped_inbound``）。
+        * 为什么先不改：改成"按联系人串行 + 跨联系人有限并发"会同时碰到三块共享状态
+          （全局发送锁、pending 缓冲、last_turns/dedupe），在没有真机长跑验证前风险
+          高于收益；但队列深度 / 丢弃数 / 当前在跑的联系人都已可观测（/status），
+          真出现队头阻塞能立刻从 ``queue_size`` + ``in_flight_contact`` 看出来。
+        * 想缓解的话，正确方向是"LLM 生成与发送解耦"（生成线程池 + 发送仍单线程），
+          这属于后续任务，不在本次范围。
+        """
         while not self.stop_event.is_set():
             msg = None
             try:
@@ -1081,6 +1210,8 @@ class Gateway:
             except queue.Empty:
                 msg = None
             if msg is not None:
+                # P0-AB-B：把"当前在跑谁"暴露到 /status，便于看队头阻塞
+                self.in_flight_contact = str(msg.get("friend") or "")
                 try:
                     if self._handle_feedback(msg):
                         continue
@@ -1089,6 +1220,9 @@ class Gateway:
                     self.failed += 1
                     self._record("worker_error",
                                  {"error": f"{type(exc).__name__}: {exc}"})
+                finally:
+                    # 单条消息处理完（含 LLM 与发送）再清空在跑标记
+                    self.in_flight_contact = ""
             try:
                 self._flush_pending()
             except Exception as exc:  # noqa: BLE001
@@ -1136,6 +1270,18 @@ class Gateway:
         buf["texts"].append(text)
 
     def _flush_pending(self, *, force: bool = False) -> None:
+        """把 debounce 到点的攒批消息发出去。
+
+        P0-AB2（不丢消息）：旧实现是「先 pop 再 _reply」，_reply 一抛异常这条消息就
+        彻底消失（用户永远等不到回复，日志里只有 worker_error）。现在改成：
+        - **发送成功才 pop**；
+        - 失败时把 buffer 原样放回 pending（保留 texts/deadline），attempt+1，
+          记 ``flush_retry``，并按 attempt 做退避（``retry_at``），避免每 0.2s 打一次
+          LLM；
+        - attempt 达到 ``FLUSH_RETRY_MAX`` 仍失败：记 ``flush_dropped`` 并**落盘**
+          ``pending_lost.jsonl``（保留 contact/texts/异常/时间戳），人工可捞回来补发。
+          "最终丢弃"仍然会发生（不能无限重试），但不再是静默的。
+        """
         # P18-A：引擎停止时不冲刷攒着的回复（否则重启后会补发旧内容）
         if not self.engine_enabled:
             self.pending.clear()
@@ -1145,19 +1291,75 @@ class Gateway:
             buf = self.pending[contact]
             if not force and now < float(buf.get("deadline") or 0):
                 continue
-            self.pending.pop(contact, None)
+            # 失败退避：到点前不重试（force=停机最后一次冲刷，忽略退避只受上限约束）
+            if not force and now < float(buf.get("retry_at") or 0):
+                continue
             texts = [x for x in (buf.get("texts") or []) if x]
             if not texts:
+                self.pending.pop(contact, None)
                 continue
             msg = dict(buf.get("msg") or {})
             msg.update({"friend": contact, "text": chr(10).join(texts),
                         "kind": "text"})
+            attempt = int(buf.get("attempt") or 0)
             try:
+                self.in_flight_contact = str(contact or "")
                 self._reply(msg)
             except Exception as exc:  # noqa: BLE001
                 self.failed += 1
-                self._record("worker_error",
-                             {"error": f"{type(exc).__name__}: {exc}"})
+                attempt += 1
+                error = f"{type(exc).__name__}: {exc}"
+                self._record("worker_error", {"error": error,
+                                              "friend": contact, "attempt": attempt})
+                if attempt >= FLUSH_RETRY_MAX:
+                    # 到上限：不再留在内存里（否则会无限涨），但绝不静默丢
+                    self.pending.pop(contact, None)
+                    self.flush_dropped += 1
+                    self._persist_pending_lost(contact, buf, texts, error, attempt)
+                    self._record("flush_dropped", {
+                        "friend": contact, "attempt": attempt,
+                        "error": error[:200],
+                        "texts": len(texts),
+                        "lost_path": str(self.pending_lost_path)})
+                else:
+                    # 放回 pending：texts/deadline 原样保留，只加 attempt/retry_at
+                    back = dict(buf)
+                    back.update({"texts": list(buf.get("texts") or []),
+                                 "attempt": attempt,
+                                 "retry_at": now + min(60.0, 2.0 ** attempt)})
+                    self.pending[contact] = back
+                    self.flush_retry += 1
+                    self._record("flush_retry", {
+                        "friend": contact, "attempt": attempt,
+                        "retry_in_s": round(min(60.0, 2.0 ** attempt), 1),
+                        "error": error[:200]})
+            else:
+                self.pending.pop(contact, None)
+            finally:
+                self.in_flight_contact = ""
+
+    def _persist_pending_lost(self, contact: str, buf: dict, texts: list[str],
+                              error: str, attempt: int) -> None:
+        """把"重试到上限仍失败"的攒批消息落盘（追加一行 JSONL，失败静默）。
+
+        为什么落盘而不是只记日志：日志会被轮转/被 grep 淹没，而这批文本是**用户真的
+        说了、我们却没回**的内容，需要能直接捞出来补发。
+        """
+        entry = {
+            "ts": time.time(),
+            "contact": str(contact or ""),
+            "texts": [str(x) for x in texts],
+            "attempt": int(attempt),
+            "error": str(error)[:500],
+            "source_msg": {k: v for k, v in (buf.get("msg") or {}).items()
+                           if k in ("id", "kind", "friend", "media_path")},
+        }
+        try:
+            self.pending_lost_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.pending_lost_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        except Exception:  # noqa: BLE001 - 落盘失败不影响主链（事件里仍有记录）
+            pass
 
     def _handle_feedback(self, msg: dict) -> bool:
         contact = str(msg.get("friend") or "")
@@ -1195,12 +1397,26 @@ class Gateway:
             return ""
 
     def _reply(self, msg: dict) -> dict | None:
+        """一条入站消息 → selflearn 生成 → 逐气泡发送 → 回填送达状态。
+
+        注意（P0-AB-B）：本方法在**单 worker 线程**里跑，``agent.send`` 是真实 LLM
+        调用（最坏约 60s），期间其它联系人的消息只能在队列里排队（/status 的
+        ``queue_size`` / ``in_flight_contact`` 可观测）。并发模型本次不改，见
+        :meth:`_work` 的取舍说明。
+
+        P0-AB5（先落库后发送的补偿）：``agent.send`` 已经把 assistant 回复写进
+        messages/turns（下一轮上下文需要它），但真正送没送到是这里决定的。所以每个
+        气泡都带「turn_id:气泡序号」的幂等键发给 :meth:`_send`，发完按分类把整轮
+        状态回填到 ``turns.delivery_status``：全 delivered→sent；有 unverified→
+        unverified；一个都没送达（blocked/failed）→ blocked/failed，并把该 turn 的
+        assistant 消息标 delivered=0（读侧不再把它当"我说过的话"）。
+        """
         # P18-A：自动回复前置检查；engine 关直接返回，不写草稿、不调 agent
         if not self.engine_enabled:
             self._log_engine_pause("reply")
             return {"ok": False, "status": "engine_stopped",
                     "error": "engine_stopped"}
-        from agi.selflearn.chat import SelfLearnAgent
+        from agi.selflearn.chat import SelfLearnAgent, mark_turn_delivery
 
         contact = str(msg.get("friend") or "")
         raw_text = str(msg.get("text") or "")
@@ -1230,18 +1446,26 @@ class Gateway:
             if not text.strip():
                 text = "发了个表情包" if kind == "emoji" else "发了张图片"
         result = agent.send(text, image=image_data or None)
-        if result.get("turn_id"):
-            self.last_turns[contact] = str(result["turn_id"])
+        turn_id = str(result.get("turn_id") or "")
+        if turn_id:
+            self.last_turns[contact] = turn_id
         if result.get("skipped"):
             self._record("skipped", {"friend": contact, "reason": result.get("skip_reason")})
             return
         bubbles = result.get("bubbles") or ([result.get("reply")] if result.get("reply") else [])
+        classifications: list[str] = []
+        bubble_index = 0
         for bubble in bubbles:
             bubble = str(bubble or "").strip()
             if not bubble:
                 continue
-            out = self._send(contact, bubble, reactive=True)
+            # P0-AB4：幂等键 = turn_id:气泡序号。同一 turn 重试会撞键被拦（防重发），
+            # 不同 turn 说了同样一句话则键不同 → 照常发（旧实现按文本去重会误杀）。
+            out = self._send(contact, bubble, reactive=True,
+                             idem_key=f"{turn_id}:{bubble_index}" if turn_id else None)
+            bubble_index += 1
             classification = sendclass.classify_send_result(out)
+            classifications.append(classification)
             entry = {"friend": contact, "text": bubble, "status": out.get("status"),
                      "classification": classification,
                      "dry_run": bool(self.cfg.get("dry_run", True)), "result": out}
@@ -1259,6 +1483,20 @@ class Gateway:
                 self.failed += 1
             if not self.cfg.get("dry_run", True):
                 time.sleep(float(self.cfg.get("reply_delay") or 0))
+        # P0-AB5：把这一轮的真实送达结果回填（失败静默，绝不影响回复主链）
+        delivery_status = _delivery_status_from_classes(classifications)
+        if turn_id and delivery_status:
+            try:
+                marked = mark_turn_delivery(db_path, turn_id, delivery_status,
+                                            detail=f"bubbles={len(classifications)}")
+                self._record("delivery_marked", {
+                    "friend": contact, "turn_id": turn_id,
+                    "delivery_status": delivery_status,
+                    "messages_marked": marked.get("messages_marked", 0)})
+            except Exception as exc:  # noqa: BLE001 - 补偿失败不能影响发送
+                self._record("delivery_mark_failed", {
+                    "friend": contact, "turn_id": turn_id,
+                    "error": f"{type(exc).__name__}: {exc}"[:200]})
         # P5-b/P19：把模型指令解析出的媒体气泡发出去（此前只发文字，贴纸/图片被丢弃）
         media_plan = result.get("media")
         if isinstance(media_plan, dict):
@@ -1290,7 +1528,29 @@ class Gateway:
 
     def _send(self, contact: str, text: str, *, force: bool = False,
               reactive: bool = False, proactive: bool = False,
-              manual: bool = False, force_quiet: bool = False) -> dict:
+              manual: bool = False, force_quiet: bool = False,
+              idem_key: str | None = None) -> dict:
+        """发送单条文本（唯一入口）；持**全局发送锁**串行化所有真实外发。
+
+        锁覆盖：闸门判断 + 发送后端调用（wxauto 子进程 / UIA）+ send_times/
+        sent_today 记账。这样 reactive worker 与 proactive 线程不会同时抢微信窗口，
+        限流窗口的读改写也不会互相覆盖（旧实现两个线程能同时通过 hourly_limit 检查）。
+        用 RLock 是因为 _send → _on_send_failure → 兜底发送在同一线程内嵌套调用。
+
+        ``idem_key``（P0-AB4）：幂等去重键。给了就用它当 reactive 去重键，否则退回
+        文本本身。reactive 调用方传 ``f"{turn_id}:{bubble_index}"``：同一轮重试会被
+        拦（防重复发送），不同轮次说同一句话不会被误杀（旧实现按文本去重会吞掉）。
+        """
+        with self._send_lock:
+            return self._send_locked(
+                contact, text, force=force, reactive=reactive,
+                proactive=proactive, manual=manual, force_quiet=force_quiet,
+                idem_key=idem_key)
+
+    def _send_locked(self, contact: str, text: str, *, force: bool = False,
+                     reactive: bool = False, proactive: bool = False,
+                     manual: bool = False, force_quiet: bool = False,
+                     idem_key: str | None = None) -> dict:
         self.reload_config_now()
         # P0-22：STOP 文件是最高优先级，先于任何发送判断（含 reactive/force）
         if self.stop_present():
@@ -1375,8 +1635,13 @@ class Gateway:
             self._record("send_blocked", {"friend": contact,
                                           "reason": "daily_limit"})
             return {"ok": False, "status": "blocked", "error": "daily_limit"}
+        # P0-AB4：reactive 去重键 = (contact, idem_key or text)。
+        # 旧实现只看文本：模型在两轮里说了同一句"在呢"会被误拦（该发的不发）；
+        # 而同一轮的重试又会重复发（该拦的不拦）。带 turn_id:气泡序号的幂等键两个
+        # 方向都对：同 turn 重试撞键 → 拦；不同 turn 同文本 → 放行。
+        dedupe_token = str(idem_key or "").strip() or str(text or "")
         if reactive:
-            key = (str(contact or "").strip(), str(text or ""))
+            key = (str(contact or "").strip(), dedupe_token)
             seen = self._reactive_dedupe.get(key)
             if seen and (now - seen) < 60:
                 self._record("send_blocked", {
@@ -1426,7 +1691,7 @@ class Gateway:
                                            str(out.get("error") or "failed"))
             if reactive and out.get("ok"):
                 self._reactive_dedupe[(str(contact or "").strip(),
-                                       str(text or ""))] = now
+                                       dedupe_token)] = now
             return out
         # 发送后端：uia = 系统 .NET UIA（wxauto4 失效期间的替代，保留 wxauto 代码待其更新）
         backend = str(self.cfg.get("send_backend") or "wxauto").strip().lower()
@@ -1441,7 +1706,7 @@ class Gateway:
                         self.sent_today += 1
                         if reactive:
                             self._reactive_dedupe[(str(contact or "").strip(),
-                                                   str(text or ""))] = now
+                                                   dedupe_token)] = now
                         out["classification"] = cls
                         out["backend"] = "uia"
                         return out
@@ -1478,7 +1743,7 @@ class Gateway:
                 self.sent_today += 1
                 if reactive:
                     self._reactive_dedupe[(str(contact or "").strip(),
-                                           str(text or ""))] = now
+                                           dedupe_token)] = now
             elif classification == sendclass.FAILED:
                 return self._on_send_failure(
                     contact, text,
@@ -1533,7 +1798,20 @@ class Gateway:
         stop 开关 > 夜间静默 > 频率/预算；真实发送在 wxauto4 venv 子进程里执行。
         返回 ``{ok, status, items, sent, failed, draft_ids}``；失败的**文本**气泡
         会落草稿（不丢内容），media 失败只记审计、不影响同批其它气泡。
+
+        P0-AB1：整批持全局发送锁（子进程/UIA 阶段 + send_times/sent_today 记账都在
+        锁内），与 :meth:`_send` 互斥——否则 proactive 与 reactive 能同时抢窗口，
+        限流窗口的读改写也会互相覆盖。
         """
+        with self._send_lock:
+            return self._send_media_batch_locked(
+                contact, items, proactive=proactive, reactive=reactive,
+                force=force, manual=manual)
+
+    def _send_media_batch_locked(self, contact: str,
+                                 items: list[dict] | tuple[dict, ...], *,
+                                 proactive: bool = False, reactive: bool = False,
+                                 force: bool = False, manual: bool = False) -> dict:
         contact_name = str(contact or "").strip()
         raw_items = [dict(item) for item in (items or []) if isinstance(item, dict)]
         if not contact_name or not raw_items:
@@ -1551,11 +1829,14 @@ class Gateway:
         # ② 媒体开关（默认 false：上线前显式开启）
         if not media_mod.media_enabled(self.cfg):
             return self._media_blocked(contact_name, "media_disabled", raw_items)
-        # ③ 白名单
-        allowed = [str(x) for x in (self.cfg.get("allowed_contacts") or [])
+        # ③ 白名单：与 _send 一致 fail-closed（F2）。旧实现 `if allowed and ...` 在
+        # allowed 为空时**放行全部**，等于媒体路径绕过了白名单（安全不一致）。
+        allowed = [str(x).strip() for x in (self.cfg.get("allowed_contacts") or [])
                    if str(x).strip()]
-        if allowed and contact_name not in allowed:
-            return self._media_blocked(contact_name, "not_allowed", raw_items)
+        if not allowed or contact_name not in allowed:
+            return self._media_blocked(contact_name,
+                                       "no_allowlist" if not allowed else "not_allowed",
+                                       raw_items)
         # ④ 文本消毒/内容闸门 + 逐条校验（坏条目只失败自己，不拖累整批）
         results: list[dict | None] = [None] * len(raw_items)
         cleaned: list[tuple[int, dict]] = []
@@ -1696,8 +1977,13 @@ class Gateway:
                                 "used": r.get("used"), "error": "", "error_key": ""})
                             if r.get("ok"):
                                 sent += 1
-                                self.send_times.append(now)
-                                self.sent_today += 1
+                                # P0-AB7：只有"有送达证据"的才计 sent/占发送预算
+                                if sendclass.classify_send_result(r) == sendclass.DELIVERED:
+                                    self.send_times.append(now)
+                                    self.sent_today += 1
+                                    self.sent += 1
+                                else:
+                                    self.unverified += 1
                         return {"ok": True, "status": "sent",
                                 "items": [r for r in results if r is not None],
                                 "sent": sent, "failed": 0, "draft_ids": [],
@@ -1820,9 +2106,24 @@ class Gateway:
                 "error_key": (str(result.get("error_key") or "")
                               or self._normalize_error_key(str(result.get("error") or "")))})
             if result.get("ok"):
+                # 批次 sent 保持旧语义（ok 条目数，调用方/决策层按它统计逐条结果），
+                # 但网关口径分得更细（P0-AB7）：只有 DELIVERED 才算 sent 并占发送预算；
+                # ok=True + verified=False（窗口/UIA 兜底）→ unverified，单列、不虚高。
                 sent += 1
-                self.send_times.append(now)
-                self.sent_today += 1
+                cls = sendclass.classify_send_result(result)
+                result["classification"] = cls
+                if cls == sendclass.DELIVERED:
+                    self.send_times.append(now)
+                    self.sent_today += 1
+                    self.sent += 1
+                else:
+                    self.unverified += 1
+                    self._record("send_media_unverified", {
+                        "friend": contact_name,
+                        "type": str(result.get("type") or ""),
+                        "status": str(result.get("status") or ""),
+                        "warning": str(result.get("warning") or "")[:200],
+                        "method": str(result.get("method") or "")[:40]})
                 continue
             failed += 1
             # 文本气泡失败：落草稿，内容不丢（media 无草稿形态，只记审计）
@@ -1836,7 +2137,6 @@ class Gateway:
                     stage="media")
                 if draft is not None:
                     draft_ids.append(draft["id"])
-        self.sent += sent
         self.failed += failed
         all_ok = bool(sent) and failed == 0
         if all_ok:
@@ -1928,7 +2228,13 @@ class Gateway:
         return value[:60]
 
     def _fallback_send(self, contact: str, text: str, error: str) -> dict | None:
-        """窗口级兜底（默认关闭；默认只做剪贴板协助，不自动盲发）。"""
+        """窗口级兜底（默认关闭；默认只做剪贴板协助，不自动盲发）。
+
+        P0-AB7：兜底通道一律**不得声称已确认送达**。它发生在主后端失败之后的第二次
+        尝试，没有 wxauto 的 ChatInfo 证据链（UIA 只是按控件猜会话），所以 UIA 兜底
+        结果强制 ``verified=False`` / ``unverified=True``：调用方按 sendclass 归到
+        unverified——不计 sent、不占发送预算、不重置熔断，但审计里看得到。
+        """
         if not self.cfg.get("fallback_enabled"):
             return None
         try:
@@ -1938,6 +2244,13 @@ class Gateway:
             if backend == "uia":
                 from . import uia_sender
                 out = uia_sender.send_to_contact(contact, text, self.cfg)
+                if isinstance(out, dict) and out.get("ok"):
+                    out = dict(out)
+                    # 兜底=二次尝试，没有任何"确认送达"的证据链 → 一律 unverified
+                    # （uia_sender 自己的 verified=True 是"主通道"语义，兜底不认）
+                    out["verified"] = False
+                    out["unverified"] = True
+                    out.setdefault("warning", "fallback_send_unverified")
             elif mode == "auto" and backend == "contact":
                 out = win_send.send_to_contact(contact, text, self.cfg)
             else:
@@ -1945,8 +2258,17 @@ class Gateway:
         except Exception as exc:  # noqa: BLE001
             out = {"ok": False, "status": "failed",
                    "error": f"{type(exc).__name__}: {exc}"}
+        # P0-AB7：兜底结果必须自带"送达证据"才算 delivered。窗口/UIA 兜底默认只标
+        # verified=False（win_send 文档就是这么约定的）；连 verified 字段都没有的实现
+        # 一律降级成 unverified，绝不因为"ok=True"就计 sent。
+        if isinstance(out, dict) and out.get("ok") and out.get("verified") is not True:
+            out = dict(out)
+            out["verified"] = False
+            out["unverified"] = True
+            out.setdefault("warning", "fallback_send_unverified")
         self._record("fallback", {"friend": contact, "status": out.get("status"),
                                   "ok": bool(out.get("ok")),
+                                  "verified": out.get("verified"),
                                   "warning": str(out.get("warning") or "")[:200],
                                   "error": str(out.get("error") or "")[:200],
                                   "trigger": str(error)[:120]})
@@ -2013,17 +2335,32 @@ class Gateway:
             "allowed_contacts": self.cfg.get("allowed_contacts") or [],
             "monitored_contacts": self.cfg.get("monitored_contacts") or [],
             "queue": self.queue.qsize(),
+            # P0-AB-B：单 worker 队头阻塞的观测量（队列深度 + 当前在跑谁）
+            "queue_size": self.queue.qsize(),
+            "in_flight_contact": str(getattr(self, "in_flight_contact", "") or ""),
+            # P0-AB6：队列满被丢弃的入站消息累计数（有损但绝不静默）
+            "dropped_inbound": int(getattr(self, "dropped_inbound", 0) or 0),
+            # P0-AB2：debounce 冲刷重试/最终丢弃计数（丢弃的文本在 pending_lost.jsonl）
+            "flush_retry": int(getattr(self, "flush_retry", 0) or 0),
+            "flush_dropped": int(getattr(self, "flush_dropped", 0) or 0),
+            "pending_lost_path": str(getattr(self, "pending_lost_path", "") or ""),
             # P7-b：sent 只统计 delivered（真正送达）；
             # unverified/clipboard/planned 单列，方便和 proactive 的 out.* 对账。
             "sent": self.sent,
             "failed": self.failed,
+            # P0-AB7：兜底通道（窗口/UIA）"发了但没证据"的条数，可观测、不计 sent
             "unverified": self.unverified,
             "clipboard": self.clipboard,
             "planned": self.planned,
             "send_mode": control.send_mode(self.cfg),
             "drafts_pending": len(drafts.list_all(path=self.draft_path, limit=200)),
+            # P0-AB8：启动时按 TTL 清掉的过期草稿数（配置 draft_ttl_days，默认 7 天）
+            "drafts_pruned": int(getattr(self, "drafts_pruned", 0) or 0),
             "admin_token_set": bool(self.cfg.get("admin_token")),
             "admin_token_weak": bool(getattr(self, "admin_token_warning", "")),
+            # P0-AB9：弱/空 token 且服务已启动 → 管理 API 一律 403（不只是告警）
+            "admin_token_weak_blocked": bool(
+                getattr(self, "admin_token_weak_blocked", False)),
             "admin_token_warning": str(getattr(self, "admin_token_warning", "") or ""),
             "policy": {"stop": bool(self.cfg.get("stop")),
                        "quiet_hours": self.cfg.get("quiet_hours"),
@@ -2076,6 +2413,14 @@ def make_handler(gateway: Gateway):
             except Exception:  # noqa: BLE001
                 return int(gateway.cfg.get("port") or 801)
 
+        def _has_query_token(self) -> bool:
+            """请求 URL 里是否带了 ?token=…（P0-AB9：批准类接口一律拒绝这种形态）。"""
+            try:
+                values = parse_qs(urlsplit(self.path).query).get("token") or []
+                return any(str(value or "").strip() for value in values)
+            except Exception:  # noqa: BLE001
+                return False
+
         def _query_token(self) -> str:
             """P0-2：默认拒绝 ?token=；仅 GATEWAY_ALLOW_QUERY_TOKEN=1 + 回环来源才读。"""
             allow = str(os.environ.get("GATEWAY_ALLOW_QUERY_TOKEN", "")).strip().lower() in (
@@ -2097,10 +2442,35 @@ def make_handler(gateway: Gateway):
             except Exception:  # noqa: BLE001
                 return default
 
+        def _weak_token_active(self) -> bool:
+            """当前配置下 admin_token 是否不合格（空/默认口令/长度<8）。
+
+            每次请求重新读 cfg：控制台改完 config.json 后下一次请求就该按新值判定，
+            不能沿用构造时的快照（否则轮换 token 后旧判定还拦着）。
+            """
+            token = str(gateway.cfg.get("admin_token") or "").strip()
+            return (not token) or bool(admin_token_warning(token))
+
         def _guard(self) -> bool:
-            """Host 回环校验 + token 鉴权；任一不过直接回错误。"""
+            """Host 回环校验 + token 鉴权 + 弱口令硬拦；任一不过直接回错误。
+
+            P0-AB9：服务**已真正启动**（``gateway.ready``）且 admin_token 为空/默认
+            弱口令/长度<8 时，管理 API 直接 403 并审计 ``admin_token_weak_blocked``。
+            弱口令以前只是 /health 的一句告警——没人看告警就等于没有闸。
+            未 start() 的网关（离线构造/单测）保持旧行为：历史测试用短 token 调
+            handler，不能因为没真起服务就把它们全打红；生产 main() 一定先 start()。
+            """
             if not control.host_ok(self.headers.get("Host") or "", self._port()):
                 self._json(403, {"ok": False, "error": "host not allowed"})
+                return False
+            if getattr(gateway, "ready", False) and self._weak_token_active():
+                gateway._record("admin_token_weak_blocked", {
+                    "path": str(self.path.split("?", 1)[0]),
+                    "token_len": len(str(gateway.cfg.get("admin_token") or "")),
+                    "warning": gateway.admin_token_warning or "admin_token 为空"})
+                self._json(403, {"ok": False, "error": "admin_token_weak_blocked",
+                                 "detail": gateway.admin_token_warning
+                                 or "admin_token 为空"})
                 return False
             headers = {k: v for k, v in self.headers.items()}
             if not control.auth_ok(headers, gateway.cfg, self._query_token()):
@@ -2129,6 +2499,14 @@ def make_handler(gateway: Gateway):
             if not self._guard():
                 return
             path = self.path.split("?", 1)[0]
+            # P0-AB9：批准类接口只认 X-Admin-Token 头。?token= 会把管理令牌留在
+            # 浏览器历史 / 反向代理日志 / Referer 里，是实打实的凭据泄漏面 → 直接拒绝
+            # （即使 GATEWAY_ALLOW_QUERY_TOKEN=1 也不放行这两个接口）。
+            if path in ("/api/approve", "/api/draft/approve") and self._has_query_token():
+                gateway._record("admin_token_query_rejected", {"path": path})
+                self._json(403, {"ok": False, "error": "token_query_forbidden",
+                                 "detail": "批准类接口请改用 X-Admin-Token 头"})
+                return
             try:
                 body = self._read_json()
             except ValueError as exc:

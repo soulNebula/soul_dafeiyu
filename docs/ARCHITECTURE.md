@@ -1,168 +1,209 @@
-# 小鱼 · 项目架构说明
+# 小鱼 · 项目架构说明（按代码现状）
 
-> 这个项目是一个「会聊天的本地伴侣」：微信里真实收发消息，背后是一个带记忆、情绪、人格、兴趣、主动性和日记的智能体。
-> 大模型负责「会说」，项目负责「是谁」——记忆、心情、关系、欲望都在模型外面，逐层注入与约束。
+> 本文只写**能在代码里核对到的东西**。核对日期：2026-10-29；改了链路请同步改这里，
+> 数字类事实用 `python tools/status_report.py` 复算，架构约束用
+> `python tools/check_architecture.py` 复验。
+>
+> 一句话：微信里真实收发消息的本地伴侣；大模型负责「会说」，记忆/心情/人格/关系/欲望
+> 都在模型外部，逐层注入与约束。
 
-## 一、一张图看懂
+## 一、一张图
 
 ```mermaid
 flowchart LR
-    U[用户 · 微信] <--> WX[微信客户端<br/>wxauto4 / UIA]
-    WX <--> GW[网关 801<br/>receiver → normalize → chat.send]
-    GW --> CORE[对话核心<br/>记忆检索→心情→内状态→提示词→LLM→护栏]
-    CORE --> LLM[LLM 路由<br/>DeepSeek API 主 / 本地 3B 辅助]
-    CORE --> LOCAL[本地 0.5B 心灵模型 8123<br/>内状态 JSON（shadow）]
-    GW --> AUTO[自主层<br/>主动消息 / 冲浪 / 日记 / 周复盘 / 记忆睡眠]
-    AUTO --> DATA[(SQLite 分库<br/>memory + persona)]
+    U[用户 · 微信] <--> WX[微信 PC 客户端]
+    WX --> RECV[接入层<br/>wxauto4 WeChatReceiver<br/>或 wx_core.MonitorBackend]
+    RECV --> GW[网关 801<br/>receiver → 归一化 → chat.send]
+    GW --> CORE[对话核心 agi/selflearn/chat.py<br/>记忆→心情→内状态→提示词→LLM→护栏]
+    CORE --> LLM[agi/llm 路由<br/>DeepSeek API / 本地 openai_local / rule 兜底]
+    CORE --> INNER[内状态 agi/inner<br/>本地 0.5B 8123（shadow）]
+    GW --> AUTO[自主层<br/>主动链 / 冲浪 / 日记 / 周复盘 / 记忆睡眠]
+    GW --> SEND[发送链路<br/>STOP→引擎→白名单→内容→send_mode→节流→sender 子进程]
+    AUTO --> DATA[(SQLite 分库<br/>memory / persona)]
     CORE --> DATA
-    CONSOLE[控制台 802<br/>总览/推理过程/素材库/内驱力/成长/模型/B站] <--> GW
+    CONSOLE[控制台 802<br/>tools/console] <--> GW
     CONSOLE <--> DATA
-    BILI[B站插件 · DSH<br/>后台刷视频/读字幕评论] --> INGEST[内容摄取<br/>印象库 / 兴趣]
+    BILI[仓库外插件 ~/.dsh/bili-duty] --> INGEST[agi/integrations<br/>bili_digest / bili_ingest]
     INGEST --> DATA
-    EXT[外部信息<br/>天气/新闻/网页搜索] --> CORE
-    MODELS[E:\agent<br/>GGUF / adapter / 日志] -.模型与数据.-> LOCAL
+    EXT[agi/integrations/web_lookup<br/>天气/新闻/搜索] --> CORE
+    LEGACY[legacy 非主链<br/>8081 web_app.py / 8082 selflearn web] -.仅历史对照.-> GW
 ```
 
-## 二、分层
+## 二、端口与入口（代码默认值）
 
-### 1. 接入层（微信）
+| 端口/入口 | 启动命令 | 定位 | 代码依据 |
+| --- | --- | --- | --- |
+| **801** | `python -m agi.wechat_gateway.server` | 主链：微信网关（收/发/状态/调试 API） | `agi/wechat_gateway/config.py` DEFAULTS `"port": 801` |
+| **802** | `python tools/console/server.py --port 802` | 主链：控制台单页应用 | `tools/console/server.py` `--port` 默认 `PORT`（802） |
+| 8123 | `llama-server -m <0.5B gguf> --port 8123` | 可选：内状态小模型（shadow，只记录） | `agi/selflearn/mood_judge.py` 内状态地址默认 `http://127.0.0.1:8123` |
+| 8125 | `python tools/soul_serve/serve_local3b.py` | 可选：本地 3B（摘要/关键词/提取） | `tools/soul_serve/serve_local3b.py` |
+| 8081 | `python web_app.py` | **legacy/非主链**：旧 wx_box 网页端 | `web_app.py` `DEFAULT_PORT = 8081` |
+| 8082 | `python -m agi.selflearn.cli serve --port 8082` | **legacy/非主链**：selflearn 自带调试网页 | `agi/selflearn/cli.py` `serve` → `agi/selflearn/web.py` `main()` |
+
+桌面 GUI：`python app.py`（Tk；`--fake` 用 `ui/dev_backend.DevBackend` 演示，真实后端不可用时自动回退假后端）。
+`802` 控制台是日常唯一操作入口；`801` 网关是唯一真实收发入口。
+
+## 三、接入层：双后端 + 发送链路
+
+### 3.1 收消息（两套后端，归一到同一事件队列）
 
 | 模块 | 职责 |
-|---|---|
-| `agi/wechat_gateway/receiver.py` | 网关侧 wxauto4（UIA）接收适配器：白名单、去重、防抖、过期标记；识别撤回/引用/拍一拍的 system 与 text 变体、@提及 |
-| `wx_core/monitor.py` | **第二套采集后端** `MonitorBackend`：可启动 `db_source`（WCDB 解密直读）或 OCR 截图解析；对网关暴露统一 `events` 队列 |
-| `wx_core/db_source.py` | 数据库直读源（首选）：WCDB 解密到临时目录 → sqlite `mode=ro` → `Message`；文字/图片/表情/文件/语音精确对应，不需要 OCR |
-| `wx_core/extract.py` + `wx_core/ocr.py` | OCR 回退：PrintWindow 截图 + 布局识别 + 整区 OCR；WCDB 不可用或联系人不在库时使用 |
-| `agi/wechat_gateway/server.py` | 网关主进程（HTTP 801）：消息归一化（`[引用]`/`[拍一拍]`/`[对方@了你]`）、审核与发送闸门（STOP 文件、静默时段、小时/日上限、熔断）、引擎启停（`engine_enabled`）、以及各种调试接口 |
-| `agi/wechat_gateway/sender.py` / `sticker_native.py` | 文本/图片/贴纸发送；真实发送在 wxauto4 venv 子进程里执行（`agi/data/wechat/.venv`） |
+| --- | --- |
+| `agi/wechat_gateway/receiver.py` | `WeChatReceiver`：消费外部注入的 `wx_core.monitor.MonitorBackend`，做白名单/去重/防抖/过期标记，识别撤回、引用、拍一拍、@ |
+| `wx_core/monitor.py` | `MonitorBackend`：可选 `db_source`（WCDB 解密直读，`wx_core/db_source.py`）或 OCR 截图解析（`wx_core/ocr.py` + `wx_core/extract.py`），统一暴露 `events` 队列 |
+| `wx_core/db_source.py` | 数据库直读源：只读解密到临时目录 → sqlite `mode=ro`；文字/图片/表情/文件/语音精确对应 |
+| `wx_core/ocr.py`、`wx_core/extract.py` | OCR 回退：PrintWindow 截图 + 布局识别 + 整区 OCR |
 
-**双后端**：网关侧 `WeChatReceiver` 消费 wxauto4 事件；`MonitorBackend` 另一路可用 `db_source`（WCDB 直读，精确原文/媒体）或 OCR（截图回退）。两者最终都归一到同一 `Message`/`events` 队列，再进入网关归一化；不要只按单后端理解接入层。
+两个后端最终都归一到同一 `Message`/`events` 队列，再进网关归一化；不要按单后端理解接入层。
 
-消息进入顺序：**receiver（双后端之一） → 归一化 → 引擎/STOP 检查 → chat.send → 发送闸门 → wxauto4 子进程**。
+### 3.2 发消息（唯一入口 `Gateway._send`，持全局发送锁）
 
-### 2. 对话核心（`agi/selflearn/chat.py`）
-
-每轮 `send()` 的流水线：
+真实外发只走 `Gateway._send`（先拿全局发送锁，串行化 reactive / proactive / 人工三条调用路径），闸门顺序：
 
 ```
-输入清洗（图片理解 caption / 撤回引用脱敏 / 拍一拍直回"干嘛？"）
-  → 记忆检索（hybrid 检索 + 类海马体续命 search_with_revive）
-  → 心情快照（mood_state + 7 维 + 衰减）
-  → 内状态（0.5B 模型生成 stance/intent/monologue，shadow 模式只记录）
-  → 人格层/教训/技能/兴趣/关系种子 → 拼 system prompt
-  → 时间上下文（现在是 2026-10-27 22:00 周四 深夜）
-  → 实时资料（web_lookup：天气/新闻/网页搜索，命中才注入）
-  → LLM 生成（DeepSeek API；可选两段式证据生成，默认关）
-  → 护栏（去网感腔 / 去金句腔 / 禁编故障 / 禁主动收尾 / 长度/问号/内心独白）
-  → 润色（voice_polish 规则）→ 气泡拆分（心情高时可按逗号连发两条）
-  → 媒体配额（每 10 条 ≥2 条带 emoji/贴纸/GIF）→ 记录 turn/trace/记忆
+STOP 文件（最高优先）
+→ engine_enabled（手动/force 调试除外）
+→ allowed_contacts 白名单（空白名单 fail-closed，不再全放行）
+→ 出站文本摘除微信内部 ID
+→ policy.check_content（长度/占位/敏感）
+→ send_mode（off 拦 / confirm 只落草稿等人工批准 / auto 直发）
+→ config.stop 开关
+→ min_interval_s（只约束非 reactive 发送）
+→ hourly_limit（默认 40）
+→ daily_limit（默认 200）
+→ reactive 去重（60s 窗口，键 = turn_id:气泡序号）
+→ quiet_hours 夜间静默（默认 [23,8]；reactive/force_quiet 不受限）
+→ policy.check_send（统一限流/静默复核）→ sender
 ```
 
-关键子模块：
+发送器：`agi/wechat_gateway/sender.py` `WxAutoSender`，`send_module` 默认 `wechatauto`（历史值 `wxauto4`），
+`send_backend=sender|uia`；真实发送在独立的 Python 3.12 venv 子进程里执行（Python 3.14 主进程不 import wx 系依赖）。
+发送结果分类见 `agi/wechat_gateway/sendclass.py`：`sent` / `draft` / `blocked` / `unverified` / `failed`。
+**`unverified` 表示「调用返回 ok 但没有送达证据」（如窗口兜底 `verified=False`），不等于送达**，不计 sent、不重置熔断。
 
-| 模块 | 说明 |
-|---|---|
-| `agi/llm/` | 模型路由：按用途选后端（`video_understanding` 必须 API；摘要/关键词用本地 3B；回复用 DeepSeek），带回退链与 token 记账 |
-| `agi/selflearn/memory.py` | 长期记忆：抽取、合并、冲突处理、遗忘、检索 |
-| `agi/selflearn/memory_decay.py` | 类海马体衰减：strength 半衰期 → full/compressed/keyword/dormant；命中续命；200 天可唤醒；夜间睡眠清理 |
-| `agi/selflearn/mood_judge.py` | 每轮心情判定（moodDelta + 7 维 + 原因 + 置信度），低置信只记录 |
-| `agi/inner/` | 内状态层：本地 0.5B 输出 JSON（心情/能量/亲密/立场/独白） |
-| `agi/selflearn/persona_layers.py` | 人格层：core（人工批准）/evolving（自长）/seed，带证据与变更日志 |
-| `agi/selflearn/guard.py` | 输出护栏：slang（网感）/canned（金句腔）/false_failure（编造网络故障）/closing（主动收尾）/长度与占位兜底 |
-| `agi/integrations/web_lookup.py` | 联网实时信息：天气（wttr.in）、网页搜索（搜狗/必应）、新闻 top3、URL 正文提取、公众号（搜索可用，全文受微信风控） |
-| `agi/selflearn/media_quota.py` | 回复媒体配额：≥2/10 带图，连续 3 条软冷却 |
+## 四、对话核心（`agi/selflearn/chat.py`）
 
-### 3. 自主层（她自己的时间）
+`chat.send()` 一轮的主干（模块名即代码依据）：
 
-| 模块 | 何时 | 做什么 |
-|---|---|---|
-| `proactive_worker.py` + `proactive.py` | 每轮调度（静默 22–9 除外） | **现役生成链是 `simple_tick`（`proactive_style=simple`）**，外层由 `pacing`（对等）× `initiative`（熟悉度×心情×信任→主动度）× `urges`（内驱力队列）做门控/选题，再走 simple 的硬检查与发送；`proactive.py` 的 legacy 生成路径只保留兜底/实验，不是主链 |
-| `surf.py` / `surf_worker.py` | 10:00–22:00，每 30 分钟投骰 | 骰子≥3 且 ×冲浪因子≥2.4 才冲浪；时长 3–12 分钟、条数 ≤20；产出 my_take → 兴趣库，并向内驱力队列 push |
-| `diary.py` | 每天 23:00 | 读当天对话/主动/冲浪/心情/兴趣，第一人称写 300–600 字日记 → `agi/data/diary/YYYY-MM-DD.txt` |
-| `self_narrative.py` | 每周日 23:30 | 汇总一周日记与心情 → 周记 → 提炼 ≤120 字"我是谁/我在意什么" → core 人格层 → 注入日常 prompt |
-| `memory_decay.py` | 每天 03:00 | 记忆衰减/压缩/休眠与清理（dry-run 默认），模拟"睡眠整理" |
+| 环节 | 模块 |
+| --- | --- |
+| 记忆检索 | `retrieval.hybrid()`（类海马体续命在 `memory.retrieve*` + `memory_decay.py`） |
+| 心情判定 | `mood_judge.py`：LLM 判 `moodDelta` + 7 维情绪 + reason + confidence；基线 mood 70，mood 半衰期 3h、7 情绪 90min |
+| 内状态 | `agi/inner/`：0.5B 输出 stance/intent/monologue；shadow 模式只记录/注入受限字段 |
+| 人格与上下文 | `persona_layers.py`（core/evolving/relations）、`skills.py`、`lessons.py`、`interests.py`、`profile.py` |
+| 实时资料 | `agi/integrations/web_lookup.py`（天气/新闻/网页搜索；命中才注入） |
+| 生成 | `agi/llm/router.py` + `deepseek.py`（主）/ `openai_local.py`（本地）/ `rule.py`（兜底） |
+| 护栏 | `guard.py`（网感腔/金句腔/编造故障/主动收尾）+ `textguard.py`（内部 ID/尖括号） |
+| 媒体 | `media_quota.py`：最近 10 条里 <2 条带媒体 → 强制；2–3 → 30% 鼓励；≥4 → 不强制 |
+| 可观测 | `trace.py` → `turn_traces`（prompt/记忆/内状态/心情/生成/润色/守卫/耗时） |
 
-### 4. 数据层（SQLite 分库）
+## 五、记忆 / 内状态 / 心情 / 人格的归属
 
-`agi/data/selflearn/wechat_contacts/<哈希>.memory.sqlite3` + `.persona.sqlite3`（旧单库自动重命名为 `.legacy.sqlite3`）：
+- **记忆**：`agi/selflearn/memory.py`（抽取/合并/冲突/检索）+ `memory_decay.py`（分层衰减：strength 半衰期
+  → compressed → keyword → dormant；`DORMANT_PURGE_DAYS = 200`，清理默认 dry-run）。
+- **内状态**：`agi/inner/`（`schema.py` JSON schema、`inject.py` 注入、`render.py` 渲染），模型在仓库外。
+- **心情**：`agi/selflearn/mood_judge.py`（判定）+ `affect.py`（快照）+ `state` 表存当前心情；
+  与人格库的 `mood_state/mood_timeline` 表并存，是「细粒度心情层」。
+- **人格**：`persona_layers.py` 三层 `core`（人工批准）/`evolving`（证据累积+限速）/`relations`；
+  安装设定书由 `tools/persona/install_xiaoyu.py` 写入（`agi/persona/xiaoyu/` 素材）。
 
-| 域 | 表 |
-|---|---|
-| memory | `messages` `turns` `user_memories` `claims` `attachments` `mood_state` `mood_timeline` `turn_traces` `surf_sessions` `urges` `skills` `lessons` `interests` `bili_impressions` |
-| persona | `persona_layers` `state` `trust` `user_profile` `mood_*`（人格侧） |
+## 六、自主层（她自己的时间）
 
-`db.connect()` 是透明路由连接：按表名路由到对应文件，跨库查询走 `CrossDomainQuery`。
+### 6.1 主动消息链（唯一真相源：`agi/proactive_registry.py`）
 
-### 5. 控制台（`tools/console`，802）
+真实调用链（`registry.ENTRIES` 登记，测试静态核对）：
 
-单页应用（原生 JS）：总览（启停引擎/状态灯）、对话流、推理过程（每条回复 8 段链路，含 reasoning 原文）、内状态/心情、媒体、素材库（增删改类型/含义/标签/软删）、记忆、B站、模型（启停/外部进程识别）、训练/成长、日志、设置。
+```
+Gateway._proactive_loop          常驻线程（proactive_enabled；engine 停则空转）
+→ Gateway._proactive_cycle       委托 registry.run_proactive_tick（唯一入口）
+→ proactive_registry             登记表 + 引擎开关检查（代码与文档同一真相源）
+→ proactive_worker.run_cycle     配置热重载/STOP/开关/熔断/概率/间隔/白名单
+→ ticker.run_once                autonomy.gate 闸门
+→ proactive.tick                 生成正文并落库（从不直接发送）
+→ proactive._tick_impl           按 proactive_style 分流
+→ simple_tick.tick_simple        仅当 proactive_style=simple；默认 legacy
+```
 
-### 6. 内容世界（B站）
+- **主链唯一对外入口**：`agi/proactive_registry.run_proactive_tick(gateway)`；
+  `Gateway._proactive_cycle` 已改为直接委托它（不再各写一套），`tests/test_architecture.py`
+  静态核对「server 调用 registry / registry 全仓库只此一处定义 / 登记证据可搜到」。
+- **legacy/manual**：`agi/selflearn/web.py` 的 `POST /api/proactive/tick`（8082 调试页）、
+  `ticker.loop`（无现役调用者）、`python -m agi.selflearn.cli proactive`（人工触发一次生成）。
+- 主动节奏：`pacing.py`（对等）× `initiative.py`（熟悉度/心情/信任 → drive）× `urges`（内驱力队列），
+  再受日上限（`pacing_daily_cap` 默认 12，范围 12–100）、静默、连续无回应约束。
+- `proactive_style` 默认 `legacy`（`agi/selflearn/simple_tick.py::proactive_style`；可用 config
+  或 `PROACTIVE_STYLE` 环境变量切 `simple`）。**不要**再按旧文档写成「现役是 simple_tick」。
 
-`~/.dsh/bili-duty` 插件（DSH 侧）后台在峰谷时段刷视频、读字幕/评论 → 写日报与归档；本项目用 `agi/integrations/bili_digest.py` 解析日报、`bili_ingest.py` 做视频理解（走 API）与分享文案，产出进入兴趣库与主动话题。
+### 6.2 其它自主循环（都在网关线程里，互不阻塞）
 
-### 7. 模型与训练
+| 模块/入口 | 周期 | 做什么 |
+| --- | --- | --- |
+| `Gateway._surf_loop` → `agi/selflearn/surf_worker.py` + `surf.py` | 窗口内投骰 | 网上冲浪、沉淀兴趣/审计；**默认不主动发消息**，不碰发送通道 |
+| `Gateway._diary_loop` → `agi/selflearn/diary.py` | 每天 `diary_hour`（默认 23） | 写第一人称日记；engine 停也照写 |
+| `Gateway._narrative_loop` → `agi/selflearn/self_narrative.py` | 周日 23:30 后、本周未跑 | 周复盘 → core 人格层「我是谁/我在意什么」 |
+| 记忆睡眠 | 每天 `memory_sleep_hour`（默认 3） | `memory_decay.py` 衰减/压缩/休眠；`memory_purge_enabled` 默认 False（dry-run） |
 
-- **主意识**：DeepSeek API（`agi/selflearn/llm.py`），负责对话生成。
-- **潜意识**：本地 Qwen2.5-0.5B（llama-server 8123），只产内状态 JSON。
-- **本地 3B**（8125）：摘要/关键词/视频提取等高频便宜任务。
-- **后训练闭环**：`tools/train/` 每天 03:00 收集语料（正/负/修正样本 → SFT/DPO jsonl）→ 累计 ≥300 条且距上次 ≥3 天 → LoRA 增量训练（0.5B/1.5B）→ 黄金集评测 → 只标 candidate，不自动上线。
-- 模型资产在 `E:\agent`（GGUF/adapter/日志），**独立于项目目录**。
+## 七、数据层（SQLite 分库）
 
-## 三、关键机制
+- 位置：`agi/data/selflearn/`（运行数据，git 忽略）；按联系人落在 `wechat_contacts/<hash>.memory.sqlite3`
+  与 `.persona.sqlite3`，旧单库自动重命名为 `.legacy.sqlite3`。
+- 代码：`agi/selflearn/db.py` —— `memory_path()` / `persona_path()` / `legacy_path()` / `connect()`（路由连接）。
+- 表（节选，完整 schema 在 `db.py`）：记忆侧 `messages`/`turns`/`user_memories`/`turn_traces`/`mood_state`/
+  `mood_timeline`/`interests`/`bili_impressions`/`claims`/`attachments`；人格侧 `persona_layers`/
+  `persona_changelog`/`trust_events`/`raw_events` 等。
+- `agi/data/**` 一律不入库、不打包；路径解析见 `docs/PATHS.md`（`AGENT_HOME` / `agi/paths.py`）。
 
-1. **记忆分层 + 类海马体衰减**：hot/warm/cold + strength 半衰期；文字逐步压成一句、再到关键词、最后休眠；被提起即续命。
-2. **心情系统**：每轮判定（不靠 LLM 拍脑袋的单值，而是 7 维 + 原因 + 置信度）；衰减有半衰期；下降只能因为"担心你/自己难过"。
-3. **人格三层**：seed（安装设定书）→ evolving（互动中长，需证据）→ core（人工批准，如"你教她的那段话"）。
-4. **主动性三因子**：对等（pacing）、关系与心情（initiative → drive）、内驱（urges）→ 再被日上限/静默/连续无回应三重保护约束。
-5. **护栏**：网感腔、金句腔、编造故障、主动收尾四类硬规则，命中重写一次，仍命中删分句；所有被拦内容留 trace。
-6. **可观测**：每条回复落 `turn_traces`（system/user prompt、记忆、内状态、心情、生成含 reasoning、润色、守卫、耗时），控制台可逐段查看。
+## 八、控制台 802、B站与模型
 
-## 四、目录
+- **控制台**：`tools/console/server.py`（默认 802）+ `trace_api.py`/`media_store.py`/`growth_api.py`/
+  `model_admin.py`/`moments_api.py`；单页原生 JS，覆盖总览/对话/推理过程/内状态/素材/记忆/内驱力/B站/模型/训练/设置。
+- **B站**：仓库**不包含**插件本体，依赖外部 `~/.dsh/bili-duty`（DSH 侧插件）产出日报与凭证；
+  `agi/integrations/bili_digest.py` 读 `~/.dsh/bili-duty/out`，`bili_ingest.py` 读
+  `~/.dsh/bili-duty/bili_credential.json`；插件不存在时相关能力降级，不影响主链。
+- **模型**：主对话 = DeepSeek API（`agi/llm/deepseek.py`）；内状态 = 本地 0.5B（8123，shadow）；
+  本地 3B（8125）做摘要/关键词/提取；模型资产在仓库外（`E:\agent`，由 `agi/paths.py` 的 `agent_home` 解析）。
+- **训练**：`tools/train/`（`daily_corpus.py` 收集 → `daily_summary.py` → `train_gate.py` 门禁 →
+  `sft_train.py`/`smoke_lora.py` 训练）。门禁 `MIN_SAMPLES=300`、`MIN_DAYS=3`；默认只做计划，
+  必须人工 `--execute`，且只产出候选版本，**不自动切换线上**。截至 2026-10-27 的语料门禁：
+  可训练样本 96/300、`last_training=null`（未训练、未合并、未切线上，见 `docs/plans/52`）。
+
+## 九、目录（实际存在的）
 
 ```
 SoulAgent/
-├── agi/                     # 核心包（selflearn/ inner/ llm/ integrations/ wechat_gateway/）
-│   └── data/                # 运行数据（DB、媒体、日记、训练语料、缓存）【git 忽略】
-├── app/                     # IDEA 工作台后端（服务/配置/Git/文件/Data Studio）
-├── wx_core/                 # wxauto4 封装与监控
-├── tools/                   # console / desktop / soul_serve / train / persona / bili_patch
-├── tests/ ui/ webui/ Demo/  # 测试与旧前端/演示
-├── docs/                    # 说明文稿、架构图、plans、specs、分析
-├── docs/plans/              # 迭代计划（唯一目录；15–59，缺 17/27/55）
-├── run.bat / 启动桌面版.bat   # 启动入口
+├── agi/                   核心包：selflearn(94 个模块)/ inner/ llm/ integrations/
+│   │                      wechat_gateway/ soul/ persona/ data(运行数据, git 忽略)
+│   └── proactive_registry.py   主动链登记表 + 唯一主动入口
+├── tools/                 控制台(802)/ 桌面版/ soul_serve(8125)/ train/ persona/
+│   ├── check_architecture.py   架构守卫（死代码/环/行数/分层）
+│   └── status_report.py        可复现状态报告（测试数字/代码规模/归档量）
+├── wx_core/               wxauto4 封装、WCDB 直读、OCR、发送底座
+├── webui/                 legacy 8081 网页端（非主链，仍有测试覆盖）
+├── ui/                    Tk 桌面 GUI（app.py 入口）
+├── Demo/                  独立工具实现（tools_impl 被 tools/ 动态 import）
+├── legacy/                死代码归档区（只 mv 不删，见 legacy/README.md）
+├── tests/                 根测试套件
+├── scripts/               发布/验证脚本
+├── docs/                  文档（plans/ specs/ archive/ sources/）
+├── media/                 本地素材（运行数据）
+├── app.py / web_app.py    桌面 GUI / legacy 网页端入口
 └── README.md
 ```
 
-## 五、端口与进程
+## 十、架构守卫与归档（防回流）
 
-| 端口 | 进程 | 说明 |
-|---|---|---|
-| 801 | `python -m agi.wechat_gateway.server` | 微信网关（收发、状态、调试 API） |
-| 802 | `python tools/console/server.py --port 802` | 控制台 |
-| 8123 | `llama-server -m soul_qwen25_05b_v1b-q4_k_m.gguf` | 内状态（潜意识） |
-| 8125 | `python tools/soul_serve/serve_local3b.py` | 本地 3B（提取/摘要） |
-| 8081 | `python web_app.py`（旧根网页 `/agi`） | **非主链/legacy**：旧 wx_box 网页；`agi.core` 已移除，`/agi/core` 页面与 `/api/agi/core/*` 现恒返回 **410 Gone**（`agi_core_removed`），仅供历史对照 |
-| 8082 | `python -m agi.selflearn.web` | **非主链/调试**：selflearn 自带网页（记忆统计/反馈），日常入口仍是 802 控制台 |
+- `python tools/check_architecture.py` 四条规则：① 未登记顶层目录/无引用模块（死代码回归）；
+  ② `agi` 内部模块级 import 环；③ 单文件行数预算（新增 >1500 行直接 FAIL，存量大文件有各自上限）；
+  ④ 分层：`agi/*` 模块级不得 import `tools/*` 或 `webui/*`。
+- 已知无 import 边但活着的手动/动态入口（CLI、离线评测脚本、子进程 worker 等）登记在
+  `UNIMPORTED_ALLOWLIST`；归档历史见 `legacy/README.md`。
+- 归档只允许 `mv`（不 `rm`），内容不改，可原样搬回；`legacy/` 不参与运行、pytest 收集与合规扫描。
 
-## 六、已删除 / 遗留清单（不要照旧文档接线）
+## 十一、已知边界（与代码一致）
 
-以下链路已删除或降级为非主链。新代码**只接 801 网关 + 802 控制台**（外加 8123 内状态、8125 本地 3B），
-不要再引用本表里的旧入口；旧书签/脚本请迁移到 802 控制台。
-
-| 已删除 / 遗留 | 现状 | 说明 |
-|---|---|---|
-| `WechatMoments/` | **已删除** | 朋友圈第三方参考项目（微信 4.x 导出）不再随仓库分发；`webui/moments*.py` 只保留"可选外部目录"探测，目录缺失时网页端「朋友圈」页签降级不可用，不影响主链 |
-| `agi/core` | **已删除** | 旧 AGI 核心包（草稿/记忆审批/画像/授权/验收）；`webui/server.py` 的 `/agi/core`、`/agi/core.html` 与 `/api/agi/core/*` 全部改为**显式 410 Gone**：`{"error":"agi_core_removed","hint":"8081 旧接口已移除，请用 802 控制台"}` |
-| 8081 旧页面 | **legacy，非主链** | `web_app.py` 的旧根网页（`/agi` 草稿页仍保留兼容）；`/agi/core*` 已 410；不要再把 8081 当作入口 |
-| `proactive.py` legacy 生成路径 | **非主链** | 现役主动消息生成 = `simple_tick`（`proactive_style=simple`），外层由 `pacing`（对等）× `initiative`（熟悉度×心情×信任→主动度）× `urges`（内驱力队列）门控/选题；`proactive.py` 的 legacy 路径只作兜底/实验，不要作为生成链来读 |
-| 8082 实验台 | **非主链/调试** | `agi.selflearn.web`（记忆统计/反馈页），日常入口仍是 802 控制台；不要把它当产品入口 |
-
-> 历史参考归档：`_refs/`（本地参考，git 忽略）、`tools/reference_weflow/`、`Demo/` 不参与运行，
-> 也不在合规审计扫描范围内；`WechatMoments/` 已删除，如本地仍有副本同样不参与运行/审计。
-
-## 七、已知边界
-
-- 微信侧只能通过 UIA 操作：群聊未支持；引用/拍一拍为启发式识别。
-- 公众号全文受微信 IP 级风控（302 验证码），只能搜索标题摘要，或由用户复制正文。
-- "真意识"不存在；目标是把"连续的自我叙事 + 有因果的情绪 + 自己的兴趣 + 会主动 + 记得关系"做出来，让人相处时觉得她像个有自己生活的存在。
+- 微信侧只能 UIA 操作：群聊未支持；引用/拍一拍是启发式识别（`receiver.py`）。
+- 公众号全文受微信 IP 级风控：`web_lookup` 只能搜标题摘要，或由用户复制正文。
+- 本地小模型目前只做内状态与提取；「像她」主要靠记忆/人格/护栏，权重层面尚未替换主模型。
+- 兜底发送的 `unverified` 只代表无送达证据，不能当「已送达」写进对外说明。
+- 8081/8082 仅历史/调试用途，不写入主链操作步骤；`/agi/core*` 旧接口在 `webui/server.py` 返回 410
+  （`agi_core_removed`）。

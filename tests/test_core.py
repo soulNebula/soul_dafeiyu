@@ -16,6 +16,12 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "core"
 FRAME = FIXTURES / "wechat_frame.png"
 CONTACTS = FIXTURES / "wechat_contacts.png"
 FONT = r"C:\Windows\Fonts\msyh.ttc"
+#: 合成消息用例需要用 Windows 中文字体绘制气泡；非 Windows/CI 上没有这个 font → 精确 skip
+#: （不是整文件 ignore：其它不依赖字体的用例照常跑）
+REQUIRES_WINDOWS_FONT = pytest.mark.skipif(
+    not Path(FONT).is_file(),
+    reason=f"需要 Windows 中文字体 {FONT} 绘制合成消息（非 Windows/CI 跳过）",
+)
 
 DPI = 120  # 样本截图来自 125% 缩放
 
@@ -118,6 +124,7 @@ def _synth_new_message(base: Image.Image, layout, text: str, y_center: int) -> I
     return img
 
 
+@REQUIRES_WINDOWS_FONT
 def test_synth_new_message_detected(layout, ocr, frame):
     from wx_core import extract as E
 

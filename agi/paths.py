@@ -71,6 +71,60 @@ def agent_home() -> Path:
     return configured if configured is not None else Path(DEFAULT_AGENT_HOME)
 
 
+#: 数据根 / 日志根 / 根配置文件的环境变量（测试与多实例隔离用；生产不设置即保持历史路径）
+DATA_DIR_ENV = "SOULAGENT_DATA_DIR"
+LOG_DIR_ENV = "SOULAGENT_LOG_DIR"
+CONFIG_ENV = "SOULAGENT_CONFIG_PATH"
+WEB_CONFIG_ENV = "SOULAGENT_WEB_CONFIG"
+
+
+def data_dir() -> Path:
+    """仓库内数据根：``SOULAGENT_DATA_DIR`` → 默认 ``<repo>/agi/data``。
+
+    为什么单独抽出来：``agi/wechat_gateway/config.py``（网关配置/草稿/日志）、
+    ``agi/selflearn/config.py``（自学习库/日记/冲浪状态）、``agi/soul/dataset.py``
+    （消息日志）都把路径写成 import 时求值的常量。测试一旦先 import 这些模块，
+    任何 fixture 都改不动它们——只能在 import 之前用环境变量把整个数据根搬走。
+    默认值必须与历史路径逐字节一致（``REPO_ROOT/agi/data``），保证生产零变化。
+    """
+    value = _env(DATA_DIR_ENV)
+    if value:
+        resolved = _resolve(value)
+        if resolved is not None:
+            return resolved
+    return REPO_ROOT / "agi" / "data"
+
+
+def log_dir() -> Path:
+    """仓库内日志根：``SOULAGENT_LOG_DIR`` → 默认 ``<repo>/log``（默认与历史一致）。"""
+    value = _env(LOG_DIR_ENV)
+    if value:
+        resolved = _resolve(value)
+        if resolved is not None:
+            return resolved
+    return REPO_ROOT / "log"
+
+
+def config_path() -> Path:
+    """根 ``config.json``（含 db_keys 等敏感项）：``SOULAGENT_CONFIG_PATH`` → 默认 ``<repo>/config.json``。"""
+    value = _env(CONFIG_ENV)
+    if value:
+        resolved = _resolve(value)
+        if resolved is not None:
+            return resolved
+    return REPO_ROOT / "config.json"
+
+
+def web_config_path() -> Path:
+    """根 ``web_config.json``（含 LLM API key）：``SOULAGENT_WEB_CONFIG`` → 默认 ``<repo>/web_config.json``。"""
+    value = _env(WEB_CONFIG_ENV)
+    if value:
+        resolved = _resolve(value)
+        if resolved is not None:
+            return resolved
+    return REPO_ROOT / "web_config.json"
+
+
 def agent_path(*parts: str) -> Path:
     """``agent_home()/parts...``；parts 可以带 ``/`` 或 ``\\``。"""
     path = agent_home()
@@ -167,6 +221,10 @@ def backups_dir() -> Path:
 def describe() -> dict:
     """当前解析结果（诊断/控制台用）。"""
     return {
+        "data_dir": str(data_dir()),
+        "log_dir": str(log_dir()),
+        "repo_config": str(config_path()),
+        "web_config_path": str(web_config_path()),
         "agent_home": str(agent_home()),
         "models_dir": str(models_dir()),
         "gguf_dir": str(gguf_dir()),

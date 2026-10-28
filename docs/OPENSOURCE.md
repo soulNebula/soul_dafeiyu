@@ -1,7 +1,12 @@
 # 开源化与发布（M6）
 
-本文写清楚「怎么把 SoulAgent 开源出去、怎么发一个版本」。目标：**别人 clone 下来能跑、
-能提 issue/PR；我们发布时不会把用户数据/凭证带出去**。
+本文写清楚「怎么把 SoulAgent 开源出去、怎么发一个版本」。目标：**别人 clone 下来能跑
+离线逻辑层与测试、能提 issue/PR；我们发布时不会把用户数据/凭证带出去**。
+
+> 对外声明必须和代码一致：能力边界（已实现 / 未完成 / 外部依赖）以
+> [`../README.md`](../README.md) 第 1–3 节为准；数字以 [`STATUS.md`](STATUS.md) 的
+> `STATUS:AUTO` 区块为准（`python tools/status_report.py --run` 生成）。
+> 真机收发的运行前提（Windows/微信/独立 3.12 venv/API key/B站插件）不是「已实现」的一部分。
 
 ## 1. 版本与分支
 
@@ -26,8 +31,11 @@
 ## 3. 一键检查
 
 ```bash
-python tools/check_secrets.py     # 只做密钥扫描
-python scripts/release_check.py   # 发布闸门：必备文件 + 密钥 + 大文件 + 全量离线测试
+python tools/check_secrets.py          # 只做密钥扫描
+python tools/check_architecture.py     # 架构守卫（死代码/环/行数/分层），必须退出 0
+python tools/check_docs_links.py       # docs/ 断链检查，必须退出 0
+python tools/status_report.py --check   # STATUS.md 数字是否过期，过期退出 1
+python scripts/release_check.py        # 发布闸门：必备文件 + 密钥 + 大文件 + 全量离线测试
 ```
 
 `release_check.py` 输出逐项 `[PASS]/[FAIL]` 和最终 `RESULT: PASS|FAIL`，退出码 0/1；
@@ -54,7 +62,8 @@ python scripts/release_check.py --json           # 机器可读
 | `*.sqlite3` / `*.db` | 数据库（聊天/记忆/训练样本） | 不入库 |
 | 截图/录屏/Demo 数据 | 可能含好友昵称、wxid、头像、聊天内容 | 发布前逐张检查 |
 | `docs/analysis/` 里的真实对话摘录 | 隐私 | 脱敏或删除 |
-| `scratch/`、`_tmp*`、`.data_shots/` | 调试残留 | 清理 |
+| `_tmp*`、`.data_shots/`、运行期临时文件 | 调试残留 | 清理（原 `scratch/` 已归档到 `legacy/scratch/`，不再产生新残留） |
+| `legacy/` | 历史死代码归档（只 mv 不删，内容可发布，不含运行数据） | 保留；清单见 `legacy/README.md` |
 
 ### 4.2 敏感配置检查
 
@@ -104,19 +113,26 @@ python scripts/release_check.py --json           # 机器可读
 
 1. 确认 `main` 干净、CI 绿；
 2. 跑 `python scripts/release_check.py` → `RESULT: PASS`；
-3. 更新 `CHANGELOG.md`（新版本号 + 日期 + 变更）；
-4. 提升版本号（`agi/__init__.py` 或 `VERSION` 文件，若存在），提交；
-5. 打 tag：`git tag -a v0.1.0 -m "v0.1.0"`，推送 tag；
-6. GitHub → Releases → Draft a new release → 选 tag → 贴 CHANGELOG → 附可选的说明性
+3. 跑 `python tools/check_architecture.py`、`python tools/check_docs_links.py` 均退出 0；
+4. 全量跑一次测试并回填状态数字：`python tools/status_report.py --run`（`--check` 必须通过）；
+5. 更新 `CHANGELOG.md`（新版本号 + 日期 + 变更）；
+6. 提升版本号（`agi/__init__.py` 或 `VERSION` 文件，若存在），提交；
+7. 打 tag：`git tag -a v0.1.0 -m "v0.1.0"`，推送 tag；
+8. GitHub → Releases → Draft a new release → 选 tag → 贴 CHANGELOG → 附可选的说明性
    压缩包（**只含代码**，按 4.1 排除数据/媒体/配置；附 `sha256`）；
-7. 发布后自检：在干净目录 `git clone` + `pip install -r requirements.txt` +
-   `pytest agi/tests tests -q --ignore=tests/test_webui.py` 能跑；
-8. 回滚：删除 Release、`git tag -d`/远端删 tag；已合入的问题用 `fix:` 补丁版本；
-   **已泄漏的凭证先轮换，再考虑回滚代码**。
+9. 发布后自检：在干净目录 `git clone` + `pip install -r requirements.txt` +
+   `pytest tests agi/tests -q` 能跑（离线层；真机能力按 README「外部依赖」说明）；
+10. 回滚：删除 Release、`git tag -d`/远端删 tag；已合入的问题用 `fix:` 补丁版本；
+    **已泄漏的凭证先轮换，再考虑回滚代码**。
 
 ## 7. 已知限制（写进 Release Notes，避免误解）
 
 - 微信自动化依赖 Windows 客户端与 wx4 数据层，**Linux/macOS 只能跑离线逻辑层**；
 - CI（ubuntu）只保证离线测试；真机行为以 Windows 实测为准；
 - 需要自备大模型 API key（DeepSeek 等），费用自负；
-- 仅用于**本人账号**的陪伴/自动化，不支持多开群控与商业群发。
+- 仅用于**本人账号**的陪伴/自动化，不支持多开群控与商业群发；
+- **训练闭环未开始**：语料门禁 96/300（2026-10-27）、`last_training=null`，仓库无自动训练/自动上线；
+  唯一跑通过的是 20 步 smoke，没有线上 adapter；不要写成「会自我训练」；
+- **兜底发送 `unverified` 不等于送达**（`agi/wechat_gateway/sendclass.py`），对外说明不能用「已送达」；
+- **B站能力依赖仓库外插件** `~/.dsh/bili-duty`；本仓库只读其日报/凭证，不包含插件本体；
+- 8081/8082 是 legacy/调试入口，不是产品入口；主链只有 801 网关 + 802 控制台。

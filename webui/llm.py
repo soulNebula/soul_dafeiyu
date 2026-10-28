@@ -638,6 +638,24 @@ def _normalize_limit(value: Any) -> int:
 # ---------------------------------------------------------------------------
 # 配置存储
 # ---------------------------------------------------------------------------
+def _secrets_api_key() -> str:
+    """本机密钥库（agi/data/secrets.json）里的 ``llm.api_key``；不可用返回空串。
+
+    why 需要这一步：``python tools/rotate_secrets.py --apply`` 会把明文 key 从
+    ``web_config.json`` 迁走。若这里不读密钥库，迁移后网页端就会显示「未配置」
+    并让聊天直接失败——迁移工具不能以牺牲可用性为代价。
+    导入失败（例如只拷了 webui/ 目录）一律当作「没有密钥库」，行为不变。
+    """
+    try:
+        from agi import secrets_store
+    except Exception:  # noqa: BLE001 - 没有密钥库模块就当没迁移
+        return ""
+    try:
+        return secrets_store.llm_api_key()
+    except Exception:  # noqa: BLE001 - 密钥库损坏同样按「没有」处理
+        return ""
+
+
 class LLMConfigStore:
     """管理项目根 ``web_config.json`` 里的 LLM 配置（原子写 + 脱敏）。
 
@@ -647,7 +665,10 @@ class LLMConfigStore:
                  "base_url": "https://api.deepseek.com",
                  "thinking": true, "attach_images": true}}
 
-    没有保存 key 时用环境变量 ``DEEPSEEK_API_KEY`` 兜底（不回显明文）。
+    api_key 的解析顺序（2026-10 起）：``web_config.json`` 里保存的 key →
+    本机密钥库 ``agi/data/secrets.json`` 的 ``llm.api_key`` →
+    环境变量 ``DEEPSEEK_API_KEY``。每一步都可能落空，最终没有 key 就是「未配置」。
+    所有来源都**不回显明文**（只返回 ``api_key_masked``）。
     所有读写都在同一把可重入锁内完成：HTTP 线程、后台分析线程可能同时读配置。
     """
 
@@ -706,9 +727,12 @@ class LLMConfigStore:
         return config
 
     def load(self) -> dict:
-        """返回完整配置（api_key 为明文；没有保存 key 时用环境变量兜底）。"""
+        """返回完整配置（api_key 为明文；文件 → 密钥库 → 环境变量兜底）。"""
         with self._lock:
             config = self._saved_config()
+            if not config["api_key"]:
+                # 迁移后 key 不在 web_config.json 里了，先看本机密钥库。
+                config["api_key"] = _secrets_api_key()
             if not config["api_key"]:
                 env_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
                 if env_key:

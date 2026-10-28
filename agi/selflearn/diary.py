@@ -29,6 +29,7 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+from agi.paths import data_dir as _default_data_dir
 
 from . import db, state
 from .config import DATA_DIR, DB_PATH
@@ -40,8 +41,8 @@ INDEX_PATH = DIARY_DIR / "index.jsonl"
 #: 微信联系人库目录（网关按联系人分库；日记要把当天各库的对话都收进来）
 CONTACT_DB_DIR = DATA_DIR / "wechat_contacts"
 #: 网关日志（主动消息发没发/被回没回）
-GATEWAY_LOG = ROOT / "agi" / "data" / "wechat" / "gateway.log"
-WECHAT_CONFIG = ROOT / "agi" / "data" / "wechat" / "config.json"
+GATEWAY_LOG = _default_data_dir() / "wechat" / "gateway.log"
+WECHAT_CONFIG = _default_data_dir() / "wechat" / "config.json"
 
 DEFAULT_HOUR = 23
 MAX_MATERIAL_CHARS = 3000

@@ -276,10 +276,10 @@ def _memory_candidates(memories: list[dict[str, Any]],
     for item in memories[:3]:
         content = _clip(item["content"], 28)
         if item.get("associated"):
-            text = f"刚聊到点相关的，我突然想起你之前说过「{content}」"
+            text = f"刚聊到点相关的，你之前说过{content}"
             reason = "最近聊到的内容和这条记忆对得上，接得比较自然"
         else:
-            text = f"突然想起你之前说过「{content}」，不知道现在还作不作数"
+            text = f"突然想起你之前说过{content}，不知道现在还作不作数"
             reason = "记忆里有可以回访的事"
         bonus = max(-0.03, min(0.03, 0.2 * (float(item.get("confidence") or 0.6) - 0.6)))
         out.append(_candidate(

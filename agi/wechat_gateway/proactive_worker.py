@@ -416,7 +416,7 @@ def _urge_text(urge: dict) -> str:
         summary = str(payload.get("summary") or topic or "刚看到的东西").strip()
         return f"刚看到{summary[:80]}，挺想跟你说说"[:160]
     if kind == "progress_check":
-        return f"想起你说「{topic}」，现在进展怎么样了？"[:120]
+        return f"你之前说的{topic}，后来弄到哪一步了？"[:120]
     if kind == "light":
         return "在吗"
     return ""

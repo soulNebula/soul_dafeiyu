@@ -336,7 +336,7 @@ _KIND_FALLBACK = {
     "followup": "上次你说「{anchor}」，我一直惦记着",
     "light": "看到一个段子，笑死",
     "silence_ack": "翻到以前存的一篇文章，有点感慨",
-    "progress_check": "想起你说「{anchor}」，现在进展怎么样了？",
+    "progress_check": "你之前说的{anchor}，后来弄到哪一步了？",
 }
 
 #: 后处理兜底用的**数字生活/自我感受**安全句（P0-14：无物理细节、
@@ -347,7 +347,7 @@ _SAFE_FALLBACK = {
     "followup": "想起以前的一个笔记，有点感慨",
     "light": "看到一个段子，笑死",
     "silence_ack": "翻到一篇文章，有点感慨",
-    "progress_check": "想起你说「{anchor}」，现在进展怎么样了？",
+    "progress_check": "你之前说的{anchor}，后来弄到哪一步了？",
 }
 
 #: P6-c：兜底池（≥8 句，避免每次落同一句）；按最近 5 条/7 天去重选择
@@ -1032,6 +1032,17 @@ def polish_outbound(text: Any) -> str:
     value = _WS_RE.sub(" ", str(text or "")).strip()
     if not value:
         return ""
+    # 2026-10-28 用户反馈：不要用「」方括号引号
+    try:
+        from ..textguard import strip_corner_brackets
+        value = strip_corner_brackets(value)
+    except Exception:  # noqa: BLE001
+        pass
+    # 2026-10-28 用户反馈：不要再说「想起你说…」这种句式
+    for _bad, _good in (("想起你之前说过", "你之前说过"),
+                        ("想起你说", "你说"),
+                        ("我突然想起", "我想起")):
+        value = value.replace(_bad, _good)
     # P0-20：发送前兜底删除元话语（「接着刚才说的/刚才说的/前面提到…」）
     value = strip_metadiscourse(value).strip()
     if not value:
@@ -1211,7 +1222,11 @@ def find_physical_detail(text: Any) -> str | None:
     if not value:
         return None
     stripped = _QUOTED_RE.sub("", value)
-    claim_hints = SHARED_CLAIM_PATTERNS + ("你说的", "你之前说", "你上次说", "你说要")
+    # 2026-10-28：模板不再用「」包 anchor（用户要求），改成自然引述前缀；
+    # 这些前缀后面的物理词属于"对方/记忆里的内容"，不算小鱼自己的起居细节。
+    claim_hints = SHARED_CLAIM_PATTERNS + (
+        "你说的", "你之前说", "你上次说", "你说要", "上次你说", "你说",
+        "你之前提过", "你提过", "关于", "上次聊到", "刚看到", "跟")
     for sentence in re.split(r"[。！？!?；;\n]+", stripped):
         if not sentence:
             continue

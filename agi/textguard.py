@@ -51,3 +51,15 @@ def strip_internal_ids(text: str, *, placeholder: str = "") -> str:
         s = pat.sub(placeholder, s)
     s = re.sub(r"[ \t]{2,}", " ", s)
     return s.strip(" \t\r\n：:，,、;；")
+
+#: 用户明确不喜欢的「」『』方括号引号（2026-10-28 明确反馈："不要用这个符号"）
+_CORNER_BRACKETS = re.compile(r"[「」『』]")
+
+
+def strip_corner_brackets(text: str) -> str:
+    """去掉「」『』方括号引号；纯函数、无 IO。
+
+    用户反馈（10-28）：小鱼主动消息里用「」包引用，看着像公文/书面腔，要求别用。
+    """
+    return _CORNER_BRACKETS.sub("", str(text or "")).strip()
+

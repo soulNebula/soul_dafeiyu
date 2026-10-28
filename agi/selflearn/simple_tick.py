@@ -710,7 +710,7 @@ def tick_simple(path: Path | str, client=None, *, now: float | None = None,
     # P0-15：进度追问是确定性任务；模型两次都没写出问句时，用真实 anchor 的
     # 安全问句兜底（不编造、无 anchor 不乱问），而不是把这条好待办丢掉。
     if reasons and kind == "progress_check" and progress_anchor:
-        fallback_text = f"想起你说「{progress_anchor}」，现在进展怎么样了？"
+        fallback_text = f"你之前说的{progress_anchor}，后来弄到哪一步了？"
         fallback_reasons = _violations(fallback_text, None, anchors, recent_texts,
                                        kind=kind, anchor=progress_anchor)
         if not fallback_reasons:

@@ -252,3 +252,24 @@ def open_conflict_question(path: Path | str = DB_PATH) -> str:
     if not a or not b:
         return ""
     return f"我好像记得「{a['content']}」，又记得「{b['content']}」，哪个才是现在的？"
+
+# --------------------------------------------------------------------------- #
+# 2026-10-28 线上反馈：小鱼爱用「账/算账/记账/揭过去」比喻，逻辑混乱（用户："什么账先记着？"）
+# --------------------------------------------------------------------------- #
+LEDGER_RE = re.compile(r"账")  # 用户明确反感「账」类比喻（2026-10-28），一律视为风格问题
+_SENT_PARTS_RE = re.compile(r"[^。！？!?]+[。！？!?]?")
+
+
+def ledger_check(text: str) -> dict:
+    """命中「账」类比喻 → issues（用于重写；纯函数）。"""
+    hits = sorted({m.group(0) for m in LEDGER_RE.finditer(str(text or ""))})
+    return {"hit": bool(hits), "issues": [f"ledger:{h}" for h in hits], "hits": hits}
+
+
+def strip_ledger_clauses(text: str) -> str:
+    """删掉含「账」类比喻的分句；全删空则返回空串（调用方再走兜底）。"""
+    value = str(text or "")
+    parts = [p for p in _SENT_PARTS_RE.findall(value) if p.strip()]
+    kept = [p for p in parts if not LEDGER_RE.search(p)]
+    return "".join(kept).strip()
+

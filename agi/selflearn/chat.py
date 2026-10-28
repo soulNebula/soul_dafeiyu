@@ -459,9 +459,24 @@ class SelfLearnAgent:
             out = voice_polish.polish_reply(text, rng=self.rng, max_chars=40)
         except Exception:  # noqa: BLE001
             return text
+        try:
+            from ..textguard import strip_corner_brackets
+            text = strip_corner_brackets(text)
+        except Exception:  # noqa: BLE001 - 消毒失败不影响主链
+            pass
+        # 2026-10-28 用户反馈：不要再说「想起你说…」这种句式
+        for _bad, _good in (("想起你之前说过", "你之前说过"),
+                            ("想起你说", "你说"),
+                            ("我突然想起", "我想起")):
+            text = text.replace(_bad, _good)
         if not isinstance(out, dict) or not out.get("changed"):
             return text
         polished = str(out.get("text") or text)
+        try:
+            from ..textguard import strip_corner_brackets
+            polished = strip_corner_brackets(polished)
+        except Exception:  # noqa: BLE001
+            pass
         reasons = list(out.get("reasons") or [])
         self._record_voice_polished(text, polished, reasons)
         if isinstance(events, list):
@@ -1019,7 +1034,8 @@ class SelfLearnAgent:
             slang = guard.slang_check(reply) if slang_enabled else {"hit": False, "issues": []}
             canned = (guard.canned_check(reply, text) if canned_enabled
                       else {"hit": False, "issues": []})
-            if slang.get("hit") or canned.get("hit"):
+            ledger = guard.ledger_check(reply)
+            if slang.get("hit") or canned.get("hit") or ledger.get("hit"):
                 original = reply
                 rewritten = ""
                 try:
@@ -1028,7 +1044,8 @@ class SelfLearnAgent:
                                 "金句腔/总结式评价，或在不该收尾时主动结束话题；"
                                 "换成普通人日常说话：不用赢了/输了/这波/拿捏/绝了/笑死/666/血压；"
                                 "不写“但耐看/挺稳的/买完就踏实了/这默契先存着/我接住了/收下了/接住了/存着/记下了”；"
-                                "除非对方明说要去忙/要睡/再见，否则不要用那先这样/忙你的去/你先忙/回聊收尾。")
+                                "除非对方明说要去忙/要睡/再见，否则不要用那先这样/忙你的去/你先忙/回聊收尾；"
+                                "不要用账/算账/记账/揭过去这类比喻，直接说你的感受或接对方的话。")
                         regen_prompt = (prompt + "\n上次回复：" + original[:160]
                                         + "\n请按重写要求重写这一条，只输出正文。")
                         regen, _regen_meta = generation.generate(
@@ -1042,6 +1059,8 @@ class SelfLearnAgent:
                                 bad = bad or guard.slang_check(candidate).get("hit")
                             if candidate and canned_enabled:
                                 bad = bad or guard.canned_check(candidate, text).get("hit")
+                            if candidate and ledger.get("hit"):
+                                bad = bad or guard.ledger_check(candidate).get("hit")
                             if candidate and not bad:
                                 rewritten = candidate
                 except Exception:  # noqa: BLE001
@@ -1055,6 +1074,8 @@ class SelfLearnAgent:
                         cleaned = guard.strip_slang_clauses(cleaned)
                     if canned.get("hit"):
                         cleaned = guard.strip_canned_clauses(cleaned, text)
+                    if ledger.get("hit"):
+                        cleaned = guard.strip_ledger_clauses(cleaned)
                     if cleaned:
                         reply = cleaned
                         method = "clause_removed"
@@ -1069,6 +1090,10 @@ class SelfLearnAgent:
                     guard_info["canned_regenerated"] = {
                         "before": original[:300], "after": reply[:300],
                         "issues": canned.get("issues") or [], "method": method}
+                if ledger.get("hit"):
+                    guard_info["ledger_regenerated"] = {
+                        "before": original[:300], "after": reply[:300],
+                        "issues": ledger.get("issues") or [], "method": method}
                 guard_info["reply"] = reply
             if not image:
                 reply = style_profile.tune_reply(text, reply)

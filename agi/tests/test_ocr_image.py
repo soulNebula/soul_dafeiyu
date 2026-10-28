@@ -92,3 +92,51 @@ def test_main_no_image(capsys):
     code = ocr_image.main(["--image", ""])
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert code == 2 and payload["error"] == "no_image"
+
+
+def _media_image(tmp_path, left=True):
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (800, 1000), "#111111")
+    d = ImageDraw.Draw(img)
+    d.rectangle([40, 300, 160, 420] if left else [600, 300, 720, 420], fill="#e8b13a")
+    path = tmp_path / "chat.png"
+    img.save(path)
+    return path
+
+
+def test_detect_media_placeholder_left_and_right(tmp_path):
+    rows = [
+        {"text": "a", "cy": 100.0, "h": 30.0},
+        {"text": "b", "cy": 600.0, "h": 30.0},
+    ]
+    from PIL import Image
+    path = _media_image(tmp_path, left=True)
+    found = ocr_image._detect_media_regions(Image.open(path), rows, 800, 1000)
+    assert len(found) == 1
+    assert found[0]["role"] == "you" and found[0]["text"] == "[表情包]"
+    assert found[0]["kind"] == "media"
+
+
+def test_detect_media_blank_gap_no_placeholder(tmp_path):
+    from PIL import Image
+    img = Image.new("RGB", (800, 1000), "#111111")
+    path = tmp_path / "blank.png"
+    img.save(path)
+    rows = [{"text": "a", "cy": 100.0, "h": 30.0},
+            {"text": "b", "cy": 700.0, "h": 30.0}]
+    found = ocr_image._detect_media_regions(Image.open(path), rows, 800, 1000)
+    assert found == []
+
+
+def test_process_one_includes_media_bubbles(tmp_path, monkeypatch):
+    path = _media_image(tmp_path)
+    monkeypatch.setattr(ocr_image, "_ocr", lambda image: ([
+        _line("今天好累", (40, 100, 200, 130)),
+        _line("先瘫着", (620, 600, 720, 630)),
+    ], "windows", 8.0))
+    result = ocr_image._process_one(path, infer_role=True, detect_media=True)
+    assert result["ok"] is True
+    kinds = [b.get("kind") or "text" for b in result["bubble_lines"]]
+    assert "media" in kinds
+    media = [b for b in result["bubble_lines"] if b.get("kind") == "media"][0]
+    assert media["role"] == "you" and media["text"] == "[表情包]"

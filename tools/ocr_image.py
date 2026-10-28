@@ -121,7 +121,107 @@ def _merge_bubbles(rows):
     return bubbles
 
 
-def _process_one(path: Path, *, infer_role: bool) -> dict:
+
+
+def _estimate_bg(img) -> tuple[int, int, int]:
+    """取四角+边缘像素的中位数当背景色。"""
+    width, height = img.size
+    samples = []
+    step_x = max(1, width // 24)
+    step_y = max(1, height // 24)
+    for x in range(0, width, step_x):
+        samples.append(img.getpixel((x, 2)))
+        samples.append(img.getpixel((x, height - 3)))
+    for y in range(0, height, step_y):
+        samples.append(img.getpixel((2, y)))
+        samples.append(img.getpixel((width - 3, y)))
+    if not samples:
+        return (0, 0, 0)
+    r = sorted(p[0] for p in samples)[len(samples) // 2]
+    g = sorted(p[1] for p in samples)[len(samples) // 2]
+    b = sorted(p[2] for p in samples)[len(samples) // 2]
+    return (r, g, b)
+
+
+def _detect_media_regions(img, rows, width: int, height: int, *,
+                          top_cut: int = 80, bottom_cut: int = 70) -> list[dict]:
+    """在文字行之间的空白带里检测"图片/贴纸气泡"，返回占位符条目。
+
+    启发式：把空白带缩放到宽 64，按与背景色的差异找显著列；
+    只取连续显著列组成的 bbox（宽度 >75% 图宽视为背景噪声，丢弃）；
+    角色按 bbox 中心 x 判左右，贴纸/小图 → [表情包]，大图 → [图片]。
+    """
+    if width <= 0 or height <= 0:
+        return []
+    ordered = sorted(rows, key=lambda r: float(r["cy"]))
+    bands: list[tuple[float, float]] = []
+    prev_bottom = float(top_cut)
+    for row in ordered:
+        top = float(row["cy"]) - float(row["h"]) / 2.0
+        bottom = float(row["cy"]) + float(row["h"]) / 2.0
+        if top - prev_bottom >= 72:
+            bands.append((prev_bottom, top))
+        prev_bottom = max(prev_bottom, bottom)
+    if height - bottom_cut - prev_bottom >= 72:
+        bands.append((prev_bottom, float(height - bottom_cut)))
+    if not bands:
+        return []
+    bg = _estimate_bg(img)
+    found: list[dict] = []
+    for y0, y1 in bands:
+        try:
+            region = img.crop((0, int(y0), width, int(y1)))
+        except Exception:  # noqa: BLE001
+            continue
+        band_h = max(1, region.height)
+        scale = 64.0 / max(1, region.width)
+        small = region.resize((64, max(2, int(band_h * scale))))
+        width_s, height_s = small.size
+        columns = [0] * width_s
+        mask_rows = 0
+        for yy in range(height_s):
+            row_hit = False
+            for xx in range(width_s):
+                pixel = small.getpixel((xx, yy))
+                dist = abs(pixel[0] - bg[0]) + abs(pixel[1] - bg[1]) + abs(pixel[2] - bg[2])
+                if dist > 50:
+                    columns[xx] += 1
+                    row_hit = True
+            if row_hit:
+                mask_rows += 1
+        threshold = max(2, int(height_s * 0.10))
+        significant = [xx for xx, count in enumerate(columns) if count >= threshold]
+        if not significant:
+            continue
+        # 取最长连续段（避免把左右两侧零散噪点拼成整行）
+        runs, run_start, prev = [], significant[0], significant[0]
+        for xx in significant[1:]:
+            if xx == prev + 1:
+                prev = xx
+                continue
+            runs.append((run_start, prev))
+            run_start = prev = xx
+        runs.append((run_start, prev))
+        x0_s, x1_s = max(runs, key=lambda r: r[1] - r[0])
+        blob_w = (x1_s - x0_s + 1) / scale
+        if blob_w < 60 or blob_w > width * 0.75:
+            continue
+        ys = [yy for yy in range(height_s)
+              if any(columns[xx] and small.getpixel((xx, yy)) is not None
+                     for xx in range(max(0, x0_s), min(width_s, x1_s + 1)))]
+        blob_h = mask_rows * band_h / float(height_s)
+        if blob_h < 50:
+            continue
+        center_x = ((x0_s + x1_s) / 2.0) / scale
+        center_y = y0 + mask_rows * band_h / float(height_s) / 2.0
+        role = "me" if center_x >= width / 2.0 else "you"
+        text = "[表情包]" if (blob_w < width * 0.45 and blob_h < 420) else "[图片]"
+        found.append({"role": role, "text": text, "cy": round(center_y, 1),
+                      "kind": "media", "w": round(blob_w, 1), "h": round(blob_h, 1)})
+    return found
+
+
+def _process_one(path: Path, *, infer_role: bool, detect_media: bool = True) -> dict:
     result = {"file": str(path), "ok": False}
     try:
         img, width, height, scale = _load_image(path)
@@ -149,9 +249,17 @@ def _process_one(path: Path, *, infer_role: bool) -> dict:
             row["cx"] = round(row["cx"] / scale, 1)
             row["cy"] = round(row["cy"] / scale, 1)
             row["h"] = max(1, int(round(row["h"] / scale)))
+    bubbles = _merge_bubbles(rows)
+    if detect_media:
+        media = _detect_media_regions(img, rows, width, height)
+        if media:
+            for bubble in bubbles:
+                bubble.setdefault("kind", "text")
+            bubbles.extend(media)
+            bubbles.sort(key=lambda b: float(b.get("cy") or 0))
     result.update({"ok": True, "width": width, "height": height,
                    "scale": round(scale, 3), "engine": engine, "ms": ms,
-                   "lines": rows, "bubble_lines": _merge_bubbles(rows)})
+                   "lines": rows, "bubble_lines": bubbles})
     return result
 
 
@@ -168,6 +276,9 @@ def main(argv=None) -> int:
                         default=True, help="按左右位置推断你/我（默认开）")
     parser.add_argument("--no-infer-role", dest="infer_role", action="store_false")
     parser.add_argument("--json", action="store_true", help="只输出 JSON（默认也输出 JSON）")
+    parser.add_argument("--detect-media", dest="detect_media", action="store_true",
+                        default=True, help="识别无文字的图片/贴纸气泡并插占位符（默认开）")
+    parser.add_argument("--no-detect-media", dest="detect_media", action="store_false")
     args = parser.parse_args(argv)
 
     images: list[str] = []
@@ -178,7 +289,8 @@ def main(argv=None) -> int:
         print(json.dumps({"ok": False, "error": "no_image"}, ensure_ascii=False))
         return 2
 
-    results = [_process_one(Path(path), infer_role=bool(args.infer_role))
+    results = [_process_one(Path(path), infer_role=bool(args.infer_role),
+                            detect_media=bool(args.detect_media))
                for path in images]
     ok = any(r.get("ok") for r in results)
     payload = {"ok": ok, "results": results}

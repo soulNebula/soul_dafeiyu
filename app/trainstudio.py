@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 import time
@@ -22,6 +23,9 @@ from typing import Any
 from . import audit, paths
 
 TRAIN_PYTHON = os.environ.get("IDEA_TRAIN_PYTHON", r"E:/agent/venv312/Scripts/python.exe")
+EXPORT_PYTHON = os.environ.get("IDEA_EXPORT_PYTHON", r"C:/Python314/python.exe")
+TRAIN_FORMATS = ("auto", "messages", "instruction", "soul")
+TRAIN_MODES = ("lora", "full-ft")
 DEFAULT_MODEL = "E:/agent/models/Qwen2.5-0.5B-Instruct"
 DEFAULT_GGUF_DIR = "E:/agent/output/gguf"
 DEFAULT_OUTPUT_ROOT = "E:/agent/output"
@@ -136,6 +140,22 @@ def _dataset_kind(path: Path) -> str:
     return "sft"
 
 
+def _detect_format(rows: list[dict]) -> str:
+    """从样本行猜数据集格式：messages / instruction / soul / unknown。"""
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if isinstance(row.get("messages"), list):
+            return "messages"
+        if "instruction" in row or ("input" in row and "output" in row):
+            return "instruction"
+        if "state_profile" in row or "soul" in row or "chosen" in row:
+            return "soul"
+        if "user_msg" in row and ("assistant_msg" in row or "response" in row):
+            return "instruction"
+    return "unknown"
+
+
 def preview_dataset(path: str, *, limit: int = 20) -> dict:
     target, error = resolve_dataset(path)
     if not target:
@@ -156,7 +176,8 @@ def preview_dataset(path: str, *, limit: int = 20) -> dict:
                     break
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
-    return {"ok": True, "path": str(target), "rows": rows, "count": len(rows)}
+    return {"ok": True, "path": str(target), "rows": rows, "count": len(rows),
+            "format": _detect_format(rows)}
 
 
 def _row_text_len(row: dict) -> int:
@@ -338,37 +359,187 @@ def discover() -> dict:
             "bases": assets.get("bases", [])}
 
 
+def list_sources() -> dict:
+    """可导出的聊天库：联系人 memory sqlite + 主 selflearn memory sqlite。"""
+    soul = Path(paths.soulagent_home())
+    roots = [soul / "agi" / "data" / "selflearn" / "wechat_contacts",
+             soul / "agi" / "data" / "selflearn"]
+    items: list[dict] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        pattern = "*.memory.sqlite3" if "wechat_contacts" in str(root) else "selflearn.memory.sqlite3"
+        try:
+            found = sorted(root.glob(pattern))
+        except OSError:
+            found = []
+        for db in found:
+            key = str(db.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            rows = 0
+            last = 0.0
+            try:
+                con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
+                try:
+                    rows = int(con.execute("SELECT count(*) FROM messages").fetchone()[0])
+                    last = float(con.execute(
+                        "SELECT coalesce(max(ts),0) FROM messages").fetchone()[0] or 0)
+                finally:
+                    con.close()
+            except sqlite3.Error:
+                continue
+            items.append({"db": str(db.resolve()), "contact": db.name.split(".")[0],
+                          "rows": rows, "last": last, "mtime": db.stat().st_mtime})
+    items.sort(key=lambda row: row.get("mtime") or 0, reverse=True)
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+def export_chat(source_db: str, *, out_name: str = "", exclude_test: bool = True,
+                max_rows: int = 2000, window: int = 6, split: float = 0.0) -> dict:
+    """聊天库 → messages jsonl（子进程 tools/train/export_chat.py）。"""
+    raw = str(source_db or "").strip()
+    if not raw:
+        return {"ok": False, "error": "source_db_required"}
+    db = Path(raw).expanduser()
+    if not db.is_absolute():
+        db = Path(paths.soulagent_home()) / db
+    try:
+        db = db.resolve()
+    except OSError:
+        return {"ok": False, "error": "bad_path"}
+    if not db.is_file() or db.suffix.lower() not in (".sqlite3", ".db"):
+        return {"ok": False, "error": "not_a_sqlite_file", "path": str(db)}
+    if not any(_is_under(db, root) for root in _allowed_roots()):
+        return {"ok": False, "error": "path_out_of_allowed_roots"}
+    root = Path(paths.soulagent_home())
+    script = root / "tools" / "train" / "export_chat.py"
+    if not script.is_file():
+        return {"ok": False, "error": "export_script_missing", "path": str(script)}
+    out_root = Path(paths.agent_home()) / "datasets"
+    name = str(out_name or "").strip()
+    if name and not _NAME_RE.match(name):
+        return {"ok": False, "error": "invalid_name"}
+    if not name:
+        name = "chat_" + time.strftime("%Y%m%d_%H%M%S")
+    target_out = out_root / f"{name}.jsonl"
+    cmd = [str(EXPORT_PYTHON), str(script), "--db", str(db),
+           "--out", str(target_out),
+           "--max-rows", str(max(1, int(max_rows))),
+           "--window", str(max(1, int(window))),
+           "--split", str(max(0.0, min(0.9, float(split))))]
+    if exclude_test:
+        cmd.append("--exclude-test")
+    try:
+        result = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "export_timeout", "hint": ">300s"}
+    except OSError as exc:
+        return {"ok": False, "error": f"export_failed:{type(exc).__name__}: {exc}"}
+    if result.returncode != 0:
+        return {"ok": False, "error": "export_failed",
+                "hint": (result.stderr or result.stdout or "")[-800:]}
+    payload = {}
+    for line in reversed((result.stdout or "").splitlines()):
+        try:
+            candidate = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+    try:
+        candidates = sorted(
+            [p for p in out_root.glob(f"{name}*.jsonl") if not p.stem.endswith("_val")],
+            key=lambda p: p.stat().st_mtime, reverse=True)
+        out_path = candidates[0] if candidates else None
+        rows = int(payload.get("samples") or payload.get("rows") or 0) if isinstance(payload, dict) else 0
+        if out_path and out_path.is_file() and not rows:
+            rows = sum(1 for line in out_path.read_text(
+                encoding="utf-8", errors="replace").splitlines() if line.strip())
+        val_path = out_root / f"{name}.val.jsonl"
+    except OSError:
+        out_path, rows, val_path = None, 0, out_root / f"{name}.val.jsonl"
+    audit.record("train.export_chat", str(db), actor="workbench",
+                 meta={"out": str(out_path) if out_path else "", "rows": rows,
+                       "max_rows": max_rows, "window": window, "split": split})
+    return {"ok": True, "out": str(out_path) if out_path else "",
+            "rows": int(payload.get("rows") or rows),
+            "val_out": str(val_path) if val_path.is_file() else "",
+            "error": ""}
+
+
 def training_plan(dataset: str, *, model_path: str = DEFAULT_MODEL,
                   output: str = "", max_seq_len: int = 512, epochs: int = 1,
                   lr: float = 2e-4, lora_r: int = 16, lora_alpha: int = 32,
                   batch_size: int = 1, grad_accum: int = 1,
                   max_steps: int = 0, load_4bit: bool = False,
-                  dry_run: bool = False) -> dict:
+                  dry_run: bool = False, format: str = "auto",
+                  mode: str = "lora") -> dict:
     target, error = resolve_dataset(dataset)
     if not target:
         return {"ok": False, "error": error}
+    fmt = str(format or "auto").strip().lower()
+    if fmt not in TRAIN_FORMATS:
+        return {"ok": False, "error": "invalid_format", "allowed": list(TRAIN_FORMATS)}
+    run_mode = str(mode or "lora").strip().lower()
+    if run_mode not in TRAIN_MODES:
+        return {"ok": False, "error": "invalid_mode", "allowed": list(TRAIN_MODES)}
+    if fmt == "auto":
+        try:
+            sample = preview_dataset(str(target), limit=5)
+            detected = str(sample.get("format") or "unknown")
+        except Exception:  # noqa: BLE001
+            detected = "unknown"
+    else:
+        detected = fmt
     model_path = str(model_path or DEFAULT_MODEL)
     root = Path(paths.soulagent_home())
     adapter = Path(output) if output else (
         Path(paths.agent_home()) / "output" / f"idea_lora_{time.strftime('%Y%m%d_%H%M%S')}")
     if not adapter.is_absolute():
         adapter = root / adapter
-    cmd = [str(TRAIN_PYTHON), str(root / "tools" / "train" / "smoke_lora.py"),
-           "--data", str(target), "--model-path", str(model_path),
-           "--save-adapter", str(adapter),
-           "--max-seq-len", str(int(max_seq_len)),
-           "--epochs", str(int(epochs)), "--lr", str(float(lr)),
-           "--lora-r", str(int(lora_r)), "--lora-alpha", str(int(lora_alpha)),
-           "--batch-size", str(int(batch_size)),
-           "--grad-accum", str(int(grad_accum))]
+    use_smoke = (run_mode == "lora" and fmt == "auto"
+                 and detected in ("soul", "unknown"))  # 兼容旧 unknown 数据集
+    script = root / "tools" / "train" / ("smoke_lora.py" if use_smoke else "sft_train.py")
+    cmd = [str(TRAIN_PYTHON), str(script), "--data", str(target),
+           "--model-path", str(model_path)]
+    if use_smoke:
+        cmd.extend(["--save-adapter", str(adapter),
+                    "--lora-r", str(int(lora_r)),
+                    "--lora-alpha", str(int(lora_alpha))])
+        if load_4bit:
+            cmd.append("--load-4bit")
+    else:
+        # sft_train.py 的 LoRA 输出是 --save-adapter，全参微调输出是 --out（10-29 修）
+        if run_mode == "full-ft":
+            cmd.extend(["--out", str(adapter)])
+        else:
+            cmd.extend(["--save-adapter", str(adapter)])
+        cmd.extend(["--format",
+                    detected if detected in TRAIN_FORMATS[1:] else "messages"])
+        if run_mode == "full-ft":
+            cmd.append("--full-ft")
+        else:
+            cmd.extend(["--lora-r", str(int(lora_r)),
+                        "--lora-alpha", str(int(lora_alpha))])
+            if load_4bit:
+                cmd.append("--load-4bit")
+    cmd.extend(["--max-seq-len", str(int(max_seq_len)),
+                "--epochs", str(int(epochs)), "--lr", str(float(lr)),
+                "--batch-size", str(int(batch_size)),
+                "--grad-accum", str(int(grad_accum))])
     if int(max_steps) > 0:
         cmd.extend(["--max-steps", str(int(max_steps))])
-    if load_4bit:
-        cmd.append("--load-4bit")
     if dry_run:
         cmd.append("--dry-run")
     return {"ok": True, "cmd": cmd, "cwd": str(root), "dataset": str(target),
-            "adapter": str(adapter), "python": TRAIN_PYTHON}
+            "adapter": str(adapter), "python": TRAIN_PYTHON,
+            "format": detected, "mode": run_mode,
+            "engine": "smoke_lora" if use_smoke else "sft_train"}
 
 
 def _new_job(kind: str, **fields) -> dict:
@@ -433,7 +604,8 @@ def create_training_job(dataset: str, *, model_path: str = DEFAULT_MODEL,
                         steps: int = 0, lr: float = 2e-4,
                         lora_r: int = 16, lora_alpha: int = 32,
                         load_4bit: bool = False, max_len: int = 512,
-                        epochs: int = 1) -> dict:
+                        epochs: int = 1, format: str = "auto",
+                        mode: str = "lora") -> dict:
     model_path = str(model_path or DEFAULT_MODEL)
     if out_name and not output:
         if not _NAME_RE.match(str(out_name)):
@@ -442,14 +614,18 @@ def create_training_job(dataset: str, *, model_path: str = DEFAULT_MODEL,
     plan = training_plan(dataset, model_path=model_path, output=output,
                          max_seq_len=max_len, epochs=epochs, lr=lr,
                          lora_r=lora_r, lora_alpha=lora_alpha,
-                         max_steps=steps, load_4bit=load_4bit)
+                         max_steps=steps, load_4bit=load_4bit,
+                         format=format, mode=mode)
     if not plan.get("ok"):
         return plan
     job = _new_job("train", status="created", cmd=plan["cmd"], cwd=plan["cwd"],
                    dataset=plan["dataset"], adapter=plan["adapter"],
                    params={"steps": steps, "lr": lr, "lora_r": lora_r,
                            "lora_alpha": lora_alpha, "load_4bit": load_4bit,
-                           "max_len": max_len, "epochs": epochs})
+                           "max_len": max_len, "epochs": epochs,
+                           "format": plan.get("format") or format,
+                           "mode": plan.get("mode") or mode,
+                           "engine": plan.get("engine")})
     _write_job(job)
     audit.record("train.create", plan["dataset"], actor="workbench",
                  meta={"job": job["id"], "adapter": plan["adapter"]})

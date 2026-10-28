@@ -219,6 +219,25 @@ def train_datasets():
     return trainstudio.list_datasets()
 
 
+@app.get("/api/wb/train/sources", dependencies=[Depends(require_token)])
+def train_sources():
+    return trainstudio.list_sources()
+
+
+@app.post("/api/wb/train/export_chat", dependencies=[Depends(require_token)])
+def train_export_chat(body: dict):
+    out = trainstudio.export_chat(
+        str(body.get("source_db") or ""),
+        out_name=str(body.get("out_name") or ""),
+        exclude_test=bool(body.get("exclude_test", True)),
+        max_rows=int(body.get("max_rows") or 2000),
+        window=int(body.get("window") or 6),
+        split=float(body.get("split") or 0.0))
+    if out.get("ok"):
+        audit.record("train.export_chat", str(out.get("out") or ""), actor="workbench")
+    return out
+
+
 @app.get("/api/wb/train/assets", dependencies=[Depends(require_token)])
 def train_assets():
     return trainstudio.list_assets()
@@ -251,7 +270,9 @@ def train_create(body: dict):
         lora_alpha=int(body.get("lora_alpha") or 32),
         load_4bit=bool(body.get("load_4bit", False)),
         max_len=int(body.get("max_len") or 512),
-        epochs=int(body.get("epochs") or 1))
+        epochs=int(body.get("epochs") or 1),
+        format=str(body.get("format") or "auto"),
+        mode=str(body.get("mode") or "lora"))
     if out.get("ok"):
         audit.record("train.create", str(out.get("job", {}).get("id") or ""), actor="workbench",
                      meta={"dataset": body.get("dataset")})
@@ -260,9 +281,10 @@ def train_create(body: dict):
 
 @app.post("/api/wb/train/start", dependencies=[Depends(require_token)])
 def train_start(body: dict):
-    out = trainstudio.start_job(str(body.get("id") or ""))
+    job_id = str(body.get("id") or body.get("job_id") or "")
+    out = trainstudio.start_job(job_id)
     if out.get("ok"):
-        audit.record("train.start", str(body.get("id")), actor="workbench")
+        audit.record("train.start", job_id, actor="workbench")
     return out
 
 

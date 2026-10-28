@@ -94,15 +94,27 @@
 
     <section id="view-train" class="view">
       <div class="page-head"><div><h2>训练工厂</h2><p class="muted">数据集 → 过滤 → 创建任务 → 启动 → 看日志/产物。</p></div><button class="btn" id="train-refresh">刷新</button></div>
-      <div class="grid2">
-        <div class="panel">
-          <div class="panel-head"><h3>数据集</h3><span class="muted small" id="train-ds-count"></span></div>
-          <div id="train-datasets" class="list scroll"></div>
+      <div class="panel">
+        <div class="panel-head"><h3>数据来源</h3>
+          <div class="tabs"><button class="tab active" data-train-source="existing">已有数据集</button><button class="tab" data-train-source="chat">从聊天记录导出</button></div>
+          <span class="muted small" id="train-ds-count"></span></div>
+        <div id="train-source-existing"><div id="train-datasets" class="list scroll" style="max-height:220px"></div></div>
+        <div id="train-source-chat" style="display:none">
+          <div class="form-grid">
+            <label class="field"><span>聊天库</span><select id="train-source-db"></select></label>
+            <label class="field"><span>导出名称（可选）</span><input id="train-export-name" placeholder="留空自动生成"></label>
+            <label class="field"><span>最大行数</span><input id="train-export-rows" type="number" value="2000" min="10"></label>
+            <label class="field"><span>上下文窗口</span><input id="train-export-window" type="number" value="6" min="1"></label>
+            <label class="field"><span>验证集比例（0–0.9）</span><input id="train-export-split" type="number" value="0" min="0" max="0.9" step="0.05"></label>
+            <label class="check"><input type="checkbox" id="train-export-exclude" checked> 排除测试联系人</label>
+          </div>
+          <div class="actions"><button class="btn primary" id="train-export-btn">导出数据集</button><span class="muted small" id="train-export-hint">导出到 E:/agent/datasets，可直接用于训练</span></div>
+          <div id="train-export-result" class="muted small"></div>
         </div>
-        <div class="panel">
-          <div class="panel-head"><h3>任务</h3></div>
-          <div id="train-jobs" class="list scroll"></div>
-        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>任务</h3><span class="muted small">创建后选中并启动；日志实时轮询</span></div>
+        <div id="train-jobs" class="list scroll" style="max-height:220px"></div>
       </div>
       <div class="panel">
         <div class="panel-head"><h3>新建训练</h3></div>
@@ -114,6 +126,11 @@
           <label class="field"><span>lr</span><input id="train-lr" type="number" value="0.0002" step="0.00001"></label>
           <label class="field"><span>lora_r</span><input id="train-r" type="number" value="8" min="1"></label>
           <label class="field"><span>lora_alpha</span><input id="train-alpha" type="number" value="16" min="1"></label>
+          <label class="field"><span>格式</span><select id="train-format">
+            <option value="auto">自动识别</option><option value="messages">对话 messages</option>
+            <option value="instruction">指令 instruction</option><option value="soul">蒸馏 soul</option></select></label>
+          <label class="field"><span>训练模式</span><select id="train-mode">
+            <option value="lora">LoRA（省显存）</option><option value="full-ft">全参数 FFT（显存大，建议 0.5B + seq≤256）</option></select></label>
           <label class="check"><input type="checkbox" id="train-4bit"> load_4bit</label>
         </div>
         <div class="actions"><button class="btn primary" id="train-create">创建任务</button><button class="btn" id="train-start">启动选中任务</button><button class="btn" id="train-stop">停止选中任务</button></div>
@@ -396,6 +413,45 @@ async function backupDb() {
 }
 
 /* ---------------------------------------------------------------- 训练 */
+async function loadTrainSources() {
+  try {
+    const d = await api('/api/wb/train/sources');
+    const items = d.items || [];
+    const sel = $('#train-source-db');
+    if (sel) sel.innerHTML = items.map(x => `<option value="${esc(x.db)}">${esc(x.contact)} · ${x.rows} 行</option>`).join('') || '<option value="">没有可导出聊天库</option>';
+    const hint = $('#train-export-hint');
+    if (hint && !items.length) hint.textContent = '接口已接但未发现聊天库（或后端 /api/wb/train/sources 未接线）';
+  } catch (err) {
+    const sel = $('#train-source-db');
+    if (sel) sel.innerHTML = '<option value="">后端未接线（/api/wb/train/sources）</option>';
+  }
+}
+async function exportChatDataset() {
+  const source = $('#train-source-db').value;
+  if (!source) { toast('先选聊天库', 'err'); return; }
+  const btn = $('#train-export-btn');
+  btn.disabled = true;
+  try {
+    const body = { source_db: source,
+      out_name: $('#train-export-name').value.trim(),
+      max_rows: parseInt($('#train-export-rows').value, 10) || 2000,
+      window: parseInt($('#train-export-window').value, 10) || 6,
+      split: parseFloat($('#train-export-split').value) || 0,
+      exclude_test: $('#train-export-exclude').checked };
+    const d = await api('/api/wb/train/export_chat', { method: 'POST', body });
+    if (!d.ok) throw new Error(d.error || d.hint || '导出失败');
+    $('#train-export-result').innerHTML = `导出成功：${esc(d.out || '')}<br>行数 ${d.rows || 0}${d.val_out ? ' · 验证集 ' + esc(d.val_out) : ''}`;
+    toast('已导出 ' + (d.rows || 0) + ' 行', 'ok');
+    await loadTrain();
+    if (d.out) {
+      const match = (S.train.datasets || []).find(x => x.path === d.out || (x.rel && d.out.endsWith(x.rel)));
+      if (match) { S.train.selected = match.path; $('#train-dataset').value = match.path; loadPreview(match.path); }
+    }
+  } catch (err) {
+    $('#train-export-result').textContent = '导出失败：' + err.message;
+    toast(err.message, 'err');
+  } finally { btn.disabled = false; }
+}
 async function loadTrain() {
   try {
     const d = await api('/api/wb/train/datasets');
@@ -404,6 +460,11 @@ async function loadTrain() {
     $('#train-datasets').innerHTML = S.train.datasets.map(x => `<button class="list-row ${S.train.selected === x.path ? 'selected' : ''}" data-ds="${esc(x.path)}"><span>${esc(x.name)} <span class="muted small">${esc(x.root || '')}</span></span><span class="muted small">${x.rows ?? ''} 行</span></button>`).join('') || '<div class="muted">暂无数据集</div>';
     $('#train-dataset').innerHTML = S.train.datasets.map(x => `<option value="${esc(x.path)}">${esc(x.name)} (${x.rows ?? '?'} 行)</option>`).join('');
     $$('#train-datasets [data-ds]').forEach(b => b.onclick = () => { S.train.selected = b.dataset.ds; $('#train-dataset').value = b.dataset.ds; loadPreview(b.dataset.ds); loadTrain(); });
+    loadTrainSources();
+    if (new URLSearchParams(location.search).get('train') === 'chat') {
+      const chatTab = document.querySelector('[data-train-source="chat"]');
+      if (chatTab) chatTab.click();
+    }
     const jobs = await api('/api/wb/train/jobs');
     S.train.jobs = jobs.items || [];
     $('#train-jobs').innerHTML = S.train.jobs.map(j => `<button class="list-row ${S.train.selectedJob === j.id ? 'selected' : ''}" data-job="${esc(j.id)}"><span>${esc(j.id)} <span class="muted small">${esc(j.kind || '')}</span></span><span class="badge ${j.status === 'done' ? 'on' : ''}">${esc(j.status || '')}</span></button>`).join('') || '<div class="muted">暂无任务</div>';
@@ -413,6 +474,7 @@ async function loadTrain() {
 async function loadPreview(path) {
   try {
     const d = await api('/api/wb/train/preview?path=' + encodeURIComponent(path) + '&limit=3');
+    $('#train-hint').textContent = '格式：' + (d.format || 'unknown') + ' · 选中：' + path;
     term(JSON.stringify(d.rows || [], null, 2), '数据集预览');
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -425,7 +487,9 @@ async function createTrain() {
     lr: parseFloat($('#train-lr').value) || 0.0002,
     lora_r: parseInt($('#train-r').value, 10) || 16,
     lora_alpha: parseInt($('#train-alpha').value, 10) || 32,
-    load_4bit: $('#train-4bit').checked
+    load_4bit: $('#train-4bit').checked,
+    format: $('#train-format').value,
+    mode: $('#train-mode').value
   };
   try {
     const d = await api('/api/wb/train/create', {method: 'POST', body});
@@ -637,6 +701,13 @@ $('#db-next').onclick = () => { if (S.data.table && S.data.page < S.data.pages) 
 $('#db-run').onclick = runSql;
 $('#db-backup').onclick = backupDb;
 $('#train-refresh').onclick = loadTrain;
+$('#train-export-btn').onclick = exportChatDataset;
+$$('[data-train-source]').forEach(b => b.onclick = () => {
+  $$('[data-train-source]').forEach(x => x.classList.toggle('active', x === b));
+  $('#train-source-existing').style.display = b.dataset.trainSource === 'existing' ? '' : 'none';
+  $('#train-source-chat').style.display = b.dataset.trainSource === 'chat' ? '' : 'none';
+  if (b.dataset.trainSource === 'chat') loadTrainSources();
+});
 $('#train-create').onclick = createTrain;
 $('#train-start').onclick = startTrain;
 $('#train-stop').onclick = stopTrain;

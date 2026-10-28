@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -60,6 +61,92 @@ def _is_sqlite(path: Path) -> bool:
             return fh.read(16) == SQLITE_MAGIC
     except OSError:
         return False
+
+
+# --------------------------------------------------------------------------- #
+# 数据文件友好化：给普通用户看得懂的名字，测试/备份/旧库默认折叠
+# --------------------------------------------------------------------------- #
+_DOMAIN_LABELS = {
+    "audit": "操作审计",
+    "memory": "聊天记忆",
+    "persona": "人物画像",
+    "wechat": "微信数据",
+    "idea": "工作台数据",
+    "moments": "朋友圈数据",
+    "train": "训练数据",
+}
+#: 路径里出现这些片段 → 视为测试/临时/旧库，默认隐藏
+_HIDDEN_MARKERS = ("chattrials", "pytest-", "console_test", "_mood_probe", "legacy",
+                   "db_backups", ".trash", "\tmp\\", "/tmp/", "scratch")
+
+
+def _known_contacts() -> dict[str, str]:
+    """微信配置里的联系人名 → sha1(name)[:14]（= 每联系人库文件名前缀）。"""
+    cfg_path = Path(paths.soulagent_home()) / "agi" / "data" / "wechat" / "config.json"
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    names: set[str] = set()
+    for key in ("allowed_contacts", "monitored_contacts", "proactive_contacts",
+                "friends", "contacts"):
+        for name in cfg.get(key) or []:
+            if isinstance(name, str) and name.strip():
+                names.add(name.strip())
+    for key in ("contact_modes", "contact_profiles", "contact_nicknames"):
+        mapping = cfg.get(key)
+        if isinstance(mapping, dict):
+            names.update(str(k).strip() for k in mapping if str(k).strip())
+    return {hashlib.sha1(name.encode("utf-8")).hexdigest()[:14]: name for name in names}
+
+
+_CONTACT_CACHE: dict[str, str] | None = None
+
+
+def _contact_of(path: Path, domain: str) -> str:
+    """联系人名：优先 sessions.friend，其次按库文件名sha1前缀反查微信联系人。"""
+    if domain not in ("memory", "persona"):
+        return ""
+    try:
+        con = sqlite3.connect(f"file:{quote(str(path).replace(chr(92), '/'))}?mode=ro", uri=True, timeout=3)
+        try:
+            row = con.execute("SELECT friend FROM sessions WHERE friend IS NOT NULL "
+                              "AND friend != '' LIMIT 1").fetchone()
+            if row and str(row[0]).strip():
+                return str(row[0]).strip()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        pass
+    global _CONTACT_CACHE
+    if _CONTACT_CACHE is None:
+        _CONTACT_CACHE = _known_contacts()
+    stem = path.name.split(".")[0]
+    if re.fullmatch(r"[0-9a-f]{14}", stem):
+        return _CONTACT_CACHE.get(stem, "")
+    return ""
+
+
+def _friendly(path: Path, domain: str) -> dict:
+    lowered = str(path).lower()
+    name = path.name
+    hidden = any(marker in lowered for marker in _HIDDEN_MARKERS)
+    hidden = hidden or bool(re.match(r"^audit_\d{8}_", name)) or name.startswith("_")
+    base = _DOMAIN_LABELS.get(domain) or "其它数据"
+    contact = _contact_of(path, domain)
+    # sha1 前缀的库但已反查不到联系人 = 旧联系人/已删除会话的库 → 默认折叠
+    if not hidden and not contact and re.fullmatch(r"[0-9a-f]{14}\.\w+\.sqlite3", name):
+        hidden = True
+        base = base + "（旧联系人库）"
+    if contact:
+        label = f"{base} · {contact}"
+    elif domain in ("memory", "persona") and not hidden and "." in name             and not re.fullmatch(r"[0-9a-f]{14}.*", name):
+        label = f"{base}（默认库）"
+    elif hidden:
+        label = f"{base}（临时/备份）"
+    else:
+        label = base
+    return {"label_zh": label, "contact": contact, "hidden": hidden}
 
 
 def _domain_of(path: Path) -> str:
@@ -140,11 +227,18 @@ def list_databases() -> dict:
                 label = path.relative_to(data).as_posix()
             except ValueError:
                 label = path.name
+        domain = _domain_of(path)
+        friendly = _friendly(path, domain)
         items.append({"id": str(path), "name": path.name, "label": label,
                       "path": str(path), "size": stat.st_size,
-                      "mtime": stat.st_mtime,
-                      "domain": _domain_of(path),
-                      "root": "soulagent" if _is_under(path, soul) else "idea"})
+                      "mtime": stat.st_mtime, "domain": domain,
+                      "root": "soulagent" if _is_under(path, soul) else "idea",
+                      **friendly})
+    _priority = {"audit": 0, "memory": 1, "persona": 2}
+    items.sort(key=lambda it: (bool(it.get("hidden")),
+                               _priority.get(it.get("domain") or "", 9),
+                               str(it.get("contact") or ""),
+                               str(it.get("label_zh") or "")))
     return {"ok": True, "items": items, "count": len(items),
             "allowed_roots": [str(item) for item in _roots()]}
 

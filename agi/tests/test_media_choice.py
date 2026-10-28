@@ -297,7 +297,8 @@ def test_chat_parses_emoji_directive(monkeypatch, tmp_path):
     agent = SelfLearnAgent(tmp_path / "chat.sqlite3", client=Fake(), rng=__import__("random").Random(1))
     row = agent.send("我喜欢晚上写东西")
     assert row["ok"] is True
-    assert row["reply_media"] is not None
+    # 2026-10-28 复读事故后：emoji 并入正文气泡，不再作为独立媒体重复发一次
+    assert row["reply_media"] is None
     assert "😄" in row["reply"]
     assert "[[media:" not in row["reply"]
 

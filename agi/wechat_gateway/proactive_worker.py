@@ -87,6 +87,27 @@ def record_event(db_path: Path | str, contact: str, text: str,
     return eid
 
 
+def recent_kind_sent(db_path: Path | str, contact: str, kind: str,
+                     since: float) -> float | None:
+    """窗口内是否发过同类主动消息；命中返回最近一次的 ts（用于同类追问冷却）。"""
+    try:
+        _ensure_events(db_path)
+        con = _connect(db_path)
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        row = con.execute(
+            "SELECT max(ts) FROM proactive_events WHERE contact=? AND kind=? AND ts>=? "
+            "AND status NOT IN ('failed','blocked','draft')",
+            (str(contact), str(kind), float(since))).fetchone()
+        return float(row[0]) if row and row[0] else None
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        con.close()
+
+
+
 def mark_response(db_path: Path | str, text: str, now: float | None = None) -> str:
     """收到对方消息时，给最近一条未响应的主动消息标上反应（正/负/中性）。"""
     now = time.time() if now is None else float(now)
@@ -782,6 +803,21 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             except Exception:  # noqa: BLE001
                 pass
             continue
+        # 同类追问冷却：progress_check/followup 在窗口内只发一次（10-28 线上：同一件事追问了 3 次）
+        if kind in ("progress_check", "followup"):
+            cooldown_s = _cfg_float(gateway, "proactive_kind_cooldown_s", 8 * 3600)
+            last_same = recent_kind_sent(db_path, contact, kind, float(now) - cooldown_s)
+            if last_same is not None:
+                out["skipped"].append({"contact": contact,
+                                       "reason": f"{kind}_cooldown"})
+                try:
+                    gateway._record("proactive_kind_cooldown", {
+                        "friend": contact, "kind": kind,
+                        "last_ts": round(float(last_same), 1),
+                        "window_s": round(float(cooldown_s), 1)})
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
         turn_id = str(pro.get("turn_id") or "")
         # P0-3 出站文本质检：补句末标点/合并空白/超长按标点切分（带 kind 的新主动消息才处理，
         # 无 kind 的旧 payload 原样透传，保持向后兼容）。

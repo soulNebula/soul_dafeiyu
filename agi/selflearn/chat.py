@@ -1140,12 +1140,20 @@ class SelfLearnAgent:
                     first = reply_media["bubbles"][0]
                     candidate = str(first.get("text") or "")
                     if first.get("type") == "emoji_text" and candidate.startswith(turn_reply) and candidate != turn_reply:
+                        # emoji 已并入正文气泡；媒体计划里那条文本气泡不能重复发
                         bubbles[-1] = bubbles[-1] + candidate[len(turn_reply):]
                         turn_reply = " ".join(bubbles)
-                    elif first.get("type") == "text":
-                        pass
+                        reply_media["bubbles"] = reply_media["bubbles"][1:]
+                        if not reply_media["bubbles"]:
+                            reply_media = None
+                    elif first.get("type") in ("text", "emoji_text"):
+                        # 文本已经由 bubbles 发出；只保留媒体气泡，避免同一句发两遍
+                        reply_media["bubbles"] = reply_media["bubbles"][1:]
+                        if not reply_media["bubbles"]:
+                            reply_media = None
                     else:
-                        reply_media = None
+                        # 第一条就是媒体（文本为空/只有 wish）：保留纯媒体计划
+                        pass
             except Exception:  # noqa: BLE001
                 reply_media = None
         # P0-26：最终外发文本兜底——纯问号/占位/与最近 5 条完全相同 → 换成有意义的自然话

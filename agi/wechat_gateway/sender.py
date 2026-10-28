@@ -735,6 +735,16 @@ class WxAutoSender:
         tries: list[str] = []
         raw = item.get("path") or item.get("name")
         sticker_path = media_mod.resolve_sticker(raw, cfg)
+        # 贴纸素材在库里是「名字 → 路径」（文件名多为哈希），按名字直接找文件会找不到，
+        # 于是永远降级成 emoji（2026-10-28 线上：表情包一个都发不出去）。这里补一次库查表。
+        if sticker_path is None and raw:
+            try:
+                from agi.selflearn import media_choice as _media_choice
+                asset = _media_choice.find_asset(str(raw))
+                if asset and asset.get("path"):
+                    sticker_path = media_mod.resolve_sticker(str(asset["path"]), cfg)
+            except Exception:  # noqa: BLE001 - 查表失败照旧走降级
+                sticker_path = None
         errors: list[str] = []
         if sticker_path:
             tries.append("image")

@@ -1262,8 +1262,11 @@ class Gateway:
         # P5-b/P19：把模型指令解析出的媒体气泡发出去（此前只发文字，贴纸/图片被丢弃）
         media_plan = result.get("media")
         if isinstance(media_plan, dict):
+            # 文本气泡已由上面的 bubbles 循环发出；这里只发媒体，避免同一句重复（10-28 复读事故）
             media_items = [dict(item) for item in (media_plan.get("bubbles") or [])
-                           if isinstance(item, dict)]
+                           if isinstance(item, dict)
+                           and str(item.get("type") or "").strip().lower()
+                           not in ("text", "emoji_text")]
             if media_items and self.cfg.get("media_enabled", False):
                 try:
                     batch = self.send_media_batch(contact, media_items, reactive=True)

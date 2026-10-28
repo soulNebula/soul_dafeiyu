@@ -114,7 +114,7 @@ def _merge_bubbles(rows):
                 last["_last_h"] = row["h"]
                 continue
         bubbles.append({"role": row["role"], "text": row["text"],
-                        "_last_cy": row["cy"], "_last_h": row["h"]})
+                        "cy": row["cy"], "_last_cy": row["cy"], "_last_h": row["h"]})
     for bubble in bubbles:
         bubble.pop("_last_cy", None)
         bubble.pop("_last_h", None)
@@ -156,6 +156,11 @@ def _process_one(path: Path, *, infer_role: bool) -> dict:
 
 
 def main(argv=None) -> int:
+    # Windows 管道下 stdout 默认可能是 cp936，显式改成 UTF-8，避免父进程按 UTF-8 解码变乱码
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        pass
     parser = argparse.ArgumentParser(description="聊天截图 OCR（支持多图 + 左右角色推断）")
     parser.add_argument("--image", action="append", default=[],
                         help="图片路径，可重复/多值")

@@ -7,10 +7,15 @@ import os
 import time
 from pathlib import Path
 
+from agi.paths import data_dir as _default_data_dir
+from agi.paths import web_config_path as _default_web_config
+
 ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT / "agi" / "data" / "selflearn"
+# 数据根/根配置统一由 agi.paths 解析（SOULAGENT_DATA_DIR / SOULAGENT_WEB_CONFIG 可重定向）；
+# 不设环境变量时与历史路径完全一致（<repo>/agi/data/selflearn、<repo>/web_config.json）。
+DATA_DIR = _default_data_dir() / "selflearn"
 DB_PATH = DATA_DIR / "selflearn.sqlite3"
-WEB_CONFIG = ROOT / "web_config.json"
+WEB_CONFIG = _default_web_config()
 DEFAULT_MODEL = "deepseek-flash"
 MODEL_LABEL = "DeepSeek V4.1 Flash"
 REFLECT_EVERY_TURNS = 6
@@ -39,7 +44,7 @@ CANNED_GUARD_ENABLED = True
 
 # P16-A：时间感知（被动回复 + simple 主动消息注入当前时间）
 INJECT_TIME_CONTEXT = True
-_WECHAT_CONFIG = ROOT / "agi" / "data" / "wechat" / "config.json"
+_WECHAT_CONFIG = DATA_DIR.parent / "wechat" / "config.json"
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
 

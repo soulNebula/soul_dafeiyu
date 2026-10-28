@@ -23,12 +23,22 @@ DIR_ACL_INHERITED = """agi/data BUILTIN\\Administrators:(OI)(CI)(F)
          NT AUTHORITY\\SYSTEM:(OI)(CI)(F)"""
 
 
-def test_file_vs_dir_grant_flags(monkeypatch):
+def test_file_vs_dir_grant_flags(monkeypatch, tmp_path):
+    """文件/目录的 icacls 授权标记不同（OI/CI 只对目录有意义）。
+
+    必须用 tmp_path 里的真实文件/目录：旧写法传 ``pathlib.Path("log")``，只有
+    CWD 恰好存在 ``log/`` 目录时才通过——干净 checkout / CI 里根本没有 log/，
+    于是断言假失败。测试的判据应该是「路径是文件还是目录」，而不是「仓库里有没有 log」。
+    """
     monkeypatch.setattr(harden_acl, "allowed_sids", lambda: ["S-1-5-21-1", "S-1-5-18"])
-    file_args = harden_acl.icacls_apply_args(pathlib.Path("config.json"))
+    file_path = tmp_path / "config.json"
+    file_path.write_text("{}", encoding="utf-8")
+    file_args = harden_acl.icacls_apply_args(file_path)
     assert "/inheritance:r" in file_args
     assert "*S-1-5-21-1:F" in file_args
-    dir_args = harden_acl.icacls_apply_args(pathlib.Path("log"))
+    dir_path = tmp_path / "log"
+    dir_path.mkdir()
+    dir_args = harden_acl.icacls_apply_args(dir_path)
     assert "*S-1-5-21-1:(OI)(CI)F" in dir_args
 
 
@@ -41,10 +51,11 @@ def test_parse_detects_inheritance_and_principals():
     assert inherited["inherited"] is True
 
 
-def test_check_target_marks_unhardened(monkeypatch):
+def test_check_target_marks_unhardened(monkeypatch, tmp_path):
     monkeypatch.setattr(harden_acl, "run_icacls",
                         lambda *a, **k: (0, DIR_ACL_INHERITED))
-    info = harden_acl.check_target(pathlib.Path("agi/data"))
+    # 用 tmp 路径而不是相对 CWD 的 "agi/data"：不依赖生产目录是否存在（run_icacls 已 fake）
+    info = harden_acl.check_target(tmp_path / "agi" / "data")
     assert info["ok"] is True and info["hardened"] is False
 
 

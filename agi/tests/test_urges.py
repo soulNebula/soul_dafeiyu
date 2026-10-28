@@ -520,5 +520,9 @@ def test_worker_urges_disabled_ignores_queue(path, monkeypatch):
     called: list[str] = []
     monkeypatch.setattr(ticker, "run_once",
                         lambda *a, **k: called.append("tick") or _tick_available())
+    # 可重复性（P0-24）：urges 关掉后 run_cycle 走「随机主动」分支，概率闸门读的是
+    # 未 seed 的 random.random()——不固定就会随机失败（实测单跑 8 次挂 2 次）。
+    # 与兄弟用例 test_worker_without_urge_falls_back_to_random 一致固定为必定触发。
+    monkeypatch.setattr(proactive_worker.random, "random", lambda: 0.0)
     proactive_worker.run_cycle(g, client=object(), now=1_800_000_000.0)
     assert called == ["tick"]

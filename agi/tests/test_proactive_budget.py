@@ -60,8 +60,15 @@ def test_llm_can_speak_even_below_score_and_state(tmp_path, monkeypatch):
     con.execute("INSERT OR REPLACE INTO state(key,value,updated_at) VALUES('self_state',?,?)",
                 ('{"self": {"mood": 0.1, "sharing": 0.05, "energy": 0.1}}', time.time()))
     con.commit(); con.close()
+    # 墙钟 flake（2026-10-29 实测）：apply_emoji 按 int(now//300)%20==0 的 5 分钟真实时间桶
+    # 以 ~5% 概率给消息补一个 emoji；本用例断言文本严格相等，撞进那个桶就必红
+    # （窗口外 143 passed、窗口内失败）。emoji 是与「预算/低状态不挡 LLM 主动说话」
+    # 正交的概率行为，不是本用例要验证的东西——把 now 挪出该桶，而不是放宽断言/skip。
+    now = time.time()
+    while int(now // 300) % 20 == 0:
+        now += 300.0
     r = proactive.tick(path, client=_SayClient("今天有点想你，在忙吗？"), cooldown=0,
-                       respect_state=False, min_score=0)
+                       respect_state=False, min_score=0, now=now)
     assert r["available"] is True
     assert r["message"] == "今天有点想你，在忙吗？"
 

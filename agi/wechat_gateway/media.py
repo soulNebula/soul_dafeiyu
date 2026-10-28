@@ -24,12 +24,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Iterable
+from agi.paths import data_dir as _default_data_dir
 
 ROOT = Path(__file__).resolve().parents[2]
 
 EMOJI_ASSET_DIR = ROOT / "wx_core" / "emoji_assets"
 STICKER_DIR = ROOT / "media" / "stickers"
-INBOUND_MEDIA_DIR = ROOT / "agi" / "data" / "selflearn" / "media"
+INBOUND_MEDIA_DIR = _default_data_dir() / "selflearn" / "media"
 
 #: 默认白名单目录（顺序即解析优先级）
 MEDIA_ROOT_DIR = ROOT / "media"          # 工作台媒体目录（文档/图片/贴纸素材）

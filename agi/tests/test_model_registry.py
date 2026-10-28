@@ -1,14 +1,30 @@
 # -*- coding: utf-8 -*-
-"""模型注册表单测（P3-c）：预留位/健康检查/缺文件/安全启停。"""
+"""模型注册表单测（P3-c）：预留位/健康检查/缺文件/安全启停。
+
+可移植性说明（P0-24）：``agi/data/local_models.json`` 是本机部署配置、被
+``.gitignore`` 排除，干净 checkout / CI 里不存在。下面这批判例验证的是「本机注册表
+里 qwen15 预留位/tone 适配器不能被误删」，没有该文件时它们只能验证 None——
+这里用 skipif 精确跳过（原因写清楚、条数可见），而不是让 CI 报假红，也绝不改成
+放宽断言。纯逻辑用例（缺文件/坏 JSON/缺权重）不受影响，照常在任何机器上跑。
+"""
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from agi.selflearn import model_registry as registry
 
+#: 本机注册表配置是否存在（不存在 → 依赖它的「防误删」用例精确 skip）
+_LOCAL_CONFIG_MISSING = not Path(registry.CONFIG_PATH).is_file()
+requires_local_registry = pytest.mark.skipif(
+    _LOCAL_CONFIG_MISSING,
+    reason="需要本机 agi/data/local_models.json（gitignore，不在仓库里；CI/干净 checkout 无此文件）",
+)
 
+
+@requires_local_registry
 def test_qwen15_reserved_entry_and_port():
     """防误删：1.5B 预留位必须存在、reserved、端口 8124、gguf 指向已有文件。"""
     entry = registry.get("qwen15")
@@ -20,6 +36,7 @@ def test_qwen15_reserved_entry_and_port():
     assert registry.resolve_by_role("reserved") == [entry]
 
 
+@requires_local_registry
 def test_extra_adapters_registered():
     adapters = {item["name"]: item for item in registry.list_extra_adapters()}
     assert "tone_qwen15_v1" in adapters
@@ -37,6 +54,7 @@ def test_missing_or_corrupt_config_returns_empty(tmp_path):
     assert registry.list_models(broken) == []
 
 
+@requires_local_registry
 def test_get_and_resolve_by_role():
     assert registry.get("soul-05b")["role"] == "soul"
     assert registry.get("no-such-model") is None
@@ -60,12 +78,14 @@ def test_missing_files_detects_missing_paths(tmp_path):
     assert missing[0]["kind"] == "base"
 
 
+@requires_local_registry
 def test_health_closed_port_and_unknown_do_not_raise():
     # qwen15 预留端口 8124 当前没有服务 → False，不抛异常
     assert registry.health("qwen15") is False
     assert registry.health("no-such-model") is False
 
 
+@requires_local_registry
 def test_start_reserved_and_unknown_refused():
     reserved = registry.start("qwen15")
     assert reserved["ok"] is False
@@ -75,12 +95,14 @@ def test_start_reserved_and_unknown_refused():
     assert "unknown_model" in unknown["error"]
 
 
+@requires_local_registry
 def test_stop_unstarted_refused():
     result = registry.stop("qwen15")
     assert result["ok"] is False
     assert result["error"] in ("not_started_by_registry", "pid_not_alive")
 
 
+@requires_local_registry
 def test_cli_list_returns_json(capsys):
     exit_code = registry.main(["--list"])
     captured = capsys.readouterr()
@@ -90,6 +112,7 @@ def test_cli_list_returns_json(capsys):
     assert any(item["name"] == "qwen15" for item in payload)
 
 
+@requires_local_registry
 def test_validate_registry_no_duplicate():
     result = registry.validate_registry()
     assert result["models"] >= 3

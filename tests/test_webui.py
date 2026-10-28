@@ -3290,7 +3290,12 @@ def test_server_contacts_refresh_account_changed(web_server, monkeypatch):
         web_server.backend, "config",
         {"friends_cache": ["旧好友"], "image_wxid": "wxid_old"},
     )
-    config_file = ROOT / "config.json"
+    # 项目配置路径已被 tests/conftest.py 隔离到 tmp（生产 config.json 含 db_keys，测试不碰）。
+    # 这里断言「落盘不会改写当前配置路径」，同时证明读的确实不是仓库根的生产文件。
+    from wx_core import config as wx_config
+
+    config_file = Path(wx_config.CONFIG_PATH)
+    assert ROOT not in config_file.parents, f"配置路径未被隔离到仓库外：{config_file}"
     config_before = config_file.read_bytes() if config_file.is_file() else b""
 
     # 停掉假后端，避免清空后立刻又收到新消息导致断言不稳定
@@ -3813,7 +3818,12 @@ def test_server_messages_clear_without_support(web_server, monkeypatch):
 
 
 def test_default_web_port_is_8081():
-    """V2：默认端口改为 8081（8080 被其他项目占用）；run_web/web_app 参数一致。"""
+    """V2：默认端口改为 8081（8080 被其他项目占用）；run_web/web_app 参数一致。
+
+    ``web_app`` 的 import 链会拉进 ``ui.main_window``（Tk）。CI 的 ubuntu runner 若没装
+    tkinter，这里只能精确 skip 这一个用例，而不是把整个 test_webui.py --ignore 掉。
+    """
+    pytest.importorskip("tkinter", reason="web_app import 链依赖 tkinter（CI 无 Tk 时跳过）")
     import web_app
 
     assert web_app.DEFAULT_PORT == 8081

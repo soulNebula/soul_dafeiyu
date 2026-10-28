@@ -55,6 +55,14 @@ jobs:
           # Windows-only 外部依赖，不在 requirements.txt 里，CI 不安装。
           python -m pip install -r requirements.txt
           python -m pip install pytest
-      - name: Run offline test suite
+      # 真跑两套离线测试，不再 --ignore 整个文件：
+      # - Windows-only 用例（Win32/UIA/Tk/WinDLL）由 conftest 按 SOULAGENT_CI=1 统一 skip，
+      #   跳过的条数与原因会出现在报告里，不再被 --ignore 静默吞掉；
+      # - 跑完守卫（tests/conftest.py、agi/tests/conftest.py）会对生产敏感文件做
+      #   mtime+size 前后比对：任何测试写到仓库默认路径都会让 CI 直接红。
+      - name: Run root offline tests (tests/)
         run: |
-          python -m pytest agi/tests tests -q --ignore=tests/test_webui.py
+          python -m pytest tests -q
+      - name: Run agi offline tests (agi/tests)
+        run: |
+          python -m pytest agi/tests -q

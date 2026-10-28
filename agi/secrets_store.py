@@ -46,6 +46,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+from agi.paths import data_dir as _default_data_dir
 
 #: 仓库根（agi/ 的上一级）。与 agi.paths.REPO_ROOT 保持一致，但不互相 import，
 #: 避免在这个最底层模块里引入包初始化顺序问题。
@@ -56,7 +57,7 @@ SECRETS_ENV = "SOULAGENT_SECRETS"
 
 #: 默认位置：与 config.json/web_config.json 同级目录不同，放在已经 gitignore 的
 #: agi/data/ 下，天然不会被提交；harden_acl.py 也会收紧 agi/data 的 ACL。
-DEFAULT_SECRETS_PATH = REPO_ROOT / "agi" / "data" / "secrets.json"
+DEFAULT_SECRETS_PATH = _default_data_dir() / "secrets.json"
 
 #: 缓存：{绝对路径: ((mtime_ns, size), dict)}
 _CACHE: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}

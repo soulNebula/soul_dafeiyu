@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
+from agi.paths import data_dir as _default_data_dir
 
 from .llm import parse_json
 
@@ -21,7 +22,7 @@ def enabled() -> bool:
     try:
         from . import config as _cfg
         raw = json.loads(
-            (_cfg.ROOT / "agi" / "data" / "wechat" / "config.json").read_text(encoding="utf-8"))
+            (_default_data_dir() / "wechat" / "config.json").read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         raw = {}
     value = raw.get("two_stage_enabled") if isinstance(raw, dict) else None

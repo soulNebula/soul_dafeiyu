@@ -40,6 +40,7 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Any
+from agi.paths import data_dir as _default_data_dir
 
 from . import render, schema
 
@@ -70,7 +71,7 @@ DEFAULT_SCHEMA_MODE = "slim"
 
 ROOT = Path(__file__).resolve().parents[2]
 #: inner_fallback JSONL 日志；测试可 monkeypatch 本模块属性
-INNER_LOG_PATH = ROOT / "agi" / "data" / "selflearn" / "inner.log"
+INNER_LOG_PATH = _default_data_dir() / "selflearn" / "inner.log"
 
 _LOCK = threading.Lock()
 _FALLBACK_TIMES: deque[float] = deque(maxlen=10000)

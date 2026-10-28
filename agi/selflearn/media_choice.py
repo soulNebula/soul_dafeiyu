@@ -22,6 +22,7 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Any
+from agi.paths import data_dir as _default_data_dir
 
 from . import config
 from . import emoji as emoji_archive
@@ -32,7 +33,7 @@ ASSET_DIRS = (
     ROOT / "media" / "stickers",
     config.DATA_DIR / "media",
 )
-TAGS_PATH = ROOT / "agi" / "data" / "media_tags.json"
+TAGS_PATH = _default_data_dir() / "media_tags.json"
 STICKER_WINDOW_S = 7 * 24 * 3600
 FUNNY_TAGS = {"好笑", "搞笑", "恶搞", "赞", "嘲讽"}
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".wxgf"}

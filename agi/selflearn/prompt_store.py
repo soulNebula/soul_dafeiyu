@@ -21,10 +21,11 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from agi.paths import data_dir as _default_data_dir
 
 ROOT = Path(__file__).resolve().parents[2]
-PROMPTS_PATH = ROOT / "agi" / "data" / "prompts.json"
-PROMPT_OVERRIDE_LOG_PATH = ROOT / "agi" / "data" / "selflearn" / "prompt_override.log"
+PROMPTS_PATH = _default_data_dir() / "prompts.json"
+PROMPT_OVERRIDE_LOG_PATH = _default_data_dir() / "selflearn" / "prompt_override.log"
 
 MAX_CHARS_PER_ENTRY = 4000
 MAX_FILE_BYTES = 64 * 1024

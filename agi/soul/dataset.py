@@ -67,6 +67,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from agi.inner import schema
+from agi.paths import log_dir as _default_log_dir
 from agi.selflearn import llm
 
 from .prompt import (  # noqa: F401  W4-D1：角色设定/状态档案/system 拼接的唯一真源
@@ -85,7 +86,7 @@ from .scenarios import BUCKET_CONTEXTS, SYNTHETIC_USER_MSGS
 # --------------------------------------------------------------------------- #
 ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_PATH = ROOT / "agi" / "eval_data" / "golden_v1.jsonl"
-MESSAGE_LOG = ROOT / "log" / "messages.jsonl"
+MESSAGE_LOG = _default_log_dir() / "messages.jsonl"
 BUILD_GOLDEN_PATH = ROOT / "tools" / "build_golden.py"
 DEFAULT_OUT = ROOT / "agi" / "soul" / "data" / "soul_sft_v1.jsonl"
 DEFAULT_V0 = ROOT / "agi" / "soul" / "data" / "soul_sft_v0.jsonl"

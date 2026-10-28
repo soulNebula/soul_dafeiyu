@@ -12,9 +12,10 @@ import json
 import time
 from pathlib import Path
 from typing import Any
+from agi.paths import data_dir as _default_data_dir
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_USAGE_PATH = ROOT / "agi" / "data" / "llm_usage.jsonl"
+DEFAULT_USAGE_PATH = _default_data_dir() / "llm_usage.jsonl"
 DAY_SECONDS = 86400.0
 
 #: 计入「API token 预算」的后端 kind（本地 openai / rule 不计费）

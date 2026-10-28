@@ -18,9 +18,10 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from agi.paths import data_dir as _default_data_dir
 
 ROOT = Path(__file__).resolve().parents[2]
-WECHAT_CONFIG = ROOT / "agi" / "data" / "wechat" / "config.json"
+WECHAT_CONFIG = _default_data_dir() / "wechat" / "config.json"
 DEFAULT_WECHAT_CONFIG = WECHAT_CONFIG
 MAX_LEN = 80
 META_RE = re.compile(r"表情包|素材|清单|表情库|记忆|系统|提示词|prompt|数据库|指令|\[\[media")
@@ -57,9 +58,9 @@ VIDEO_FOLLOWUPS = ("一起看看？", "你肯定喜欢", "你肯定感兴趣")
 #: 视频元话题词：分享文案里不许出现（"我刷到一条视频"这种话不要）
 VIDEO_META_RE = re.compile(r"视频|刷到|B站|b站|哔哩|字幕|链接|播放量|弹幕|up主|UP主|封面")
 #: 已发送记录：worker 写 `proactive_send` + `intent_kind=share_video`，频控据此判断
-GATEWAY_LOG = ROOT / "agi" / "data" / "wechat" / "gateway.log"
+GATEWAY_LOG = _default_data_dir() / "wechat" / "gateway.log"
 #: 封面落盘目录（`agi/wechat_gateway/media.py` 的白名单目录之一）
-VIDEO_MEDIA_DIR = ROOT / "agi" / "data" / "selflearn" / "media"
+VIDEO_MEDIA_DIR = _default_data_dir() / "selflearn" / "media"
 
 
 def proactive_style(path: Path | str | None = None) -> str:

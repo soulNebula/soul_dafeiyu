@@ -12,12 +12,24 @@
 """
 from __future__ import annotations
 
+import sys
 import types
 
 import pytest
 
-from wx_core import friends as F
-from wx_core.models import OcrLine
+# Windows-only：wx_core/friends.py 顶层 `from ctypes import wintypes` 并调用 Win32
+# 窗口/鼠标 API。非 Windows 上 import 就会失败（ctypes.wintypes 不可用），
+# 所以必须在 import 之前 skip —— 否则 ubuntu CI 是 collection error 而不是 skip。
+# 不用 --ignore 整文件掩盖：本文件仍参与收集，跳过条数与原因都可见。
+if not sys.platform.startswith("win"):
+    pytest.skip("wx_core.friends 依赖 ctypes.wintypes/Win32 点击 API（Windows-only）",
+                allow_module_level=True)
+
+from wx_core import friends as F  # noqa: E402
+from wx_core.models import OcrLine  # noqa: E402
+
+# SOULAGENT_CI=1（Linux runner 模拟环境）时同样整模块跳过：这些用例的语义就是 Win32
+pytestmark = pytest.mark.windows_only
 
 # ---------------------------------------------------------------- 假几何（画面坐标）
 IMG_SIZE = (1118, 809)

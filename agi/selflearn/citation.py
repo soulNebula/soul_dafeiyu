@@ -12,6 +12,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any, Iterable
+from agi.paths import data_dir as _default_data_dir
 
 from . import db
 from .config import DB_PATH
@@ -52,8 +53,7 @@ def enabled() -> bool:
         pass
     # 运行期 wechat config（与 trace_enabled 等同一份本机配置）
     try:
-        config_path = (Path(__file__).resolve().parents[2] / "agi" / "data"
-                       / "wechat" / "config.json")
+        config_path = _default_data_dir() / "wechat" / "config.json"
         payload = json.loads(config_path.read_text(encoding="utf-8"))
         if isinstance(payload, dict) and "memory_citation_enabled" in payload:
             value = payload.get("memory_citation_enabled")

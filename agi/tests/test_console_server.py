@@ -1655,6 +1655,10 @@ def _bili_console_env(tmp_path, monkeypatch, write_env):
     (home / "out" / (time.strftime("%Y-%m-%d") + ".md")).write_text("# report\n", encoding="utf-8")
     monkeypatch.setenv("BILI_DUTY_HOME", str(home))
     monkeypatch.setattr(console, "BILI_QR_PNG", tmp_path / "qr.png")
+    # 隔离（P0-24）：扫码登录会写 `DATA_DIR/selflearn/bili_login_debug.log` 与
+    # `bili_profile.json`；不重定向就会落到 worktree 真实 agi/data（守卫会报生产写盘）。
+    monkeypatch.setattr(console, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(console, "SELFLEARN_DIR", tmp_path / "data" / "selflearn")
     monkeypatch.setattr(console, "_bili_http_json", _bili_http_fake)
     _bili_http_fake.poll_code = 86101
     console._BILI_NAV_CACHE.update(ts=0.0, data=None)

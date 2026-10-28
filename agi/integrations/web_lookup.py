@@ -33,11 +33,12 @@ from urllib.parse import quote, urlsplit
 
 import requests
 from bs4 import BeautifulSoup
+from agi.paths import data_dir as _default_data_dir
 
 from ..selflearn import config as sl_config
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CACHE_PATH = ROOT / "agi" / "data" / "web_cache.json"
+DEFAULT_CACHE_PATH = _default_data_dir() / "web_cache.json"
 CACHE_TTL_S = 600.0
 CACHE_MAX_ENTRIES = 200
 MAX_URL_BYTES = 300_000

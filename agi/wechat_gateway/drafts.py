@@ -15,8 +15,37 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PATH = ROOT / "agi" / "data" / "wechat" / "drafts.jsonl"
+#: 草稿 TTL（默认 24 小时）：confirm 模式攒下的草稿超过这个时长自动过期清掉，
+#: 避免 drafts.jsonl 无限堆积（2026-10-29 线上有 90 条 4 天前的 pending）。
+TTL_S = int(float(os.environ.get("DRAFTS_TTL_S") or 24 * 3600))
 
 _LOCK = threading.Lock()
+
+
+def _expired(row: dict, now: float, ttl_s: float) -> bool:
+    """只有 pending 且超过 TTL 的草稿才算过期；已处理状态不动。"""
+    if str(row.get("status") or "") != "pending":
+        return False
+    try:
+        ts = float(row.get("ts") or 0)
+    except (TypeError, ValueError):
+        return True
+    return ts > 0 and now - ts > ttl_s
+
+
+def purge(*, path: Path | str | None = None, ttl_s: float | None = None,
+          now: float | None = None) -> dict:
+    """清掉过期 pending 草稿，返回 {removed, kept, ttl_s}。"""
+    target = _path(path)
+    ttl = float(TTL_S if ttl_s is None else ttl_s)
+    current = time.time() if now is None else float(now)
+    with _LOCK:
+        rows = _read_all(target)
+        kept = [row for row in rows if not _expired(row, current, ttl)]
+        removed = len(rows) - len(kept)
+        if removed:
+            _write_all(target, kept)
+    return {"removed": removed, "kept": len(kept), "ttl_s": ttl}
 
 
 def _path(path: Path | str | None) -> Path:
@@ -65,14 +94,17 @@ def add(contact: str, text: str, reason: str = "confirm",
         "status": "pending",
     }
     with _LOCK:
-        rows = _read_all(target)
+        rows = [row for row in _read_all(target)
+                if not _expired(row, time.time(), TTL_S)]
         rows.append(item)
         _write_all(target, rows[-200:])
     return item
 
 
 def list_all(*, path: Path | str | None = None, limit: int = 50) -> list[dict]:
-    rows = _read_all(_path(path))
+    target = _path(path)
+    purge(path=target)                      # 读之前先清过期
+    rows = _read_all(target)
     return rows[-max(1, int(limit)):]
 
 

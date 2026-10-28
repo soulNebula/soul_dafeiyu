@@ -1038,6 +1038,13 @@ def polish_outbound(text: Any) -> str:
         value = strip_corner_brackets(value)
     except Exception:  # noqa: BLE001
         pass
+    # 2026-10-28 用户反馈：不要「账/算账」比喻（2026-10-29 接到主动消息路径）
+    try:
+        from .guard import ledger_check, strip_ledger_clauses
+        if ledger_check(value).get("hit"):
+            value = strip_ledger_clauses(value)
+    except Exception:  # noqa: BLE001 - guard 不可用不影响发送
+        pass
     # 2026-10-28 用户反馈：不要再说「想起你说…」这种句式
     for _bad, _good in (("想起你之前说过", "你之前说过"),
                         ("想起你说", "你说"),

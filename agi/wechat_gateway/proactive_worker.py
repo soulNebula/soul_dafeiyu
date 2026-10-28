@@ -87,6 +87,21 @@ def record_event(db_path: Path | str, contact: str, text: str,
     return eid
 
 
+def last_sent_ts(db_path: Path | str, contact: str) -> float:
+    """最近一条 status=sent 的主动消息时间戳（没有返回 0）。"""
+    try:
+        con = _connect(db_path)
+        try:
+            row = con.execute(
+                "SELECT ts FROM proactive_events WHERE contact=? AND status='sent' "
+                "ORDER BY ts DESC LIMIT 1", (str(contact),)).fetchone()
+            return float(row[0]) if row else 0.0
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001 - 表/库异常都当没有
+        return 0.0
+
+
 def recent_kind_sent(db_path: Path | str, contact: str, kind: str,
                      since: float) -> float | None:
     """窗口内是否发过同类主动消息；命中返回最近一次的 ts（用于同类追问冷却）。"""
@@ -609,6 +624,26 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
                     continue
             except Exception:  # noqa: BLE001 - pacing 失败不影响主链，回退旧概率
                 pacing_adjustment = None
+        # 2026-10-29：连续 3 条主动消息用户都没回应 → 暂停 6 小时（别自言自语刷屏）。
+        try:
+            silent_streak = int((pacing_adjustment or {}).get("unanswered_streak") or 0)
+        except (TypeError, ValueError):
+            silent_streak = 0
+        cooldown_s = _cfg_float(gateway, "proactive_no_response_cooldown_s", 6 * 3600)
+        if silent_streak >= 3:
+            last_sent = last_sent_ts(db_path, contact)
+            if last_sent and float(now) - last_sent < cooldown_s:
+                out["skipped"].append({"contact": contact,
+                                       "reason": "no_response_cooldown",
+                                       "streak": silent_streak})
+                try:
+                    gateway._record("proactive_no_response_cooldown", {
+                        "friend": contact, "streak": silent_streak,
+                        "last_sent_ts": round(last_sent, 1),
+                        "cooldown_s": round(cooldown_s, 1)})
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
         # P33：主动度（关系熟悉度×心情×信任）→ 概率↑/间隔↓；与 pacing 取更保守
         drive_info: dict[str, Any] | None = None
         init_adjustment: dict[str, Any] | None = None
@@ -826,14 +861,14 @@ def run_cycle(gateway, *, contacts=None, client=None, now=None) -> dict[str, Any
             raw = str(bubble or "").strip()
             if not raw:
                 continue
-            if not kind:
-                outbound.append(raw)
-                continue
+            # 2026-10-29：legacy payload（无 kind）也过一遍出站质检（去「」/账比喻/补标点），
+            # 以前直接透传，线上出现过旧 payload 带「」和"账"比喻。
             polished = selflearn_proactive.polish_outbound(raw)
             if not polished:
                 continue
             # P0-8 发送前最后一道内容闸：命中「安静/没动静/忙吗…」禁词 → 换该 kind 兜底句
-            polished = selflearn_proactive.sanitize_topic(polished, kind)
+            if kind:
+                polished = selflearn_proactive.sanitize_topic(polished, kind)
             if "\n" in polished:  # 超长多句：逐段发送，避免一整段粘连
                 outbound.extend(part.strip() for part in polished.split("\n")
                                 if part.strip())

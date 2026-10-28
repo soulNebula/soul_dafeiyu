@@ -241,7 +241,8 @@ def test_worker_rewrites_banned_text_before_send(tmp_path, monkeypatch):
         assert text, text
 
 
-def test_worker_legacy_payload_without_kind_still_untouched(tmp_path, monkeypatch):
+def test_worker_legacy_payload_without_kind_is_polished(tmp_path, monkeypatch):
+    """2026-10-29 起：无 kind 的 legacy payload 也过出站质检（去「」/账、补标点）。"""
     path = _seed(tmp_path)
     monkeypatch.setattr("agi.wechat_gateway.config.contact_db", lambda contact: path)
 
@@ -253,4 +254,5 @@ def test_worker_legacy_payload_without_kind_still_untouched(tmp_path, monkeypatc
     monkeypatch.setattr(ticker, "run_once", fake_tick)
     g = FakeGateway()
     proactive_worker.run_cycle(g, client=object(), now=time.time())
-    assert [item[1] for item in g.sent] == ["在干嘛"]
+    from agi.selflearn import proactive as _pro
+    assert [item[1] for item in g.sent] == [_pro.polish_outbound("在干嘛")]

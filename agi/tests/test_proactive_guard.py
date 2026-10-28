@@ -92,7 +92,8 @@ def test_dedupe_same_text_within_window_is_skipped(monkeypatch):
     deduped = _events(g, "proactive_deduped")
     assert len(deduped) == 1
     assert deduped[0]["hit_ts"] == 100.0       # 带命中的历史 ts
-    assert deduped[0]["text"] == "在干嘛"
+    from agi.selflearn import proactive as _pro
+    assert deduped[0]["text"] == _pro.polish_outbound("在干嘛")
     assert deduped[0]["window_s"] == 1800.0
 
 
@@ -115,7 +116,9 @@ def test_dedupe_different_text_is_sent(monkeypatch):
     monkeypatch.setattr(ticker, "run_once", lambda *a, **k: _tick("明天出去吃饭吗"))
     out = proactive_worker.run_cycle(g, client=object(), now=300.0)
     assert out["sent"] == 1 and out["deduped"] == 0
-    assert [s[1] for s in g.sent] == ["今天有点累", "明天出去吃饭吗"]
+    from agi.selflearn import proactive as _pro
+    assert [s[1] for s in g.sent] == [_pro.polish_outbound("今天有点累"),
+                                     _pro.polish_outbound("明天出去吃饭吗")]
 
 
 def test_dedupe_window_expiry_allows_same_text(monkeypatch):

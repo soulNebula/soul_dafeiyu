@@ -40,7 +40,7 @@ def test_drafts_add_drops_expired(tmp_path):
     path = tmp_path / "drafts.jsonl"
     now = time.time()
     _write_drafts(path, [_draft("old-pending", now - 48 * 3600)])
-    item = drafts.add("某人", "新草稿", path=path)
+    item = drafts.add("某人", "新草稿", path=path, ttl_days=1)
     rows = drafts.list_all(path=path, limit=10)
     assert item["id"] in [row["id"] for row in rows]
     assert "old-pending" not in [row["id"] for row in rows]

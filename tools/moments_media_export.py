@@ -51,9 +51,21 @@ json.dump(out, sys.stdout, ensure_ascii=False)
 
 
 def _load_keys() -> dict[str, tuple[bytes, int]]:
-    """从 config.json 读每个账号的图片 AES/XOR 密钥。"""
+    """读每个账号的图片 AES/XOR 密钥（优先密钥库 secrets.json，其次旧明文 config）。"""
     cfg_path = HOME / "config.json"
     cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.is_file() else {}
+    # 2026-10-29 密钥迁移后 config.json 里已清空 → 先读密钥库
+    try:
+        from agi import secrets_store
+        stored = secrets_store.image_keys_by_account() or {}
+        if stored:
+            cfg["image_keys_by_account"] = stored
+        for field, getter in (("image_aes_key", secrets_store.image_aes_key),
+                              ("image_xor_key", secrets_store.image_xor_key)):
+            if not cfg.get(field):
+                cfg[field] = getter()
+    except Exception:  # noqa: BLE001 - 没有密钥库就退回旧路径
+        pass
     keys: dict[str, tuple[bytes, int]] = {}
     for wxid, item in (cfg.get("image_keys_by_account") or {}).items():
         aes = str(item.get("aes_key") or "").encode("ascii", "ignore")

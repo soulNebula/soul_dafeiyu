@@ -340,3 +340,23 @@ body.term-resizing #shell { transition: none; }
 .annot-bubble-row.selected .annot-avatar.me { outline: 2px solid #4ea1ff; }
 .annot-bubble-status { font-size: 10.5px; color: var(--muted); padding: 0 3px; }
 .annot-bubble mark { background: #f7b955; color: #1a1300; border-radius: 2px; padding: 0 1px; }
+
+/* ---------- 数据工作室：简单模式 + 高级折叠 ---------- */
+.data-simple { padding: 14px; }
+.data-toolbar { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.data-toolbar .field { min-width: 220px; }
+.data-toolbar .field select { width: 100%; }
+.data-toolbar .grow { flex: 1; }
+.data-count { font-weight: 600; color: var(--text); padding-bottom: 6px; }
+.data-search { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.data-search input { width: 300px; }
+.data-advanced { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 14px; margin-top: 14px; }
+.data-advanced summary { cursor: pointer; color: var(--muted); font-size: 13px; list-style: none; }
+.data-advanced summary::-webkit-details-marker { display: none; }
+.data-advanced summary::before { content: "▶ "; color: var(--accent); }
+.data-advanced[open] summary::before { content: "▼ "; }
+.data-advanced summary .hint { margin-left: 12px; font-size: 11.5px; color: var(--muted); }
+.advanced-body { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.advanced-body textarea { min-height: 96px; font-family: var(--mono); }
+#db-confirm-wrap { max-width: 420px; }

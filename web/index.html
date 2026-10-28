@@ -74,24 +74,37 @@
     </section>
 
     <section id="view-data" class="view">
-      <div class="page-head"><div><h2>数据工作室</h2><p class="muted">只读浏览 + 受控写入；写入必须确认短语，写前自动备份。</p></div><button class="btn" id="db-refresh">刷新库列表</button></div>
-      <div class="grid-data">
-        <aside class="panel side-panel">
-          <label class="field"><span>数据库</span><select id="db-select"></select></label>
-          <div id="db-tables" class="tree list"></div>
-          <div class="muted small" id="db-meta"></div>
-        </aside>
-        <div class="panel">
-          <div class="panel-head"><h3 id="db-title">选择数据库</h3><span class="muted small" id="db-count"></span></div>
-          <div class="table-wrap"><table class="table"><thead id="db-thead"></thead><tbody id="db-tbody"></tbody></table></div>
-          <div class="pager"><button class="btn small" id="db-prev">上一页</button><span id="db-page" class="muted small"></span><button class="btn small" id="db-next">下一页</button></div>
-          <div class="sql-box">
-            <textarea id="db-sql" placeholder="SELECT * FROM ...  （默认只读；写语句需勾选写入并输入 确认写入）"></textarea>
-            <div class="sql-actions"><label class="check"><input type="checkbox" id="db-write"> 允许写入</label><button class="btn primary" id="db-run">执行 SQL</button><button class="btn" id="db-backup">备份当前库</button></div>
-            <pre id="db-sql-out" class="terminal-inline"></pre>
-          </div>
+      <div class="page-head"><div><h2>数据工作室</h2><p class="muted">存放本机数据，只读浏览：选数据文件 → 选数据表 → 查看/搜索/翻页。高级 SQL 在底部折叠。</p></div><button class="btn" id="db-refresh">刷新数据文件</button></div>
+      <div class="panel data-simple">
+        <div class="data-toolbar">
+          <label class="field"><span>数据文件</span><select id="db-select"></select></label>
+          <label class="field"><span>数据表</span><select id="db-table-select"></select></label>
+          <span class="data-count" id="db-count">共 0 条</span>
+          <span class="grow"></span>
+          <button class="btn small" id="db-refresh2">刷新</button>
         </div>
+        <div class="data-search">
+          <span>🔍 搜索内容：</span><input id="db-search" placeholder="输入关键词，搜索本表文字内容">
+          <button class="btn small primary" id="db-search-btn">搜索</button>
+          <span class="muted small" id="db-meta"></span>
+        </div>
+        <div class="table-wrap"><table class="table"><thead id="db-thead"></thead><tbody id="db-tbody"></tbody></table></div>
+        <div class="pager"><button class="btn small" id="db-prev">上一页</button><span id="db-page" class="muted small">第 1 / 1 页</span><button class="btn small" id="db-next">下一页</button>
+          <span class="grow"></span><span class="muted small" id="db-title"></span></div>
       </div>
+      <details class="data-advanced" id="db-advanced">
+        <summary>▶ 高级模式（开发者 / SQL）<span class="hint">默认收起；写入会先自动备份</span></summary>
+        <div class="advanced-body">
+          <textarea id="db-sql" placeholder="SELECT * FROM ...  （默认只读；写语句需勾选写入并输入 确认写入）"></textarea>
+          <div class="sql-actions">
+            <label class="check"><input type="checkbox" id="db-write"> 允许写入</label>
+            <button class="btn primary" id="db-run">执行 SQL</button>
+            <button class="btn" id="db-backup">备份当前数据文件</button>
+          </div>
+          <div id="db-confirm-wrap" class="hidden"><label class="field"><span>写入确认语（必须输入「确认写入」）</span><input id="db-confirm" placeholder="确认写入"></label></div>
+          <pre id="db-sql-out" class="terminal-inline"></pre>
+        </div>
+      </details>
     </section>
 
     <section id="view-train" class="view">
@@ -255,7 +268,7 @@
 const S = {
   token: localStorage.getItem('idea_token') || new URLSearchParams(location.search).get('token') || '8888',
   view: new URLSearchParams(location.search).get('view') || 'welcome',
-  services: [], overview: null, data: { dbs: [], db: '', table: '', page: 1, pages: 1 },
+  services: [], overview: null, data: { dbs: [], db: '', table: '', page: 1, pages: 1, search: '' },
   train: { datasets: [], jobs: [], selected: '', selectedJob: '' }, models: null, cfg: null,
   corpus: { jobs: [], job: null, files: [], parsed: null, selected: new Set(),
             filterRole: '', search: '', result: null, busy: '', error: '',
@@ -478,44 +491,78 @@ async function loadDatabases() {
   try {
     const d = await api('/api/wb/db/databases');
     S.data.dbs = d.items || [];
-    $('#db-select').innerHTML = '<option value="">选择数据库</option>' + S.data.dbs.map(x => `<option value="${esc(x.id)}">${esc(x.label)}</option>`).join('');
-    $('#db-meta').textContent = '共 ' + S.data.dbs.length + ' 个数据库';
+    $('#db-select').innerHTML = S.data.dbs.map(x => {
+      const name = x.name || String(x.label || x.path || '').split(/[\\/]/).pop();
+      const domain = x.domain && x.domain !== 'other' ? (' · ' + x.domain) : '';
+      return `<option value="${esc(x.id)}">${esc(name)}${esc(domain)}</option>`;
+    }).join('') || '<option value="">暂无数据文件</option>';
+    $('#db-meta').textContent = '本机共 ' + S.data.dbs.length + ' 个数据文件，只读浏览';
     if (!S.data.db && S.data.dbs.length) S.data.db = S.data.dbs[0].id;
     if (S.data.db) { $('#db-select').value = S.data.db; loadSchema(S.data.db); }
   } catch (e) { toast(e.message, 'err'); }
 }
+function dbFieldLabel(name) {
+  const map = {
+    id: '编号', created_at: '时间', updated_at: '更新时间', ts: '时间',
+    kind: '类型', status: '状态', text: '内容', content: '内容', user: '用户',
+    role: '角色', actor: '操作者', action: '操作', target: '对象', name: '名称',
+    path: '路径', reason: '原因', error: '错误', meta_json: '扩展信息',
+    before_json: '修改前', after_json: '修改后', tags_json: '标签',
+    score: '评分', confidence: '置信度', importance: '重要度', enabled: '启用',
+    size: '大小', mtime: '修改时间', count: '数量', total: '总数',
+  };
+  return map[name] || name;
+}
 async function loadSchema(db) {
   S.data.db = db;
-  if (!db) { $('#db-tables').innerHTML = ''; return; }
+  S.data.table = '';
+  S.data.page = 1;
+  if (!db) { $('#db-table-select').innerHTML = '<option value="">先选择数据文件</option>'; return; }
   try {
     const d = await api('/api/wb/db/schema?db=' + encodeURIComponent(db));
-    $('#db-tables').innerHTML = (d.tables || []).map(t => `<button class="tree-row" data-table="${esc(t.name)}"><span>${esc(t.name)}</span><span class="muted small">${t.rows ?? ''}</span></button>`).join('') || '<div class="muted">无表</div>';
-    $$('#db-tables [data-table]').forEach(b => b.onclick = () => loadRows(b.dataset.table, 1));
+    const tables = d.tables || [];
+    $('#db-table-select').innerHTML = tables.map(t => `<option value="${esc(t.name)}">${esc(t.name)}（${t.rows ?? 0} 条）</option>`).join('') || '<option value="">该文件没有数据表</option>';
     $('#db-title').textContent = db.split(/[\\/]/).pop();
+    if (tables.length) { $('#db-table-select').value = tables[0].name; loadRows(tables[0].name, 1); }
+    else {
+      $('#db-thead').innerHTML = '<tr><th>提示</th></tr>';
+      $('#db-tbody').innerHTML = '<tr><td class="muted">这个数据文件没有可浏览的数据表。</td></tr>';
+      $('#db-count').textContent = '共 0 条';
+    }
   } catch (e) { toast(e.message, 'err'); }
 }
 async function loadRows(table, page) {
-  if (!S.data.db) return;
+  if (!S.data.db || !table) return;
   S.data.table = table; S.data.page = page || 1;
   try {
-    const q = '/api/wb/db/rows?db=' + encodeURIComponent(S.data.db) + '&table=' + encodeURIComponent(table) + '&page=' + S.data.page + '&page_size=50';
+    const q = '/api/wb/db/rows?db=' + encodeURIComponent(S.data.db)
+      + '&table=' + encodeURIComponent(table)
+      + '&page=' + S.data.page + '&page_size=50'
+      + (S.data.search ? '&q=' + encodeURIComponent(S.data.search) : '');
     const d = await api(q);
     if (!d.ok) { toast(d.error || '读取失败', 'err'); return; }
-    $('#db-thead').innerHTML = '<tr>' + (d.columns || []).map(c => `<th>${esc(c)}</th>`).join('') + '</tr>';
-    $('#db-tbody').innerHTML = (d.rows || []).map(row => '<tr>' + (d.columns || []).map(c => `<td>${esc(row[c] === null ? 'NULL' : row[c])}</td>`).join('') + '</tr>').join('') || '<tr><td class="muted">空</td></tr>';
+    const columns = (d.columns || []).map(c => (typeof c === 'string' ? c : (c.name || c.column || ''))).filter(Boolean);
+    $('#db-thead').innerHTML = '<tr>' + columns.map(c => `<th title="${esc(c)}">${esc(dbFieldLabel(c))}</th>`).join('') + '</tr>';
+    $('#db-tbody').innerHTML = (d.rows || []).map(row => '<tr>' + columns.map(c => {
+      const value = row[c];
+      return `<td>${esc(value === null || value === undefined ? '—' : value)}</td>`;
+    }).join('') + '</tr>').join('') || '<tr><td colspan="' + Math.max(1, columns.length) + '" class="muted">没有匹配的数据</td></tr>';
     S.data.pages = d.pages || 1;
-    $('#db-page').textContent = '第 ' + S.data.page + ' / ' + S.data.pages + ' 页 · 共 ' + (d.total ?? 0) + ' 行';
-    $('#db-count').textContent = table;
+    S.data.page = d.page || S.data.page;
+    $('#db-page').textContent = '第 ' + S.data.page + ' / ' + S.data.pages + ' 页';
+    $('#db-count').textContent = '共 ' + (d.total ?? 0) + ' 条';
+    $('#db-title').textContent = table + (S.data.search ? ' · 搜索「' + S.data.search + '」' : '');
+    $('#db-table-select').value = table;
   } catch (e) { toast(e.message, 'err'); }
 }
 async function runSql() {
   const sql = $('#db-sql').value.trim();
-  if (!sql || !S.data.db) { toast('先选数据库并输入 SQL', 'err'); return; }
+  if (!sql || !S.data.db) { toast('先选数据文件并输入 SQL', 'err'); return; }
   const write = $('#db-write').checked;
   let confirm = '';
   if (write) {
-    confirm = prompt('写操作需输入确认短语：确认写入');
-    if (confirm === null) return;
+    confirm = ($('#db-confirm').value || '').trim();
+    if (confirm !== '确认写入') { toast('写操作需要输入确认语「确认写入」', 'err'); return; }
   }
   try {
     const d = await api('/api/wb/db/sql', {method: 'POST', body: {db: S.data.db, sql, write, confirm}});
@@ -1424,11 +1471,17 @@ $('#svc-refresh').onclick = loadServices;
 $('#cfg-save').onclick = saveConfig;
 $('#cfg-backups').onclick = showConfigBackups;
 $('#db-refresh').onclick = loadDatabases;
+$('#db-refresh2').onclick = () => loadDatabases();
 $('#db-select').onchange = e => loadSchema(e.target.value);
+$('#db-table-select').onchange = e => loadRows(e.target.value, 1);
 $('#db-prev').onclick = () => { if (S.data.table && S.data.page > 1) loadRows(S.data.table, S.data.page - 1); };
 $('#db-next').onclick = () => { if (S.data.table && S.data.page < S.data.pages) loadRows(S.data.table, S.data.page + 1); };
+$('#db-search-btn').onclick = () => { S.data.search = ($('#db-search').value || '').trim(); if (S.data.table) loadRows(S.data.table, 1); };
+$('#db-search').onkeydown = e => { if (e.key === 'Enter') $('#db-search-btn').onclick(); };
+$('#db-write').onchange = () => { $('#db-confirm-wrap').classList.toggle('hidden', !$('#db-write').checked); };
 $('#db-run').onclick = runSql;
 $('#db-backup').onclick = backupDb;
+if (new URLSearchParams(location.search).get('db_adv') === '1') $('#db-advanced').open = true;
 $('#annot-reload').onclick = () => loadAnnotateSource(S.annotate.source || '');
 $('#annot-path-load').onclick = () => {
   const path = $('#annot-path').value.trim();

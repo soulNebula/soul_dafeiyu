@@ -2,7 +2,7 @@
 """IDEA 全服务冒烟（本机 HTTP GET，纯 httpx，不导入业务代码）。
 
 覆盖：
-- 803 工作台：health/overview/config/services/git/files/db/mem/train/models
+- 803 工作台：health/overview/config/services/db/train/models
 - 801 网关：health/status（X-Admin-Token）
 - 802 控制台：api/health
 - 8123 llama-server /v1/models
@@ -64,10 +64,7 @@ def _checks() -> list[Check]:
         ("overview", "/api/wb/overview", True),
         ("config", "/api/wb/config", True),
         ("services", "/api/wb/services", True),
-        ("git/status", "/api/wb/git/status", True),
-        ("files/tree", "/api/wb/files/tree", True),
         ("db/databases", "/api/wb/db/databases", True),
-        ("mem/overview", "/api/wb/mem/overview", True),
         ("train/datasets", "/api/wb/train/datasets", True),
         ("models/running", "/api/wb/models/running", True),
         ("models/disk", "/api/wb/models/disk", True),

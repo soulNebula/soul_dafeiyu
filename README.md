@@ -1,96 +1,48 @@
 # IDEA · SoulAgent 工作台（Workbench）
 
-[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-blue.svg)](.github/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](https://www.python.org/)
+> 浏览器里的 **模型 / 训练 / 数据** 工作台，外加最小 M0（服务管理、配置中心、概览）。
+> 微信控制台在 802，不在本仓库；本工作台只做工作台自己的事。
 
-> 项目的「IDE」：在浏览器里管理 SoulAgent 的服务、配置、数据库、记忆、对话流水线、训练工厂与 Git。
-> 设计文档见 SoulAgent 仓库：`docs/specs/11-工作台-Workbench.md`、`docs/specs/10-训练工厂-TrainLab.md`。
-
-## 当前阶段：M0.1（VS Code 风格骨架）
-
-已完成的目标范围：
-
-- [x] FastAPI 后端（803，本机 127.0.0.1）+ Token 鉴权（默认 `8888`）
-- [x] **VS Code 风格 UI**：标题栏 / 活动栏 / 侧栏 / 编辑器标签页 / 底部面板 / 状态栏
-- [x] **单页欢迎界面**：顶部任务栏（打开文件夹/新建文件/运行/源代码管理/服务/设置/总览/连接）+ 项目状态卡 + 常用任务
-- [x] **资源管理器**：文件树 + **打开文件夹选择器**（可添加任意本机目录为根）、点击打开、Ctrl+S 保存
-- [x] **顶部菜单**：☰ 打开文件夹/新建文件/保存/服务/设置/连接/关于（已移除不可用的命令输入框）
-- [x] **连接弹窗**：左下角钥匙或菜单打开，填令牌重连
-- [x] **代码编辑器**：Monaco（CDN 加载，离线自动退回 textarea）
-- [x] **代码工作区**：运行 Python（可选 4 个解释器，含训练 venv312/torch），输出进「终端」面板
-- [x] **代码模板**：PyTorch 环境自检 / LoRA SFT 训练骨架，一键生成到 `scratch/`
-- [x] **Git Studio**：变更列表、diff 查看、分支下拉/新建切换、提交/推送、历史 + 自动推送设置/密钥扫描
-- [x] **微信草稿箱**：confirm 模式下她的回复落草稿，工作台里一键批准/拒绝（代理 801 网关）
-- [x] **发送模式开关**：标题栏/状态栏一键切换 auto（自动发送）↔ confirm（草稿模式），写入配置并让网关立即热重载
-- [x] **服务管理**：801/802/8123/8125 启停/重启/日志
-- [x] **设置（按域分页）**：每个配置分组独立一页，保存即校验+备份+审计
-- [x] 审计日志（sqlite，before/after）
-- [x] 测试（pytest）
-
-## 快速开始
+## 运行
 
 ```bat
 cd C:\Users\Administrator\Desktop\idea
-scripts\run.bat
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 803
 ```
 
-浏览器打开 <http://127.0.0.1:803>，右上角填 token（默认 `8888`）。
+打开 <http://127.0.0.1:803/?token=8888>。令牌默认 `8888`，可用 `IDEA_TOKEN` 覆盖。
 
-## 界面速览（VS Code 风格）
+## 页面（7 个）
 
-```
-标题栏：菜单 / 项目名 / 令牌连接
-活动栏：资源管理器 | 源代码管理 | 运行 | 服务 | 设置 | 总览 | 训练(M3) | 数据(M1)
-侧栏  ：文件树 / Git 变更 / 运行任务 / 服务卡片 / 设置分组
-编辑区：Monaco 编辑器 + 标签页；设置页按域独立渲染；总览页
-底部  ：终端（运行输出）| 输出 | 审计
-状态栏：分支 · 服务运行数 · python/torch · 连接状态
-```
+| 页面 | 说明 |
+| --- | --- |
+| `welcome` | 欢迎/任务入口（默认页） |
+| `overview` | 服务、模型、最近训练概览 |
+| `services` | 801/802/803/8123/8125 启停、状态、日志 |
+| `config` | 基础 / 模型 / 训练必要配置；保存前备份 + 审计 |
+| `data` | SQLite 数据工作室：库/表浏览、分页、只读 SQL、受控写入、备份 |
+| `train` | 训练工厂：数据集发现/预览、LoRA 任务创建/启动/日志、导出 |
+| `models` | 模型中心：模型/适配器/GGUF、运行状态、磁盘 |
 
-## 代码工作区怎么用
+## API（精简后）
 
-1. 侧栏「运行」→ 选择解释器（含 `E:/agent/venv312`，带 torch 2.6 + CUDA）
-2. 点「新建训练脚本（模板）」生成 `scratch/pytorch_train_lora.py`
-3. 打开文件 → 点「运行当前 Python 文件」→ 输出实时进终端
-4. 改完 Ctrl+S 保存；提交走 Git 侧栏
+- 基础：`/health`、`/api/wb/env`、`/api/wb/overview`
+- 服务：`/api/wb/services`、`/api/wb/services/{name}/{action}`、`/api/wb/services/{name}/logs`
+- 配置：`/api/wb/config`、`/api/wb/config/validate`、`/api/wb/config/save`、`/api/wb/config/backups`、`/api/wb/config/restore`
+- 数据：`/api/wb/db/databases`、`schema`、`rows`、`sql`、`update`、`backup`、`backups`
+- 训练：`/api/wb/train/discover`、`datasets`、`assets`、`preview`、`filter`、`create`、`start`、`stop`、`jobs`、`job/{id}`、`job/{id}/log`、`export/preview`、`export`
+- 模型：`/api/wb/models`、`running`、`adapters`、`disk`、`status`、`start`、`stop`、`merge`、`convert`
+- 审计：`/api/wb/audit`
 
-## 环境变量
+## 已删除
 
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `IDEA_TOKEN` | `8888` | 工作台令牌 |
-| `SOULAGENT_HOME` | `C:\Users\Administrator\Desktop\SoulAgent` | 被管理的项目根目录 |
-| `AGENT_HOME` | `E:\agent` | 模型/数据/日志根目录 |
+对话工作室、记忆工作室、朋友圈、草稿/发送模式、Git Studio、文件树/编辑器/运行 Python、Monaco。
+这些功能不再由 IDEA 提供（朋友圈等迁移到 802 控制台）。
 
-## 目录
+## 测试
 
-```
-idea/
-├── app/            后端（FastAPI）
-│   ├── main.py
-│   ├── paths.py
-│   ├── config_schema.py
-│   ├── config_store.py
-│   ├── services.py
-│   ├── gitstudio.py
-│   └── audit.py
-├── web/            前端（index.html + app.js + style.css）
-├── tests/
-├── scripts/        run.bat / run.sh
-└── requirements.txt
+```bat
+.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-## 路线图
-
-- M0 骨架（当前）
-- M1 数据工作室 + 记忆工作室 + Git 自动推送
-- M2 对话工作室（流水线编辑器 + 试跑）
-- M3 模型中心 + 训练工厂（TrainLab）
-- M4 UI 工作室
-- M5 桌面化（Windows → macOS → Linux）
-- M6 开源化（CI/文档/示例/许可）
-
-## 开源
-
-MIT（待定）。私有数据不进入本仓库；被管理的 SoulAgent 数据在 `E:\agent`，不在本仓。
+冒烟：`.venv\Scripts\python.exe scripts\smoke_all.py`

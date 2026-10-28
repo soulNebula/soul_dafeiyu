@@ -72,7 +72,7 @@ def _gateway_token() -> str:
 
 
 GATEWAY_TOKEN = _gateway_token()
-VIEWS = ("welcome", "train", "models", "chat", "moments", "drafts")
+VIEWS = ("welcome", "overview", "services", "config", "data", "train", "models")
 SCREEN_MIN_BYTES = 20 * 1024
 PYTEST_TIMEOUT_S = 1800              # 单组 pytest 上限 30min
 SMOKE_TIMEOUT_S = 120
@@ -297,73 +297,22 @@ def step_e2e(matrix: Matrix, args: argparse.Namespace) -> None:
     headers = {"X-Admin-Token": str(TOKEN), "Accept": "application/json"}
     client = httpx.Client(timeout=20.0, trust_env=False)
     try:
-        # 工作台只读端点
+        # 工作台只读端点（精简后只保留模型/训练/数据 + M0）
         for path in (
+            "/api/wb/overview",
+            "/api/wb/config",
+            "/api/wb/services",
+            "/api/wb/db/databases",
             "/api/wb/train/datasets",
             "/api/wb/models/running",
             "/api/wb/models/disk",
-            "/api/wb/chat/persona",
-            "/api/wb/chat/traces",
         ):
             _http_get(client, f"工作台 {path}", WB + path, token=True, matrix=matrix)
-        # 朋友圈（未接线则 SKIP，不 FAIL）
-        _http_get(client, "工作台 /api/wb/moments", WB + "/api/wb/moments",
-                  token=True, matrix=matrix, allow_404_skip=True)
-        _http_get(client, "工作台 /api/wb/models/running（只读）",
-                  WB + "/api/wb/models/running", token=True, matrix=matrix)
 
         # 网关
         _http_get(client, "网关 /health", GW + "/health", token=False, matrix=matrix)
         _http_get(client, "网关 /status（X-Admin-Token）", GW + "/status",
                   token=True, matrix=matrix, gateway=True)
-
-        # 对话试跑（dry，不发微信）
-        url = WB + "/api/wb/chat/test"
-        started = time.perf_counter()
-        try:
-            response = client.post(url, headers=headers,
-                                   json={"text": "验收测试：在吗"},
-                                   timeout=CHAT_TEST_TIMEOUT_S)
-            elapsed = time.perf_counter() - started
-            try:
-                payload = response.json()
-            except (ValueError, TypeError):
-                payload = None
-            ok = (response.status_code == 200 and isinstance(payload, dict)
-                  and payload.get("ok") is True and payload.get("dry_run") is True)
-            detail = f"HTTP {response.status_code} dry_run={payload.get('dry_run') if isinstance(payload, dict) else '?'}"
-            if isinstance(payload, dict):
-                reply = str(payload.get("reply") or "")
-                detail += f" latency={payload.get('latency_ms')}ms reply={reply[:40]}"
-            matrix.add("功能 E2E", "对话试跑 POST /api/wb/chat/test", "PASS" if ok else "FAIL",
-                       duration_s=elapsed, detail=detail, command=f"POST {url}",
-                       tail="" if ok else json.dumps(payload, ensure_ascii=False)[:2000])
-        except Exception as exc:  # noqa: BLE001
-            matrix.add("功能 E2E", "对话试跑 POST /api/wb/chat/test", "FAIL",
-                       duration_s=time.perf_counter() - started,
-                       detail=f"{type(exc).__name__}: {str(exc)[:120]}", command=f"POST {url}")
-
-        # 朋友圈抓取（若可用；失败 SKIP 不 FAIL）
-        url = WB + "/api/wb/moments/refresh"
-        started = time.perf_counter()
-        try:
-            response = client.post(url, headers=headers, json={"limit": 5}, timeout=60.0)
-            elapsed = time.perf_counter() - started
-            if response.status_code == 404:
-                matrix.add("功能 E2E", "朋友圈刷新 POST /api/wb/moments/refresh", "SKIP",
-                           duration_s=elapsed, detail="接口未接线（404）", command=f"POST {url}")
-            elif response.status_code == 200:
-                matrix.add("功能 E2E", "朋友圈刷新 POST /api/wb/moments/refresh", "PASS",
-                           duration_s=elapsed, detail="HTTP 200", command=f"POST {url}")
-            else:
-                matrix.add("功能 E2E", "朋友圈刷新 POST /api/wb/moments/refresh", "SKIP",
-                           duration_s=elapsed,
-                           detail=f"HTTP {response.status_code}（朋友圈依赖缺失可接受）",
-                           command=f"POST {url}")
-        except Exception as exc:  # noqa: BLE001
-            matrix.add("功能 E2E", "朋友圈刷新 POST /api/wb/moments/refresh", "SKIP",
-                       duration_s=time.perf_counter() - started,
-                       detail=f"{type(exc).__name__}: {str(exc)[:100]}", command=f"POST {url}")
 
         # 控制台 health（构建在 802，只读）
         _http_get(client, "控制台 /api/health", CONSOLE + "/api/health",

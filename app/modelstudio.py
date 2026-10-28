@@ -18,11 +18,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import unquote, urlsplit
 
 from . import audit, paths, services
 
@@ -657,3 +661,642 @@ def status(home: Path | str | None = None) -> dict:
     return {"ok": True, "agent_home": str(base),
             "catalog": list_models(base), "running": running_models(base),
             "disk": disk_usage(base), "adapters": list_adapters(base)}
+
+
+# ================================================================== #
+# 在线下载 / 离线导入 / 删除 / 格式校验 / 清单增强（task-147）
+# ================================================================== #
+MODELS_DIRNAME = "models"
+DOWNLOADS_DIRNAME = "downloads"
+IMPORTED_DIRNAME = "imported"
+TRASH_DIRNAME = ".trash"
+#: 下载进度状态文件（工作台数据目录，gitignore）
+DOWNLOAD_STATE = paths.DATA_DIR / "downloads.json"
+_DL_LOCK = threading.Lock()
+_DL_CANCEL: set[str] = set()
+_DL_ACTIVE: dict[str, dict] = {}
+
+
+class _DownloadCancelled(Exception):
+    pass
+
+
+def _models_root(home: Path | str | None = None) -> Path:
+    base = Path(home) if home is not None else agent_home()
+    return base / MODELS_DIRNAME
+
+
+def _safe_name(name: Any) -> str | None:
+    """模型/文件名校验：不含路径分隔符、不以点开头、长度 1–120。"""
+    value = str(name or "").strip()
+    if not value or len(value) > 120:
+        return None
+    if value.startswith(".") or value in (".", ".."):
+        return None
+    for char in value:
+        if char in ("/", "\\", ":", "*", "?", '"', "<", ">", "|"):
+            return None
+        if ord(char) < 32:
+            return None
+    return value
+
+
+def _safe_file_name(name: Any) -> str | None:
+    value = _safe_name(Path(str(name or "")).name)
+    return value
+
+
+def _now_name() -> str:
+    return time.strftime("%Y%m%d-%H%M%S")
+
+
+# ------------------------------------------------------------------ 状态文件
+def _state_path(state_path: Path | str | None = None) -> Path:
+    return Path(state_path) if state_path is not None else DOWNLOAD_STATE
+
+
+def _read_state(state_path: Path | str | None = None) -> dict:
+    path = _state_path(state_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _write_state(state: dict, state_path: Path | str | None = None) -> None:
+    path = _state_path(state_path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state["updated_at"] = time.time()
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+        tmp.replace(path)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _job_update(job_id: str, state_path: Path | str | None = None, **fields: Any) -> None:
+    with _DL_LOCK:
+        state = _read_state(state_path)
+        jobs = state.get("jobs") if isinstance(state.get("jobs"), dict) else {}
+        job = dict(jobs.get(job_id) or {})
+        if not job:
+            return
+        job.update(fields)
+        job["updated_at"] = time.time()
+        jobs[job_id] = job
+        state["jobs"] = jobs
+        _write_state(state, state_path)
+        if job_id in _DL_ACTIVE:
+            _DL_ACTIVE[job_id].update(fields)
+
+
+def download_status(job_id: str | None = None,
+                    state_path: Path | str | None = None) -> dict:
+    """读下载进度：不传 job_id 返回全部（最近的在前），传则单条。"""
+    state = _read_state(state_path)
+    jobs = state.get("jobs") if isinstance(state.get("jobs"), dict) else {}
+    items = list(jobs.values())
+    items.sort(key=lambda item: float(item.get("updated_at") or 0), reverse=True)
+    if job_id:
+        job = jobs.get(str(job_id))
+        if not job:
+            return {"ok": False, "error": "not_found", "job_id": str(job_id)}
+        return {"ok": True, "job": job}
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+def cancel_download(job_id: str,
+                    state_path: Path | str | None = None) -> dict:
+    """请求取消后台下载；线程在下个 chunk 检查到后标 cancelled。"""
+    state = _read_state(state_path)
+    jobs = state.get("jobs") if isinstance(state.get("jobs"), dict) else {}
+    job = jobs.get(str(job_id))
+    if not job:
+        return {"ok": False, "error": "not_found", "job_id": str(job_id)}
+    if job.get("status") in ("done", "failed", "cancelled"):
+        return {"ok": True, "job": job, "already_finished": True}
+    _DL_CANCEL.add(str(job_id))
+    _job_update(str(job_id), state_path, status="cancelling")
+    return {"ok": True, "job_id": str(job_id), "status": "cancelling"}
+
+
+# ------------------------------------------------------------------ 格式校验
+def _read_head(path: Path, size: int = 512) -> bytes:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(size)
+    except OSError:
+        return b""
+
+
+def _looks_like_html(head: bytes) -> bool:
+    value = head[:512].lstrip().lower()
+    return (value.startswith(b"<!doctype") or value.startswith(b"<html")
+            or b"<title>404" in value or b"404 not found" in value
+            or b"access denied" in value)
+
+
+def validate_model_path(path: Path | str,
+                        home: Path | str | None = None) -> dict:
+    """校验一个模型路径的格式：gguf / hf（目录）/ adapter（目录）。"""
+    target = _resolve(path, home)
+    reasons: list[str] = []
+    if not target.exists():
+        return {"ok": False, "format": "", "path": str(target),
+                "reasons": ["path_not_found"], "size": 0, "files": 0}
+    size, files = _size_of(target)
+    if target.is_file():
+        name = target.name.lower()
+        if name.endswith(".gguf"):
+            head = _read_head(target, 4)
+            if head != b"GGUF":
+                reasons.append("bad_gguf_magic")
+            if size <= 0:
+                reasons.append("empty_file")
+            return {"ok": not reasons, "format": "gguf", "path": str(target),
+                    "reasons": reasons, "size": size, "files": files}
+        if name.endswith(".safetensors"):
+            if size <= 0:
+                reasons.append("empty_file")
+            if _looks_like_html(_read_head(target, 512)):
+                reasons.append("looks_like_html_error_page")
+            reasons.append("safetensors_requires_hf_dir")
+            return {"ok": False, "format": "safetensors", "path": str(target),
+                    "reasons": reasons, "size": size, "files": files}
+        return {"ok": False, "format": "", "path": str(target),
+                "reasons": ["unsupported_file"], "size": size, "files": files}
+    # 目录
+    adapter_config = target / "adapter_config.json"
+    if adapter_config.is_file():
+        try:
+            payload = json.loads(adapter_config.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                reasons.append("adapter_config_not_object")
+        except Exception as exc:  # noqa: BLE001
+            reasons.append(f"adapter_config_invalid:{type(exc).__name__}")
+        return {"ok": not reasons, "format": "adapter", "path": str(target),
+                "reasons": reasons, "size": size, "files": files}
+    config = target / "config.json"
+    if config.is_file():
+        try:
+            payload = json.loads(config.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            payload = None
+            reasons.append(f"config_json_invalid:{type(exc).__name__}")
+        if isinstance(payload, dict):
+            if not str(payload.get("model_type") or "").strip():
+                reasons.append("config_missing_model_type")
+        if not any(target.glob("*.safetensors")):
+            reasons.append("no_safetensors_weights")
+        return {"ok": not reasons, "format": "hf", "path": str(target),
+                "reasons": reasons, "size": size, "files": files}
+    gguf_files = list(target.glob("*.gguf"))
+    if gguf_files:
+        if _read_head(gguf_files[0], 4) != b"GGUF":
+            reasons.append("bad_gguf_magic")
+        return {"ok": not reasons, "format": "gguf", "path": str(target),
+                "reasons": reasons, "size": size, "files": files}
+    return {"ok": False, "format": "", "path": str(target),
+            "reasons": ["unsupported_dir"], "size": size, "files": files}
+
+
+# ------------------------------------------------------------------ 在线下载
+def _download_url_for(spec: dict) -> tuple[str, str]:
+    """返回 (url, 建议文件名)。支持直链与 HF（hf-mirror 直链兜底）。"""
+    url = str(spec.get("url") or "").strip()
+    if url:
+        base = Path(unquote(urlsplit(url).path)).name or "model.gguf"
+        return url, str(spec.get("filename") or base)
+    repo = str(spec.get("repo") or "").strip().strip("/")
+    filename = str(spec.get("file") or "model.safetensors").strip()
+    mirror = str(spec.get("mirror") or "hf-mirror.com").strip().strip("/")
+    return (f"https://{mirror}/{repo}/resolve/main/{filename}",
+            Path(filename).name)
+
+
+def _validate_downloaded(path: Path) -> dict:
+    if not path.is_file() or path.stat().st_size <= 0:
+        return {"ok": False, "error": "empty_download", "format": ""}
+    size = int(path.stat().st_size)
+    suffix = path.suffix.lower()
+    if suffix == ".gguf":
+        if _read_head(path, 4) != b"GGUF":
+            return {"ok": False, "error": "bad_gguf_magic", "format": "gguf",
+                    "size": size}
+        return {"ok": True, "format": "gguf", "size": size}
+    head = _read_head(path, 512)
+    if _looks_like_html(head):
+        return {"ok": False, "error": "downloaded_html_error_page",
+                "format": "", "size": size}
+    if suffix == ".safetensors":
+        return {"ok": True, "format": "hf", "size": size}
+    return {"ok": True, "format": "unknown", "size": size}
+
+
+def _stream_download(url: str, target: Path, job_id: str,
+                     state_path: Path | str | None = None) -> int:
+    """默认实现：httpx 流式下载并写进度；测试可 monkeypatch 本函数。"""
+    import httpx
+
+    done = 0
+    total = 0
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with httpx.stream("GET", url, follow_redirects=True, timeout=60.0) as response:
+        if response.status_code >= 400:
+            raise RuntimeError(f"http_{response.status_code}")
+        try:
+            total = int(response.headers.get("content-length") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        with target.open("wb") as handle:
+            for chunk in response.iter_bytes(65536):
+                if job_id in _DL_CANCEL:
+                    raise _DownloadCancelled()
+                if not chunk:
+                    continue
+                handle.write(chunk)
+                done += len(chunk)
+                _job_update(job_id, state_path, bytes_done=done, total=total)
+    return done
+
+
+def _hf_hub_download(repo: str, filename: str, target_dir: Path) -> Path | None:
+    """优先 huggingface_hub；未安装返回 None（调用方走 hf-mirror 直链）。"""
+    try:
+        from huggingface_hub import hf_hub_download  # type: ignore
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        try:
+            path = hf_hub_download(repo_id=repo, filename=filename,
+                                   local_dir=str(target_dir),
+                                   local_dir_use_symlinks=False)
+        except TypeError:  # 新版去掉了 local_dir_use_symlinks
+            path = hf_hub_download(repo_id=repo, filename=filename,
+                                   local_dir=str(target_dir))
+        return Path(path)
+    except Exception:  # noqa: BLE001 - 失败交给直链兜底
+        return None
+
+
+def _download_worker(job_id: str, spec: dict, target: Path, state_path: Path) -> None:
+    try:
+        _job_update(job_id, state_path, status="downloading",
+                    started_at=time.time())
+        url, _suggested = _download_url_for(spec)
+        done = 0
+        file_name = target.name
+        if spec.get("repo"):
+            hf_path = _hf_hub_download(str(spec.get("repo")), file_name,
+                                       target.parent)
+            if hf_path is not None:
+                if hf_path.resolve() != target.resolve():
+                    if target.exists():
+                        target.unlink()
+                    try:
+                        os.link(hf_path, target)
+                    except OSError:
+                        shutil.copy2(hf_path, target)
+                done = int(target.stat().st_size)
+                _job_update(job_id, state_path, bytes_done=done, total=done)
+            else:
+                done = _stream_download(url, target, job_id, state_path)
+        else:
+            done = _stream_download(url, target, job_id, state_path)
+        if job_id in _DL_CANCEL:
+            raise _DownloadCancelled()
+        checked = _validate_downloaded(target)
+        if not checked.get("ok"):
+            raise RuntimeError(str(checked.get("error") or "invalid_download"))
+        _job_update(job_id, state_path, status="done", bytes_done=done,
+                    total=done, finished_at=time.time(),
+                    format=checked.get("format") or "",
+                    target=str(target), source="downloaded", error="")
+    except _DownloadCancelled:
+        _safe_remove(target)
+        _job_update(job_id, state_path, status="cancelled",
+                    finished_at=time.time(), error="cancelled")
+    except Exception as exc:  # noqa: BLE001
+        _safe_remove(target)
+        _job_update(job_id, state_path, status="failed",
+                    finished_at=time.time(),
+                    error=f"{type(exc).__name__}: {exc}")
+    finally:
+        _DL_CANCEL.discard(str(job_id))
+        _DL_ACTIVE.pop(str(job_id), None)
+
+
+def _safe_remove(path: Path) -> None:
+    try:
+        if path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+    except OSError:
+        pass
+
+
+def download_model(spec: dict, home: Path | str | None = None,
+                   state_path: Path | str | None = None) -> dict:
+    """在线下载（直链或 HF 仓库）；后台线程执行，立即返回 job_id。
+
+    spec:
+      - 直链：{"name":"...", "url":"https://.../model.gguf", "filename"?: "model.gguf"}
+      - HF：{"name":"...", "repo":"Qwen/Qwen2.5-0.5B-Instruct",
+             "file":"model.safetensors"|None, "mirror":"hf-mirror.com"|None}
+    """
+    if not isinstance(spec, dict):
+        return {"ok": False, "error": "invalid_spec"}
+    name = _safe_name(spec.get("name"))
+    if not name:
+        return {"ok": False, "error": "invalid_name"}
+    if not str(spec.get("url") or "").strip() and not str(spec.get("repo") or "").strip():
+        return {"ok": False, "error": "url_or_repo_required"}
+    if spec.get("url") and not str(spec.get("url")).startswith(("http://", "https://")):
+        return {"ok": False, "error": "invalid_url"}
+    url, suggested = _download_url_for(spec)
+    file_name = _safe_file_name(spec.get("filename") or suggested)
+    if not file_name:
+        return {"ok": False, "error": "invalid_filename"}
+    target_dir = _models_root(home) / DOWNLOADS_DIRNAME / name
+    target = target_dir / file_name
+    if target_dir.exists() and any(target_dir.iterdir()) and not spec.get("overwrite"):
+        return {"ok": False, "error": "target_exists",
+                "hint": "传 overwrite=true 覆盖", "target": str(target_dir)}
+    target_dir.mkdir(parents=True, exist_ok=True)
+    job_id = "DL-" + uuid.uuid4().hex[:12]
+    suffix = Path(file_name).suffix.lower()
+    fmt = "gguf" if suffix == ".gguf" else ("hf" if suffix == ".safetensors" else "unknown")
+    state_path_obj = _state_path(state_path)
+    with _DL_LOCK:
+        state = _read_state(state_path_obj)
+        jobs = state.get("jobs") if isinstance(state.get("jobs"), dict) else {}
+        jobs[job_id] = {
+            "job_id": job_id, "name": name, "status": "queued",
+            "bytes_done": 0, "total": 0, "target": str(target),
+            "format": fmt, "source": "downloaded", "url": url,
+            "repo": str(spec.get("repo") or ""), "file": file_name,
+            "created_at": time.time(), "updated_at": time.time(), "error": "",
+        }
+        state["jobs"] = jobs
+        _write_state(state, state_path_obj)
+    _DL_ACTIVE[job_id] = {"target": str(target)}
+    worker = threading.Thread(target=_download_worker,
+                              args=(job_id, dict(spec), target, state_path_obj),
+                              name="model-download-" + job_id, daemon=True)
+    worker.start()
+    return {"ok": True, "job_id": job_id, "name": name, "status": "queued",
+            "target": str(target), "format": fmt, "source": "downloaded"}
+
+
+def wait_download(job_id: str, *, timeout: float = 30.0,
+                  interval: float = 0.05,
+                  state_path: Path | str | None = None) -> dict:
+    """轮询等待后台下载结束（测试/CLI 用；失败/取消也返回）。"""
+    import time as _time
+    deadline = _time.time() + max(0.0, float(timeout))
+    while True:
+        result = download_status(job_id, state_path)
+        job = result.get("job") if result.get("ok") else None
+        if job and job.get("status") in ("done", "failed", "cancelled"):
+            return {"ok": job.get("status") == "done", "job": job,
+                    "status": job.get("status"), "error": job.get("error") or ""}
+        if _time.time() >= deadline:
+            return {"ok": False, "error": "timeout", "job": job,
+                    "status": (job or {}).get("status") or "unknown"}
+        _time.sleep(max(0.01, float(interval)))
+
+
+# ------------------------------------------------------------------ 离线导入
+def _copy_or_link(source: Path, target: Path) -> None:
+    """同盘优先硬链接；跨盘/失败回退复制。"""
+    try:
+        os.link(source, target)
+        return
+    except OSError:
+        pass
+    shutil.copy2(source, target)
+
+
+def _copy_tree(source: Path, target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    for item in source.rglob("*"):
+        rel = item.relative_to(source)
+        destination = target / rel
+        if item.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+        elif item.is_file():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _copy_or_link(item, destination)
+
+
+def import_model(spec: dict, home: Path | str | None = None) -> dict:
+    """离线导入本地 gguf / HF 目录 / adapter 目录到 ``models/imported/<name>/``。
+
+    spec: {"name": "...", "path": "本地路径", "format": "gguf|hf|adapter" (可省略自动识别),
+           "overwrite": false}
+    """
+    if not isinstance(spec, dict):
+        return {"ok": False, "error": "invalid_spec"}
+    name = _safe_name(spec.get("name"))
+    if not name:
+        return {"ok": False, "error": "invalid_name"}
+    source_raw = str(spec.get("path") or "").strip()
+    if not source_raw:
+        return {"ok": False, "error": "path_required"}
+    source = Path(os.path.expanduser(os.path.expandvars(source_raw)))
+    if not source.exists():
+        return {"ok": False, "error": "source_not_found", "path": str(source)}
+    checked = validate_model_path(source)
+    detected = str(checked.get("format") or "")
+    requested = str(spec.get("format") or "").strip().lower()
+    if requested and requested not in ("gguf", "hf", "adapter", "auto"):
+        return {"ok": False, "error": "invalid_format", "format": requested}
+    if not checked.get("ok"):
+        return {"ok": False, "error": "invalid_model", "format": detected,
+                "reasons": checked.get("reasons") or [], "path": str(source)}
+    if requested and requested != "auto" and requested != detected:
+        return {"ok": False, "error": "format_mismatch",
+                "expected": requested, "detected": detected}
+    target_root = _models_root(home) / IMPORTED_DIRNAME
+    target = target_root / name
+    if source.resolve() == target.resolve() or _is_under(source, target):
+        return {"ok": False, "error": "source_inside_target",
+                "source": str(source), "target": str(target)}
+    if target.exists():
+        if not spec.get("overwrite"):
+            return {"ok": False, "error": "target_exists",
+                    "hint": "传 overwrite=true 覆盖", "target": str(target)}
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        except OSError as exc:
+            return {"ok": False, "error": f"overwrite_failed: {exc}"}
+    try:
+        target_root.mkdir(parents=True, exist_ok=True)
+        source_size, source_files = _size_of(source)
+        if source.is_dir():
+            _copy_tree(source, target)
+        else:
+            target.mkdir(parents=True, exist_ok=True)
+            _copy_or_link(source, target / source.name)
+        target_size, target_files = _size_of(target)
+    except Exception as exc:  # noqa: BLE001
+        _safe_remove(target)
+        return {"ok": False, "error": f"import_failed: {type(exc).__name__}: {exc}"}
+    if target_size != source_size:
+        _safe_remove(target)
+        return {"ok": False, "error": "size_mismatch",
+                "source_size": source_size, "target_size": target_size}
+    _record("model.import", str(target), source=str(source), format=detected,
+            size=target_size)
+    return {"ok": True, "name": name, "path": str(target), "format": detected,
+            "source": "imported", "size": target_size, "files": target_files,
+            "imported_from": str(source)}
+
+
+# ------------------------------------------------------------------ 删除（进回收站）
+def _find_deletable(name: str, home: Path | str | None) -> Path | None:
+    root = _models_root(home)
+    candidates = [root / name, root / DOWNLOADS_DIRNAME / name,
+                  root / IMPORTED_DIRNAME / name]
+    for candidate in candidates:
+        try:
+            if candidate.exists() and candidate.resolve() != root.resolve():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def delete_model(spec: dict, home: Path | str | None = None) -> dict:
+    """删除模型条目：默认移动到 ``models/.trash/<时间戳>/``（可恢复）。
+
+    spec: {"name": "...", "path"?: "...", "kind"?: "gguf|hf|adapter"}
+    """
+    if not isinstance(spec, dict):
+        return {"ok": False, "error": "invalid_spec"}
+    root = _models_root(home)
+    candidate: Path | None = None
+    raw_path = str(spec.get("path") or "").strip()
+    if raw_path:
+        candidate = _resolve(raw_path, home)
+        if not _is_under(candidate, root) or candidate.resolve() == root.resolve():
+            return {"ok": False, "error": "path_outside_models"}
+        if candidate == root / TRASH_DIRNAME or _is_under(candidate, root / TRASH_DIRNAME):
+            return {"ok": False, "error": "cannot_delete_trash"}
+    else:
+        name = _safe_name(spec.get("name"))
+        if not name:
+            return {"ok": False, "error": "invalid_name"}
+        candidate = _find_deletable(name, home)
+        if candidate is None:
+            return {"ok": False, "error": "not_found", "name": name}
+    kind = str(spec.get("kind") or "").strip().lower()
+    if kind:
+        checked = validate_model_path(candidate)
+        if checked.get("format") != kind:
+            return {"ok": False, "error": "kind_mismatch",
+                    "expected": kind, "detected": checked.get("format") or ""}
+    trash_parent = root / TRASH_DIRNAME / _now_name()
+    target = trash_parent / candidate.name
+    suffix = 1
+    while target.exists():
+        target = trash_parent / f"{candidate.name}-{suffix}"
+        suffix += 1
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(candidate), str(target))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"move_failed: {type(exc).__name__}: {exc}"}
+    _record("model.delete", str(candidate), moved_to=str(target))
+    return {"ok": True, "name": candidate.name, "path": str(candidate),
+            "moved_to": str(target)}
+
+
+# ------------------------------------------------------------------ 清单/详情增强
+def _entry_format(path: Path) -> str:
+    checked = validate_model_path(path)
+    return str(checked.get("format") or "")
+
+
+def _inventory_entry(path: Path, *, source: str, fmt: str | None = None,
+                     kind: str | None = None) -> dict:
+    size, files = _size_of(path)
+    format_value = fmt if fmt is not None else _entry_format(path)
+    kind_value = kind or ("adapter" if format_value == "adapter"
+                          else "gguf" if format_value == "gguf" else "base")
+    return {
+        "name": path.name,
+        "path": str(path),
+        "format": format_value,
+        "kind": kind_value,
+        "size": size,
+        "files": files,
+        "source": source,
+        "mtime": _mtime_of(path),
+        "usable_for_train": format_value == "hf",
+        "usable_for_serve": format_value == "gguf",
+    }
+
+
+def model_inventory(home: Path | str | None = None) -> dict:
+    """扩展清单：builtin/downloaded/imported + output gguf/adapter，带格式与用途。"""
+    base = Path(home) if home is not None else agent_home()
+    root = base / MODELS_DIRNAME
+    items: list[dict] = []
+    seen: set[str] = set()
+
+    def add(entry: dict) -> None:
+        key = entry["path"]
+        if key in seen:
+            return
+        seen.add(key)
+        items.append(entry)
+
+    if root.is_dir():
+        for child in sorted(root.iterdir()):
+            if child.name in (DOWNLOADS_DIRNAME, IMPORTED_DIRNAME, TRASH_DIRNAME):
+                continue
+            if child.is_dir() and (child / "adapter_config.json").is_file():
+                add(_inventory_entry(child, source="builtin", fmt="adapter"))
+            elif child.is_dir() and (child / "config.json").is_file():
+                add(_inventory_entry(child, source="builtin", fmt="hf"))
+            elif child.is_file() and child.suffix.lower() == ".gguf":
+                add(_inventory_entry(child, source="builtin", fmt="gguf"))
+    for sub, source in ((DOWNLOADS_DIRNAME, "downloaded"),
+                        (IMPORTED_DIRNAME, "imported")):
+        directory = root / sub
+        if not directory.is_dir():
+            continue
+        for child in sorted(directory.iterdir()):
+            if child.is_dir():
+                fmt = _entry_format(child)
+                if fmt:
+                    add(_inventory_entry(child, source=source, fmt=fmt))
+            elif child.is_file() and child.suffix.lower() == ".gguf":
+                add(_inventory_entry(child, source=source, fmt="gguf"))
+    output = base / "output"
+    if (output / "gguf").is_dir():
+        for path in sorted((output / "gguf").glob("*.gguf")):
+            add(_inventory_entry(path, source="builtin", fmt="gguf"))
+    adapter_dirs = _adapter_dirs(output / "adapters")
+    existing = {str(path.resolve()) for path in adapter_dirs}
+    for path in _adapter_dirs(output):
+        key = str(path.resolve())
+        if key not in existing:
+            adapter_dirs.append(path)
+            existing.add(key)
+    for path in adapter_dirs:
+        add(_inventory_entry(path, source="builtin", fmt="adapter"))
+    items.sort(key=lambda row: (row["source"], row["format"], row["name"].lower()))
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item["format"] or "unknown"] = counts.get(item["format"] or "unknown", 0) + 1
+    return {"ok": True, "agent_home": str(base), "items": items,
+            "count": len(items), "counts": counts}

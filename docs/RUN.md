@@ -58,7 +58,7 @@ cd C:\Users\Administrator\Desktop\idea
 ```
 
 - 覆盖：
-  - 803：`/health`、overview/config/services/git status/files tree/db databases/mem overview/train datasets/models running/models disk
+  - 803：`/health`、overview/config/services/db databases/train datasets/models running/models disk
   - 801：`/health`、`/status`（`X-Admin-Token`）
   - 802：`/api/health`
   - 8123/8125：`/v1/models`

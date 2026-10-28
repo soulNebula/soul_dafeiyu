@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""配置中心：读取/校验/保存/热生效/审计 + 自动 git commit。"""
+"""配置中心：读取/校验/保存/备份/恢复/审计（精简版，无 Git 自动提交）。"""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,7 @@ import shutil
 import time
 from pathlib import Path
 
-from . import audit, config_schema, gitstudio, paths
+from . import audit, config_schema, paths
 
 BACKUP_DIR = paths.DATA_DIR / "config_backups"
 
@@ -30,7 +30,6 @@ def load_raw() -> dict:
 
 
 def load_view() -> dict:
-    """给前端：schema + 当前值（敏感项打码）。"""
     raw = load_raw()
     items = []
     for item in config_schema.SCHEMA:
@@ -54,9 +53,8 @@ def validate(patch: dict) -> dict:
     return config_schema.validate_all(patch)
 
 
-def save(patch: dict, *, actor: str = "workbench", auto_commit: bool = True,
-         auto_push: bool = False) -> dict:
-    """保存补丁：写前备份 → 原子写 → 审计 → 自动 git commit。"""
+def save(patch: dict, *, actor: str = "workbench") -> dict:
+    """保存补丁：校验 → 写前备份 → 原子写 → 审计（不再自动 Git 提交）。"""
     if not isinstance(patch, dict) or not patch:
         return {"ok": False, "error": "empty_patch"}
     result = validate(patch)
@@ -66,10 +64,8 @@ def save(patch: dict, *, actor: str = "workbench", auto_commit: bool = True,
     p = paths.wechat_config_path()
     before = load_raw()
     after = dict(before)
-    for key, value in patch.items():
-        after[key] = value
+    after.update(patch)
 
-    # 备份（保留最近 50 份）
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     if p.is_file():
@@ -88,21 +84,13 @@ def save(patch: dict, *, actor: str = "workbench", auto_commit: bool = True,
     audit.record("config.save", str(p), actor=actor, before=before, after=after,
                  meta={"keys": sorted(patch.keys())})
 
-    committed = None
-    if auto_commit:
-        summary = "配置更新：" + ", ".join(sorted(patch.keys()))
-        committed = gitstudio.auto_commit("config", "save", summary, actor=actor)
-        if auto_push and committed.get("ok") and not committed.get("noop"):
-            committed["push"] = gitstudio.push_default()
-
     restart_keys = [k for k in patch
                     if (config_schema.by_key(k) or {}).get("restart")]
     return {"ok": True, "changed": sorted(patch.keys()),
-            "restart_required": restart_keys, "git": committed}
+            "restart_required": restart_keys}
 
 
 def restore_backup(name: str, *, actor: str = "workbench") -> dict:
-    """从备份恢复（name 例如 config.20261028-011500.json）。"""
     src = BACKUP_DIR / Path(name).name
     if not src.is_file():
         return {"ok": False, "error": "backup_not_found"}
@@ -112,11 +100,10 @@ def restore_backup(name: str, *, actor: str = "workbench") -> dict:
     after = load_raw()
     audit.record("config.restore", str(p), actor=actor, before=before, after=after,
                  meta={"backup": src.name})
-    gitstudio.auto_commit("config", "restore", f"从备份恢复 {src.name}", actor=actor)
     return {"ok": True, "restored": src.name}
 
 
 def backups() -> list[str]:
     if not BACKUP_DIR.is_dir():
         return []
-    return sorted((x.name for x in BACKUP_DIR.glob("config.*.json")), reverse=True)
+    return sorted((p.name for p in BACKUP_DIR.glob("config.*.json")), reverse=True)

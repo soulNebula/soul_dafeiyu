@@ -360,3 +360,40 @@ body.term-resizing #shell { transition: none; }
 .advanced-body { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .advanced-body textarea { min-height: 96px; font-family: var(--mono); }
 #db-confirm-wrap { max-width: 420px; }
+
+/* 数据文件友好下拉 */
+.db-picker-field { position: relative; }
+.db-picker-btn { width: 100%; text-align: left; background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 6px; color: var(--text); padding: 8px 10px; cursor: pointer; }
+.db-picker-btn:hover { border-color: var(--accent); }
+.db-select-menu { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; width: 360px;
+  max-height: 60vh; overflow: auto; background: #181d26; border: 1px solid var(--line);
+  border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,.5); padding: 6px; }
+.db-select-menu.hidden { display: none; }
+.db-group-title { color: var(--muted); font-size: 11px; padding: 7px 8px 3px; }
+.db-option { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: none; border: 0; color: var(--text); text-align: left; padding: 7px 9px;
+  border-radius: 5px; font-size: 12.5px; }
+.db-option:hover { background: #232b38; }
+.db-option.active { background: #1b324d; color: #fff; }
+.db-old { font-size: 10px; color: var(--warn); border: 1px solid #6b5426; border-radius: 8px; padding: 0 5px; }
+.db-show-all { font-size: 11.5px; padding-bottom: 6px; white-space: nowrap; }
+.db-note { margin: -2px 0 8px; }
+.db-path { font-family: var(--mono); font-size: 11px; color: var(--muted);
+  background: #0d1117; border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px;
+  word-break: break-all; }
+
+/* ---------- 蒸馏语义数据 ---------- */
+.distill-intro { color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+.distill-intro b { color: var(--text); }
+.dist-mode { display: flex; gap: 18px; margin: 10px 0; flex-wrap: wrap; }
+.distill-job-card { margin-top: 12px; border: 1px solid #2f6fed55; background: #121b2d;
+  border-radius: 8px; padding: 10px 12px; }
+.distill-job-card .kv { display: grid; grid-template-columns: 100px 1fr; gap: 3px 10px; font-size: 12px; margin: 6px 0; }
+.distill-log { margin-top: 8px; }
+.distill-log pre { max-height: 220px; }
+.distill-datasets { max-height: 62vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.distill-dataset-row { border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px;
+  display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.distill-dataset-row .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.distill-dataset-row .mono { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

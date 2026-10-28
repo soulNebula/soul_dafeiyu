@@ -27,6 +27,7 @@
     <button class="ab-item" data-view="config" title="配置">🎛<span>配置</span></button>
     <button class="ab-item" data-view="data" title="数据工作室">🗄<span>数据</span></button>
     <button class="ab-item" data-view="train" title="训练工厂">🧪<span>训练</span></button>
+    <button class="ab-item" data-view="distill" title="蒸馏语义数据">🧬<span>蒸馏</span></button>
     <button class="ab-item" data-view="corpus" title="语料清洗">🧹<span>语料</span></button>
     <button class="ab-item" data-view="annotate" title="用户标注">🏷<span>标注</span></button>
     <button class="ab-item" data-view="models" title="模型中心">🧰<span>模型</span></button>
@@ -77,12 +78,17 @@
       <div class="page-head"><div><h2>数据工作室</h2><p class="muted">存放本机数据，只读浏览：选数据文件 → 选数据表 → 查看/搜索/翻页。高级 SQL 在底部折叠。</p></div><button class="btn" id="db-refresh">刷新数据文件</button></div>
       <div class="panel data-simple">
         <div class="data-toolbar">
-          <label class="field"><span>数据文件</span><select id="db-select"></select></label>
+          <div class="field db-picker-field"><span>数据文件</span>
+            <button class="db-picker-btn" id="db-select-btn" type="button">选择数据文件 ▾</button>
+            <div id="db-select-menu" class="db-select-menu hidden"></div>
+          </div>
           <label class="field"><span>数据表</span><select id="db-table-select"></select></label>
           <span class="data-count" id="db-count">共 0 条</span>
+          <label class="check db-show-all"><input type="checkbox" id="db-show-all"> 显示全部数据文件（含测试/备份/旧库）</label>
           <span class="grow"></span>
           <button class="btn small" id="db-refresh2">刷新</button>
         </div>
+        <div class="db-note muted small" id="db-note">默认只显示常用数据；测试/备份/旧库已折叠</div>
         <div class="data-search">
           <span>🔍 搜索内容：</span><input id="db-search" placeholder="输入关键词，搜索本表文字内容">
           <button class="btn small primary" id="db-search-btn">搜索</button>
@@ -95,6 +101,7 @@
       <details class="data-advanced" id="db-advanced">
         <summary>▶ 高级模式（开发者 / SQL）<span class="hint">默认收起；写入会先自动备份</span></summary>
         <div class="advanced-body">
+          <div class="db-path" id="db-path"></div>
           <textarea id="db-sql" placeholder="SELECT * FROM ...  （默认只读；写语句需勾选写入并输入 确认写入）"></textarea>
           <div class="sql-actions">
             <label class="check"><input type="checkbox" id="db-write"> 允许写入</label>
@@ -151,6 +158,40 @@
         <div class="actions"><button class="btn primary" id="train-create">创建任务</button><button class="btn" id="train-start">启动选中任务</button><button class="btn" id="train-stop">停止选中任务</button></div>
         <div class="muted small" id="train-hint">选中数据集可预览；任务启动后日志实时轮询。</div>
         <pre id="train-log" class="terminal-inline"></pre>
+      </div>
+    </section>
+
+    <section id="view-distill" class="view">
+      <div class="page-head"><div><h2>蒸馏语义数据</h2><p class="muted">让 DeepSeek 看着聊天上下文，按人设与状态档案写出「她这一轮怎么想」的训练数据。</p></div><button class="btn" id="distill-refresh">刷新</button></div>
+      <div class="panel distill-intro">
+        <b>模拟模式</b>免费、秒级，用假 teacher 走通流程；<b>真实模式</b>调用 DeepSeek，会花钱（约 <span id="distill-cps">0.001468</span> 元/条）。生成的 jsonl 可直接在训练工厂使用。
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <div class="panel-head"><h3>生成新数据集</h3><span class="muted small" id="distill-estimate"></span></div>
+          <div class="form-grid">
+            <label class="field"><span>生成数量（1–5000）</span><input id="dist-limit" type="number" value="300" min="1" max="5000"></label>
+            <label class="field"><span>输出名（可空，自动 soul_sft_web_MMDD_HHMM）</span><input id="dist-out" placeholder="留空自动命名"></label>
+            <label class="field"><span>每个 context 状态变体数（1–7）</span><input id="dist-variants" type="number" value="7" min="1" max="7"></label>
+            <label class="check"><input type="checkbox" id="dist-split"> 额外拆 train/val</label>
+          </div>
+          <div class="dist-mode">
+            <label class="check"><input type="radio" name="dist-mode" value="mock" checked> 模拟生成（免费·假 teacher）</label>
+            <label class="check"><input type="radio" name="dist-mode" value="real"> 真实生成（DeepSeek·花钱）</label>
+          </div>
+          <div id="dist-real-box" class="hidden">
+            <div class="form-grid">
+              <label class="field"><span>预算上限（元，默认 3.05）</span><input id="dist-budget" type="number" value="3.05" min="0.01" step="0.01"></label>
+              <label class="field"><span>确认短语（必须输入「确认生成」）</span><input id="dist-confirm" placeholder="确认生成"></label>
+            </div>
+          </div>
+          <div class="actions"><button class="btn primary" id="distill-create">开始生成</button><span class="muted small" id="distill-create-hint"></span></div>
+          <div id="distill-job"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>已有数据集</h3><label class="check small"><input type="checkbox" id="distill-derived"> 显示派生（_train/_val/_norm）</label></div>
+          <div id="distill-datasets" class="distill-datasets"><div class="muted small">加载中…</div></div>
+        </div>
       </div>
     </section>
 
@@ -268,8 +309,11 @@
 const S = {
   token: localStorage.getItem('idea_token') || new URLSearchParams(location.search).get('token') || '8888',
   view: new URLSearchParams(location.search).get('view') || 'welcome',
-  services: [], overview: null, data: { dbs: [], db: '', table: '', page: 1, pages: 1, search: '' },
+  services: [], overview: null, data: { dbs: [], db: '', table: '', page: 1, pages: 1, search: '',
+          showAll: sessionStorage.getItem('idea_db_show_all') === '1' },
   train: { datasets: [], jobs: [], selected: '', selectedJob: '' }, models: null, cfg: null,
+  distill: { datasets: [], jobs: [], job: null, log: [], timer: null, showDerived: false,
+             error: '', busy: '', out: '' },
   corpus: { jobs: [], job: null, files: [], parsed: null, selected: new Set(),
             filterRole: '', search: '', result: null, busy: '', error: '',
             progress: null, parseTimer: null },
@@ -365,7 +409,7 @@ function term(text, target='') {
   openTerminal(true);
 }
 function showView(name) {
-  const allowed = ['welcome','overview','services','config','data','train','corpus','annotate','models'];
+  const allowed = ['welcome','overview','services','config','data','train','distill','corpus','annotate','models'];
   if (!allowed.includes(name)) name = 'welcome';
   S.view = name;
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
@@ -376,12 +420,14 @@ function showView(name) {
   history.replaceState(null, '', url);
   if (S.timer) { clearInterval(S.timer); S.timer = null; }
   if (name !== 'corpus' && S.corpus.parseTimer) { clearInterval(S.corpus.parseTimer); S.corpus.parseTimer = null; }
+  if (name !== 'distill' && S.distill.timer) { clearInterval(S.distill.timer); S.distill.timer = null; }
   if (name !== 'models' && S.dlTimer) { clearInterval(S.dlTimer); S.dlTimer = null; }
   if (name === 'overview') loadOverview();
   if (name === 'services') loadServices();
   if (name === 'config') loadConfig();
   if (name === 'data') loadDatabases();
   if (name === 'train') loadTrain();
+  if (name === 'distill') loadDistill();
   if (name === 'corpus') loadCorpus();
   if (name === 'annotate') loadAnnotate();
   if (name === 'models') loadModels();
@@ -487,19 +533,56 @@ async function showConfigBackups() {
 }
 
 /* ---------------------------------------------------------------- 数据 */
+const DB_GROUPS = [['audit', '操作审计'], ['memory', '聊天记忆'], ['persona', '人物画像'], ['other', '其他数据']];
+function dbFileLabel(f) {
+  let label = f.label_zh || f.name || String(f.label || f.path || '').split(/[\\/]/).pop();
+  if (f.hidden && !label.includes('旧')) label += ' · 旧';
+  return label;
+}
+function dbVisibleFiles() {
+  return S.data.dbs.filter(f => S.data.showAll || !f.hidden);
+}
+function renderDbPicker() {
+  const btn = $('#db-select-btn');
+  const menu = $('#db-select-menu');
+  if (!btn || !menu) return;
+  const current = S.data.dbs.find(f => f.id === S.data.db);
+  btn.textContent = current ? dbFileLabel(current) + ' ▾' : '选择数据文件 ▾';
+  const files = dbVisibleFiles();
+  menu.innerHTML = DB_GROUPS.map(([domain, title]) => {
+    const rows = files.filter(f => (f.domain || 'other') === domain);
+    if (!rows.length) return '';
+    return `<div class="db-group-title">${title}（${rows.length}）</div>`
+      + rows.map(f => `<button class="db-option ${f.id === S.data.db ? 'active' : ''}" data-db-pick="${esc(f.id)}">
+          <span>${esc(dbFileLabel(f))}</span>${f.hidden ? '<span class="db-old">旧</span>' : ''}
+        </button>`).join('');
+  }).join('') || '<div class="muted small" style="padding:6px 8px">没有可见的数据文件</div>';
+  menu.querySelectorAll('[data-db-pick]').forEach(item => item.onclick = () => {
+    S.data.db = item.dataset.dbPick;
+    menu.classList.add('hidden');
+    renderDbPicker();
+    loadSchema(S.data.db);
+  });
+}
 async function loadDatabases() {
   try {
+    if (new URLSearchParams(location.search).get('db_all') === '1') S.data.showAll = true;
     const d = await api('/api/wb/db/databases');
     S.data.dbs = d.items || [];
-    $('#db-select').innerHTML = S.data.dbs.map(x => {
-      const name = x.name || String(x.label || x.path || '').split(/[\\/]/).pop();
-      const domain = x.domain && x.domain !== 'other' ? (' · ' + x.domain) : '';
-      return `<option value="${esc(x.id)}">${esc(name)}${esc(domain)}</option>`;
-    }).join('') || '<option value="">暂无数据文件</option>';
-    $('#db-meta').textContent = '本机共 ' + S.data.dbs.length + ' 个数据文件，只读浏览';
-    if (!S.data.db && S.data.dbs.length) S.data.db = S.data.dbs[0].id;
-    if (S.data.db) { $('#db-select').value = S.data.db; loadSchema(S.data.db); }
-  } catch (e) { toast(e.message, 'err'); }
+    const allBox = $('#db-show-all');
+    if (allBox) allBox.checked = S.data.showAll;
+    const visible = dbVisibleFiles();
+    if (!S.data.db || (!S.data.showAll && !visible.some(f => f.id === S.data.db))) {
+      S.data.db = visible[0] ? visible[0].id : (S.data.dbs[0] ? S.data.dbs[0].id : '');
+    }
+    renderDbPicker();
+    const note = $('#db-note');
+    if (note) note.textContent = '已显示 ' + visible.length + ' / ' + S.data.dbs.length
+      + ' 个数据文件（默认只显示常用数据；测试/备份/旧库已折叠）';
+    const current = S.data.dbs.find(f => f.id === S.data.db);
+    $('#db-meta').textContent = current ? ('当前：' + dbFileLabel(current)) : '';
+    if (S.data.db) loadSchema(S.data.db);
+  } catch (e) { toast(e.message, 'err'); $('#db-note').textContent = '数据文件加载失败：' + e.message; }
 }
 function dbFieldLabel(name) {
   const map = {
@@ -522,7 +605,9 @@ async function loadSchema(db) {
     const d = await api('/api/wb/db/schema?db=' + encodeURIComponent(db));
     const tables = d.tables || [];
     $('#db-table-select').innerHTML = tables.map(t => `<option value="${esc(t.name)}">${esc(t.name)}（${t.rows ?? 0} 条）</option>`).join('') || '<option value="">该文件没有数据表</option>';
-    $('#db-title').textContent = db.split(/[\\/]/).pop();
+    $('#db-title').textContent = (S.data.dbs.find(f => f.id === db) ? dbFileLabel(S.data.dbs.find(f => f.id === db)) : db.split(/[\\/]/).pop());
+    $('#db-path').textContent = db;
+    $('#db-meta').textContent = '当前：' + $('#db-title').textContent;
     if (tables.length) { $('#db-table-select').value = tables[0].name; loadRows(tables[0].name, 1); }
     else {
       $('#db-thead').innerHTML = '<tr><th>提示</th></tr>';
@@ -1193,6 +1278,177 @@ async function saveAnnotations() {
     toast('保存失败：' + e.message, 'err');
   } finally { a.busy = ''; $('#annot-save').disabled = false; }
 }
+function distillStatus(v) { return zh('status', v); }
+function distillSourceText(sources) {
+  const map = { golden: '黄金集', messages: '聊天', synthetic: '合成' };
+  const parts = Object.entries(sources || {}).map(([k, v]) => (map[k] || k) + ' ' + v);
+  return parts.join(' · ') || '—';
+}
+function distillCost() {
+  const limit = parseInt($('#dist-limit').value, 10) || 0;
+  const real = document.querySelector('input[name="dist-mode"]:checked')?.value === 'real';
+  const cps = S.distill.costPerSample || 0.001468;
+  const cost = real ? (limit * cps) : 0;
+  const el = $('#distill-estimate');
+  if (el) el.textContent = real ? ('预计约 ' + cost.toFixed(2) + ' 元') : '模拟模式免费';
+}
+function distillJobHtml() {
+  const job = S.distill.job;
+  if (!job) return '';
+  const running = job.status === 'running';
+  return `<div class="distill-job-card">
+    <div class="panel-head"><h3>当前任务 <span class="muted small">${esc(job.id || '')}</span></h3>
+      <span class="badge ${job.status === 'done' ? 'on' : (job.status === 'failed' ? 'danger' : '')}">${esc(distillStatus(job.status))}</span></div>
+    <div class="kv">
+      <span class="k">模式</span><span class="v">${job.real ? '真实生成（DeepSeek）' : '模拟生成（免费）'}</span>
+      <span class="k">目标数量</span><span class="v">${esc(job.limit ?? '')}</span>
+      <span class="k">已生成</span><span class="v">${esc(job.rows ?? '—')} 行</span>
+      <span class="k">耗时</span><span class="v">${job.seconds != null ? esc(job.seconds) + ' 秒' : '—'}</span>
+      <span class="k">输出</span><span class="v mono">${esc(job.out || '')}</span>
+      <span class="k">预计成本</span><span class="v">${job.estimate_cost_cny != null ? esc(job.estimate_cost_cny) + ' 元' : '免费'}</span>
+    </div>
+    ${job.error ? `<div class="err-text">${esc(job.error)}</div>` : ''}
+    <div class="actions">
+      ${running ? '<button class="btn small danger" id="distill-cancel">取消任务</button>' : ''}
+      ${job.status === 'done' && job.out ? '<button class="btn small primary" id="distill-go-train">去训练</button>' : ''}
+    </div>
+    <details class="distill-log" ${(running || job.status === 'done') ? 'open' : ''}><summary class="muted small">任务日志${running ? '（每秒刷新）' : ''}</summary>
+      <pre class="terminal-inline" id="distill-log">${esc((S.distill.log || []).slice(-120).join(String.fromCharCode(10)))}</pre></details>
+  </div>`;
+}
+function distillDatasetsHtml() {
+  const items = (S.distill.datasets || []).filter(x => S.distill.showDerived || !x.derived);
+  if (!items.length) return '<div class="muted small">还没有生成过数据集。先用上方表单生成一份（模拟模式免费）。</div>';
+  return items.map(x => `<div class="distill-dataset-row">
+    <div><b>${esc(x.name)}</b> <span class="muted small">${x.rows} 行 · ${fmtSize(x.size)} · ${new Date((x.mtime || 0) * 1000).toLocaleString()}</span>
+      <div class="muted small">来源：${esc(distillSourceText(x.sources))}${x.derived ? ' · 派生文件' : ''}</div></div>
+    <div class="row"><span class="mono small">${esc(x.path || '')}</span>
+      <button class="btn small primary" data-distill-train="${esc(x.path || '')}">用于训练</button></div>
+  </div>`).join('');
+}
+function renderDistillPage() {
+  const d = S.distill;
+  const jobEl = $('#distill-job');
+  if (jobEl) jobEl.innerHTML = distillJobHtml();
+  const dsEl = $('#distill-datasets');
+  if (dsEl) dsEl.innerHTML = distillDatasetsHtml();
+  const cps = $('#distill-cps');
+  if (cps) cps.textContent = (d.costPerSample || 0.001468).toFixed(6);
+  distillCost();
+  $$('[data-distill-train]').forEach(btn => btn.onclick = () => useDistillDataset(btn.dataset.distillTrain));
+  const cancel = $('#distill-cancel');
+  if (cancel) cancel.onclick = cancelDistill;
+  const go = $('#distill-go-train');
+  if (go) go.onclick = () => { if (S.distill.job && S.distill.job.out) useDistillDataset(S.distill.job.out); };
+}
+async function loadDistill() {
+  const d = S.distill;
+  try {
+    const [datasets, jobs] = await Promise.all([
+      api('/api/wb/distill/datasets').catch(e => ({ok:false, error:e.message, items:[]})),
+      api('/api/wb/distill/jobs').catch(e => ({ok:false, error:e.message, items:[]})),
+    ]);
+    d.datasets = datasets.items || [];
+    d.costPerSample = datasets.cost_per_sample || d.costPerSample;
+    d.jobs = jobs.items || [];
+    d.error = datasets.ok === false ? ('数据集加载失败：' + (datasets.error || '')) : '';
+    const formMode = new URLSearchParams(location.search).get('distill_form') === '1';
+    if (formMode) d.job = null;
+    if (!formMode && !d.job && d.jobs.length) {
+      const running = d.jobs.find(j => j.status === 'running');
+      d.job = running || d.jobs[0];
+    }
+    if (d.job && d.job.id) {
+      try {
+        const log = await api('/api/wb/distill/job/' + encodeURIComponent(d.job.id) + '/log?tail=200');
+        d.log = log.lines || [];
+      } catch (e) { d.log = []; }
+    }
+  } catch (e) { d.error = '后端未就绪：' + e.message; }
+  renderDistillPage();
+  if (d.job && d.job.status === 'running') pollDistill(d.job.id);
+}
+async function startDistill() {
+  const limit = parseInt($('#dist-limit').value, 10) || 300;
+  const real = document.querySelector('input[name="dist-mode"]:checked')?.value === 'real';
+  const confirmText = $('#dist-confirm').value.trim();
+  if (real && confirmText !== '确认生成') { toast('真实生成需要输入确认短语「确认生成」', 'err'); return; }
+  const body = {
+    limit, real, out_name: $('#dist-out').value.trim(),
+    budget_cny: parseFloat($('#dist-budget').value) || 3.05,
+    split: $('#dist-split').checked,
+    max_variants: parseInt($('#dist-variants').value, 10) || 7,
+    confirm: confirmText,
+  };
+  const btn = $('#distill-create'); btn.disabled = true;
+  try {
+    const d = await api('/api/wb/distill/create', {method: 'POST', body});
+    if (!d.ok) throw new Error(d.hint || d.error || '创建失败');
+    S.distill.job = d.job; S.distill.log = [];
+    toast('已开始生成（' + (d.job.real ? '真实' : '模拟') + '）', 'ok');
+    renderDistillPage();
+    pollDistill(d.job.id);
+  } catch (e) {
+    $('#distill-create-hint').textContent = '创建失败：' + e.message;
+    toast('创建失败：' + e.message, 'err');
+  } finally { btn.disabled = false; }
+}
+function pollDistill(id) {
+  const d = S.distill;
+  if (d.timer) clearInterval(d.timer);
+  const tick = async () => {
+    if (S.view !== 'distill') { clearInterval(d.timer); d.timer = null; return; }
+    try {
+      const [job, log] = await Promise.all([
+        api('/api/wb/distill/job/' + encodeURIComponent(id)),
+        api('/api/wb/distill/job/' + encodeURIComponent(id) + '/log?tail=200').catch(() => null),
+      ]);
+      if (job.ok) d.job = job.job;
+      if (log && log.ok) d.log = log.lines || [];
+      renderDistillPage();
+      if (d.job && ['done', 'failed', 'cancelled'].includes(d.job.status)) {
+        clearInterval(d.timer); d.timer = null;
+        if (d.job.status === 'done') { loadDistillDatasetsOnly(); toast('生成完成 → 可去训练', 'ok'); }
+      }
+    } catch (e) { clearInterval(d.timer); d.timer = null; }
+  };
+  d.timer = setInterval(tick, 1000);
+  tick();
+}
+async function loadDistillDatasetsOnly() {
+  try {
+    const d = await api('/api/wb/distill/datasets');
+    S.distill.datasets = d.items || [];
+    S.distill.costPerSample = d.cost_per_sample || S.distill.costPerSample;
+    renderDistillPage();
+  } catch (e) {}
+}
+async function cancelDistill() {
+  if (!S.distill.job) return;
+  if (!confirm('取消当前蒸馏任务？')) return;
+  try {
+    const d = await api('/api/wb/distill/job/' + encodeURIComponent(S.distill.job.id) + '/cancel', {method: 'POST', body: {}});
+    toast(d.ok ? '已取消' : (d.hint || d.error || '取消失败'), d.ok ? 'ok' : 'err');
+    if (d.job) S.distill.job = d.job;
+    renderDistillPage();
+  } catch (e) { toast('取消失败：' + e.message, 'err'); }
+}
+async function useDistillDataset(path) {
+  if (!path) return;
+  showView('train');
+  try {
+    await loadTrain();
+    const select = $('#train-dataset');
+    const opt = [...select.options].find(o => o.value === path);
+    if (opt) {
+      select.value = path; S.train.selected = path;
+      loadPreview(path); loadTrain();
+      toast('已切到训练页并选中数据集', 'ok');
+    } else {
+      toast('已切到训练页；数据集下拉里没找到该文件：' + path, '');
+    }
+  } catch (e) { toast('切到训练页失败：' + e.message, 'err'); }
+}
 async function loadTrain() {
   try {
     const d = await api('/api/wb/train/datasets');
@@ -1470,9 +1726,47 @@ $('#ov-refresh').onclick = loadOverview;
 $('#svc-refresh').onclick = loadServices;
 $('#cfg-save').onclick = saveConfig;
 $('#cfg-backups').onclick = showConfigBackups;
+$('#distill-refresh').onclick = loadDistill;
+$('#distill-create').onclick = startDistill;
+$('#distill-derived').onchange = () => { S.distill.showDerived = $('#distill-derived').checked; renderDistillPage(); };
+function updateDistillCreateState() {
+  const real = document.querySelector('input[name="dist-mode"]:checked')?.value === 'real';
+  const ok = !real || $('#dist-confirm').value.trim() === '确认生成';
+  const btn = $('#distill-create');
+  if (btn) btn.disabled = !ok;
+  $('#distill-create-hint').textContent = real && !ok ? '真实生成需输入确认语「确认生成」' : '';
+}
+$$('input[name="dist-mode"]').forEach(radio => radio.onchange = () => {
+  $('#dist-real-box').classList.toggle('hidden', radio.value !== 'real' || !radio.checked);
+  distillCost();
+  updateDistillCreateState();
+});
+$('#dist-confirm').oninput = updateDistillCreateState;
+updateDistillCreateState();
+['#dist-limit', '#dist-budget'].forEach(sel => { const el = $(sel); if (el) el.oninput = distillCost; });
+$('#distill-cps').textContent = '0.001468';
 $('#db-refresh').onclick = loadDatabases;
 $('#db-refresh2').onclick = () => loadDatabases();
-$('#db-select').onchange = e => loadSchema(e.target.value);
+$('#db-select-btn').onclick = () => $('#db-select-menu').classList.toggle('hidden');
+$('#db-show-all').checked = S.data.showAll;
+$('#db-show-all').onchange = () => {
+  S.data.showAll = $('#db-show-all').checked;
+  try { sessionStorage.setItem('idea_db_show_all', S.data.showAll ? '1' : '0'); } catch (e) {}
+  if (S.data.db && !dbVisibleFiles().some(f => f.id === S.data.db)) {
+    S.data.db = dbVisibleFiles()[0] ? dbVisibleFiles()[0].id : '';
+  }
+  renderDbPicker();
+  const note = $('#db-note');
+  if (note) note.textContent = '已显示 ' + dbVisibleFiles().length + ' / ' + S.data.dbs.length
+    + ' 个数据文件（' + (S.data.showAll ? '含测试/备份/旧库' : '默认只显示常用数据；测试/备份/旧库已折叠') + '）';
+  if (S.data.db) loadSchema(S.data.db);
+};
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.db-picker-field')) $('#db-select-menu').classList.add('hidden');
+});
+if (new URLSearchParams(location.search).get('db_menu') === '1') {
+  setTimeout(() => $('#db-select-menu').classList.remove('hidden'), 900);
+}
 $('#db-table-select').onchange = e => loadRows(e.target.value, 1);
 $('#db-prev').onclick = () => { if (S.data.table && S.data.page > 1) loadRows(S.data.table, S.data.page - 1); };
 $('#db-next').onclick = () => { if (S.data.table && S.data.page < S.data.pages) loadRows(S.data.table, S.data.page + 1); };

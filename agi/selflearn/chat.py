@@ -1203,8 +1203,13 @@ class SelfLearnAgent:
         media_info = None
         if image and attachment:
             try:
+                try:
+                    from ..llm.vision import RouterChatClient
+                    vision_client = RouterChatClient()
+                except Exception:  # noqa: BLE001 - 老环境/导入失败退回线上 client
+                    vision_client = self.client
                 media_info = image_understanding.describe_image(
-                    attachment["path"], self.client, attachment.get("id", ""),
+                    attachment["path"], vision_client, attachment.get("id", ""),
                     existing_caption=reply, db_path=self.path)
             except Exception:  # noqa: BLE001
                 media_info = None

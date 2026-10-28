@@ -13,6 +13,7 @@
 | --- | --- |
 | `router.py` | `Router` / `chat()` / `usage_summary()` / `purposes()` / `available_backends()`；配置加载与校验 |
 | `openai_local.py` | 本地 OpenAI 兼容后端（llama-server `8125/v1/chat/completions`，纯标准库） |
+| `vision.py` | 识图 client 适配器：`image_understanding` → 本地 Qwen2.5-VL-3B（失败回落 DeepSeek） |
 | `deepseek.py` | API 后端，**复用 `agi.selflearn.llm.Client`**（不重复造轮子） |
 | `rule.py` | 纯规则后端（`relevance_score` 等简单用途，零成本） |
 | `usage.py` | 用量 JSONL 记账、`usage_summary` 聚合、每日 API token 预算计数 |
@@ -109,7 +110,7 @@ backend_overrides={...}, usage_path=tmp, now_fn=...)` 完全离线。
 
 ## 7. 成本估算（按默认配置）
 
-- 本地 8125（3B/4B）≈ 0 元/次，只占显存；高量提取（摘要/聚类/关键词）全部本地。
+- 本地 8125（Qwen2.5-VL-3B）≈ 0 元/次；高量提取（摘要/聚类/关键词）全部本地，**识图也走本地**（失败回落 API）。
 - API（deepseek-flash）只用于：视频理解、主对话、分享文案、心情判定、人格反思。
   按每条 ~1–3k prompt + ~200 completion tokens 估：300k tokens/天预算 ≈
   每天百次级 API 调用（具体取决于对话量）；超了自动降级本地。

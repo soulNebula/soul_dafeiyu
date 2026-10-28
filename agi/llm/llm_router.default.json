@@ -3,7 +3,7 @@
     "local": {
       "kind": "openai",
       "base_url": "http://127.0.0.1:8125/v1",
-      "model": "local-3b",
+      "model": "local-vl-3b",
       "timeout_s": 60
     },
     "api": {
@@ -23,25 +23,35 @@
     },
     "ingest_summary": {
       "backend": "local",
-      "fallback": ["api"],
+      "fallback": [
+        "api"
+      ],
       "max_tokens": 400
     },
     "comment_cluster": {
       "backend": "local",
-      "fallback": ["api"]
+      "fallback": [
+        "api"
+      ]
     },
     "keyword_extract": {
       "backend": "local",
-      "fallback": ["api"],
+      "fallback": [
+        "api"
+      ],
       "max_tokens": 200
     },
     "relevance_score": {
       "backend": "local",
-      "fallback": ["rule"]
+      "fallback": [
+        "rule"
+      ]
     },
     "share_copy": {
       "backend": "api",
-      "fallback": ["local"]
+      "fallback": [
+        "local"
+      ]
     },
     "chat_reply": {
       "backend": "api"
@@ -51,10 +61,21 @@
     },
     "persona_reflect": {
       "backend": "api",
-      "fallback": ["local"]
+      "fallback": [
+        "local"
+      ]
     },
     "transcribe": {
       "backend": "local_whisper"
+    },
+    "selflearn_image_understanding": {
+      "backend": "local",
+      "fallback": [
+        "api"
+      ],
+      "max_tokens": 500,
+      "temperature": 0.2,
+      "note": "识图：本地 Qwen2.5-VL-3B 优先，失败回落 API"
     }
   },
   "budget": {

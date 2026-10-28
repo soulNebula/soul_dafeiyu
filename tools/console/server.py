@@ -55,6 +55,7 @@ LOG_MESSAGES = LOG_DIR / "messages.jsonl"
 LOG_CHAT = LOG_DIR / "聊天记录.txt"
 BACKUP_DIR = agent_path(r"backups")
 AUDIT_PATH = DATA_DIR / "console_audit.log"
+DIARY_DIR = DATA_DIR / "diary"
 TONE_PROFILE = ROOT / "agi" / "eval_data" / "human_tone" / "profile.md"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -455,6 +456,73 @@ def memory_strength() -> dict:
                 "count": 0, "stages": {}, "strongest": [], "weakest": [],
                 "items": []}
 
+
+
+# --------------------------------------------------------------------------- #
+# 日记（只读）
+# --------------------------------------------------------------------------- #
+_DIARY_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def diary_list(limit: int = 60) -> dict:
+    """列出所有日记：日期 + 字数 + 一句预览。只读，不创建/修改文件。"""
+    try:
+        limit = max(1, min(365, int(limit)))
+    except (TypeError, ValueError):
+        limit = 60
+    items: list[dict] = []
+    try:
+        files = sorted(Path(DIARY_DIR).glob("*.txt"), reverse=True)
+    except OSError:
+        files = []
+    for path in files:
+        date = path.stem
+        if not _DIARY_DATE_RE.match(date):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            stat = path.stat()
+        except OSError:
+            continue
+        clean = text.strip()
+        preview = ""
+        for line in clean.splitlines():
+            line = line.strip()
+            if line:
+                preview = line[:40]
+                break
+        items.append({"date": date, "chars": len(clean),
+                      "preview": preview, "mtime": stat.st_mtime})
+    items = items[:limit]
+    return {"ok": True, "items": items, "count": len(items),
+            "dir": str(DIARY_DIR)}
+
+
+def diary_get(date: str) -> dict:
+    """按日期读日记；日期严格 YYYY-MM-DD，防路径穿越。"""
+    value = str(date or "").strip()
+    if not _DIARY_DATE_RE.match(value):
+        return {"ok": False, "error": "invalid_date",
+                "hint": "日期格式应为 YYYY-MM-DD"}
+    try:
+        time.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return {"ok": False, "error": "invalid_date", "hint": "日期不存在"}
+    base = Path(DIARY_DIR).resolve()
+    target = (base / f"{value}.txt").resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return {"ok": False, "error": "invalid_date", "hint": "路径不合法"}
+    if not target.is_file():
+        return {"ok": False, "error": "not_found", "hint": f"没有 {value} 的日记"}
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+        stat = target.stat()
+    except OSError as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "date": value, "text": text,
+            "chars": len(text.strip()), "mtime": stat.st_mtime}
 
 
 # --------------------------------------------------------------------------- #
@@ -4337,6 +4405,10 @@ class Handler(BaseHTTPRequestHandler):
             # P38：记忆强度/遗忘阶段（只读）
             if path == "/api/memory/strength":
                 self._json(200, memory_strength()); return
+            if path == "/api/diary/list":
+                self._json(200, diary_list(self._limit(query, 60))); return
+            if path.startswith("/api/diary/"):
+                self._json(200, diary_get(unquote(path.split("/api/diary/", 1)[1]))); return
             if path == "/api/tone":
                 self._json(200, tone_snapshot(self._limit(query, 100))); return
             if path == "/api/control/send_mode":

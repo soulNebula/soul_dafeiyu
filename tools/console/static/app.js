@@ -29,6 +29,7 @@ const state = {
   bili: null,
   trace: null,
   moments: null,
+  diary: null,
   sendMode: null,
   library: null,
   status: null,
@@ -54,6 +55,7 @@ const PAGES = {
   logs: '日志',
   bili: 'B站',
   moments: '朋友圈',
+  diary: '日记',
   settings: '设置',
 };
 
@@ -3273,6 +3275,52 @@ function bindSendMode() {
   });
 }
 
+/* ---------------- 日记（只读） ---------------- */
+async function renderDiary() {
+  $('#app').innerHTML = '<div class="empty">加载日记…</div>';
+  if (!state.diary) state.diary = { selected: '', list: [], detail: null, error: '' };
+  let data = null;
+  try {
+    data = await api('/api/diary/list');
+  } catch (e) {
+    $('#app').innerHTML = card('日记', `<div class="error-text">日记读取失败：${esc(e.message)}</div>`);
+    return;
+  }
+  const items = (data && data.items) || [];
+  if (!items.length) {
+    $('#app').innerHTML = card('日记', '<div class="empty">还没有日记，今晚 23:00 会自动写第一篇。</div>');
+    return;
+  }
+  if (!state.diary.selected || !items.some((item) => item.date === state.diary.selected)) {
+    state.diary.selected = items[0].date;
+  }
+  const selected = state.diary.selected;
+  let detail = null;
+  try {
+    detail = await api('/api/diary/' + encodeURIComponent(selected));
+  } catch (e) {
+    detail = { ok: false, error: e.message };
+  }
+  const listHtml = items.map((item) => `<button class="diary-item ${item.date === selected ? 'active' : ''}" data-diary-date="${esc(item.date)}">
+      <span class="diary-date">${esc(item.date)}</span>
+      <span class="diary-meta">${num(item.chars)} 字</span>
+      <span class="diary-preview">${esc(item.preview || '（暂无内容）')}</span>
+    </button>`).join('');
+  const body = detail && detail.ok
+    ? `<div class="diary-body-head"><b>${esc(detail.date)}</b><span class="hint">${num(detail.chars)} 字</span></div>
+       <div class="diary-text">${esc(detail.text || '')}</div>`
+    : `<div class="error-text">这篇日记读取失败：${esc((detail && detail.error) || '未知错误')}</div>`;
+  $('#app').innerHTML = `
+    <div class="page-head"><div><h2>日记</h2><p class="muted">她每晚 23:00 自动写一篇，只读；左侧按日期查看。</p></div></div>
+    <div class="diary-layout">
+      <aside class="diary-list"><div class="diary-list-head">日期 <span class="muted small">${items.length} 篇</span></div>${listHtml}</aside>
+      <section class="diary-reader">${body}</section>
+    </div>`;
+  $$('[data-diary-date]').forEach((btn) => {
+    btn.onclick = () => { state.diary.selected = btn.dataset.diaryDate; renderDiary(); };
+  });
+}
+
 /* ---------------- 朋友圈（802 控制台） ---------------- */
 function momentsRelTime(ts) {
   const value = Number(ts || 0);
@@ -3514,6 +3562,7 @@ const RENDERERS = {
   logs: renderLogs,
   bili: renderBili,
   moments: renderMoments,
+  diary: renderDiary,
   settings: renderSettings,
 };
 

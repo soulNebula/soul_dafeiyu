@@ -2013,3 +2013,36 @@ def test_memory_list_old_db_without_forget_columns(tmp_path, monkeypatch):
     assert item["forget_degree"] == 0.0 and item["forget_percent"] == 0
     assert item["forget_stage_zh"] == "完整"
     assert item["half_life_days"] is not None
+
+
+# ============================================================ 日记（task-165）
+def test_diary_list_and_get(tmp_path, monkeypatch):
+    diary = tmp_path / "diary"
+    diary.mkdir()
+    (diary / "2026-10-28.txt").write_text("第一行预览\n正文第二行。\n", encoding="utf-8")
+    (diary / "2026-10-27.txt").write_text("昨天的一篇日记\n", encoding="utf-8")
+    (diary / "notes.md").write_text("不是日记", encoding="utf-8")
+    monkeypatch.setattr(console, "DIARY_DIR", diary)
+
+    listing = console.diary_list()
+    assert listing["ok"] is True and listing["count"] == 2
+    assert [item["date"] for item in listing["items"]] == ["2026-10-28", "2026-10-27"]
+    assert listing["items"][0]["preview"] == "第一行预览"
+    assert listing["items"][0]["chars"] > 0
+
+    detail = console.diary_get("2026-10-28")
+    assert detail["ok"] is True
+    assert "正文第二行" in detail["text"]
+    assert detail["chars"] > 0
+
+
+def test_diary_date_validation_and_missing(tmp_path, monkeypatch):
+    diary = tmp_path / "diary"
+    diary.mkdir()
+    (diary / "2026-10-28.txt").write_text("日记", encoding="utf-8")
+    monkeypatch.setattr(console, "DIARY_DIR", diary)
+    for bad in ("../secret", "2026-10-28/../../x", "2026-13-99", "20261028", ""):
+        result = console.diary_get(bad)
+        assert result["ok"] is False and result["error"] == "invalid_date"
+    missing = console.diary_get("2026-10-29")
+    assert missing["ok"] is False and missing["error"] == "not_found"

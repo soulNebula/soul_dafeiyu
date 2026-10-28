@@ -52,18 +52,106 @@ def load() -> dict:
         if isinstance(data, dict):
             cfg.update({k: v for k, v in data.items() if k in DEFAULTS})
     except FileNotFoundError:
-        save(cfg)
+        _write_plain(cfg)
     except Exception:
         pass
-    return cfg
+    return _apply_secrets(cfg)
 
 
 def save(cfg: dict) -> None:
-    cfg = {k: cfg.get(k, v) for k, v in DEFAULTS.items()}
+    payload = {k: cfg.get(k, v) for k, v in DEFAULTS.items()}
+    # 迁移之后（agi/data/secrets.json 存在）敏感字段不再写回明文 config.json，
+    # 而是并入密钥库；写库失败就整体回退旧行为——宁可这一轮还是明文，
+    # 也不能因为写库失败把用户刚提取的密钥丢掉。
+    if _route_secrets(payload):
+        for key in SECRET_KEYS:
+            payload.pop(key, None)
+    _write_plain(payload)
+
+
+def _write_plain(payload: dict) -> None:
+    """原子写 config.json（不含路由逻辑；load 建默认文件时也走这里）。"""
     tmp = CONFIG_PATH.with_suffix(".json.tmp")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            json.dump(payload, f, ensure_ascii=False, indent=2)
         os.replace(tmp, CONFIG_PATH)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------- 密钥库接入
+#: 会被迁移到密钥库的敏感字段（与 tools/rotate_secrets.py 的清单保持一致）。
+#: 默认行为不变：没有密钥文件时，这些字段照旧读写 config.json。
+SECRET_KEYS = (
+    "db_keys",
+    "db_keys_by_account",
+    "image_aes_key",
+    "image_xor_key",
+    "image_keys_by_account",
+    "image_cfg_dword",
+)
+
+
+def _is_empty(value) -> bool:
+    """空值判定：None / 空串 / 空 dict / 空 list；0 视为有值（可能是合法 xor）。"""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (dict, list, tuple)):
+        return not value
+    return False
+
+
+def _secrets_module():
+    """尝试导入密钥库读取模块；不可用返回 None（保持旧行为，绝不抛）。
+
+    why try/except：wx_core 可能被单独拷出去跑（仓库根不在 sys.path），
+    这种情况下只应该退化成「没有密钥库」，而不是让整个采集链崩掉。
+    """
+    try:
+        from agi import secrets_store
+    except Exception:
+        return None
+    return secrets_store
+
+
+def _apply_secrets(cfg: dict) -> dict:
+    """用密钥库补齐**旧文件里为空**的敏感字段（文件优先，默认行为不变）。
+
+    why 只在文件为空时补：老机器没有 secrets.json，行为必须逐字节一致；
+    迁移过的机器 config.json 里这些字段已被清空，才会走到这里拿密钥。
+    """
+    module = _secrets_module()
+    if module is None:
+        return cfg
+    try:
+        overlay = module.config_section()
+    except Exception:
+        return cfg
+    if not overlay:
+        return cfg
+    for key in SECRET_KEYS:
+        if key in overlay and _is_empty(cfg.get(key)):
+            cfg[key] = overlay[key]
+    return cfg
+
+
+def _route_secrets(payload: dict) -> bool:
+    """把敏感字段写入密钥库；返回 True 表示「已接管，config.json 里应删掉它们」。
+
+    只在本轮确实有非空敏感值时才路由：
+    - 没有密钥文件（迁移前的机器）→ False，保持旧的明文写回；
+    - 全为空（例如首次运行建默认文件）→ False，避免把空值覆盖掉密钥库里的真密钥。
+    """
+    values = {key: payload.get(key) for key in SECRET_KEYS if key in payload}
+    if not any(not _is_empty(value) for value in values.values()):
+        return False
+    module = _secrets_module()
+    if module is None:
+        return False
+    try:
+        return bool(module.store_config_section(values))
+    except Exception:
+        return False

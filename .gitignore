@@ -10,6 +10,29 @@ _refs/
 .dsh-ops/
 .dsh_write_probe
 
+# P0 安全卫生：本机运行残留（2026-10-29 收敛）
+# 说明：下面这些是「跑起来就会产生」的本机文件；一旦被 git add -A 带上，
+# 轻则提交一堆无关产物，重则把密钥/聊天记录/画像数据带进公开仓库。
+#   .data/            控制台/桌面版的本机状态目录
+#   Desktop/          桌面快捷方式/导出的本机文件
+#   pip-*             离线安装包与 pip 日志（大文件，且可能含内部索引地址）
+#   star/             冲浪/星标功能的原始抓取产物（只保留 *.md 报告）
+#   agi/data/desktop_profile/  桌面版画像/训练派生数据（已在 agi/data/ 下，这里显式标注）
+.data/
+Desktop/
+pip-*
+pip_*
+star/*
+!star/*.md
+!star/README.md
+agi/data/desktop_profile/
+# 密钥库（正常情况下已被 agi/data/ 覆盖；单独列出来便于审计时一眼看到）
+agi/data/secrets.json
+secrets.json
+# dotenv 风格的本机环境文件（DEEPSEEK_API_KEY 等）
+.env
+.env.*
+
 # python / build caches
 __pycache__/
 *.py[cod]

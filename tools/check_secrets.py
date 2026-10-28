@@ -56,7 +56,15 @@ RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("credential-assignment", re.compile(
         r"(?i)\b(?:api[_-]?key|secret[_-]?key|access[_-]?token|client[_-]?secret|"
         r"app[_-]?secret)\b\s*[:=]\s*[\"'][A-Za-z0-9/+_-]{24,}[\"']")),
+    # WCDB 数据库密钥：根 config.json 的 db_keys / db_keys_by_account 里
+    # `"key": "<64 位 hex>"`、`"salt": "<32 位 hex>"`。这是本项目最敏感的一类：
+    # 拿到它就能解密整台机器的微信聊天库，而且它是合法 JSON、很容易被整份提交。
+    ("wcdb-key(db_keys)", re.compile(r"\"(?:key|salt)\"\s*:\s*\"[0-9a-fA-F]{32,64}\"")),
+    # 图片/表情包 AES 密钥：image_aes_key 或 image_keys_by_account[].aes_key
+    ("image-aes-key", re.compile(r"\"(?:image_)?aes_key\"\s*:\s*\"[A-Za-z0-9+/=]{16,}\"")),
 )
+#: 单字符重复 ≥16 次的值（如 "aaaa…"/"0000…"）是典型测试占位符，不算泄漏
+REPEATED_PLACEHOLDER = re.compile(r"\"(.)\1{15,}\"")
 #: 允许出现的「已知占位符」前缀（文档/示例里常见，不算泄漏）
 ALLOW_PREFIXES = (
     "sk-xxxx", "sk-your", "sk-test", "sk-demo", "sk-example", "sk-placeholder",
@@ -80,6 +88,12 @@ PLACEHOLDER_FRAGMENTS = (
     "12345678901234567890",
     "xxxxxxxxxxxxxxxxxxxx",
 )
+#: 只对「JSON 密钥字段」规则生效的示例值：SPEC/文档里的顺序 hex 示例
+#: （例如 ``"image_aes_key": "0123456789abcdef"``）。单独一组是因为
+#: 这条片段如果对所有规则生效，会顺带放过含该子串的 sk- 假阳性。
+JSON_EXAMPLE_FRAGMENTS = ("0123456789abcdef",)
+#: 适用 JSON_EXAMPLE_FRAGMENTS 的规则名（新增规则时按需加入）
+JSON_EXAMPLE_RULES = frozenset({"wcdb-key(db_keys)", "image-aes-key"})
 
 
 def _is_text_file(path: Path) -> bool:
@@ -129,11 +143,17 @@ def _read_text(path: Path) -> str:
         return ""
 
 
-def _allowed(line: str) -> bool:
+def _allowed(line: str, rule_name: str = "") -> bool:
     lowered = line.lower()
     if any(prefix.lower() in lowered for prefix in ALLOW_PREFIXES):
         return True
-    return any(fragment in lowered for fragment in PLACEHOLDER_FRAGMENTS)
+    if any(fragment in lowered for fragment in PLACEHOLDER_FRAGMENTS):
+        return True
+    if (rule_name in JSON_EXAMPLE_RULES
+            and any(fragment in lowered for fragment in JSON_EXAMPLE_FRAGMENTS)):
+        return True
+    # 单字符重复的长串（"aaaa…"/"0000…"）是测试占位符；真实 hex/API key 不会这样。
+    return bool(REPEATED_PLACEHOLDER.search(line))
 
 
 def scan(root: Path) -> list[dict]:
@@ -156,7 +176,7 @@ def scan(root: Path) -> list[dict]:
                 match = pattern.search(line)
                 if not match:
                     continue
-                if _allowed(line):
+                if _allowed(line, name):
                     continue
                 findings.append({"pattern": name, "path": str(rel),
                                  "line": lineno, "text": _mask(match.group(0))})

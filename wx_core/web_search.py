@@ -4,7 +4,9 @@
 工具（``web_search_20250305``）。凭据解析顺序：
 
 1. ``web_config.json`` 的 ``llm.api_key`` / ``llm.base_url``（路径相对仓库根）；
-2. 环境变量 ``DEEPSEEK_API_KEY``。
+2. 本机密钥库 ``agi/data/secrets.json`` 的 ``llm.api_key``（``SOULAGENT_SECRETS``
+   可换路径；由 ``tools/rotate_secrets.py`` 迁移生成）；
+3. 环境变量 ``DEEPSEEK_API_KEY``。
 
 后端二（回退）：Bing 的 RSS 搜索结果（``?format=rss``，注意只有 ``format=rss``
 才返回 XML，普通 HTML 页面不解析）。两个后端都失败时返回 ``provider="none"``，
@@ -75,13 +77,32 @@ def _read_config() -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _secrets_api_key() -> str:
+    """本机密钥库里的 ``llm.api_key``；模块不存在/损坏时返回空串（不改旧行为）。"""
+    try:
+        from agi import secrets_store
+    except Exception:  # noqa: BLE001 - wx_core 被单独拷出去跑时没有 agi 包
+        return ""
+    try:
+        return secrets_store.llm_api_key()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _resolve_credentials() -> tuple[str, str]:
-    """解析 (api_key, base_url)：配置文件优先，其次环境变量，最后默认值。"""
+    """解析 (api_key, base_url)：配置文件 → 密钥库 → 环境变量 → 默认值。
+
+    why 这个顺序：默认行为必须和迁移前一致（老机器没有密钥库），迁移后
+    config 里的 key 被清空时再由密钥库顶上；环境变量放最后，保留它作为
+    「不改文件也能换 key」的既有用法（已有测试依赖这一点）。
+    """
     llm = _read_config().get("llm")
     if not isinstance(llm, dict):
         llm = {}
     key = str(llm.get("api_key") or "").strip()
     base_url = str(llm.get("base_url") or "").strip()
+    if not key:
+        key = _secrets_api_key()
     if not key:
         key = str(os.environ.get("DEEPSEEK_API_KEY") or "").strip()
     if not base_url:

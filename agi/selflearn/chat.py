@@ -78,6 +78,43 @@ SYSTEM = """你是一个通过长期对话自我改进的 AI，不是客服，�
 有自伤/危机信号时优先安全，建议联系信任的人或专业帮助。"""
 
 
+# --------------------------------------------------------------------------- #
+# B站印象 → 聊天上下文（2026-10-29）：把「刷过的视频 + 一句结论」注入历史记忆，
+# 微信里聊到 B站 时她能说出细节，而不是只会说"我只能看摘要"。
+# --------------------------------------------------------------------------- #
+_BILI_HINTS = ("b站", "B站", "视频", "刷", "up", "UP", "字幕", "番", "直播", "推荐", "看了")
+
+
+def _bili_context(path, text: str = "", limit: int = 5) -> str:
+    """从 bili_impressions 取最近刷过的视频，拼成可注入上下文（无匹配返回空串）。"""
+    value = str(text or "")
+    if not any(hint in value for hint in _BILI_HINTS):
+        return ""
+    try:
+        con = db.connect(path)
+        try:
+            rows = con.execute(
+                "SELECT title, owner, summary, my_take, created_at FROM bili_impressions "
+                "ORDER BY created_at DESC LIMIT ?", (max(1, min(10, int(limit))),)).fetchall()
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001 - 没有表/库坏都当没有印象
+        return ""
+    if not rows:
+        return ""
+    lines = []
+    for row in rows:
+        title = str(row["title"] or "").strip()
+        owner = str(row["owner"] or "").strip()
+        take = str(row["my_take"] or row["summary"] or "").strip()
+        try:
+            day = time.strftime("%m-%d", time.localtime(float(row["created_at"] or 0)))
+        except Exception:  # noqa: BLE001
+            day = ""
+        head = "《" + title + "》" + (("（" + owner + "）") if owner else "") + ((" " + day) if day else "")
+        lines.append("- " + head + (("：" + take[:80]) if take else ""))
+    return chr(10).join(lines)
+
 def _system_prompt(path: Path | str | None = None) -> str:
     """P4-b：SYSTEM 支持 prompt_store 覆盖；未配置时返回代码常量（逐字节一致）。
 
@@ -931,6 +968,8 @@ class SelfLearnAgent:
                     quota_info, quota_ctx = {}, ""
             if quota_ctx:
                 media_ctx = (media_ctx + "\n" + quota_ctx).strip() if media_ctx else quota_ctx
+            # B站印象：只在聊到视频/B站时注入（没有印象/没命中返回空串 → prompt 不变）
+            bili_ctx = _bili_context(self.path, text)
             # off：inner_ctx/media_ctx 为空串 → prompt 与改动前逐字节一致
             prompt = self._prompt(text or "我发了一张图片，请看看并回应我。", mems, pctx,
                                    variant, recent, st=st, lessons=lessons,
@@ -939,7 +978,8 @@ class SelfLearnAgent:
                                    layer_ctx=layer_ctx,
                                    research_ctx=research.get("context", ""),
                                    inner_ctx=inner_ctx, media_ctx=media_ctx,
-                                   web_ctx=web_ctx, budget_out=budget_meta)
+                                   web_ctx=web_ctx, bili_ctx=bili_ctx,
+                                   budget_out=budget_meta)
             prompt_user = prompt
             if budget_meta.get("dropped"):
                 try:
@@ -1355,7 +1395,7 @@ class SelfLearnAgent:
     def _prompt(text, mems, pctx, variant, recent, *, st=None, lessons="",
                 conflict_q="", sum_ctx="", retrieval_ctx="", profile_ctx="",
                 layer_ctx="", research_ctx="", inner_ctx="",
-                media_ctx: str = "", web_ctx: str = "",
+                media_ctx: str = "", web_ctx: str = "", bili_ctx: str = "",
                 budget_out: dict | None = None) -> str:
         """拼 prompt：先构造 sections（顺序/文本与旧实现逐字节一致），再交给
         ``context.assemble`` 按优先级裁剪；未超预算时输出与改动前完全相同。"""
@@ -1466,11 +1506,21 @@ class SelfLearnAgent:
         if web_ctx:
             web_block = (chr(10) * 2 + "实时资料（刚联网查到，只能依据它回答；"
                          "资料里没有的就说查不到，别编）：" + chr(10) + str(web_ctx))
+        bili_block = ""
+        if bili_ctx:
+            bili_block = (chr(10) * 2 + "我最近在 B站刷到过、并且看过字幕/画面的视频（可以聊细节，"
+                          "但只限这些；没刷到的就直说没刷到）：" + chr(10) + str(bili_ctx))
         if web_block:
             insert_at = next((index for index, section in enumerate(sections)
                               if section.get("name") == "user_text"), len(sections))
             sections.insert(insert_at, {"name": "web", "text": web_block,
                                         "priority": 30, "protect": False,
+                                        "min_tokens": 0})
+        if bili_block:
+            insert_at = next((index for index, section in enumerate(sections)
+                              if section.get("name") == "user_text"), len(sections))
+            sections.insert(insert_at, {"name": "bili", "text": bili_block,
+                                        "priority": 45, "protect": False,
                                         "min_tokens": 0})
         if media_ctx:
             sections.append({"name": "media", "text": "\n" + media_ctx,

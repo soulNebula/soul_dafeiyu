@@ -13,3 +13,7 @@ __pycache__/
 web/dist/
 node_modules/
 web/vendor/
+
+# acceptance 脚本产生的临时目录
+edge_accept_*/
+pytest-of-Administrator/

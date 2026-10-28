@@ -314,3 +314,29 @@ body.term-resizing #shell { transition: none; }
   background: linear-gradient(90deg, #2f6fed, #4ea1ff); transition: width .25s ease; }
 #corpus-progress-fill.failed { background: var(--danger); }
 #corpus-progress-current { margin-top: 6px; }
+
+/* ---------- 标注页：微信式对话气泡 ---------- */
+.annot-chat {
+  max-height: 72vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px 12px; background: #11161e; display: flex; flex-direction: column; gap: 12px;
+}
+.annot-bubble-row { display: flex; gap: 8px; align-items: flex-start; transition: opacity .15s ease; }
+.annot-bubble-row.you { flex-direction: row; }
+.annot-bubble-row.me { flex-direction: row-reverse; }
+.annot-bubble-row.dim { opacity: .32; }
+.annot-avatar { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; }
+.annot-avatar.you { background: #4a5568; }
+.annot-avatar.me { background: #2f7d5a; }
+.annot-bubble-wrap { display: flex; flex-direction: column; max-width: 72%; gap: 3px; }
+.annot-bubble-row.me .annot-bubble-wrap { align-items: flex-end; }
+.annot-bubble { padding: 8px 11px; border-radius: 8px; font-size: 13px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word; position: relative; }
+.annot-bubble.you { background: #262b34; color: var(--text); border-top-left-radius: 2px; }
+.annot-bubble.me { background: #95ec69; color: #101d0c; border-top-right-radius: 2px; }
+.annot-bubble-row.me { cursor: pointer; }
+.annot-bubble-row.me:hover .annot-bubble.me { background: #a8f080; }
+.annot-bubble-row.selected .annot-bubble.me { outline: 2px solid #4ea1ff; outline-offset: 2px; }
+.annot-bubble-row.selected .annot-avatar.me { outline: 2px solid #4ea1ff; }
+.annot-bubble-status { font-size: 10.5px; color: var(--muted); padding: 0 3px; }
+.annot-bubble mark { background: #f7b955; color: #1a1300; border-radius: 2px; padding: 0 1px; }

@@ -124,16 +124,16 @@
           <label class="field"><span>数据集</span><select id="train-dataset"></select></label>
           <label class="field"><span>输出名</span><input id="train-out" value="idea_lora_smoke"></label>
           <label class="field"><span>步数</span><input id="train-steps" type="number" value="5" min="1"></label>
-          <label class="field"><span>max_len</span><input id="train-maxlen" type="number" value="256" min="32"></label>
-          <label class="field"><span>lr</span><input id="train-lr" type="number" value="0.0002" step="0.00001"></label>
-          <label class="field"><span>lora_r</span><input id="train-r" type="number" value="8" min="1"></label>
-          <label class="field"><span>lora_alpha</span><input id="train-alpha" type="number" value="16" min="1"></label>
+          <label class="field"><span>最大长度</span><input id="train-maxlen" type="number" value="256" min="32"></label>
+          <label class="field"><span>学习率</span><input id="train-lr" type="number" value="0.0002" step="0.00001"></label>
+          <label class="field"><span>LoRA 秩</span><input id="train-r" type="number" value="8" min="1"></label>
+          <label class="field"><span>LoRA alpha</span><input id="train-alpha" type="number" value="16" min="1"></label>
           <label class="field"><span>格式</span><select id="train-format">
-            <option value="auto">自动识别</option><option value="messages">对话 messages</option>
-            <option value="instruction">指令 instruction</option><option value="soul">蒸馏 soul</option></select></label>
+            <option value="auto">自动识别</option><option value="messages">对话</option>
+            <option value="instruction">指令</option><option value="soul">蒸馏</option></select></label>
           <label class="field"><span>训练模式</span><select id="train-mode">
-            <option value="lora">LoRA（省显存）</option><option value="full-ft">全参数 FFT（显存大，建议 0.5B + seq≤256）</option></select></label>
-          <label class="check"><input type="checkbox" id="train-4bit"> load_4bit</label>
+            <option value="lora">LoRA（省显存）</option><option value="full-ft">全参数微调（显存大，建议 0.5B + seq≤256）</option></select></label>
+          <label class="check"><input type="checkbox" id="train-4bit"> 4bit 量化</label>
         </div>
         <div class="actions"><button class="btn primary" id="train-create">创建任务</button><button class="btn" id="train-start">启动选中任务</button><button class="btn" id="train-stop">停止选中任务</button></div>
         <div class="muted small" id="train-hint">选中数据集可预览；任务启动后日志实时轮询。</div>
@@ -176,7 +176,7 @@
       <div class="panel">
         <div class="panel-head"><h3>③ 保存为数据集</h3></div>
         <div class="form-grid">
-          <label class="field"><span>格式</span><select id="corpus-format"><option value="messages">messages 统一对话</option><option value="instruction">instruction 指令对</option></select></label>
+          <label class="field"><span>格式</span><select id="corpus-format"><option value="messages">对话（统一 messages）</option><option value="instruction">指令对（instruction）</option></select></label>
           <label class="field"><span>窗口(turn)</span><input id="corpus-window" type="number" value="6" min="1"></label>
           <label class="field"><span>验证集比例</span><input id="corpus-split" type="number" value="0.05" min="0" max="0.9" step="0.01"></label>
           <label class="field"><span>输出名（可空）</span><input id="corpus-out"></label>
@@ -211,11 +211,11 @@
 
       <div class="grid2">
         <div class="panel"><div class="panel-head"><h3>运行中</h3></div><div id="models-running" class="list"></div></div>
-        <div class="panel"><div class="panel-head"><h3>离线导入</h3><span class="muted small">gguf / HF 目录 / adapter</span></div>
+        <div class="panel"><div class="panel-head"><h3>离线导入</h3><span class="muted small">GGUF / HuggingFace 目录 / LoRA 适配器</span></div>
           <div class="form-grid model-form">
             <label class="field"><span>本地路径</span><input id="import-path" placeholder="E:\agent\output\... 或 C:\models\xxx.gguf"></label>
             <label class="field"><span>导入名称</span><input id="import-name" placeholder="my-model"></label>
-            <label class="field"><span>格式</span><select id="import-format"><option value="auto">自动识别</option><option value="gguf">gguf</option><option value="hf">hf 目录</option><option value="adapter">adapter</option></select></label>
+            <label class="field"><span>格式</span><select id="import-format"><option value="auto">自动识别</option><option value="gguf">GGUF 模型</option><option value="hf">HuggingFace 目录</option><option value="adapter">LoRA 适配器</option></select></label>
             <label class="check"><input type="checkbox" id="import-overwrite"> 覆盖同名</label>
           </div>
           <div class="actions"><button class="btn" id="import-validate">校验</button><button class="btn primary" id="import-run">导入到本地</button></div>
@@ -239,7 +239,7 @@
         <div id="downloads-list" class="list scroll"></div>
       </div>
 
-      <div class="panel"><div class="panel-head"><h3>清单</h3><div class="head-tools"><select id="models-filter" class="mini-select"><option value="all">全部格式</option><option value="gguf">GGUF</option><option value="hf">HF 目录</option><option value="adapter">Adapter</option></select><span class="muted small" id="models-count"></span></div></div><div class="table-wrap"><table class="table"><thead><tr><th>名称</th><th>格式</th><th>来源</th><th>用途</th><th>大小</th><th>操作</th></tr></thead><tbody id="models-list"></tbody></table></div></div>
+      <div class="panel"><div class="panel-head"><h3>清单</h3><div class="head-tools"><select id="models-filter" class="mini-select"><option value="all">全部格式</option><option value="gguf">GGUF 模型</option><option value="hf">HuggingFace 目录</option><option value="adapter">LoRA 适配器</option></select><span class="muted small" id="models-count"></span></div></div><div class="table-wrap"><table class="table"><thead><tr><th>名称</th><th>格式</th><th>来源</th><th>用途</th><th>大小</th><th>操作</th></tr></thead><tbody id="models-list"></tbody></table></div></div>
     </section>
   </main>
 </div>
@@ -260,9 +260,10 @@ const S = {
   corpus: { jobs: [], job: null, files: [], parsed: null, selected: new Set(),
             filterRole: '', search: '', result: null, busy: '', error: '',
             progress: null, parseTimer: null },
-  annotate: { jobs: [], source: '', window: 6, items: [], targets: {}, scores: {},
-              tags: {}, notes: {}, annotated: new Set(), selected: '', filter: 'all',
-              path: '', result: null, busy: '', error: '' },
+  annotate: { jobs: [], source: '', window: 6, items: [], conversation: [], targets: {},
+              scores: {}, tags: {}, notes: {}, annotated: new Set(), selected: '',
+              filter: 'all', search: '', path: '', result: null, busy: '', error: '',
+              convWarning: '' },
   timer: null, dlTimer: null, dlTab: 'direct', dlJob: '', modelFilter: 'all'
 };
 const $ = (sel, root=document) => root.querySelector(sel);
@@ -276,6 +277,32 @@ const fmtSize = (n) => {
   if (n < 1073741824) return (n/1048576).toFixed(1) + ' MB';
   return (n/1073741824).toFixed(2) + ' GB';
 };
+const ZH_MAP = {
+  status: { created: '已创建', running: '运行中', done: '已完成', failed: '失败',
+            stopped: '已停止', queued: '排队中', starting: '启动中',
+            downloading: '下载中', cancelling: '取消中', cancelled: '已取消' },
+  format: { gguf: 'GGUF 模型', hf: 'HuggingFace 目录', adapter: 'LoRA 适配器',
+            auto: '自动识别', '': '未知' },
+  source: { builtin: '内置', downloaded: '在线下载', imported: '本地导入',
+            models: '模型目录', adapters: '适配器目录', '': '-' },
+  engine: { smoke_lora: '灵魂蒸馏训练', sft_train: '通用 SFT' },
+  train_format: { messages: '对话', instruction: '指令', soul: '蒸馏',
+                  auto: '自动', unknown: '未知' },
+  train_mode: { lora: 'LoRA', 'full-ft': '全参数微调' },
+  job_kind: { train: '训练', export: '导出' },
+  service: { UP: '运行中', DOWN: '未运行', RUNNING: '运行中', STOPPED: '未运行',
+             running: '运行中', stopped: '未运行', on: '运行中', off: '未运行' },
+  config: { auto: '自动', confirm: '草稿', off: '关闭', sender: '微信消息发送器',
+            uia: 'UIA 窗口', wechatauto: 'wechatauto 模块', model: '模型', rule: '规则',
+            static: '静态', slim: '精简', full: '完整', proactive_only: '仅主动消息',
+            all: '全部', legacy: '旧版', modern: '新版' },
+};
+function zh(cat, value) {
+  const table = ZH_MAP[cat] || {};
+  if (value === null || value === undefined || value === '') return '—';
+  return table[value] !== undefined ? table[value] : String(value);
+}
+
 function toast(text, kind='ok') {
   const box = $('#toast');
   box.textContent = text;
@@ -367,8 +394,8 @@ async function loadOverview() {
       ['训练任务', jobs.length, '最近'],
       ['模型磁盘', fmtSize(disk), '占用']
     ].map(([t, v, s]) => `<div class="card"><div class="card-label">${esc(t)}</div><div class="card-value">${esc(v)}</div><div class="card-sub">${esc(s)}</div></div>`).join('');
-    $('#ov-services').innerHTML = (d.services || []).map(s => `<div class="row"><span>${esc(s.label)} <span class="muted small">:${s.port}</span></span><span class="badge ${s.running ? 'on' : ''}">${s.running ? '运行' : '停止'}</span></div>`).join('') || '<div class="muted">暂无</div>';
-    $('#ov-jobs').innerHTML = jobs.map(j => `<div class="row"><span>${esc(j.id)} <span class="muted small">${esc(j.kind || '')}</span></span><span class="badge ${j.status === 'done' ? 'on' : ''}">${esc(j.status || '')}</span></div>`).join('') || '<div class="muted">暂无训练任务</div>';
+    $('#ov-services').innerHTML = (d.services || []).map(s => `<div class="row"><span>${esc(s.label)} <span class="muted small">:${s.port}</span></span><span class="badge ${s.running ? 'on' : ''}">${s.running ? '运行中' : '未运行'}</span></div>`).join('') || '<div class="muted">暂无</div>';
+    $('#ov-jobs').innerHTML = jobs.map(j => `<div class="row"><span>${esc(j.id)} <span class="muted small">${esc(zh('job_kind', j.kind))}</span></span><span class="badge ${j.status === 'done' ? 'on' : ''}">${esc(zh('status', j.status))}</span></div>`).join('') || '<div class="muted">暂无训练任务</div>';
   } catch (e) { toast(e.message, 'err'); }
 }
 
@@ -379,7 +406,7 @@ async function loadServices() {
     S.services = d.items || [];
     $('#svc-body').innerHTML = S.services.map(s => `<tr>
       <td>${esc(s.label)}</td><td>${s.port}</td>
-      <td><span class="badge ${s.running ? 'on' : ''}">${s.running ? '运行中' : '停止'}</span></td>
+      <td><span class="badge ${s.running ? 'on' : ''}">${s.running ? '运行中' : '未运行'}</span></td>
       <td>${s.pid ?? '-'}</td>
       <td class="actions-cell">
         <button class="btn tiny" data-svc="${esc(s.name)}" data-act="start" ${s.running ? 'disabled' : ''}>启动</button>
@@ -418,7 +445,7 @@ function configField(item) {
   let input;
   if (item.type === 'bool') input = `<input type="checkbox" id="${id}" ${item.value ? 'checked' : ''}>`;
   else if (item.type === 'int' || item.type === 'float') input = `<input type="number" id="${id}" value="${esc(item.value)}" ${item.min !== null ? 'min=' + item.min : ''} ${item.max !== null ? 'max=' + item.max : ''} step="${item.type === 'float' ? '0.01' : '1'}">`;
-  else if (item.enum) input = `<select id="${id}">${item.enum.map(v => `<option value="${esc(v)}" ${v === item.value ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+  else if (item.enum) input = `<select id="${id}">${item.enum.map(v => `<option value="${esc(v)}" ${v === item.value ? 'selected' : ''}>${esc(zh('config', v))}</option>`).join('')}</select>`;
   else input = `<input type="text" id="${id}" value="${esc(item.value)}">`;
   return `<label class="field"><span>${esc(item.label)} ${item.restart ? '<em class="tag">重启</em>' : ''}</span>${input}<small class="muted">${esc(item.desc || '')}</small></label>`;
 }
@@ -598,7 +625,7 @@ function renderCorpusPage() {
   $('#corpus-jobs').innerHTML = jobs.map(j => {
     const id = corpusId(j);
     return `<div class="list-row ${cid === id ? 'selected' : ''}" data-corpus-job="${esc(id)}">
-      <span><b>${esc(j.name || j.out_name || id)}</b> <span class="muted small">${esc(j.status || '')}</span></span>
+      <span><b>${esc(j.name || j.out_name || id)}</b> <span class="muted small">${esc(zh('status', j.status))}</span></span>
       <span class="row-tools"><span class="muted small">${esc((corpusFiles(j).length || j.uploaded || 0) + ' 个文件')}</span>
         <button class="btn small danger" data-corpus-del="${esc(id)}">删除</button></span></div>`;
   }).join('') || '<div class="muted small">暂无任务；点「新建任务」开始。</div>';
@@ -866,9 +893,15 @@ async function loadAnnotateSource(jobId, render = true) {
   a.busy = 'load';
   if (render) renderAnnotatePage();
   try {
-    const d = await api('/api/wb/annot/source/' + encodeURIComponent(jobId) + '?window=' + (a.window || 6));
+    const [d, corpus] = await Promise.all([
+      api('/api/wb/annot/source/' + encodeURIComponent(jobId) + '?window=' + (a.window || 6)),
+      api('/api/wb/corpus/job/' + encodeURIComponent(jobId) + '/items').catch(() => null),
+    ]);
     a.source = jobId;
     a.items = d.items || [];
+    a.conversation = (corpus && (corpus.items || corpus.rows))
+      || (d.items || []).map(item => ({ id: item.id, role: 'me', text: item.text }));
+    a.convWarning = corpus ? '' : '完整对话加载失败，仅显示「我」的回复';
     if (d.window) a.window = d.window;
     a.targets = {}; a.scores = {}; a.tags = {}; a.notes = {};
     a.annotated = new Set(); a.selected = '';
@@ -880,9 +913,13 @@ async function loadAnnotateSource(jobId, render = true) {
       a.tags[id] = ''; a.notes[id] = '';
     });
     if (a.items.length) a.selected = String(a.items[0].id);
+    if (new URLSearchParams(location.search).get('annot_pick')) {
+      const pick = parseInt(new URLSearchParams(location.search).get('annot_pick'), 10);
+      if (a.items[pick]) a.selected = String(a.items[pick].id);
+    }
     a.error = '';
   } catch (e) {
-    a.items = []; a.targets = {};
+    a.items = []; a.conversation = []; a.targets = {};
     a.error = String(e.message || '').startsWith('后端未就绪') ? e.message : ('后端未就绪：' + e.message);
   } finally { a.busy = ''; renderAnnotatePage(); }
 }
@@ -954,6 +991,41 @@ function annotItemHtml(item, index) {
     <div class="muted small">建议值：心情 ${esc(sug.mood)} · 精力 ${esc(sug.energy)} · 长度 ${esc({short:'短句',normal:'正常',long:'长句'}[(sug.behavior || {}).length] || '')}；可任意改。</div>
   </div>`;
 }
+function annotHighlight(text, needle) {
+  const raw = String(text || '');
+  if (!needle) return esc(raw);
+  const lower = raw.toLowerCase(), q = needle.toLowerCase();
+  let out = '', pos = 0;
+  while (true) {
+    const at = lower.indexOf(q, pos);
+    if (at < 0) { out += esc(raw.slice(pos)); break; }
+    out += esc(raw.slice(pos, at)) + '<mark>' + esc(raw.slice(at, at + q.length)) + '</mark>';
+    pos = at + q.length;
+  }
+  return out;
+}
+function annotBubbleHtml(item) {
+  const a = S.annotate;
+  const id = String(item.id ?? '');
+  const role = String(item.role || '') === 'me' ? 'me' : 'you';
+  const me = role === 'me';
+  const annot = a.items.find(x => String(x.id) === id);
+  const marked = a.annotated.has(id);
+  const score = a.scores[id] ?? 5;
+  const matchFilter = !me || (a.filter === 'all'
+    || (a.filter === 'unannotated' && !marked)
+    || (a.filter === 'low' && score < 4));
+  const dim = me && !matchFilter;
+  const selected = me && String(a.selected) === id;
+  const text = annotHighlight(item.text || item.content || '', a.search);
+  return `<div class="annot-bubble-row ${role} ${dim ? 'dim' : ''} ${selected ? 'selected' : ''}" ${me ? `data-annot-select="${esc(id)}"` : ''}>
+    <div class="annot-avatar ${role}">${me ? '我' : '你'}</div>
+    <div class="annot-bubble-wrap">
+      <div class="annot-bubble ${role}">${text}</div>
+      ${me ? `<div class="annot-bubble-status">${marked ? '已标注 ★' + score : '未标注'}${annot ? '' : ' · 无建议'}</div>` : ''}
+    </div>
+  </div>`;
+}
 function renderAnnotatePage() {
   const a = S.annotate;
   const jobSel = $('#annot-job');
@@ -961,33 +1033,31 @@ function renderAnnotatePage() {
     jobSel.innerHTML = a.jobs.map(j => `<option value="${esc(j.id || j.job_id)}" ${String(j.id || j.job_id) === String(a.source) ? 'selected' : ''}>${esc(j.name || j.id || j.job_id)} · ${esc(j.counts ? (j.counts.me || 0) + ' 个我' : '')}</option>`).join('') || '<option value="">暂无语料任务</option>';
   }
   const meta = $('#annot-source-meta');
-  if (meta) meta.textContent = a.items.length ? `可标注 ${a.items.length} 条 · 已标记 ${a.annotated.size} 条` : (a.error ? '' : '暂无可标注回复');
+  if (meta) meta.textContent = a.items.length
+    ? `可标注 ${a.items.length} 条 · 已标记 ${a.annotated.size} 条 · 对话 ${a.conversation.length} 条` : (a.error ? '' : '暂无可标注回复');
   const list = $('#annot-list');
   if (!list) return;
-  const visible = annotVisibleItems();
-  const selectedId = a.selected || (visible[0] && String(visible[0].id)) || '';
+  const selectedId = a.selected || (a.items[0] && String(a.items[0].id)) || '';
   const selected = a.items.find(item => String(item.id) === String(selectedId));
   const selectedIndex = selected ? a.items.indexOf(selected) : 0;
   list.innerHTML = `${a.error ? `<div class="card"><div class="error-text">${esc(a.error)}</div></div>` : ''}
-    ${a.items.length ? `<div class="annot-stats">
+    ${a.convWarning ? `<div class="card"><div class="muted small">${esc(a.convWarning)}</div></div>` : ''}
+    ${(a.items.length || a.conversation.length) ? `<div class="annot-stats">
       <span>已标记 <b>${a.annotated.size}</b> / 可标注 <b>${a.items.length}</b></span>
       <button class="btn small ${a.filter === 'all' ? 'primary' : ''}" data-annot-filter="all">全部</button>
       <button class="btn small ${a.filter === 'unannotated' ? 'primary' : ''}" data-annot-filter="unannotated">未标注</button>
       <button class="btn small ${a.filter === 'low' ? 'primary' : ''}" data-annot-filter="low">低分（&lt;4★）</button>
-      <span class="grow"></span><span class="muted small">左侧选一条「我」的回复，右侧编辑。</span></div>
+      <input id="annot-search" placeholder="搜索对话..." value="${esc(a.search)}" style="width:180px">
+      <span class="grow"></span><span class="muted small">点右侧「我」的气泡编辑</span></div>
     <div class="annot-split">
-      <div class="annot-conv">${visible.map((item, idx) => {
-        const id = String(item.id);
-        const marked = a.annotated.has(id);
-        return `<button class="annot-conv-row ${String(id) === String(selectedId) ? 'active' : ''}" data-annot-select="${esc(id)}">
-          <div><span class="annot-conv-role">我</span> <span class="annot-conv-text">${esc(String(item.text || '').slice(0, 80))}</span></div>
-          <div class="muted small">${marked ? '✓ 已标记' : '未标记'} · ${a.scores[id] ?? 5}★</div></button>`;
-      }).join('')}</div>
-      <div class="annot-editor-wrap">${selected ? annotItemHtml(selected, selectedIndex) : '<div class="panel"><div class="muted small">筛选后没有条目。</div></div>'}</div>
+      <div class="annot-chat" id="annot-chat">${a.conversation.map(annotBubbleHtml).join('') || '<div class="muted small">暂无对话</div>'}</div>
+      <div class="annot-editor-wrap">${selected ? annotItemHtml(selected, selectedIndex) : '<div class="panel"><div class="muted small">选一个「我」的气泡开始标注。</div></div>'}</div>
     </div>` : `<div class="panel"><div class="muted small">暂无可标注的「我」回复；请先在「语料清洗」页创建任务、上传并清洗，或在上方填 JSONL 路径。</div></div>`}
     ${a.result ? `<div class="panel"><b>已保存：</b>${esc(a.result.out || '')} · 训练 ${a.result.rows || 0} 行 / 验证 ${a.result.val_rows || 0} 行
       <button class="btn small primary" id="annot-go-train">去训练</button></div>` : ''}`;
   bindAnnotateInputs();
+  const selectedBubble = document.querySelector('.annot-bubble-row.selected');
+  if (selectedBubble) requestAnimationFrame(() => selectedBubble.scrollIntoView({ block: 'nearest' }));
 }
 function bindAnnotateInputs() {
   const a = S.annotate;
@@ -995,6 +1065,8 @@ function bindAnnotateInputs() {
   if (jobSel) jobSel.onchange = () => { a.source = jobSel.value; loadAnnotateSource(jobSel.value); };
   $$('[data-annot-filter]').forEach(btn => btn.onclick = () => { a.filter = btn.dataset.annotFilter; renderAnnotatePage(); });
   $$('[data-annot-select]').forEach(row => row.onclick = () => { a.selected = row.dataset.annotSelect; renderAnnotatePage(); });
+  const search = $('#annot-search');
+  if (search) search.oninput = () => { a.search = search.value.trim(); renderAnnotatePage(); };
   const saveOne = $('#annot-save-one');
   if (saveOne) saveOne.onclick = () => {
     const id = a.selected;
@@ -1089,14 +1161,14 @@ async function loadTrain() {
     }
     const jobs = await api('/api/wb/train/jobs');
     S.train.jobs = jobs.items || [];
-    $('#train-jobs').innerHTML = S.train.jobs.map(j => `<button class="list-row ${S.train.selectedJob === j.id ? 'selected' : ''}" data-job="${esc(j.id)}"><span>${esc(j.id)} <span class="muted small">${esc(j.kind || '')}</span></span><span class="badge ${j.status === 'done' ? 'on' : ''}">${esc(j.status || '')}</span></button>`).join('') || '<div class="muted">暂无任务</div>';
+    $('#train-jobs').innerHTML = S.train.jobs.map(j => `<button class="list-row ${S.train.selectedJob === j.id ? 'selected' : ''}" data-job="${esc(j.id)}"><span>${esc(j.id)} <span class="muted small">${esc(zh('job_kind', j.kind))}</span></span><span class="badge ${j.status === 'done' ? 'on' : ''}">${esc(zh('status', j.status))}</span></button>`).join('') || '<div class="muted">暂无任务</div>';
     $$('#train-jobs [data-job]').forEach(b => b.onclick = () => { S.train.selectedJob = b.dataset.job; loadJob(b.dataset.job); loadTrain(); });
   } catch (e) { toast(e.message, 'err'); }
 }
 async function loadPreview(path) {
   try {
     const d = await api('/api/wb/train/preview?path=' + encodeURIComponent(path) + '&limit=3');
-    $('#train-hint').textContent = '格式：' + (d.format || 'unknown') + ' · 选中：' + path;
+    $('#train-hint').textContent = '格式：' + zh('train_format', d.format || 'unknown') + ' · 选中：' + path;
     term(JSON.stringify(d.rows || [], null, 2), '数据集预览');
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -1164,11 +1236,10 @@ async function withBusy(btn, fn) {
   finally { btn.disabled = false; btn.textContent = old; }
 }
 function inventoryBadge(fmt) {
-  const map = {hf: 'HF 目录', gguf: 'GGUF', adapter: 'Adapter', '': '未知'};
-  return `<span class="badge ${fmt === 'gguf' ? 'on' : ''}">${esc(map[fmt] || fmt || '未知')}</span>`;
+  return `<span class="badge ${fmt === 'gguf' ? 'on' : ''}">${esc(zh('format', fmt || 'unknown'))}</span>`;
 }
 function sourceLabel(src) {
-  return ({builtin: '内置', imported: '离线导入', downloaded: '在线下载'})[src] || src || '-';
+  return zh('source', src && src !== '' ? src : '-');
 }
 async function loadModels() {
   try {
@@ -1186,13 +1257,13 @@ async function loadModels() {
     const items = S.modelFilter === 'all' ? allItems : allItems.filter(x => x.format === S.modelFilter);
     $('#models-cards').innerHTML = [
       ['清单', allItems.length, '模型条目'],
-      ['GGUF', counts.gguf || 0, '可服务'],
-      ['HF 目录', counts.hf || 0, '可训练'],
-      ['Adapter', counts.adapter || 0, 'LoRA'],
+      ['GGUF 模型', counts.gguf || 0, '可服务'],
+      ['HuggingFace 目录', counts.hf || 0, '可训练'],
+      ['LoRA 适配器', counts.adapter || 0, 'LoRA'],
       ['运行中', runningCount, '服务'],
       ['磁盘', fmtSize(disk.total), 'agent']
     ].map(([t, v, s]) => `<div class="card"><div class="card-label">${esc(t)}</div><div class="card-value">${esc(v)}</div><div class="card-sub">${esc(s)}</div></div>`).join('');
-    $('#models-running').innerHTML = running.map(x => `<div class="row"><span>端口 ${x.port} ${x.model_path ? '<span class="muted small">' + esc(x.model_path) + '</span>' : ''}</span><span class="badge ${x.running ? 'on' : ''}">${x.running ? '运行' : '停止'}</span></div>`).join('') || '<div class="muted">无</div>';
+    $('#models-running').innerHTML = running.map(x => `<div class="row"><span>端口 ${x.port} ${x.model_path ? '<span class="muted small">' + esc(x.model_path) + '</span>' : ''}</span><span class="badge ${x.running ? 'on' : ''}">${x.running ? '运行中' : '未运行'}</span></div>`).join('') || '<div class="muted">无</div>';
     $('#models-count').textContent = items.length + ' 项';
     $('#models-list').innerHTML = items.map(x => `<tr>
       <td title="${esc(x.path)}">${esc(x.name)}</td>
@@ -1236,7 +1307,7 @@ async function validateImport() {
   if (!path) { toast('先填本地路径', 'err'); return; }
   try {
     const d = await api('/api/wb/models/validate', {method: 'POST', body: {path}});
-    const text = d.ok ? `校验通过：${d.format} · ${fmtSize(d.size)} · ${d.files} 个文件` : `校验失败：${(d.reasons || []).join(', ') || d.error || ''}`;
+    const text = d.ok ? `校验通过：${zh('format', d.format)} · ${fmtSize(d.size)} · ${d.files} 个文件` : `校验失败：${(d.reasons || []).join(', ') || d.error || ''}`;
     $('#import-result').textContent = text;
     $('#import-result').className = 'small ' + (d.ok ? 'ok-text' : 'err-text');
     if (d.ok && !$('#import-name').value.trim()) $('#import-name').value = path.split(/[\\/]/).pop().replace(/\.gguf$/i, '');
@@ -1250,7 +1321,7 @@ async function runImport() {
   if (!name) name = path.split(/[\\/]/).pop().replace(/\.gguf$/i, '');
   try {
     const d = await api('/api/wb/models/import', {method: 'POST', body: {path, name, format, overwrite: $('#import-overwrite').checked}});
-    $('#import-result').textContent = d.ok ? `已导入：${d.path}（${d.format}, ${fmtSize(d.size)}）` : `导入失败：${d.error || ''} ${(d.reasons || []).join(', ')}`;
+    $('#import-result').textContent = d.ok ? `已导入：${d.path}（${zh('format', d.format)}, ${fmtSize(d.size)}）` : `导入失败：${d.error || ''} ${(d.reasons || []).join(', ')}`;
     $('#import-result').className = 'small ' + (d.ok ? 'ok-text' : 'err-text');
     toast(d.ok ? '导入完成' : (d.error || '导入失败'), d.ok ? 'ok' : 'err');
     if (d.ok) loadModels();

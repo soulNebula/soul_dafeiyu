@@ -293,3 +293,24 @@ body.term-resizing #shell { transition: none; }
 .annot-editor-wrap { min-width: 0; }
 .annot-editor { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
 @media (max-width: 1100px) { .annot-split { grid-template-columns: 1fr; } .annot-conv { max-height: 240px; } }
+
+/* 语料页：大号主按钮 + 清洗进度 */
+.btn.btn-corpus {
+  padding: 12px 28px; font-size: 16px; font-weight: 600; min-width: 160px;
+  background: #2f6fed; border-color: #2f6fed; color: #fff; border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(47, 111, 237, .28);
+}
+.btn.btn-corpus:hover:not(:disabled) { background: #2559c9; border-color: #2559c9; }
+.btn.btn-corpus:disabled { opacity: .62; cursor: not-allowed; box-shadow: none; }
+.corpus-progress {
+  margin-top: 10px; border: 1px solid #2f6fed55; background: #121b2d;
+  border-radius: 8px; padding: 10px 12px;
+}
+.corpus-progress.hidden { display: none; }
+.corpus-progress-head { display: flex; justify-content: space-between; align-items: center;
+  font-size: 12.5px; margin-bottom: 7px; }
+.corpus-progress-bar { height: 9px; border-radius: 6px; background: #0b111d; overflow: hidden; }
+#corpus-progress-fill { height: 100%; width: 0; border-radius: 6px;
+  background: linear-gradient(90deg, #2f6fed, #4ea1ff); transition: width .25s ease; }
+#corpus-progress-fill.failed { background: var(--danger); }
+#corpus-progress-current { margin-top: 6px; }

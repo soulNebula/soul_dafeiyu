@@ -152,3 +152,22 @@ def test_delete_job(root):
     jid = _job(root)
     assert cs.delete_job(jid, root=root)["ok"]
     assert cs.get_job(jid, root=root)["error"] == "job_not_found"
+
+def test_async_parse_reports_progress(root):
+    import time
+    jid = _job(root)
+    sample = "你：在吗" + chr(10) + "我：在的" + chr(10) + "你：忙吗" + chr(10) + "我：不忙" + chr(10)
+    _upload(jid, root, sample)
+    started = cs.start_parse(jid, root=root)
+    assert started["ok"] and started["started"] and started["total"] == 1
+    deadline = time.time() + 5
+    state = {}
+    while time.time() < deadline:
+        state = cs.parse_status(jid, root=root)
+        if state.get("status") in ("done", "failed"):
+            break
+        time.sleep(0.05)
+    assert state.get("status") == "done", state
+    assert state.get("percent") == 100 and state.get("has_items") is True
+    items = cs.load_items(jid, root=root)
+    assert items and len(items) >= 2

@@ -151,7 +151,13 @@
         <div class="panel-head"><h3>① 上传</h3><span class="muted small" id="corpus-current"></span></div>
         <div id="corpus-drop" class="corpus-drop">拖拽文件到这里，或 <label class="corpus-pick">选择文件<input type="file" id="corpus-files" multiple accept=".txt,.md,.json,.jsonl,.csv,.png,.jpg,.jpeg,.webp,.bmp"></label>
           <div class="muted small">支持 txt/md/json/jsonl/csv/图片；先新建任务再上传。</div></div>
-        <div class="actions"><button class="btn" id="corpus-parse" disabled>开始清洗</button><span class="muted small" id="corpus-upload-hint"></span></div>
+        <div class="actions"><button class="btn primary btn-corpus" id="corpus-parse">开始清洗</button>
+          <span class="muted small" id="corpus-upload-hint">支持多图；OCR 约 1–3 秒/张，请耐心等进度条。</span></div>
+        <div id="corpus-progress" class="corpus-progress hidden">
+          <div class="corpus-progress-head"><b id="corpus-progress-label">清洗中…</b><span id="corpus-progress-pct">0%</span></div>
+          <div class="corpus-progress-bar"><div id="corpus-progress-fill"></div></div>
+          <div class="muted small" id="corpus-progress-current"></div>
+        </div>
         <div id="corpus-uploaded" class="corpus-uploaded muted small"></div>
       </div>
       <div class="panel">
@@ -252,7 +258,8 @@ const S = {
   services: [], overview: null, data: { dbs: [], db: '', table: '', page: 1, pages: 1 },
   train: { datasets: [], jobs: [], selected: '', selectedJob: '' }, models: null, cfg: null,
   corpus: { jobs: [], job: null, files: [], parsed: null, selected: new Set(),
-            filterRole: '', search: '', result: null, busy: '', error: '' },
+            filterRole: '', search: '', result: null, busy: '', error: '',
+            progress: null, parseTimer: null },
   annotate: { jobs: [], source: '', window: 6, items: [], targets: {}, scores: {},
               tags: {}, notes: {}, annotated: new Set(), selected: '', filter: 'all',
               path: '', result: null, busy: '', error: '' },
@@ -328,6 +335,7 @@ function showView(name) {
   if (S.token) url.searchParams.set('token', S.token);
   history.replaceState(null, '', url);
   if (S.timer) { clearInterval(S.timer); S.timer = null; }
+  if (name !== 'corpus' && S.corpus.parseTimer) { clearInterval(S.corpus.parseTimer); S.corpus.parseTimer = null; }
   if (name !== 'models' && S.dlTimer) { clearInterval(S.dlTimer); S.dlTimer = null; }
   if (name === 'overview') loadOverview();
   if (name === 'services') loadServices();
@@ -553,6 +561,11 @@ async function loadCorpus() {
     c.error = String(e.message || '').startsWith('后端未就绪') ? e.message : ('后端未就绪：' + e.message);
     c.jobs = [];
   }
+  if (new URLSearchParams(location.search).get('corpus_progress') === '1') {
+    c.busy = 'parse';
+    c.progress = { status: 'running', done: 1, total: 3, percent: 33,
+                   current: 'shot_2.png', error: '' };
+  }
   renderCorpusPage();
 }
 function corpusId(job) { return job ? String(job.id || job.job_id || '') : ''; }
@@ -590,8 +603,31 @@ function renderCorpusPage() {
         <button class="btn small danger" data-corpus-del="${esc(id)}">删除</button></span></div>`;
   }).join('') || '<div class="muted small">暂无任务；点「新建任务」开始。</div>';
   $('#corpus-current').textContent = c.job ? ('当前任务：' + (c.job.name || cid)) : '未选择任务';
-  $('#corpus-upload-hint').textContent = c.busy === 'upload' ? '上传中…' : (cid ? '' : '先新建任务');
-  $('#corpus-parse').disabled = !cid || c.busy === 'upload' || c.busy === 'parse';
+  const fileCount = corpusFiles(c.job).length;
+  $('#corpus-upload-hint').textContent = c.busy === 'upload' ? '上传中…'
+    : (!cid ? '先新建任务' : (fileCount ? '支持多图；OCR 约 1–3 秒/张，请耐心等进度条。' : '先上传文件，再开始清洗。'));
+  const parseBtn = $('#corpus-parse');
+  parseBtn.disabled = !cid || c.busy === 'upload' || c.busy === 'parse' || !fileCount;
+  parseBtn.textContent = c.busy === 'parse' ? '清洗中…' : '开始清洗';
+  const progress = c.progress;
+  const pbox = $('#corpus-progress');
+  if (pbox) {
+    const visible = !!(progress && ['starting', 'running', 'failed'].includes(progress.status));
+    pbox.classList.toggle('hidden', !visible);
+    if (progress) {
+      const pct = progress.percent != null ? Math.max(0, Math.min(100, Number(progress.percent)))
+        : (progress.total ? Math.round(100 * (progress.done || 0) / progress.total) : 0);
+      $('#corpus-progress-label').textContent = progress.status === 'failed' ? '清洗失败'
+        : (progress.status === 'done' ? '清洗完成' : '清洗中…');
+      $('#corpus-progress-pct').textContent = Math.round(pct) + '%';
+      $('#corpus-progress-fill').style.width = pct + '%';
+      $('#corpus-progress-fill').classList.toggle('failed', progress.status === 'failed');
+      const current = progress.current ? ('当前 ' + progress.current) : '';
+      const count = progress.total ? ('已清洗 ' + (progress.done || 0) + '/' + progress.total + ' 个文件') : '';
+      $('#corpus-progress-current').textContent = progress.error
+        ? ('错误：' + progress.error) : [count, current].filter(Boolean).join(' · ');
+    }
+  }
   $('#corpus-uploaded').innerHTML = corpusFiles(c.job).map(f => `<div>${esc(f.name || f.filename || f.path || f)} · ${esc(f.type || '')} · ${fmtSize(f.size)}</div>`).join('') || (cid ? '还没有上传文件' : '');
   const items = corpusVisibleItems();
   $('#corpus-stats').textContent = c.parsed ? `总 ${c.parsed.total ?? c.parsed.count ?? corpusParsedItems().length} 条 · 你 ${c.parsed.you ?? c.parsed.user_count ?? '?'} · 我 ${c.parsed.me ?? c.parsed.assistant_count ?? '?'}` : '';
@@ -680,18 +716,116 @@ async function uploadCorpusFiles(fileList) {
     c.error = '上传失败：' + e.message; renderCorpusPage();
   } finally { c.busy = ''; renderCorpusPage(); }
 }
+function applyCorpusParsed(data) {
+  const c = S.corpus;
+  c.parsed = data;
+  c.selected = new Set(corpusParsedItems().map(item => String(item.id ?? item.index ?? '')));
+  c.progress = { status: 'done', done: 1, total: 1, percent: 100 };
+  c.busy = '';
+  if (c.parseTimer) { clearInterval(c.parseTimer); c.parseTimer = null; }
+  renderCorpusPage();
+}
+async function fetchCorpusItems(cid) {
+  const d = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/items');
+  if (d.ok === false) throw new Error(d.error || 'items_failed');
+  return { ok: true, items: d.items || d.rows || [], stats: d.stats || d.counts || d };
+}
 async function parseCorpus() {
   const c = S.corpus;
   const cid = corpusId(c.job);
   if (!cid) { toast('先新建/选择任务', 'err'); return; }
-  c.busy = 'parse'; c.error = ''; renderCorpusPage();
+  if (c.busy === 'parse') return;
+  c.busy = 'parse'; c.error = '';
+  c.progress = { status: 'starting', done: 0, total: corpusFiles(c.job).length || 0,
+                 percent: 0, current: '', error: '' };
+  renderCorpusPage();
+  let started = null;
   try {
-    const d = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/parse', { method: 'POST', body: {} });
-    c.parsed = d;
-    c.selected = new Set(corpusParsedItems().map(item => String(item.id ?? item.index ?? '')));
-    toast('清洗完成：' + corpusParsedItems().length + ' 条', 'ok');
-  } catch (e) { c.error = '后端未就绪：' + e.message; }
-  finally { c.busy = ''; renderCorpusPage(); }
+    started = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/parse', { method: 'POST', body: {} });
+  } catch (e) {
+    // 旧后端/未接线：回退同步模式
+    c.error = '后端未就绪：' + e.message;
+    await parseCorpusSync(cid);
+    return;
+  }
+  if (started && Array.isArray(started.items)) { applyCorpusParsed(started); return; }
+  if (started && started.ok === false) {
+    c.error = '清洗失败：' + (started.error || '');
+    c.progress = { status: 'failed', error: started.error || '', done: 0, total: 0, percent: 0 };
+    c.busy = ''; renderCorpusPage(); return;
+  }
+  if (c.progress) {
+    c.progress.total = started.total || c.progress.total || 0;
+    c.progress.status = 'running';
+  }
+  renderCorpusPage();
+  pollCorpusParse(cid);
+}
+function pollCorpusParse(cid) {
+  const c = S.corpus;
+  if (c.parseTimer) clearInterval(c.parseTimer);
+  const startedAt = Date.now();
+  const tick = async () => {
+    if (S.view !== 'corpus') { clearInterval(c.parseTimer); c.parseTimer = null; return; }
+    if (Date.now() - startedAt > 5 * 60 * 1000) {
+      clearInterval(c.parseTimer); c.parseTimer = null;
+      c.busy = ''; c.error = '清洗超时（>5 分钟），请重试';
+      c.progress = { status: 'failed', error: '清洗超时，请重试', done: c.progress?.done || 0,
+                     total: c.progress?.total || 0, percent: c.progress?.percent || 0 };
+      renderCorpusPage(); toast('清洗超时，请重试', 'err'); return;
+    }
+    try {
+      const d = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/parse/status');
+      if (!d.ok) throw new Error(d.error || 'status_failed');
+      const total = Number(d.total || c.progress?.total || 0);
+      const done = Number(d.done || 0);
+      c.progress = {
+        status: d.status || 'running', done, total,
+        percent: d.percent != null ? Number(d.percent) : (total ? Math.round(100 * done / total) : 0),
+        current: d.current || '', error: d.error || '', stats: d.stats || null,
+      };
+      renderCorpusPage();
+      if (d.status === 'done') {
+        clearInterval(c.parseTimer); c.parseTimer = null;
+        let result = null;
+        try { result = await fetchCorpusItems(cid); } catch (e) { result = { ok: false, items: [], error: e.message }; }
+        c.parsed = result;
+        c.selected = new Set((result.items || []).map(item => String(item.id ?? item.index ?? '')));
+        c.progress = { status: 'done', done: total, total, percent: 100 };
+        c.busy = ''; c.error = '';
+        toast('清洗完成：' + (result.items || []).length + ' 条', 'ok');
+        renderCorpusPage();
+      } else if (d.status === 'failed') {
+        clearInterval(c.parseTimer); c.parseTimer = null;
+        c.busy = ''; c.error = '清洗失败：' + (d.error || '');
+        renderCorpusPage();
+      }
+    } catch (e) {
+      clearInterval(c.parseTimer); c.parseTimer = null;
+      c.busy = '';
+      // 状态接口未接线（404）：回退同步 parse；其它错误直接显示
+      if (String(e.message || '').includes('404') || String(e.message || '').includes('Not Found')) {
+        await parseCorpusSync(cid);
+      } else {
+        c.error = '清洗进度读取失败：' + e.message;
+        renderCorpusPage();
+      }
+    }
+  };
+  c.parseTimer = setInterval(tick, 700);
+  tick();
+}
+async function parseCorpusSync(cid) {
+  const c = S.corpus;
+  try {
+    const d = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/parse', { method: 'POST', body: { sync: true } });
+    if (d.ok === false) throw new Error(d.error || 'parse_failed');
+    applyCorpusParsed(d);
+  } catch (e) {
+    c.busy = ''; c.error = '后端未就绪：' + e.message;
+    c.progress = { status: 'failed', error: e.message, done: 0, total: 0, percent: 0 };
+    renderCorpusPage();
+  }
 }
 async function saveCorpus() {
   const c = S.corpus;

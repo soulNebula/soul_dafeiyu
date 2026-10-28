@@ -364,14 +364,26 @@ async def corpus_upload(job_id: str, file: UploadFile = File(...)):
 
 @app.post("/api/wb/corpus/job/{job_id}/parse", dependencies=[Depends(require_token)])
 def corpus_parse(job_id: str, body: dict | None = None):
+    """异步清洗：立即返回 started，前端轮询 /parse/status；body.sync=true 时同步返回结果。"""
     body = body or {}
-    out = corpusstudio.parse_job(
-        job_id, me_names=body.get("me_names") or "我,me,assistant,小鱼,她",
-        you_names=body.get("you_names") or "你,user,用户,对方")
+    me = body.get("me_names") or "我,me,assistant,小鱼,她"
+    you = body.get("you_names") or "你,user,用户,对方"
+    if body.get("sync"):
+        out = corpusstudio.parse_job(job_id, me_names=me, you_names=you)
+        if out.get("ok"):
+            audit.record("corpus.parse", job_id, actor="workbench",
+                         meta={"total": (out.get("stats") or {}).get("total")})
+        return out
+    out = corpusstudio.start_parse(job_id, me_names=me, you_names=you)
     if out.get("ok"):
-        audit.record("corpus.parse", job_id, actor="workbench",
-                     meta={"total": (out.get("stats") or {}).get("total")})
+        audit.record("corpus.parse_start", job_id, actor="workbench",
+                     meta={"total": out.get("total")})
     return out
+
+
+@app.get("/api/wb/corpus/job/{job_id}/parse/status", dependencies=[Depends(require_token)])
+def corpus_parse_status(job_id: str):
+    return corpusstudio.parse_status(job_id)
 
 
 @app.get("/api/wb/corpus/job/{job_id}/items", dependencies=[Depends(require_token)])

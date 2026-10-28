@@ -441,6 +441,14 @@ def load_items(job_id: str, *, root: Path | str | None = None) -> list[dict] | N
 def parse_job(job_id: str, *, me_names: Any = "我,me,assistant,小鱼,她",
               you_names: Any = "你,user,用户,对方",
               root: Path | str | None = None) -> dict:
+    """同步清洗（CLI/测试用）；HTTP 层用 ``start_parse`` 异步 + ``parse_status`` 轮询。"""
+    return _parse_impl(job_id, me_names=me_names, you_names=you_names, root=root)
+
+
+def _parse_impl(job_id: str, *, me_names: Any = "我,me,assistant,小鱼,她",
+                you_names: Any = "你,user,用户,对方",
+                root: Path | str | None = None,
+                progress: Any = None) -> dict:
     meta = _read_meta(job_id, root)
     if not meta:
         return {"ok": False, "error": "job_not_found"}
@@ -448,7 +456,14 @@ def parse_job(job_id: str, *, me_names: Any = "我,me,assistant,小鱼,她",
     items: list[dict] = []
     skipped = 0
     files = 0
-    for record in meta.get("files") or []:
+    file_list = [f for f in (meta.get("files") or []) if isinstance(f, dict)]
+    total_files = len(file_list)
+    for order, record in enumerate(file_list):
+        if callable(progress):
+            try:
+                progress(order, total_files, str(record.get("name") or ""))
+            except Exception:  # noqa: BLE001 - 进度回调失败不影响清洗
+                pass
         path = Path(str(record.get("path") or ""))
         if not path.is_file():
             # 任务目录可能迁移：按名字在 raw/ 里找
@@ -585,3 +600,97 @@ def save_dataset(job_id: str, selected_ids: Any, *, format: str = "messages",
     return {"ok": True, "out": str(out_path), "val_out": val_path,
             "rows": len(train_rows), "val_rows": len(val_rows),
             "format": fmt, "selected": len(picked), "window": window}
+
+# --------------------------------------------------------------------------- #
+# 异步清洗 + 进度
+# --------------------------------------------------------------------------- #
+_PARSE_LOCK = __import__("threading").Lock()
+_PARSE_STATE: dict[str, dict] = {}
+
+
+def _set_parse_state(job_id: str, root, **fields) -> None:
+    state = {"status": "idle", "total": 0, "done": 0, "current": "",
+             "percent": 0, "error": "", "stats": {}, "started_at": 0,
+             "finished_at": 0}
+    state.update(_PARSE_STATE.get(job_id) or {})
+    state.update(fields)
+    total = int(state.get("total") or 0)
+    done = int(state.get("done") or 0)
+    state["percent"] = int(round(done * 100.0 / total)) if total else 0
+    _PARSE_STATE[job_id] = state
+    meta = _read_meta(job_id, root)
+    if meta:
+        meta["parse"] = state
+        meta["parsed"] = state.get("status") == "done"
+        if state.get("stats"):
+            meta["counts"] = state["stats"]
+        _write_meta(meta, root)
+
+
+def _parse_worker(job_id: str, me_names, you_names, root) -> None:
+    def progress(order: int, total: int, name: str) -> None:
+        _set_parse_state(job_id, root, status="running", total=total,
+                         done=order, current=name)
+
+    try:
+        meta = _read_meta(job_id, root) or {}
+        total = len([f for f in (meta.get("files") or []) if isinstance(f, dict)])
+        _set_parse_state(job_id, root, status="running", total=total, done=0,
+                         current="", error="", started_at=time.time())
+        result = _parse_impl(job_id, me_names=me_names, you_names=you_names,
+                             root=root, progress=progress)
+        if result.get("ok"):
+            _set_parse_state(job_id, root, status="done", total=total, done=total,
+                             percent=100, current="", error="",
+                             stats=result.get("stats") or {}, finished_at=time.time())
+        else:
+            _set_parse_state(job_id, root, status="failed", total=total,
+                             done=result.get("files") or 0,
+                             error=str(result.get("error") or "parse_failed"),
+                             finished_at=time.time())
+    except Exception as exc:  # noqa: BLE001
+        _set_parse_state(job_id, root, status="failed", error=f"{type(exc).__name__}: {exc}"[:200],
+                         finished_at=time.time())
+
+
+def start_parse(job_id: str, *, me_names: Any = "我,me,assistant,小鱼,她",
+                you_names: Any = "你,user,用户,对方",
+                root: Path | str | None = None) -> dict:
+    """启动后台清洗线程，立即返回；前端轮询 ``parse_status``。"""
+    meta = _read_meta(job_id, root)
+    if not meta:
+        return {"ok": False, "error": "job_not_found"}
+    with _PARSE_LOCK:
+        state = _PARSE_STATE.get(job_id) or {}
+        if state.get("status") == "running":
+            return {"ok": True, "started": True, "already": True,
+                    "total": state.get("total") or 0}
+    files = [f for f in (meta.get("files") or []) if isinstance(f, dict)]
+    if not files:
+        return {"ok": False, "error": "no_files"}
+    _set_parse_state(job_id, root, status="running",
+                     total=len(files), done=0, current="", error="",
+                     stats={}, started_at=time.time(), finished_at=0)
+    thread = __import__("threading").Thread(
+        target=_parse_worker, args=(job_id, me_names, you_names, root),
+        name=f"corpus-parse-{job_id}", daemon=True)
+    try:
+        thread.start()
+    except Exception as exc:  # noqa: BLE001
+        _set_parse_state(job_id, root, status="failed", error=str(exc)[:200])
+        return {"ok": False, "error": f"thread_failed:{exc}"[:200]}
+    return {"ok": True, "started": True, "total": len(files)}
+
+
+def parse_status(job_id: str, *, root: Path | str | None = None) -> dict:
+    meta = _read_meta(job_id, root)
+    if not meta:
+        return {"ok": False, "error": "job_not_found"}
+    state = _PARSE_STATE.get(job_id) or meta.get("parse") or {
+        "status": "idle", "total": 0, "done": 0, "percent": 0, "current": "",
+        "error": "", "stats": {}}
+    has_items = load_items(job_id, root=root) is not None
+    out = {"ok": True, "job_id": job_id, "has_items": has_items}
+    out.update(state)
+    return out
+

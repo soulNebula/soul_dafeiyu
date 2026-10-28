@@ -350,17 +350,25 @@ def step_ui(matrix: Matrix, args: argparse.Namespace, tag: str) -> list[Path]:
         shot = shots_dir / f"{view}.png"
         profile = Path(tempfile.mkdtemp(prefix="edge_accept_"))
         cmd = [
-            str(edge), "--headless=new", "--disable-gpu", "--no-first-run",
+            str(edge), "--headless=new", "--disable-gpu", "--no-sandbox",
+            "--disable-dev-shm-usage", "--no-first-run",
             "--hide-scrollbars", "--window-size=1440,900",
             "--virtual-time-budget=8000", f"--user-data-dir={profile}",
             f"--screenshot={shot}",
             f"{WB}/?token={TOKEN}&view={view}",
         ]
         started = time.perf_counter()
+        proc = None
         try:
-            subprocess.run(cmd, capture_output=True, text=True, timeout=90,
-                           encoding="utf-8", errors="replace")
+            # 不能 capture_output：Edge 会派生 crashpad/gpu 子进程，父进程被 kill 后
+            # 子进程仍握着管道 → communicate() 永远等不到 EOF（2026-10-29 实测卡死 10 分钟）。
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL,
+                                    stdin=subprocess.DEVNULL)
+            code = proc.wait(timeout=90)
             elapsed = time.perf_counter() - started
+            if code != 0:
+                raise subprocess.TimeoutExpired(cmd, 90)
             size = shot.stat().st_size if shot.is_file() else 0
             ok = size >= SCREEN_MIN_BYTES
             matrix.add("UI 冒烟", f"截图 view={view}", "PASS" if ok else "FAIL",
@@ -371,6 +379,11 @@ def step_ui(matrix: Matrix, args: argparse.Namespace, tag: str) -> list[Path]:
             if shot.is_file():
                 screenshots.append(shot)
         except subprocess.TimeoutExpired:
+            try:
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                               capture_output=True, timeout=15)
+            except Exception:  # noqa: BLE001
+                pass
             matrix.add("UI 冒烟", f"截图 view={view}", "FAIL",
                        duration_s=time.perf_counter() - started,
                        detail="Edge 超时 >90s", command=_cmdline(cmd))

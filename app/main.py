@@ -10,12 +10,13 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import audit, config_store, datastudio, modelstudio, paths, services, trainstudio
+from . import (annotstudio, audit, config_store, corpusstudio, datastudio,
+               modelstudio, paths, services, trainstudio)
 
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
 app = FastAPI(title="IDEA · SoulAgent Workbench", version="0.2.0")
@@ -331,6 +332,84 @@ def train_export(body: dict):
                                    quant=str(body.get("quant") or "Q4_K_M"))
     if out.get("ok"):
         audit.record("train.export", str(out.get("job", {}).get("id") or ""), actor="workbench")
+    return out
+
+
+# ------------------------------------------------------------------ 语料清洗
+@app.post("/api/wb/corpus/jobs", dependencies=[Depends(require_token)])
+def corpus_new_job(body: dict | None = None):
+    return corpusstudio.new_job(name=str((body or {}).get("name") or ""))
+
+
+@app.get("/api/wb/corpus/jobs", dependencies=[Depends(require_token)])
+def corpus_jobs():
+    return corpusstudio.list_jobs()
+
+
+@app.get("/api/wb/corpus/job/{job_id}", dependencies=[Depends(require_token)])
+def corpus_job(job_id: str):
+    return corpusstudio.get_job(job_id)
+
+
+@app.delete("/api/wb/corpus/job/{job_id}", dependencies=[Depends(require_token)])
+def corpus_job_delete(job_id: str):
+    return corpusstudio.delete_job(job_id)
+
+
+@app.post("/api/wb/corpus/job/{job_id}/upload", dependencies=[Depends(require_token)])
+async def corpus_upload(job_id: str, file: UploadFile = File(...)):
+    data = await file.read()
+    return corpusstudio.save_upload(job_id, file.filename or "upload.bin", data)
+
+
+@app.post("/api/wb/corpus/job/{job_id}/parse", dependencies=[Depends(require_token)])
+def corpus_parse(job_id: str, body: dict | None = None):
+    body = body or {}
+    out = corpusstudio.parse_job(
+        job_id, me_names=body.get("me_names") or "我,me,assistant,小鱼,她",
+        you_names=body.get("you_names") or "你,user,用户,对方")
+    if out.get("ok"):
+        audit.record("corpus.parse", job_id, actor="workbench",
+                     meta={"total": (out.get("stats") or {}).get("total")})
+    return out
+
+
+@app.get("/api/wb/corpus/job/{job_id}/items", dependencies=[Depends(require_token)])
+def corpus_items(job_id: str):
+    return corpusstudio.items_view(job_id)
+
+
+@app.post("/api/wb/corpus/job/{job_id}/save", dependencies=[Depends(require_token)])
+def corpus_save(job_id: str, body: dict):
+    out = corpusstudio.save_dataset(
+        job_id, body.get("selected_ids") or [],
+        format=str(body.get("format") or "messages"),
+        window=int(body.get("window") or 6),
+        split=float(body.get("split") or 0.0),
+        out_name=str(body.get("out_name") or ""),
+        system=str(body.get("system") or ""))
+    if out.get("ok"):
+        audit.record("corpus.save", str(out.get("out") or ""), actor="workbench")
+    return out
+
+
+# ------------------------------------------------------------------ 用户标注
+@app.get("/api/wb/annot/source/{job_id}", dependencies=[Depends(require_token)])
+def annot_source(job_id: str, window: int = Query(default=6, ge=1, le=20)):
+    return annotstudio.source_view(job_id, window=window)
+
+
+@app.post("/api/wb/annot/save", dependencies=[Depends(require_token)])
+def annot_save(body: dict):
+    out = annotstudio.save_annotations(
+        body.get("source"), body.get("annotations") or [],
+        window=int(body.get("window") or 6),
+        out_name=str(body.get("out_name") or ""),
+        min_score=int(body.get("min_score") or 0),
+        split=float(body.get("split") if body.get("split") is not None else 0.1),
+        system=str(body.get("system") or ""))
+    if out.get("ok"):
+        audit.record("annot.save", str(out.get("out") or ""), actor="workbench")
     return out
 
 

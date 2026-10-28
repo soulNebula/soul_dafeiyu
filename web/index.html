@@ -27,6 +27,7 @@
     <button class="ab-item" data-view="config" title="配置">🎛<span>配置</span></button>
     <button class="ab-item" data-view="data" title="数据工作室">🗄<span>数据</span></button>
     <button class="ab-item" data-view="train" title="训练工厂">🧪<span>训练</span></button>
+    <button class="ab-item" data-view="corpus" title="语料清洗">🧹<span>语料</span></button>
     <button class="ab-item" data-view="models" title="模型中心">🧰<span>模型</span></button>
   </nav>
 
@@ -139,6 +140,45 @@
       </div>
     </section>
 
+    <section id="view-corpus" class="view">
+      <div class="page-head"><div><h2>语料清洗</h2><p class="muted">上传聊天/文档 → 清洗成对话 → 勾选保留 → 保存为训练数据集。</p></div><button class="btn" id="corpus-refresh">刷新</button></div>
+      <div class="panel">
+        <div class="panel-head"><h3>任务</h3><div class="head-tools"><button class="btn primary small" id="corpus-new">新建任务</button><span class="muted small" id="corpus-jobs-count"></span></div></div>
+        <div id="corpus-jobs" class="list"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>① 上传</h3><span class="muted small" id="corpus-current"></span></div>
+        <div id="corpus-drop" class="corpus-drop">拖拽文件到这里，或 <label class="corpus-pick">选择文件<input type="file" id="corpus-files" multiple accept=".txt,.md,.json,.jsonl,.csv,.png,.jpg,.jpeg,.webp,.bmp"></label>
+          <div class="muted small">支持 txt/md/json/jsonl/csv/图片；先新建任务再上传。</div></div>
+        <div class="actions"><button class="btn" id="corpus-parse" disabled>开始清洗</button><span class="muted small" id="corpus-upload-hint"></span></div>
+        <div id="corpus-uploaded" class="corpus-uploaded muted small"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>② 清洗结果</h3><span class="muted small" id="corpus-stats"></span></div>
+        <div class="corpus-toolbar">
+          <button class="btn small" id="corpus-select-all">全选</button>
+          <button class="btn small" id="corpus-invert">反选</button>
+          <button class="btn small" data-corpus-role="">全部</button>
+          <button class="btn small" data-corpus-role="you">仅你</button>
+          <button class="btn small" data-corpus-role="me">仅我</button>
+          <input id="corpus-search" placeholder="搜索文本…" style="width:220px">
+          <span class="muted small" id="corpus-selected-count">已选 0 条</span>
+        </div>
+        <div id="corpus-items" class="corpus-items"><div class="muted small">先上传文件并开始清洗。</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>③ 保存为数据集</h3></div>
+        <div class="form-grid">
+          <label class="field"><span>格式</span><select id="corpus-format"><option value="messages">messages 统一对话</option><option value="instruction">instruction 指令对</option></select></label>
+          <label class="field"><span>窗口(turn)</span><input id="corpus-window" type="number" value="6" min="1"></label>
+          <label class="field"><span>验证集比例</span><input id="corpus-split" type="number" value="0.05" min="0" max="0.9" step="0.01"></label>
+          <label class="field"><span>输出名（可空）</span><input id="corpus-out"></label>
+        </div>
+        <div class="actions"><button class="btn primary" id="corpus-save">保存为数据集</button><span class="muted small" id="corpus-save-hint"></span></div>
+        <div id="corpus-result" class="muted small"></div>
+      </div>
+    </section>
+
     <section id="view-models" class="view">
       <div class="page-head"><div><h2>模型中心</h2><p class="muted">清单（格式/来源/用途）· 离线导入 · 在线下载 · 回收站删除。</p></div><button class="btn" id="models-refresh">刷新</button></div>
       <div class="cards" id="models-cards"></div>
@@ -179,7 +219,8 @@
 </div>
 
 <div id="terminal" class="terminal">
-  <div class="terminal-head"><b>终端</b><span id="terminal-target" class="muted small"></span><button class="btn small" id="terminal-clear">清空</button><button class="btn small" id="terminal-close">收起</button></div>
+  <div id="terminal-resize" class="terminal-resize" title="拖动调整宽度；双击恢复默认"></div>
+  <div class="terminal-head"><b>终端</b><span id="terminal-target" class="muted small"></span><button class="btn small" id="terminal-clear">清空</button><button class="btn small" id="terminal-close">关闭</button></div>
   <pre id="terminal-out"></pre>
 </div>
 <div id="toast" class="toast"></div>
@@ -190,6 +231,8 @@ const S = {
   view: new URLSearchParams(location.search).get('view') || 'welcome',
   services: [], overview: null, data: { dbs: [], db: '', table: '', page: 1, pages: 1 },
   train: { datasets: [], jobs: [], selected: '', selectedJob: '' }, models: null, cfg: null,
+  corpus: { jobs: [], job: null, files: [], parsed: null, selected: new Set(),
+            filterRole: '', search: '', result: null, busy: '', error: '' },
   timer: null, dlTimer: null, dlTab: 'direct', dlJob: '', modelFilter: 'all'
 };
 const $ = (sel, root=document) => root.querySelector(sel);
@@ -227,15 +270,32 @@ async function api(path, opts={}) {
   setConn(true);
   return data;
 }
+const TERM_KEY = 'idea_terminal_width';
+const TERM_MIN = 320;
+const TERM_MAX = 760;
+const TERM_DEFAULT = 420;
+function termClamp(width) {
+  return Math.max(TERM_MIN, Math.min(TERM_MAX, Math.round(width)));
+}
+function termWidthInit() {
+  let stored = 0;
+  try { stored = parseInt(localStorage.getItem(TERM_KEY), 10) || 0; } catch (e) { stored = 0; }
+  document.documentElement.style.setProperty('--term-width', termClamp(stored || TERM_DEFAULT) + 'px');
+}
+function openTerminal(open) {
+  const panel = $('#terminal');
+  panel.classList.toggle('open', open);
+  document.body.classList.toggle('term-open', open);
+}
 function term(text, target='') {
   const out = $('#terminal-out');
   out.textContent += (out.textContent ? '\n' : '') + text;
   out.scrollTop = out.scrollHeight;
   $('#terminal-target').textContent = target;
-  $('#terminal').classList.add('open');
+  openTerminal(true);
 }
 function showView(name) {
-  const allowed = ['welcome','overview','services','config','data','train','models'];
+  const allowed = ['welcome','overview','services','config','data','train','corpus','models'];
   if (!allowed.includes(name)) name = 'welcome';
   S.view = name;
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
@@ -251,6 +311,7 @@ function showView(name) {
   if (name === 'config') loadConfig();
   if (name === 'data') loadDatabases();
   if (name === 'train') loadTrain();
+  if (name === 'corpus') loadCorpus();
   if (name === 'models') loadModels();
 }
 function connect() {
@@ -451,6 +512,182 @@ async function exportChatDataset() {
     $('#train-export-result').textContent = '导出失败：' + err.message;
     toast(err.message, 'err');
   } finally { btn.disabled = false; }
+}
+async function loadCorpus() {
+  const c = S.corpus;
+  try {
+    const d = await api('/api/wb/corpus/jobs');
+    c.jobs = d.items || d.jobs || [];
+    c.error = '';
+    if (!c.job && c.jobs.length) c.job = c.jobs[0];
+    const id = c.job && (c.job.id || c.job.job_id);
+    if (id && c.jobs.length) {
+      const fresh = c.jobs.find(j => (j.id || j.job_id) === id);
+      if (fresh) c.job = fresh;
+    }
+  } catch (e) {
+    c.error = String(e.message || '').startsWith('后端未就绪') ? e.message : ('后端未就绪：' + e.message);
+    c.jobs = [];
+  }
+  renderCorpusPage();
+}
+function corpusId(job) { return job ? String(job.id || job.job_id || '') : ''; }
+function corpusFiles(job) { return (job && (job.files || job.uploads)) || []; }
+function corpusParsedItems() { return (S.corpus.parsed && (S.corpus.parsed.items || S.corpus.parsed.rows)) || []; }
+function corpusRole(item) {
+  const role = String(item.role || item.speaker || item.who || '').toLowerCase();
+  if (role === 'me' || role === 'assistant' || role === '我' || role === 'agent') return 'me';
+  if (role === 'you' || role === 'user' || role === '你' || role === 'human') return 'you';
+  return 'you';
+}
+function corpusVisibleItems() {
+  const c = S.corpus;
+  const needle = (c.search || '').toLowerCase();
+  return corpusParsedItems().filter(item => {
+    if (c.filterRole && corpusRole(item) !== c.filterRole) return false;
+    if (needle && !String(item.text || item.content || '').toLowerCase().includes(needle)) return false;
+    return true;
+  });
+}
+function corpusSelectedCount() {
+  const items = corpusParsedItems();
+  return items.filter(item => S.corpus.selected.has(String(item.id ?? item.index ?? ''))).length;
+}
+function renderCorpusPage() {
+  const c = S.corpus;
+  const jobs = c.jobs || [];
+  const cid = corpusId(c.job);
+  $('#corpus-jobs-count').textContent = jobs.length + ' 个';
+  $('#corpus-jobs').innerHTML = jobs.map(j => {
+    const id = corpusId(j);
+    return `<div class="list-row ${cid === id ? 'selected' : ''}" data-corpus-job="${esc(id)}">
+      <span><b>${esc(j.name || j.out_name || id)}</b> <span class="muted small">${esc(j.status || '')}</span></span>
+      <span class="row-tools"><span class="muted small">${esc((corpusFiles(j).length || j.uploaded || 0) + ' 个文件')}</span>
+        <button class="btn small danger" data-corpus-del="${esc(id)}">删除</button></span></div>`;
+  }).join('') || '<div class="muted small">暂无任务；点「新建任务」开始。</div>';
+  $('#corpus-current').textContent = c.job ? ('当前任务：' + (c.job.name || cid)) : '未选择任务';
+  $('#corpus-upload-hint').textContent = c.busy === 'upload' ? '上传中…' : (cid ? '' : '先新建任务');
+  $('#corpus-parse').disabled = !cid || c.busy === 'upload' || c.busy === 'parse';
+  $('#corpus-uploaded').innerHTML = corpusFiles(c.job).map(f => `<div>${esc(f.name || f.filename || f.path || f)} · ${esc(f.type || '')} · ${fmtSize(f.size)}</div>`).join('') || (cid ? '还没有上传文件' : '');
+  const items = corpusVisibleItems();
+  $('#corpus-stats').textContent = c.parsed ? `总 ${c.parsed.total ?? c.parsed.count ?? corpusParsedItems().length} 条 · 你 ${c.parsed.you ?? c.parsed.user_count ?? '?'} · 我 ${c.parsed.me ?? c.parsed.assistant_count ?? '?'}` : '';
+  $('#corpus-selected-count').textContent = '已选 ' + corpusSelectedCount() + ' 条';
+  $('#corpus-items').innerHTML = items.length ? items.map(item => {
+    const id = String(item.id ?? item.index ?? '');
+    const role = corpusRole(item);
+    return `<label class="corpus-item ${c.selected.has(id) ? 'selected' : ''}" data-corpus-item="${esc(id)}">
+      <input type="checkbox" data-corpus-check="${esc(id)}" ${c.selected.has(id) ? 'checked' : ''}>
+      <span class="role-badge ${role}">${role === 'me' ? '我' : '你'}</span>
+      <span class="corpus-text">${esc(item.text || item.content || '')}</span></label>`;
+  }).join('') : '<div class="muted small">没有匹配的条目。</div>';
+  $('#corpus-result').innerHTML = c.result ? `已保存：${esc(c.result.path || c.result.out || '')} · ${c.result.rows ?? ''} 行
+    <button class="btn small primary" id="corpus-go-train">去训练</button>` : '';
+  const errorBox = c.error ? `<div class="card"><div class="error-text">${esc(c.error)}</div></div>` : '';
+  const first = $('#view-corpus');
+  const existing = first.querySelector('.corpus-error');
+  if (existing) existing.remove();
+  if (errorBox) first.insertAdjacentHTML('afterbegin', `<div class="corpus-error">${errorBox}</div>`);
+  $$('[data-corpus-job]').forEach(row => row.onclick = (e) => {
+    if (e.target.closest('[data-corpus-del]')) return;
+    const id = row.dataset.corpusJob;
+    S.corpus.job = jobs.find(j => corpusId(j) === id) || { id };
+    S.corpus.files = corpusFiles(S.corpus.job);
+    S.corpus.parsed = null; S.corpus.selected = new Set(); S.corpus.result = null;
+    renderCorpusPage();
+  });
+  $$('[data-corpus-del]').forEach(btn => btn.onclick = async (e) => {
+    e.stopPropagation();
+    if (!confirm('删除这个语料任务？')) return;
+    try {
+      await api('/api/wb/corpus/job/' + encodeURIComponent(btn.dataset.corpusDel), { method: 'DELETE' });
+      if (corpusId(S.corpus.job) === btn.dataset.corpusDel) { S.corpus.job = null; S.corpus.parsed = null; }
+      await loadCorpus();
+    } catch (err) { toast('删除失败：' + err.message, 'err'); }
+  });
+  $$('[data-corpus-check]').forEach(box => box.onchange = () => {
+    const id = box.dataset.corpusCheck;
+    if (box.checked) S.corpus.selected.add(id); else S.corpus.selected.delete(id);
+    renderCorpusPage();
+  });
+  $$('[data-corpus-item]').forEach(row => row.onclick = (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    const box = row.querySelector('input');
+    box.checked = !box.checked; box.onchange();
+  });
+  const goTrain = $('#corpus-go-train');
+  if (goTrain) goTrain.onclick = () => { showView('train'); loadTrain(); };
+  $$('[data-corpus-role]').forEach(btn => btn.onclick = () => { S.corpus.filterRole = btn.dataset.corpusRole; renderCorpusPage(); });
+}
+async function createCorpusJob() {
+  const c = S.corpus;
+  try {
+    const d = await api('/api/wb/corpus/jobs', { method: 'POST', body: { name: '语料 ' + new Date().toLocaleString('zh-CN') } });
+    c.job = d.job || d.item || { id: d.id || d.job_id };
+    c.files = []; c.parsed = null; c.selected = new Set(); c.result = null; c.error = '';
+    toast('已创建任务 ' + corpusId(c.job), 'ok');
+    await loadCorpus();
+  } catch (e) { c.error = '后端未就绪：' + e.message; renderCorpusPage(); }
+}
+async function uploadCorpusFiles(fileList) {
+  const c = S.corpus;
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  if (!c.job) { await createCorpusJob(); if (!c.job) return; }
+  const cid = corpusId(c.job);
+  if (!cid) { toast('任务 id 缺失', 'err'); return; }
+  c.busy = 'upload'; renderCorpusPage();
+  const added = [];
+  try {
+    for (const file of files) {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/upload', {
+        method: 'POST', headers: { 'X-Admin-Token': S.token }, body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) throw new Error(data.detail || data.error || ('HTTP ' + res.status));
+      added.push({ name: file.name, type: file.type || file.name.split('.').pop(), size: file.size });
+    }
+    c.files = [...corpusFiles(c.job), ...added];
+    c.error = '';
+    toast('已上传 ' + added.length + ' 个文件', 'ok');
+    await loadCorpus();
+  } catch (e) {
+    c.error = '上传失败：' + e.message; renderCorpusPage();
+  } finally { c.busy = ''; renderCorpusPage(); }
+}
+async function parseCorpus() {
+  const c = S.corpus;
+  const cid = corpusId(c.job);
+  if (!cid) { toast('先新建/选择任务', 'err'); return; }
+  c.busy = 'parse'; c.error = ''; renderCorpusPage();
+  try {
+    const d = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/parse', { method: 'POST', body: {} });
+    c.parsed = d;
+    c.selected = new Set(corpusParsedItems().map(item => String(item.id ?? item.index ?? '')));
+    toast('清洗完成：' + corpusParsedItems().length + ' 条', 'ok');
+  } catch (e) { c.error = '后端未就绪：' + e.message; }
+  finally { c.busy = ''; renderCorpusPage(); }
+}
+async function saveCorpus() {
+  const c = S.corpus;
+  const cid = corpusId(c.job);
+  if (!cid) { toast('先新建/选择任务', 'err'); return; }
+  if (!c.selected.size) { toast('至少勾选一条', 'err'); return; }
+  c.busy = 'save'; renderCorpusPage();
+  try {
+    const d = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/save', {
+      method: 'POST', body: {
+        selected_ids: [...c.selected],
+        format: $('#corpus-format').value,
+        window: parseInt($('#corpus-window').value, 10) || 6,
+        split: parseFloat($('#corpus-split').value) || 0,
+        out_name: $('#corpus-out').value.trim(),
+      }});
+    c.result = d.result || d;
+    toast('已保存数据集：' + (c.result.path || c.result.out || ''), 'ok');
+  } catch (e) { c.error = '保存失败：' + e.message; }
+  finally { c.busy = ''; renderCorpusPage(); }
 }
 async function loadTrain() {
   try {
@@ -687,9 +924,45 @@ $('#connect').onclick = connect;
 $('#token').addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
 $$('.ab-item').forEach(b => b.onclick = () => showView(b.dataset.view));
 $$('[data-go]').forEach(b => b.onclick = () => showView(b.dataset.go));
-$('#terminal-toggle').onclick = () => $('#terminal').classList.toggle('open');
-$('#terminal-close').onclick = () => $('#terminal').classList.remove('open');
+termWidthInit();
+$('#terminal-toggle').onclick = () => openTerminal(!$('#terminal').classList.contains('open'));
+$('#terminal-close').onclick = () => openTerminal(false);
 $('#terminal-clear').onclick = () => { $('#terminal-out').textContent = ''; };
+(() => {
+  const handle = $('#terminal-resize');
+  let dragging = false;
+  const setWidth = (px, save) => {
+    const width = termClamp(px);
+    document.documentElement.style.setProperty('--term-width', width + 'px');
+    if (save) { try { localStorage.setItem(TERM_KEY, String(width)); } catch (e) {} }
+    return width;
+  };
+  handle.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    dragging = true;
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add('term-resizing');
+  });
+  handle.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    setWidth(window.innerWidth - event.clientX, false);
+  });
+  const stop = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('term-resizing');
+    setWidth(window.innerWidth - event.clientX, true);
+  };
+  handle.addEventListener('pointerup', stop);
+  handle.addEventListener('pointercancel', stop);
+  handle.addEventListener('dblclick', () => setWidth(TERM_DEFAULT, true));
+})();
+if (new URLSearchParams(location.search).get('term') === '1') {
+  setTimeout(() => {
+    openTerminal(true);
+    if (!$('#terminal-out').textContent) term('# 终端（右侧停靠；拖动左边缘调宽度）', '截图');
+  }, 300);
+}
 $('#ov-refresh').onclick = loadOverview;
 $('#svc-refresh').onclick = loadServices;
 $('#cfg-save').onclick = saveConfig;
@@ -700,6 +973,27 @@ $('#db-prev').onclick = () => { if (S.data.table && S.data.page > 1) loadRows(S.
 $('#db-next').onclick = () => { if (S.data.table && S.data.page < S.data.pages) loadRows(S.data.table, S.data.page + 1); };
 $('#db-run').onclick = runSql;
 $('#db-backup').onclick = backupDb;
+$('#corpus-refresh').onclick = loadCorpus;
+$('#corpus-new').onclick = createCorpusJob;
+$('#corpus-parse').onclick = parseCorpus;
+$('#corpus-save').onclick = saveCorpus;
+$('#corpus-files').addEventListener('change', e => uploadCorpusFiles(e.target.files));
+$('#corpus-select-all').onclick = () => { S.corpus.selected = new Set(corpusVisibleItems().map(item => String(item.id ?? item.index ?? ''))); renderCorpusPage(); };
+$('#corpus-invert').onclick = () => {
+  corpusVisibleItems().forEach(item => {
+    const id = String(item.id ?? item.index ?? '');
+    if (S.corpus.selected.has(id)) S.corpus.selected.delete(id); else S.corpus.selected.add(id);
+  });
+  renderCorpusPage();
+};
+$('#corpus-search').addEventListener('input', e => { S.corpus.search = e.target.value.trim(); renderCorpusPage(); });
+(() => {
+  const drop = $('#corpus-drop');
+  if (!drop) return;
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); }));
+  drop.addEventListener('drop', e => uploadCorpusFiles(e.dataTransfer.files));
+})();
 $('#train-refresh').onclick = loadTrain;
 $('#train-export-btn').onclick = exportChatDataset;
 $$('[data-train-source]').forEach(b => b.onclick = () => {

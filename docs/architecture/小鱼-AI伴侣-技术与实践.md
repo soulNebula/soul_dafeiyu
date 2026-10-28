@@ -374,9 +374,9 @@ E:\agent\llama\cuda\llama-server.exe -m E:\agent\models\Qwen2.5-VL-3B-Instruct-G
   -ngl 99 --port 8125 -c 4096 -np 1 --jinja
 
 # 数据与训练
-python tools/train/export_chat.py --all-contacts --limit 400 --out E:/agent/datasets/chat.jsonl
+python tools/train/export_chat.py --all-contacts --limit 400 --out <AGENT_HOME>/datasets/chat.jsonl
 python -m agi.soul.dataset --limit 2000 --real --out agi/soul/data/soul_sft_v1.jsonl
-python tools/train/sft_train.py --data E:/agent/datasets/chat.jsonl --out E:/agent/output/lora --steps 10
+python tools/train/sft_train.py --data <AGENT_HOME>/datasets/chat.jsonl --out <AGENT_HOME>/output/lora --steps 10
 
 # 质量
 python scripts/agentb_verify.py --json docs/agentb_verify_result.json

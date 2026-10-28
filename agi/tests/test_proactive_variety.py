@@ -317,12 +317,13 @@ def test_worker_splits_overlong_bubble_into_separate_sends(monkeypatch, contact_
     assert all(event["intent_kind"] == "share" for event in events)
 
 
-def test_worker_legacy_payload_without_kind_is_untouched(monkeypatch, contact_db):
+def test_worker_legacy_payload_without_kind_is_polished(monkeypatch, contact_db):
     """无 kind 的旧 payload 原样透传（P0-2 的既有测试/旧调用不回归）。"""
     monkeypatch.setattr(ticker, "run_once", lambda *a, **k: _fake_tick(None, ["在干嘛"]))
     g = FakeGateway()
     proactive_worker.run_cycle(g, client=object(), now=100.0)
-    assert [item[1] for item in g.sent] == ["在干嘛"]
+    from agi.selflearn import proactive as _pro
+    assert [item[1] for item in g.sent] == [_pro.polish_outbound("在干嘛")]
 
 
 def test_record_event_persists_kind_and_migrates_old_table(tmp_path):

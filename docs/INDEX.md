@@ -1,77 +1,105 @@
 # 文档总入口（docs/INDEX）
 
-> **唯一入口**：找文档先来这里。`docs/STATUS.md` 给可复现的当前状态，
-> `docs/ARCHITECTURE.md` 给按代码现状写的系统架构，`docs/plans/` 给迭代计划与实现记录。
-> 根目录没有平行 plans/；旧文档在 `docs/archive/`，只作历史参考。
+> **唯一入口**：找文档先来这里。`docs/quality/STATUS.md` 给可复现的当前状态，
+> `docs/architecture/ARCHITECTURE.md` 给按代码现状写的系统架构，`docs/plans/` 给迭代计划与实现记录。
+> 目录职责见 [`STRUCTURE.md`](STRUCTURE.md)。
 
-最后更新：2026-10-29（架构收敛 + 文档=事实）
+最后更新：2026-10-29（文档目录整理）
 
 ## 1. 现役文档（active）
 
+### 架构与设计
+
 | 文档 | 用途 | 什么时候看 |
 | --- | --- | --- |
-| [`STATUS.md`](STATUS.md) | **可复现测试数字（collect/实测两口径）、端口清单、里程碑、已知问题** | 每次开工、交接、写报告前 |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | 系统架构（双后端、801/802 主链、发送闸门、主动链登记、数据层） | 改接入/对话/主动/数据层前 |
-| [`plans/README.md`](plans/README.md) | **43 份**计划/记录的合并索引（15–60，缺 17/27/55） | 找方案、复盘、实施细节 |
-| [`specs/README.md`](specs/README.md) | 规格/需求（00–14，含 TrainLab 10/Workbench 11） | 查产品语义与边界 |
-| [`README-usage.md`](README-usage.md) | 使用与运维说明（安装、启动、测试、常见问题） | 部署/运行/排查 |
-| [`PATHS.md`](PATHS.md) | 数据根/模型/日志路径解析与迁移（AGENT_HOME / paths.json） | 换机器/换盘/排路径问题 |
-| [`常见问题.md`](常见问题.md) | FAQ | 用户问「为什么/怎么办」 |
-| [`网页端使用说明.md`](网页端使用说明.md) | 控制台/网页端使用 | 操作 802 控制台 |
-| [`风控与合规说明.md`](风控与合规说明.md) | 风险边界与合规 | 对外说明/安全评审 |
-| [`OPENSOURCE.md`](OPENSOURCE.md) | 开源发布流程与数据剥离（declared vs 实际能力一致） | 发版/开源前 |
-| [`微信接入与自主能力_路线图.md`](微信接入与自主能力_路线图.md) | 微信接入与自主能力路线（历史路线，现役参考） | 讨论接入/主动方向 |
-| [`../legacy/README.md`](../legacy/README.md) | **死代码归档清单与恢复方式**（只 mv 不删） | 想动「看起来没人用」的代码前 |
-| [`agent-b/SCORECARD.md`](agent-b/SCORECARD.md) | **质量维度评分卡**：9 维改前/改后分数 + 逐条证据命令 + 残余风险 | 验收、答辩、交接 |
-| [`agent-b/CHANGES.md`](agent-b/CHANGES.md) | **本轮改动说明**：提交清单、P0/P1/P2 映射、行为变化、部署后本人动作、残留风险 | 合并前评审、部署前必读 |
-| [`../README.md`](../README.md) | 项目首页/快速开始/能力边界（已实现·未完成·外部依赖） | 第一次进项目 |
+| [`architecture/ARCHITECTURE.md`](architecture/ARCHITECTURE.md) | 系统架构（双后端、801/802 主链、发送闸门、主动链登记、数据层） | 改接入/对话/主动/数据层前 |
+| [`architecture/README.md`](architecture/README.md) | 设计规格索引（00–14，含 TrainLab 10 / Workbench 11） | 查产品语义与边界 |
+| [`architecture/PLAN.md`](architecture/PLAN.md) | 设计规格的施工图入口 | 实现前对照规格 |
+| [`architecture/SPEC.md`](architecture/SPEC.md) | 项目规格总表 | 查完整需求/接口 |
+| [`architecture/小鱼-AI伴侣-技术与实践.md`](architecture/小鱼-AI伴侣-技术与实践.md) | 项目技术文章（设计、实现、实测数字） | 对外介绍/答辩 |
+| [`architecture/architecture.png`](architecture/architecture.png) | 架构图 | 快速理解分层 |
+
+### 使用与运维（guides）
+
+| 文档 | 用途 |
+| --- | --- |
+| [`guides/README-usage.md`](guides/README-usage.md) | 使用与运维说明（安装、启动、测试、常见问题） |
+| [`guides/PATHS.md`](guides/PATHS.md) | 数据根/模型/日志路径解析与迁移 |
+| [`guides/常见问题.md`](guides/常见问题.md) | FAQ |
+| [`guides/网页端使用说明.md`](guides/网页端使用说明.md) | 控制台/网页端操作 |
+| [`guides/风控与合规说明.md`](guides/风控与合规说明.md) | 风险边界与合规 |
+| [`guides/微信接入与自主能力_路线图.md`](guides/微信接入与自主能力_路线图.md) | 微信接入与自主能力路线（历史路线，现役参考） |
+| [`guides/OPENSOURCE.md`](guides/OPENSOURCE.md) | 开源发布流程与数据剥离 |
+| [`guides/MULTIGPU.md`](guides/MULTIGPU.md) | 多卡设备接入方案（方案稿） |
+
+### 质量与状态（quality）
+
+| 文档 | 用途 |
+| --- | --- |
+| [`quality/STATUS.md`](quality/STATUS.md) | **可复现测试数字、端口清单、里程碑、已知问题** |
+| [`quality/status_measured.json`](quality/status_measured.json) | 状态工具落盘的实测数字（唯一来源） |
+| [`quality/agentb_verify_result.json`](quality/agentb_verify_result.json) | Agent B 全量终验结果 |
+| [`agent-b/SCORECARD.md`](agent-b/SCORECARD.md) | 质量维度评分卡（按约定保留在 agent-b/ 原样） |
+| [`agent-b/CHANGES.md`](agent-b/CHANGES.md) | 本轮改动说明与部署前动作 |
+
+### 计划（plans）
+
+| 文档 | 用途 |
+| --- | --- |
+| [`plans/README.md`](plans/README.md) | **43 份**计划/记录的合并索引（15–60，缺 17/27/55） |
+| `plans/15-…` ~ `plans/60-…` | 决策、执行记录、实现/验收细节 |
+
+### 项目根文档
+
+| 文档 | 用途 |
+| --- | --- |
+| [`../README.md`](../README.md) | 项目首页/快速开始 |
+| [`../SECURITY.md`](../SECURITY.md) | 安全披露 |
+| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | 贡献指南 |
+| [`../legacy/README.md`](../legacy/README.md) | 死代码归档清单与恢复方式 |
 
 ## 2. 工具（文档事实的复算入口）
 
 | 命令 | 作用 |
 | --- | --- |
-| `python scripts/agentb_verify.py` | **全量终验**：两套测试 + 静态检查（链接/可移植性/密钥/架构）+ 生产文件未被测试污染，输出「套件\|通过\|失败\|跳过\|耗时\|结果」证据表；`--quick` 跳过 agi/tests |
-| `python tools/status_report.py` | 现场算测试 collect 数 / 代码规模 / 归档量；`--from-agentb <json>` 导入终验数字 |
-| `python tools/status_report.py --run` | 真跑两套测试并回填 `STATUS.md` 的 `STATUS:AUTO` 区块 |
-| `python tools/status_report.py --check` | 文档数字过期则退出 1 |
-| `python tools/check_architecture.py` | 死代码回归 / agi import 环 / 行数预算 / 分层违例（退出 0 = 通过） |
-| `python tools/check_docs_links.py` | `docs/` 内相对链接断链检查（断链退出 1） |
-| `python tools/check_secrets.py` | 提交前密钥扫描（CI 与 release_check 都跑） |
-| `python tools/check_portability.py` | 硬编码本机路径/绝对路径扫描 |
-| `python tools/rotate_secrets.py` | 把明文密钥从 `config.json`/`web_config.json` 迁到 `agi/data/secrets.json` 或环境变量（默认 dry-run） |
-| `python tools/prune_chat_logs.py` | 聊天/媒体留存 TTL 清理（默认 dry-run，`--apply` 才删） |
-| `python scripts/release_check.py` | 发布闸门（必备文件 + 密钥 + 大文件 + 全量离线测试） |
-
-`docs/status_measured.json` 是 `status_report.py --run` / `--from-agentb` 的落盘结果（实测数字的唯一来源），
-`STATUS.md` 自动区块由它生成，**不要手改**；命令与口径在 `README.md` 第 6 节和 `STATUS.md` 第 0/6 节。
+| `python scripts/agentb_verify.py` | 全量终验：两套测试 + 静态检查，输出证据表 |
+| `python tools/status_report.py` | 现场算 collect 数 / 代码规模 / 归档量；`--run` 真跑测试；`--check` 检查过期 |
+| `python tools/check_architecture.py` | 死代码回归 / import 环 / 行数预算 / 分层检查 |
+| `python tools/check_docs_links.py` | `docs/` 内相对链接断链检查 |
+| `python tools/check_secrets.py` | 提交前密钥扫描 |
+| `python tools/check_portability.py` | 硬编码本机路径扫描 |
+| `python scripts/release_check.py` | 发布闸门（必备文件 + 密钥 + 大文件 + 离线测试） |
 
 ## 3. 历史/归档（archived，仅参考）
 
 | 文档 | 说明 |
 | --- | --- |
-| [`archive/20261028-docs-snapshot/`](archive/20261028-docs-snapshot/) | **2026-10-28 收口前全量快照**（docs + 根 plans + agi 根笔记 + MANIFEST） |
-| [`archive/agi-notes/`](archive/agi-notes/) | 原根目录 `agi/00-14*.md` 等笔记（已从 `agi/` 移出，避免和 specs 双份口径） |
-| [`archive/README-legacy.md`](archive/README-legacy.md) | 旧 wx_box / 8081 网页版 README（历史，不再维护） |
-| [`archive/broken-links.md`](archive/broken-links.md) | 历史区域断链说明（active 已 0 断链） |
+| [`archive/20261028-docs-snapshot/`](archive/20261028-docs-snapshot/) | 2026-10-28 收口前全量快照 |
+| [`archive/agi-notes/`](archive/agi-notes/) | 原根目录 agi 笔记（历史，不再维护） |
 | [`archive/AGI-repo/`](archive/AGI-repo/) | 旧 AGI 仓库文档快照 |
-| [`sources/wx_box/`](sources/wx_box/) | wx_box 来源材料/旧代码/旧文档（参考，不进现役口径） |
-| [`analysis/`](analysis/) | AstrBot 等外部项目分析（历史调研） |
-| [`主动试跑复盘_20261024.md`](主动试跑复盘_20261024.md) | 一次试跑复盘（历史） |
-| [`../legacy/`](../legacy/) | 死代码归档（Demo 旧副本、dev 脚本、scratch、审计分片） |
+| [`archive/README-legacy.md`](archive/README-legacy.md) | 旧 wx_box / 8081 网页版 README |
+| [`archive/broken-links.md`](archive/broken-links.md) | 历史区域断链说明 |
+| [`archive/analysis/`](archive/analysis/) | 外部项目/仓库健康分析（历史调研） |
+| [`archive/sources/`](archive/sources/) | wx_box 来源材料/旧代码/旧文档（参考） |
+| [`archive/主动试跑复盘_20261024.md`](archive/主动试跑复盘_20261024.md) | 一次试跑复盘（历史） |
+| [`archive/WeChat-Hook-项目分析.md`](archive/WeChat-Hook-项目分析.md) | 旧微信 Hook 调研（历史） |
+| [`archive/示例_聊天记录.txt`](archive/示例_聊天记录.txt) | 示例聊天记录 |
+| `reports/archive/star/`（仓库根） | 根目录 star 6 份报告，移到仓库级归档 |
+| `reports/archive/analysis/`（仓库根） | 根目录 analysis 4 份审计报告，移到仓库级归档 |
 
 ## 4. 权威顺序（冲突时按此裁决）
 
-1. **当前状态/数字**：`docs/STATUS.md`（自动区块由工具生成，优先于任何手写数字）；
-2. **架构/端口/链路**：`docs/ARCHITECTURE.md`；
-3. **最新实现记录**：`docs/plans/` 中编号较大的实现/验收文档；
-4. **路线**：`docs/plans/19-整体开发路线.md` 与后续执行记录；
-5. **规格**：`docs/specs/`；
-6. **历史/来源**：`docs/archive/`、`docs/sources/` 只作背景，不覆写现役结论。
+1. **当前状态/数字**：`quality/STATUS.md`（自动区块优先于手写数字）；
+2. **架构/端口/链路**：`architecture/ARCHITECTURE.md`；
+3. **最新实现记录**：`plans/` 中编号较大的实现/验收文档；
+4. **路线**：`plans/19-整体开发路线.md` 与后续执行记录；
+5. **规格**：`architecture/` 下 00–14 与 SPEC；
+6. **历史/来源**：`archive/`、`reports/archive/` 只作背景，不覆写现役结论。
 
 ## 5. 维护规则
 
-- 新文档放 `docs/`（计划放 `docs/plans/`，规格放 `docs/specs/`），不要另起根目录平行 plans。
-- 新增/移动文档后跑 `python tools/check_docs_links.py --fix`，断链必须为 0。
-- 改代码链路后同步改 `ARCHITECTURE.md`，并在 `tests/test_architecture.py` 有对应断言时一起改。
-- `docs/archive/20261028-docs-snapshot/` 视为不可变快照，不再修改。
-- 测试数字只从 `STATUS.md` 自动区块取；README 里不写具体 passed 数，只写复算命令。
+- 新文档按 [`STRUCTURE.md`](STRUCTURE.md) 放：架构/设计进 `architecture/`，使用/运维进 `guides/`，测试/验收进 `quality/`，计划进 `plans/`，过时稿进 `archive/`。
+- `docs/agent-b/` 按约定保留原样，不移动、不改写。
+- 根目录只保留 `README.md`、`SECURITY.md`、`CONTRIBUTING.md` 与代码/配置；报告类杂物放 `reports/archive/`。
+- 移动/新增文档后跑 `python tools/check_docs_links.py --fix`，active 文档断链必须为 0。
+- 测试数字只从 `quality/STATUS.md` 自动区块取，README 不写具体 passed 数。

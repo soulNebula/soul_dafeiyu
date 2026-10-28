@@ -48,7 +48,7 @@ collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不
 微信消息经**双后端**（wxauto4 `WeChatReceiver`；或 `wx_core.MonitorBackend` 的 WCDB 直读 + OCR 回退）
 → 801 网关归一化/发送闸门 → `agi/selflearn/chat.py`（记忆/心情/内状态/人格/护栏）→ LLM（DeepSeek API 主）
 → `Gateway._send` → sender 子进程。自主层的主链是网关常驻主动循环，登记表见 `agi/proactive_registry.py`。
-详见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
+详见 [`ARCHITECTURE.md`](../architecture/ARCHITECTURE.md)。
 
 ## 3. 里程碑（简表；细节看对应 plans 编号）
 
@@ -62,9 +62,9 @@ collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不
 
 ## 4. 文档现状
 
-- **唯一入口**：[`INDEX.md`](INDEX.md)；计划看 [`plans/README.md`](plans/README.md)（**43 份**，15–60，缺 17/27/55）。
+- **唯一入口**：[`INDEX.md`](../INDEX.md)；计划看 [`plans/README.md`](../plans/README.md)（**43 份**，15–60，缺 17/27/55）。
 - 根 `plans/` 已并入 `docs/plans/`；旧文档在 `docs/archive/`（含 2026-10-28 全量快照）。
-- 死代码归档区：[`../legacy/README.md`](../legacy/README.md)（36 个归档文件 / 9078 行，只 mv 不删、可搬回；
+- 死代码归档区：[`../legacy/README.md`](../../legacy/README.md)（36 个归档文件 / 9078 行，只 mv 不删、可搬回；
   该 README 不计入；`tools/status_report.py` 统计整个目录会比它多 1 个文件）。
 - 链接检查：`python tools/check_docs_links.py`（`docs/` 内 0 断链才退出 0）。
 - 架构守卫：`python tools/check_architecture.py`（死代码回归 / import 环 / 行数预算 / 分层，0=通过）。

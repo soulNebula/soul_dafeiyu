@@ -22,7 +22,7 @@
 - **自己的情绪**：每轮判心情（`moodDelta` + 7 维情绪 + reason + confidence），基线 mood 70，
   mood 半衰期 3h、7 情绪 90min；心情影响说话方式与主动程度。
 - **人格**：`persona_layers.py` 三层 core（人工批准）/ evolving（证据累积+限速）/ relations。
-- **主动**：主链是网关常驻循环（见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 第 6 节），
+- **主动**：主链是网关常驻循环（见 [`docs/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md) 第 6 节），
   由 pacing（对等）× initiative（熟悉度/心情/信任）× 内驱力队列共同决定，不是定时群发。
 - **日记 / 周复盘**：每天 23:00 写第一人称日记；周日 23:30 后做周复盘并提炼进核心人格层。
 - **上网**：天气/新闻/网页搜索（`agi/integrations/web_lookup.py`）；B站素材摄取（见「外部依赖」）。
@@ -116,7 +116,7 @@ C:\Python314\python.exe tools/check_architecture.py
 C:\Python314\python.exe tools/check_docs_links.py
 ```
 
-真实测试数字以 [`docs/STATUS.md`](docs/STATUS.md) 的 `STATUS:AUTO` 区块为准（由
+真实测试数字以 [`docs/STATUS.md`](docs/quality/STATUS.md) 的 `STATUS:AUTO` 区块为准（由
 `scripts/agentb_verify.py` 全量终验 + `tools/status_report.py --from-agentb` 生成，不手抄）；
 本文只给方法和口径。安全与留存相关工具见 [`docs/INDEX.md`](docs/INDEX.md) 第 2 节
 （`rotate_secrets.py` 密钥迁移、`prune_chat_logs.py` 留存清理，二者默认 dry-run）。
@@ -136,14 +136,14 @@ SoulAgent/
 └── README.md
 ```
 
-模型与运行数据（GGUF/adapter/日志）放在 **`E:\agent`**，与项目目录分离；详见 [`docs/PATHS.md`](docs/PATHS.md)。
+模型与运行数据（GGUF/adapter/日志）放在 **`E:\agent`**，与项目目录分离；详见 [`docs/PATHS.md`](docs/guides/PATHS.md)。
 
 ## 8. 文档
 
-- [架构说明](docs/ARCHITECTURE.md)（双后端、801/802、发送闸门、主动链、数据层）
+- [架构说明](docs/architecture/ARCHITECTURE.md)（双后端、801/802、发送闸门、主动链、数据层）
 - [文档总入口](docs/INDEX.md)
-- [当前状态与可复现测试数字](docs/STATUS.md)
+- [当前状态与可复现测试数字](docs/quality/STATUS.md)
 - [迭代计划索引](docs/plans/README.md)
-- [使用与运维说明](docs/README-usage.md)
+- [使用与运维说明](docs/guides/README-usage.md)
 - [死代码归档清单](legacy/README.md)
 - [历史/归档](docs/archive/)

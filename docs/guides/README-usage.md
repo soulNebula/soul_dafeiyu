@@ -406,7 +406,7 @@ wx_box/
 | `ui/widgets.py` | 图片/表情包预览、动画 GIF 循环播放控件 |
 | `ui/dev_backend.py` | 假数据后端（演示/无微信环境自测） |
 | `tools/audit_compliance.py` | 合规静态审计（禁用 API + 微信目录写入检查） |
-| `tests/` | 离线测试（用 `tests/fixtures/` 样本，不依赖微信在线；当前实测以 [`STATUS.md`](STATUS.md) 为准（根 `tests/`：244 passed / 9 failed，失败为旧 `/agi` 页；`agi/tests` 见 STATUS），含 WCDB/db_source 单测） |
+| `tests/` | 离线测试（用 `tests/fixtures/` 样本，不依赖微信在线；当前实测以 [`STATUS.md`](../quality/STATUS.md) 为准（根 `tests/`：244 passed / 9 failed，失败为旧 `/agi` 页；`agi/tests` 见 STATUS），含 WCDB/db_source 单测） |
 
 ### 10.4 数据流与线程模型
 

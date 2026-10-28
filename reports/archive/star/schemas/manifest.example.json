@@ -1,0 +1,87 @@
+{
+  "_comment": "远程更新清单：安装器 / 修复 / 升级都读它。改它即可，不必重发安装包。",
+  "schema": 1,
+  "channel": "stable",
+  "generated_at": "2026-10-28T00:00:00+08:00",
+
+  "app": {
+    "version": "0.9.0",
+    "min_supported": "0.9.0",
+    "homepage": "https://github.com/<owner>/SoulAgent",
+    "notes_url": "https://github.com/<owner>/SoulAgent/releases"
+  },
+
+  "runtime": {
+    "python": {
+      "ver": "3.13.7",
+      "source": "python-build-standalone",
+      "urls": [
+        "https://mirror.example.invalid/cpython-3.13.7+20251001-x86_64-pc-windows-msvc-install_only.tar.gz",
+        "https://github.com/astral-sh/python-build-standalone/releases/download/..."
+      ],
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "est_size": 42000000
+    }
+  },
+
+  "wheels": {
+    "_comment": "按能力档位分组：A 只装 base；B 追加 db；C 追加 send；本地模型追加 local。",
+    "base": [
+      { "name": "Pillow-11.3.0-cp313-cp313-win_amd64.whl", "sha256": "...", "est_size": 2600000 },
+      { "name": "numpy-2.2.0-cp313-cp313-win_amd64.whl", "sha256": "...", "est_size": 16000000 }
+    ],
+    "db": [
+      { "name": "pycryptodome-3.21.0-cp313-cp313-win_amd64.whl", "sha256": "...", "est_size": 2100000 }
+    ],
+    "send": [
+      { "name": "wxauto4-41.1.7-py3-none-any.whl", "sha256": "...", "est_size": 180000 },
+      { "name": "pywin32-312-cp313-cp313-win_amd64.whl", "sha256": "...", "est_size": 9200000 }
+    ],
+    "local": [],
+    "train": []
+  },
+
+  "models": [
+    {
+      "id": "qwen25-05b-q4",
+      "tier": ["B", "C"],
+      "optional": true,
+      "filename": "soul_qwen25_05b_v1b-q4_k_m.gguf",
+      "dest": "gguf/",
+      "size": 421000000,
+      "sha256": "...",
+      "urls": [
+        "https://modelscope.cn/models/.../resolve/master/soul_qwen25_05b_v1b-q4_k_m.gguf",
+        "https://huggingface.co/.../resolve/main/..."
+      ]
+    },
+    {
+      "id": "local-3b-q4",
+      "tier": ["B", "C"],
+      "optional": true,
+      "filename": "qwen2.5-3b-instruct-q4_k_m.gguf",
+      "dest": "gguf/",
+      "size": 2020000000,
+      "sha256": "...",
+      "urls": ["https://modelscope.cn/models/..."]
+    }
+  ],
+
+  "llama": {
+    "_comment": "仅在用户选择本地模型档时需要；按显卡探测结果二选一。",
+    "cuda": { "url": "...", "sha256": "...", "est_size": 210000000 },
+    "cpu": { "url": "...", "sha256": "...", "est_size": 18000000 }
+  },
+
+  "compat": {
+    "wechat": ["4.1.15.56"],
+    "note": "仅上述版本实测；其他版本走降级模式并在控制台明确提示",
+    "windows": ["10", "11"],
+    "arch": ["x86_64"]
+  },
+
+  "migrations": {
+    "_comment": "setup.json / config.json 的版本迁移脚本，按 from→to 顺序执行。",
+    "1": ["migrate_v1_to_v2"]
+  }
+}

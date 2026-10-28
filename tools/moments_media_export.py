@@ -24,8 +24,9 @@ HOME = Path(__file__).resolve().parents[1]
 MOMENTS_DIR = HOME / "agi" / "data" / "moments"
 MEDIA_DIR = MOMENTS_DIR / "media"
 INDEX_PATH = MOMENTS_DIR / "media_index.json"
-WECHAT_FILES = Path(os.environ.get("WECHAT_FILES_DIR") or r"C:\Users\Administrator\Documents\xwechat_files")
-WX312 = os.environ.get("WX312_PYTHON") or r"E:\agent\venv_wx312\Scripts\python.exe"
+WECHAT_FILES = Path(os.environ.get("WECHAT_FILES_DIR")
+                    or (Path.home() / "Documents" / "xwechat_files"))
+WX312 = os.environ.get("WX312_PYTHON") or ""  # 微信 3.12 venv（装了 wechatauto）
 
 _DUMP_SCRIPT = r'''
 import re, json, sys
@@ -83,8 +84,8 @@ def _load_keys() -> dict[str, tuple[bytes, int]]:
 
 def dump_media_entries() -> list[dict]:
     """用 3.12 venv（装了 wechatauto）读 sns.db，返回所有媒体条目。"""
-    if not Path(WX312).is_file():
-        raise RuntimeError(f"找不到微信 3.12 venv：{WX312}")
+    if not WX312 or not Path(WX312).is_file():
+        raise RuntimeError("未配置 WX312_PYTHON（微信 3.12 venv 里装了 wechatauto）")
     proc = subprocess.run([WX312, "-c", _DUMP_SCRIPT], capture_output=True, timeout=180,
                           env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     if proc.returncode != 0:

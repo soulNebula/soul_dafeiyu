@@ -4,7 +4,7 @@
 离线逻辑层与测试、能提 issue/PR；我们发布时不会把用户数据/凭证带出去**。
 
 > 对外声明必须和代码一致：能力边界（已实现 / 未完成 / 外部依赖）以
-> [`../README.md`](../README.md) 第 1–3 节为准；数字以 [`STATUS.md`](STATUS.md) 的
+> [`../README.md`](../../README.md) 第 1–3 节为准；数字以 [`STATUS.md`](../quality/STATUS.md) 的
 > `STATUS:AUTO` 区块为准（`python tools/status_report.py --run` 生成）。
 > 真机收发的运行前提（Windows/微信/独立 3.12 venv/API key/B站插件）不是「已实现」的一部分。
 

@@ -25,24 +25,22 @@ requires_local_registry = pytest.mark.skipif(
 
 
 @requires_local_registry
-def test_qwen15_reserved_entry_and_port():
-    """防误删：1.5B 预留位必须存在、reserved、端口 8124、gguf 指向已有文件。"""
-    entry = registry.get("qwen15")
+def test_base_reference_entry_exists():
+    """防误删：0.5B 基座参考条目必须存在（合并/再训用），无端口。"""
+    entry = registry.get("qwen05-base")
     assert entry is not None
-    assert entry["role"] == "reserved"
-    assert entry["status"] == "reserved"
-    assert int(entry["port"]) == 8124
-    assert entry["gguf"].endswith("soul_qwen25_15b_v1-q4_k_m.gguf")
-    assert registry.resolve_by_role("reserved") == [entry]
+    assert entry["role"] == "reference"
+    assert not entry.get("port")
+    assert str(entry["base"]).endswith("Qwen2.5-0.5B-Instruct")
 
 
 @requires_local_registry
 def test_extra_adapters_registered():
     adapters = {item["name"]: item for item in registry.list_extra_adapters()}
-    assert "tone_qwen15_v1" in adapters
-    assert "tone_style_qwen15_v3" in adapters
-    assert adapters["tone_qwen15_v1"]["path"].endswith("tone_qwen15_v1")
-    assert adapters["tone_style_qwen15_v3"]["path"].endswith("tone_style_qwen15_v3")
+    assert "tone_qwen05_v1" in adapters
+    assert "tone_style_qwen05_v3" in adapters
+    assert adapters["tone_qwen05_v1"]["path"].endswith("tone_qwen05_v1")
+    assert adapters["tone_style_qwen05_v3"]["path"].endswith("tone_style_qwen05_v3")
 
 
 def test_missing_or_corrupt_config_returns_empty(tmp_path):
@@ -80,16 +78,16 @@ def test_missing_files_detects_missing_paths(tmp_path):
 
 @requires_local_registry
 def test_health_closed_port_and_unknown_do_not_raise():
-    # qwen15 预留端口 8124 当前没有服务 → False，不抛异常
-    assert registry.health("qwen15") is False
+    # 参考条目没有端口 → False，不抛异常
+    assert registry.health("qwen05-base") is False
     assert registry.health("no-such-model") is False
 
 
 @requires_local_registry
 def test_start_reserved_and_unknown_refused():
-    reserved = registry.start("qwen15")
-    assert reserved["ok"] is False
-    assert reserved["error"] == "reserved_model_not_started"
+    no_port = registry.start("qwen05-base")
+    assert no_port["ok"] is False
+    assert no_port["error"] == "model_has_no_port"
     unknown = registry.start("no-such-model")
     assert unknown["ok"] is False
     assert "unknown_model" in unknown["error"]
@@ -97,9 +95,10 @@ def test_start_reserved_and_unknown_refused():
 
 @requires_local_registry
 def test_stop_unstarted_refused():
-    result = registry.stop("qwen15")
+    result = registry.stop("qwen05-base")
     assert result["ok"] is False
-    assert result["error"] in ("not_started_by_registry", "pid_not_alive")
+    assert result["error"] in ("not_started_by_registry", "pid_not_alive",
+                               "model_has_no_port")
 
 
 @requires_local_registry
@@ -109,7 +108,7 @@ def test_cli_list_returns_json(capsys):
     payload = json.loads(captured.out)
     assert exit_code == 0
     assert isinstance(payload, list)
-    assert any(item["name"] == "qwen15" for item in payload)
+    assert any(item["name"] == "qwen05-base" for item in payload)
 
 
 @requires_local_registry

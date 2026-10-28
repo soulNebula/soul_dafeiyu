@@ -129,7 +129,7 @@ python -m trainlab serve llama   --gguf ... --port 8123 --status
 # tools/trainlab/profiles/soul-05b-qlora.yaml
 name: soul-05b-qlora
 paths:
-  home: ${AGENT_HOME:E:/agent}          # 模型/输出/日志都在这
+  home: ${AGENT_HOME:<AGENT_HOME>}          # 模型/输出/日志都在这
   base_model: ${AGENT_HOME}/models/Qwen2.5-0.5B-Instruct
   out: ${AGENT_HOME}/output
   logs: ${AGENT_HOME}/logs

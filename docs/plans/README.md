@@ -7,7 +7,7 @@
 > 历史文件名映射：原根 `plans/33-*.md` … `plans/59-*.md` 保持原文件名移入本目录；原
 > `docs/plans/15-*.md` … `32-*.md` 保持原名；没有重命名/合并正文。快照清单见
 > `docs/archive/20261028-docs-snapshot/MANIFEST.json`。
-> 唯一入口见 [`../INDEX.md`](../INDEX.md)，当前状态/测试数字见 [`../STATUS.md`](../STATUS.md)。
+> 唯一入口见 [`../INDEX.md`](../INDEX.md)，当前状态/测试数字见 [`../STATUS.md`](../quality/STATUS.md)。
 >
 > 注意：计划文档是**当时**的记录，正文里的测试数字/端口/分支状态可能已过期；
 > 现役事实一律以 `docs/STATUS.md` + `docs/ARCHITECTURE.md` 为准。

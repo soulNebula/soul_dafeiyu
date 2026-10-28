@@ -1,0 +1,51 @@
+{
+  "_comment": "SoulAgent 运行时路径真相源。首次运行由配置向导生成，加入 .gitignore。解析优先级：环境变量 SOULAGENT_HOME → 本文件 → 内置默认值（默认值中不允许出现盘符）。",
+  "schema": 1,
+
+  "home": "C:/Users/X/AppData/Local/SoulAgent",
+
+  "python": "runtime/python313/python.exe",
+
+  "tier": "A",
+  "_tier_comment": "A=只读观察(默认) / B=数据库直读 / C=自动回复。见 配置应用设计-v0.1.md §2",
+
+  "features": {
+    "db_direct": false,
+    "send": false,
+    "auto_reply": false,
+    "local_models": false
+  },
+
+  "ports": {
+    "gateway": 801,
+    "console": 802,
+    "webui": 8081,
+    "selflearn": 8082,
+    "llama_inner": 8123,
+    "llama_local3b": 8125
+  },
+
+  "models_root": "C:/Users/X/AppData/Local/SoulAgent/models",
+
+  "llama_server": null,
+
+  "wechat": {
+    "install_path": null,
+    "version": null,
+    "verified": false
+  },
+
+  "network": {
+    "channels": ["stable"],
+    "manifest_url": "https://example.invalid/soulagent/manifest.json",
+    "mirror_preferred": "modelscope"
+  },
+
+  "safety": {
+    "dry_run": true,
+    "send_mode": "confirm",
+    "quiet_hours": [22, 9],
+    "daily_limit": 200,
+    "stop_file_enabled": true
+  }
+}

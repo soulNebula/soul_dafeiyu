@@ -107,11 +107,7 @@ def _bili_context(path, text: str = "", limit: int = 5) -> str:
         title = str(row["title"] or "").strip()
         owner = str(row["owner"] or "").strip()
         take = str(row["my_take"] or row["summary"] or "").strip()
-        try:
-            day = time.strftime("%m-%d", time.localtime(float(row["created_at"] or 0)))
-        except Exception:  # noqa: BLE001
-            day = ""
-        head = "《" + title + "》" + (("（" + owner + "）") if owner else "") + ((" " + day) if day else "")
+        head = "《" + title + "》" + (("（" + owner + "）") if owner else "")
         lines.append("- " + head + (("：" + take[:80]) if take else ""))
     return chr(10).join(lines)
 

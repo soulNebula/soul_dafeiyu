@@ -47,7 +47,9 @@ def test_sends_bubbles_and_links_turn(monkeypatch):
     g = FakeGateway()
     out = proactive_worker.run_cycle(g, client=object(), now=100.0)
     assert out["sent"] == 2 and out["drafts"] == 0
-    assert [s[1] for s in g.sent] == ["在吗", "刚想到个事"]
+    from agi.selflearn import proactive as _pro
+    assert [s[1] for s in g.sent] == [_pro.polish_outbound("在吗"),
+                                     _pro.polish_outbound("刚想到个事")]
     assert all(s[2].get("proactive") is True for s in g.sent)
     assert g.last_turns["好友A"] == "T-PRO-1"
     assert any(k == "proactive_send" for k, _ in g.records)

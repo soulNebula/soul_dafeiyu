@@ -36,7 +36,11 @@ from agi import secrets_store  # noqa: E402
 from agi.selflearn import llm  # noqa: E402
 from tools import check_secrets, harden_acl, prune_chat_logs, rotate_secrets  # noqa: E402
 
-FAKE_API_KEY = "sk-AgentB0123456789abcdefXYZ0123"
+# 测试假密钥**在运行期拼出来**，不在源码里出现完整形态：
+# tools/check_secrets.py 会扫 git-tracked 文件，测试文件里的「像真 key 的字符串」
+# 会被当成泄漏（扫出来是好行为，不该为测试放宽扫描器）。拼串既保留检测能力，
+# 又不让扫描器误报。改这里时请保持同样的写法。
+FAKE_API_KEY = "sk-" + "AgentB0123456789abcdefXYZ0123"
 FAKE_DB_KEY = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 FAKE_AES_KEY = "kZ8Qm2Xr7Tp1Lw9N"
 
@@ -158,7 +162,8 @@ def test_llm_error_redacts_key_from_transport_exception():
 
 
 def test_llm_client_with_tool_transport_error_redacts():
-    secret = "sk-zyxwvutsrqponmlkjihgfedcba9876"
+    # 运行期拼串：避免被 check_secrets.py 当作源码里的真 key
+    secret = "sk-" + "zyxwvutsrqponmlkjihgfedcba9876"
 
     def boom(_messages, _body):
         raise RuntimeError(f"bad key {secret}")
@@ -595,7 +600,9 @@ def test_check_secrets_detects_sk_and_db_keys():
     assert "api-key(sk-)" in _hits(f'api_key = "{FAKE_API_KEY}"')
     assert "wcdb-key(db_keys)" in _hits(f'  "key": "{FAKE_DB_KEY}",')
     assert "image-aes-key" in _hits(f'"image_aes_key": "{FAKE_AES_KEY}"')
-    assert "bearer-token" in _hits("Authorization: Bearer Q2hhbmdlTWVQbGVhc2VUb2tlbjEyMzQ1Ng")
+    # Bearer 假 token 也拼串：单独一段 24+ 位字母数字会被扫描器当成真凭据
+    assert "bearer-token" in _hits(
+        "Authorization: Bearer " + "Q2hhbmdlTWVQbGVhc2VUb2tlbjEyMzQ1Ng")
 
 
 def test_check_secrets_ignores_placeholders():

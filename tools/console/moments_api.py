@@ -16,6 +16,8 @@ FETCH_SCRIPT = Path(os.environ.get("CONSOLE_MOMENTS_FETCH_SCRIPT")
                     or ROOT / "tools" / "moments_fetch.py")
 FETCH_PYTHON = Path(os.environ.get("CONSOLE_MOMENTS_PYTHON")
                     or r"E:/agent/venv_wx312/Scripts/python.exe")
+#: 朋友圈图片导出目录（tools/moments_media_export.py 生成）
+MEDIA_DIR = Path(__file__).resolve().parents[2] / "agi" / "data" / "moments" / "media"
 FETCH_TIMEOUT = 180
 CACHE_LIMIT = 500
 _FIELDS = ("summary", "topics", "mood", "social_signals", "notable", "suggestions")
@@ -181,6 +183,10 @@ def find_media(md5: str) -> dict:
     target = str(md5 or "").strip()
     if not target:
         return {"ok": False, "error": "md5_required"}
+    # 优先用导出的解密图片（tools/moments_media_export.py）
+    exported = MEDIA_DIR / f"{target}.jpg"
+    if exported.is_file():
+        return {"ok": True, "path": str(exported), "exported": True}
     for item in load_cache(limit=CACHE_LIMIT)["items"]:
         for image in item.get("images") or []:
             if str(image.get("md5") or "") == target:

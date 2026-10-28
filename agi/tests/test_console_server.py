@@ -1963,3 +1963,53 @@ def test_growth_routes_401_and_200(write_env, monkeypatch):
     monkeypatch.setattr(console, "_load_growth_api", lambda: None)
     status, data = _call("GET", "/api/growth/narrative", token="tok")
     assert status == 501 and data["ok"] is False
+
+
+# ============================================================ 遗忘度（task-163）
+def _forget_db(path: Path) -> Path:
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE user_memories(id TEXT PRIMARY KEY, scope TEXT, kind TEXT, "
+                "content TEXT, evidence TEXT, confidence REAL, status TEXT, "
+                "created_at REAL, importance REAL, strength REAL, last_strength_at REAL, "
+                "forget_stage TEXT, access_count INTEGER)")
+    rows = [
+        ("UM-F1", "user", "preference", "喜欢猫", "喜欢猫", 0.9, "active", 100.0, 0.5,
+         0.8, 90.0, "full", 3),
+        ("UM-F2", "user", "fact", "住在杭州", "住杭州", 0.8, "active", 200.0, 0.9,
+         0.1, 80.0, "keyword", 1),
+    ]
+    con.executemany("INSERT INTO user_memories(id,scope,kind,content,evidence,confidence,"
+                    "status,created_at,importance,strength,last_strength_at,forget_stage,"
+                    "access_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    con.commit()
+    con.close()
+    return path
+
+
+def test_memory_list_exposes_forget_fields(tmp_path, monkeypatch):
+    db = _forget_db(tmp_path / "forget.memory.sqlite3")
+    monkeypatch.setattr(console, "DEFAULT_CONTACT_DB", db)
+    data = console.memory_list(limit=10)
+    assert data["ok"] is True and data["total"] == 2
+    by_id = {item["id"]: item for item in data["items"]}
+    first = by_id["UM-F1"]
+    assert first["strength"] == 0.8
+    assert first["forget_degree"] == 0.2 and first["forget_percent"] == 20
+    assert first["forget_stage_zh"] == "完整"
+    assert first["half_life_days"] and first["half_life_days"] > 0
+    assert first["last_strength_at"] == 90.0
+    second = by_id["UM-F2"]
+    assert second["forget_degree"] == 0.9 and second["forget_percent"] == 90
+    assert second["forget_stage_zh"] == "关键词"
+
+
+def test_memory_list_old_db_without_forget_columns(tmp_path, monkeypatch):
+    db = _make_db(tmp_path / "old.memory.sqlite3")
+    monkeypatch.setattr(console, "DEFAULT_CONTACT_DB", db)
+    data = console.memory_list(limit=10)
+    assert data["ok"] is True and data["total"] == 1
+    item = data["items"][0]
+    assert item["strength"] == 1.0
+    assert item["forget_degree"] == 0.0 and item["forget_percent"] == 0
+    assert item["forget_stage_zh"] == "完整"
+    assert item["half_life_days"] is not None

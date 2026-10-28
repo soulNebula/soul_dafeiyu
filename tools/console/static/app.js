@@ -729,12 +729,29 @@ async function renderMemory() {
         <span class="k">月度摘要</span><span class="v">${num((m.summaries || {}).monthly)}（${esc((m.summaries || {}).latest_month || '—')}）</span></div>`)}
     </div>`;
 
-  const memoryTable = `<table><thead><tr><th>内容</th><th>类型</th><th>重要性</th><th>状态</th><th>创建时间</th><th>访问次数</th></tr></thead>
+function forgetBar(row) {
+  const pct = Math.max(0, Math.min(100, Math.round(Number(
+    row.forget_percent ?? (1 - Number(row.strength ?? 1)) * 100))));
+  const stage = row.forget_stage_zh || enumLabel('forget_stage', row.forget_stage, row.forget_stage || '完整');
+  const strength = row.strength === undefined || row.strength === null ? '—' : Number(row.strength).toFixed(2);
+  const half = row.half_life_days === undefined || row.half_life_days === null ? '—' : Number(row.half_life_days).toFixed(1) + ' 天';
+  const last = row.last_strength_at ? fmtDateTime(row.last_strength_at) : '—';
+  const cls = pct < 30 ? 'fresh' : (pct <= 60 ? 'warm' : 'hot');
+  const hint = `保留强度 ${strength} · 遗忘阶段 ${stage} · 半衰期 ${half} · 最近计算 ${last}`;
+  return `<div class="forget-cell" title="${esc(hint)}">
+    <span class="forget-num">${pct}%</span>
+    <span class="forget-track"><span class="forget-fill ${cls}" style="width:${pct}%"></span></span>
+    <span class="forget-hint">${esc(stage)}</span>
+  </div>`;
+}
+
+  const memoryTable = `<table><thead><tr><th>内容</th><th>类型</th><th>重要性</th><th>遗忘度</th><th>状态</th><th>创建时间</th><th>访问次数</th></tr></thead>
     <tbody>${recent.map((row) => `<tr><td>${esc(String(row.content || '').slice(0, 120))}</td>
       <td>${badge(enumLabel('memory_kind', row.kind))}</td><td class="num">${num(row.importance)}</td>
+      <td>${forgetBar(row)}</td>
       <td>${badge(enumLabel('memory_status', row.status), row.status === 'active' ? 'green' : (row.status === 'dormant' ? 'orange' : ''))}</td>
       <td>${fmtDateTime(row.created_at)}</td><td class="num">${num(row.access_count)}</td></tr>`).join('') ||
-      '<tr><td colspan="6" class="empty">暂无记忆</td></tr>'}</tbody></table>`;
+      '<tr><td colspan="7" class="empty">暂无记忆</td></tr>'}</tbody></table>`;
 
   const toneCard = renderToneCard(tone);
   $('#app').innerHTML = `${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}

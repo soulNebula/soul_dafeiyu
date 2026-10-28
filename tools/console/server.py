@@ -420,10 +420,15 @@ def memory_snapshot() -> dict:
             if cols:
                 wanted = [name for name in
                           ("id", "kind", "content", "importance", "status",
-                           "created_at", "access_count") if name in cols]
-                recent = [dict(row) for row in con.execute(
-                    f"SELECT {','.join(wanted)} FROM user_memories "
-                    "ORDER BY created_at DESC LIMIT 50").fetchall()]
+                           "created_at", "access_count", "strength",
+                           "last_strength_at", "forget_stage", "last_accessed") if name in cols]
+                recent = []
+                for row in con.execute(
+                        f"SELECT {','.join(wanted)} FROM user_memories "
+                        "ORDER BY created_at DESC LIMIT 50").fetchall():
+                    item = dict(row)
+                    item.update(_forget_meta(item))
+                    recent.append(item)
         finally:
             con.close()
     except sqlite3.Error:
@@ -2593,6 +2598,40 @@ def _memory_row(con: sqlite3.Connection, mem_id: str) -> dict | None:
         return None
 
 
+def _forget_meta(item: dict) -> dict:
+    """给记忆行补遗忘度展示字段；不改变原库/接口语义。"""
+    try:
+        strength = float(item.get("strength"))
+    except (TypeError, ValueError):
+        strength = 1.0
+    strength = max(0.0, min(1.0, strength))
+    degree = round(1.0 - strength, 3)
+    stage = str(item.get("forget_stage") or "").strip()
+    half_life = None
+    try:
+        from agi.selflearn import memory_decay
+        if not stage:
+            stage = memory_decay.stage_for(strength)
+        half_life = round(memory_decay.half_life_days(
+            str(item.get("kind") or ""), float(item.get("importance") or 0.5)), 1)
+    except Exception:  # noqa: BLE001 - 展示字段失败不影响记忆列表
+        if not stage:
+            stage = "full" if strength >= 0.5 else ("compressed" if strength >= 0.2
+                                                    else ("keyword" if strength >= 0.05 else "dormant"))
+        half_life = 30.0
+    stage_zh = {"full": "完整", "compressed": "压缩", "keyword": "关键词",
+                "dormant": "休眠"}.get(stage, stage or "未知")
+    return {
+        "strength": round(strength, 3),
+        "forget_degree": degree,
+        "forget_percent": int(round(degree * 100)),
+        "forget_stage": stage,
+        "forget_stage_zh": stage_zh,
+        "half_life_days": half_life,
+        "last_strength_at": item.get("last_strength_at"),
+    }
+
+
 def memory_list(contact: str = "", q: str = "", status: str = "",
                 limit: int = 100, offset: int = 0) -> dict:
     db_path, error = _memory_db(contact)
@@ -2628,7 +2667,9 @@ def memory_list(contact: str = "", q: str = "", status: str = "",
                 return {"ok": True, "items": [], "total": 0, "db": str(db_path)}
             selected = [name for name in
                         ("id", "kind", "content", "importance", "confidence", "status",
-                         "created_at", "evidence", "evidence_history") if name in columns]
+                         "created_at", "evidence", "evidence_history", "strength",
+                         "last_strength_at", "forget_stage", "access_count",
+                         "last_accessed") if name in columns]
             total = int(con.execute(
                 f"SELECT count(*) FROM user_memories{clause}", params).fetchone()[0])
             rows = con.execute(
@@ -2645,6 +2686,7 @@ def memory_list(contact: str = "", q: str = "", status: str = "",
         history = item.get("evidence_history")
         if isinstance(history, str) and len(history) > 300:
             item["evidence_history"] = history[:300] + "…"
+        item.update(_forget_meta(item))
         items.append(item)
     return {"ok": True, "items": items, "total": total, "limit": limit,
             "offset": offset, "db": str(db_path)}

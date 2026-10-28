@@ -277,3 +277,19 @@ def test_moments_models_routes(cons, monkeypatch, tmp_path):
     status, data = _call("GET", "/api/models/download/status", token="tok")
     assert status == 200 and data["count"] == 0
     assert "model_import" in Path(console.AUDIT_PATH).read_text(encoding="utf-8")
+
+def test_load_cache_dedupes_by_moment_id_not_shared_tid(tmp_path, monkeypatch):
+    """朋友圈所有动态的 tid 都是账号 wxid；去重必须按动态 id（2026-10-29 线上 bug）。"""
+    from tools.console import moments_api
+    data_dir = tmp_path / "moments"
+    data_dir.mkdir()
+    rows = [
+        {"id": "15000000000000001", "tid": "wxid_self", "nickname": "甲", "text": "a", "create_time": 1792783913},
+        {"id": "15000000000000002", "tid": "wxid_self", "nickname": "乙", "text": "b", "create_time": 1792234266},
+    ]
+    (data_dir / "2026-10-24.jsonl").write_text(
+        chr(10).join(json.dumps(r, ensure_ascii=False) for r in rows) + chr(10), encoding="utf-8")
+    monkeypatch.setattr(moments_api, "DATA_DIR", data_dir)
+    cache = moments_api.load_cache(limit=50)
+    assert cache["total"] == 2 and cache["count"] == 2
+    assert {i["nickname"] for i in cache["items"]} == {"甲", "乙"}

@@ -1,0 +1,1833 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IDEA · 小鱼工作台</title>
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+<header id="topbar">
+  <button id="brand" class="brand" title="回到欢迎页">IDEA <span>小鱼工作台</span></button>
+  <div class="top-right">
+    <div class="conn">
+      <span id="conn-dot" class="dot"></span>
+      <input id="token" placeholder="管理令牌" value="8888" autocomplete="off">
+      <button id="connect" class="btn small">连接</button>
+      <span id="conn-text" class="muted small">未连接</span>
+    </div>
+    <button id="terminal-toggle" class="btn small">终端</button>
+  </div>
+</header>
+
+<div id="shell">
+  <nav id="activitybar">
+    <button class="ab-item" data-view="overview" title="概览">◈<span>概览</span></button>
+    <button class="ab-item" data-view="services" title="服务">⚙<span>服务</span></button>
+    <button class="ab-item" data-view="config" title="配置">🎛<span>配置</span></button>
+    <button class="ab-item" data-view="data" title="数据工作室">🗄<span>数据</span></button>
+    <button class="ab-item" data-view="train" title="训练工厂">🧪<span>训练</span></button>
+    <button class="ab-item" data-view="distill" title="蒸馏语义数据">🧬<span>蒸馏</span></button>
+    <button class="ab-item" data-view="corpus" title="语料清洗">🧹<span>语料</span></button>
+    <button class="ab-item" data-view="annotate" title="用户标注">🏷<span>标注</span></button>
+    <button class="ab-item" data-view="models" title="模型中心">🧰<span>模型</span></button>
+  </nav>
+
+  <main id="main">
+    <section id="view-welcome" class="view active">
+      <div class="welcome">
+        <div class="hero">
+          <div class="kicker">SOULAGENT WORKBENCH</div>
+          <h1>模型 · 训练 · 数据</h1>
+          <p>工作台只保留三件事：看模型、跑训练、查数据；服务与配置作为最小运维入口。</p>
+          <div class="hero-actions">
+            <button class="btn primary" data-go="models">打开模型中心</button>
+            <button class="btn" data-go="train">进入训练工厂</button>
+            <button class="btn" data-go="data">浏览数据</button>
+          </div>
+        </div>
+        <div class="welcome-grid">
+          <button class="task-card" data-go="models"><b>模型中心</b><span>本地模型、适配器、GGUF、运行状态</span></button>
+          <button class="task-card" data-go="train"><b>训练工厂</b><span>数据集预览/过滤、LoRA 任务、日志与导出</span></button>
+          <button class="task-card" data-go="data"><b>数据工作室</b><span>SQLite 浏览、只读 SQL、受控写入与备份</span></button>
+          <button class="task-card" data-go="services"><b>服务管理</b><span>801 / 802 / 803 / 8123 / 8125 启停与日志</span></button>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-overview" class="view">
+      <div class="page-head"><div><h2>概览</h2><p class="muted">服务、模型、训练任务一眼看清。</p></div><button class="btn" id="ov-refresh">刷新</button></div>
+      <div id="ov-cards" class="cards"></div>
+      <div class="grid2">
+        <div class="panel"><div class="panel-head"><h3>服务</h3></div><div id="ov-services" class="list"></div></div>
+        <div class="panel"><div class="panel-head"><h3>最近训练</h3></div><div id="ov-jobs" class="list"></div></div>
+      </div>
+    </section>
+
+    <section id="view-services" class="view">
+      <div class="page-head"><div><h2>服务管理</h2><p class="muted">启停与日志；终端面板查看输出。</p></div><button class="btn" id="svc-refresh">刷新</button></div>
+      <div class="panel"><table class="table"><thead><tr><th>服务</th><th>端口</th><th>状态</th><th>PID</th><th>操作</th></tr></thead><tbody id="svc-body"></tbody></table></div>
+    </section>
+
+    <section id="view-config" class="view">
+      <div class="page-head"><div><h2>配置中心</h2><p class="muted">只保留基础 / 模型 / 训练必要项；保存前自动备份并写审计。</p></div><div><button class="btn" id="cfg-backups">备份列表</button><button class="btn primary" id="cfg-save">保存修改</button></div></div>
+      <div id="cfg-form" class="config-groups"></div>
+    </section>
+
+    <section id="view-data" class="view">
+      <div class="page-head"><div><h2>数据工作室</h2><p class="muted">存放本机数据，只读浏览：选数据文件 → 选数据表 → 查看/搜索/翻页。高级 SQL 在底部折叠。</p></div><button class="btn" id="db-refresh">刷新数据文件</button></div>
+      <div class="panel data-simple">
+        <div class="data-toolbar">
+          <div class="field db-picker-field"><span>数据文件</span>
+            <button class="db-picker-btn" id="db-select-btn" type="button">选择数据文件 ▾</button>
+            <div id="db-select-menu" class="db-select-menu hidden"></div>
+          </div>
+          <label class="field"><span>数据表</span><select id="db-table-select"></select></label>
+          <span class="data-count" id="db-count">共 0 条</span>
+          <label class="check db-show-all"><input type="checkbox" id="db-show-all"> 显示全部数据文件（含测试/备份/旧库）</label>
+          <span class="grow"></span>
+          <button class="btn small" id="db-refresh2">刷新</button>
+        </div>
+        <div class="db-note muted small" id="db-note">默认只显示常用数据；测试/备份/旧库已折叠</div>
+        <div class="data-search">
+          <span>🔍 搜索内容：</span><input id="db-search" placeholder="输入关键词，搜索本表文字内容">
+          <button class="btn small primary" id="db-search-btn">搜索</button>
+          <span class="muted small" id="db-meta"></span>
+        </div>
+        <div class="table-wrap"><table class="table"><thead id="db-thead"></thead><tbody id="db-tbody"></tbody></table></div>
+        <div class="pager"><button class="btn small" id="db-prev">上一页</button><span id="db-page" class="muted small">第 1 / 1 页</span><button class="btn small" id="db-next">下一页</button>
+          <span class="grow"></span><span class="muted small" id="db-title"></span></div>
+      </div>
+      <details class="data-advanced" id="db-advanced">
+        <summary>▶ 高级模式（开发者 / SQL）<span class="hint">默认收起；写入会先自动备份</span></summary>
+        <div class="advanced-body">
+          <div class="db-path" id="db-path"></div>
+          <textarea id="db-sql" placeholder="SELECT * FROM ...  （默认只读；写语句需勾选写入并输入 确认写入）"></textarea>
+          <div class="sql-actions">
+            <label class="check"><input type="checkbox" id="db-write"> 允许写入</label>
+            <button class="btn primary" id="db-run">执行 SQL</button>
+            <button class="btn" id="db-backup">备份当前数据文件</button>
+          </div>
+          <div id="db-confirm-wrap" class="hidden"><label class="field"><span>写入确认语（必须输入「确认写入」）</span><input id="db-confirm" placeholder="确认写入"></label></div>
+          <pre id="db-sql-out" class="terminal-inline"></pre>
+        </div>
+      </details>
+    </section>
+
+    <section id="view-train" class="view">
+      <div class="page-head"><div><h2>训练工厂</h2><p class="muted">数据集 → 过滤 → 创建任务 → 启动 → 看日志/产物。</p></div><button class="btn" id="train-refresh">刷新</button></div>
+      <div class="panel">
+        <div class="panel-head"><h3>数据来源</h3>
+          <div class="tabs"><button class="tab active" data-train-source="existing">已有数据集</button><button class="tab" data-train-source="chat">从聊天记录导出</button></div>
+          <span class="muted small" id="train-ds-count"></span></div>
+        <div id="train-source-existing"><div id="train-datasets" class="list scroll" style="max-height:220px"></div></div>
+        <div id="train-source-chat" style="display:none">
+          <div class="form-grid">
+            <label class="field"><span>聊天库</span><select id="train-source-db"></select></label>
+            <label class="field"><span>导出名称（可选）</span><input id="train-export-name" placeholder="留空自动生成"></label>
+            <label class="field"><span>最大行数</span><input id="train-export-rows" type="number" value="2000" min="10"></label>
+            <label class="field"><span>上下文窗口</span><input id="train-export-window" type="number" value="6" min="1"></label>
+            <label class="field"><span>验证集比例（0–0.9）</span><input id="train-export-split" type="number" value="0" min="0" max="0.9" step="0.05"></label>
+            <label class="check"><input type="checkbox" id="train-export-exclude" checked> 排除测试联系人</label>
+          </div>
+          <div class="actions"><button class="btn primary" id="train-export-btn">导出数据集</button><span class="muted small" id="train-export-hint">导出到 E:/agent/datasets，可直接用于训练</span></div>
+          <div id="train-export-result" class="muted small"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>任务</h3><span class="muted small">创建后选中并启动；日志实时轮询</span></div>
+        <div id="train-jobs" class="list scroll" style="max-height:220px"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>新建训练</h3></div>
+        <div class="form-grid">
+          <label class="field"><span>数据集</span><select id="train-dataset"></select></label>
+          <label class="field"><span>输出名</span><input id="train-out" value="idea_lora_smoke"></label>
+          <label class="field"><span>步数</span><input id="train-steps" type="number" value="5" min="1"></label>
+          <label class="field"><span>最大长度</span><input id="train-maxlen" type="number" value="256" min="32"></label>
+          <label class="field"><span>学习率</span><input id="train-lr" type="number" value="0.0002" step="0.00001"></label>
+          <label class="field"><span>LoRA 秩</span><input id="train-r" type="number" value="8" min="1"></label>
+          <label class="field"><span>LoRA alpha</span><input id="train-alpha" type="number" value="16" min="1"></label>
+          <label class="field"><span>格式</span><select id="train-format">
+            <option value="auto">自动识别</option><option value="messages">对话</option>
+            <option value="instruction">指令</option><option value="soul">蒸馏</option></select></label>
+          <label class="field"><span>训练模式</span><select id="train-mode">
+            <option value="lora">LoRA（省显存）</option><option value="full-ft">全参数微调（显存大，建议 0.5B + seq≤256）</option></select></label>
+          <label class="check"><input type="checkbox" id="train-4bit"> 4bit 量化</label>
+        </div>
+        <div class="actions"><button class="btn primary" id="train-create">创建任务</button><button class="btn" id="train-start">启动选中任务</button><button class="btn" id="train-stop">停止选中任务</button></div>
+        <div class="muted small" id="train-hint">选中数据集可预览；任务启动后日志实时轮询。</div>
+        <pre id="train-log" class="terminal-inline"></pre>
+      </div>
+    </section>
+
+    <section id="view-distill" class="view">
+      <div class="page-head"><div><h2>蒸馏语义数据</h2><p class="muted">让 DeepSeek 看着聊天上下文，按人设与状态档案写出「她这一轮怎么想」的训练数据。</p></div><button class="btn" id="distill-refresh">刷新</button></div>
+      <div class="panel distill-intro">
+        <b>模拟模式</b>免费、秒级，用假 teacher 走通流程；<b>真实模式</b>调用 DeepSeek，会花钱（约 <span id="distill-cps">0.001468</span> 元/条）。生成的 jsonl 可直接在训练工厂使用。
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <div class="panel-head"><h3>生成新数据集</h3><span class="muted small" id="distill-estimate"></span></div>
+          <div class="form-grid">
+            <label class="field"><span>生成数量（1–5000）</span><input id="dist-limit" type="number" value="300" min="1" max="5000"></label>
+            <label class="field"><span>输出名（可空，自动 soul_sft_web_MMDD_HHMM）</span><input id="dist-out" placeholder="留空自动命名"></label>
+            <label class="field"><span>每个 context 状态变体数（1–7）</span><input id="dist-variants" type="number" value="7" min="1" max="7"></label>
+            <label class="check"><input type="checkbox" id="dist-split"> 额外拆 train/val</label>
+          </div>
+          <div class="dist-mode">
+            <label class="check"><input type="radio" name="dist-mode" value="mock" checked> 模拟生成（免费·假 teacher）</label>
+            <label class="check"><input type="radio" name="dist-mode" value="real"> 真实生成（DeepSeek·花钱）</label>
+          </div>
+          <div id="dist-real-box" class="hidden">
+            <div class="form-grid">
+              <label class="field"><span>预算上限（元，默认 3.05）</span><input id="dist-budget" type="number" value="3.05" min="0.01" step="0.01"></label>
+              <label class="field"><span>确认短语（必须输入「确认生成」）</span><input id="dist-confirm" placeholder="确认生成"></label>
+            </div>
+          </div>
+          <div class="actions"><button class="btn primary" id="distill-create">开始生成</button><span class="muted small" id="distill-create-hint"></span></div>
+          <div id="distill-job"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>已有数据集</h3><label class="check small"><input type="checkbox" id="distill-derived"> 显示派生（_train/_val/_norm）</label></div>
+          <div id="distill-datasets" class="distill-datasets"><div class="muted small">加载中…</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-corpus" class="view">
+      <div class="page-head"><div><h2>语料清洗</h2><p class="muted">上传聊天/文档 → 清洗成对话 → 勾选保留 → 保存为训练数据集。</p></div><button class="btn" id="corpus-refresh">刷新</button></div>
+      <div class="panel">
+        <div class="panel-head"><h3>任务</h3><div class="head-tools"><button class="btn primary small" id="corpus-new">新建任务</button><span class="muted small" id="corpus-jobs-count"></span></div></div>
+        <div id="corpus-jobs" class="list"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>① 上传</h3><span class="muted small" id="corpus-current"></span></div>
+        <div id="corpus-drop" class="corpus-drop">拖拽文件到这里，或 <label class="corpus-pick">选择文件<input type="file" id="corpus-files" multiple accept=".txt,.md,.json,.jsonl,.csv,.png,.jpg,.jpeg,.webp,.bmp"></label>
+          <div class="muted small">支持 txt/md/json/jsonl/csv/图片；先新建任务再上传。</div></div>
+        <div class="actions"><button class="btn primary btn-corpus" id="corpus-parse">开始清洗</button>
+          <span class="muted small" id="corpus-upload-hint">支持多图；OCR 约 1–3 秒/张，请耐心等进度条。</span></div>
+        <div id="corpus-progress" class="corpus-progress hidden">
+          <div class="corpus-progress-head"><b id="corpus-progress-label">清洗中…</b><span id="corpus-progress-pct">0%</span></div>
+          <div class="corpus-progress-bar"><div id="corpus-progress-fill"></div></div>
+          <div class="muted small" id="corpus-progress-current"></div>
+        </div>
+        <div id="corpus-uploaded" class="corpus-uploaded muted small"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>② 清洗结果</h3><span class="muted small" id="corpus-stats"></span></div>
+        <div class="corpus-toolbar">
+          <button class="btn small" id="corpus-select-all">全选</button>
+          <button class="btn small" id="corpus-invert">反选</button>
+          <button class="btn small" data-corpus-role="">全部</button>
+          <button class="btn small" data-corpus-role="you">仅你</button>
+          <button class="btn small" data-corpus-role="me">仅我</button>
+          <input id="corpus-search" placeholder="搜索文本…" style="width:220px">
+          <span class="muted small" id="corpus-selected-count">已选 0 条</span>
+        </div>
+        <div id="corpus-items" class="corpus-items"><div class="muted small">先上传文件并开始清洗。</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>③ 保存为数据集</h3></div>
+        <div class="form-grid">
+          <label class="field"><span>格式</span><select id="corpus-format"><option value="messages">对话（统一 messages）</option><option value="instruction">指令对（instruction）</option></select></label>
+          <label class="field"><span>窗口(turn)</span><input id="corpus-window" type="number" value="6" min="1"></label>
+          <label class="field"><span>验证集比例</span><input id="corpus-split" type="number" value="0.05" min="0" max="0.9" step="0.01"></label>
+          <label class="field"><span>输出名（可空）</span><input id="corpus-out"></label>
+        </div>
+        <div class="actions"><button class="btn primary" id="corpus-save">保存为数据集</button><span class="muted small" id="corpus-save-hint"></span></div>
+        <div id="corpus-result" class="muted small"></div>
+      </div>
+    </section>
+
+    <section id="view-annotate" class="view">
+      <div class="page-head"><div><h2>用户标注</h2><p class="muted">给「我」的回复标注 InnerState：滑杆/下拉/星标 → 保存为 soul 训练数据集。</p></div><button class="btn" id="annot-reload">刷新</button></div>
+      <div class="panel">
+        <div class="panel-head"><h3>数据源</h3><span class="muted small" id="annot-source-meta"></span></div>
+        <div class="form-grid">
+          <label class="field"><span>语料任务</span><select id="annot-job"></select></label>
+          <label class="field"><span>或 messages JSONL 路径</span><input id="annot-path" placeholder="E:/.../chat.jsonl（后端支持时）"></label>
+          <label class="field"><span>上下文窗口</span><input id="annot-window" type="number" value="6" min="1" max="20"></label>
+          <label class="field"><span>最低星标（min_score）</span><input id="annot-min-score" type="number" value="1" min="0" max="5"></label>
+          <label class="field"><span>验证集比例</span><input id="annot-split" type="number" value="0.1" min="0" max="0.9" step="0.05"></label>
+          <label class="field"><span>输出名（可空）</span><input id="annot-out"></label>
+          <label class="field"><span>system（可选，会写进 context）</span><input id="annot-system" placeholder="留空则不加 system"></label>
+        </div>
+        <div class="actions"><button class="btn" id="annot-path-load">按路径加载</button><button class="btn primary" id="annot-save">保存标注并生成数据集</button><span class="muted small" id="annot-save-hint"></span></div>
+        <div id="annot-result" class="muted small"></div>
+      </div>
+      <div id="annot-list" class="annot-list"><div class="muted small">加载中…</div></div>
+    </section>
+
+    <section id="view-models" class="view">
+      <div class="page-head"><div><h2>模型中心</h2><p class="muted">清单（格式/来源/用途）· 离线导入 · 在线下载 · 回收站删除。</p></div><button class="btn" id="models-refresh">刷新</button></div>
+      <div class="cards" id="models-cards"></div>
+
+      <div class="grid2">
+        <div class="panel"><div class="panel-head"><h3>运行中</h3></div><div id="models-running" class="list"></div></div>
+        <div class="panel"><div class="panel-head"><h3>离线导入</h3><span class="muted small">GGUF / HuggingFace 目录 / LoRA 适配器</span></div>
+          <div class="form-grid model-form">
+            <label class="field"><span>本地路径</span><input id="import-path" placeholder="E:\agent\output\... 或 C:\models\xxx.gguf"></label>
+            <label class="field"><span>导入名称</span><input id="import-name" placeholder="my-model"></label>
+            <label class="field"><span>格式</span><select id="import-format"><option value="auto">自动识别</option><option value="gguf">GGUF 模型</option><option value="hf">HuggingFace 目录</option><option value="adapter">LoRA 适配器</option></select></label>
+            <label class="check"><input type="checkbox" id="import-overwrite"> 覆盖同名</label>
+          </div>
+          <div class="actions"><button class="btn" id="import-validate">校验</button><button class="btn primary" id="import-run">导入到本地</button></div>
+          <div id="import-result" class="muted small"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>在线下载</h3><span class="muted small">直链 / HuggingFace 镜像</span></div>
+        <div class="tabs"><button class="tab active" data-dl-tab="direct">直链</button><button class="tab" data-dl-tab="hf">HuggingFace</button></div>
+        <div class="form-grid model-form">
+          <label class="field"><span>保存名称</span><input id="dl-name" placeholder="my-model"></label>
+          <label class="field" id="dl-direct-url"><span>文件直链</span><input id="dl-url" placeholder="https://.../model.gguf"></label>
+          <label class="field" id="dl-filename-wrap"><span>文件名（可选）</span><input id="dl-filename" placeholder="model.gguf"></label>
+          <label class="field" id="dl-repo-wrap" style="display:none"><span>HF 仓库</span><input id="dl-repo" placeholder="Qwen/Qwen2.5-0.5B-Instruct"></label>
+          <label class="field" id="dl-file-wrap" style="display:none"><span>仓库内文件</span><input id="dl-file" placeholder="model.safetensors"></label>
+          <label class="field" id="dl-mirror-wrap" style="display:none"><span>镜像站</span><input id="dl-mirror" value="hf-mirror.com"></label>
+          <label class="check"><input type="checkbox" id="dl-overwrite"> 覆盖同名</label>
+        </div>
+        <div class="actions"><button class="btn primary" id="dl-start">开始下载</button><span class="muted small" id="dl-hint">下载在后台进行，可取消。</span></div>
+        <div id="downloads-list" class="list scroll"></div>
+      </div>
+
+      <div class="panel"><div class="panel-head"><h3>清单</h3><div class="head-tools"><select id="models-filter" class="mini-select"><option value="all">全部格式</option><option value="gguf">GGUF 模型</option><option value="hf">HuggingFace 目录</option><option value="adapter">LoRA 适配器</option></select><span class="muted small" id="models-count"></span></div></div><div class="table-wrap"><table class="table"><thead><tr><th>名称</th><th>格式</th><th>来源</th><th>用途</th><th>大小</th><th>操作</th></tr></thead><tbody id="models-list"></tbody></table></div></div>
+    </section>
+  </main>
+</div>
+
+<div id="terminal" class="terminal">
+  <div id="terminal-resize" class="terminal-resize" title="拖动调整宽度；双击恢复默认"></div>
+  <div class="terminal-head"><b>终端</b><span id="terminal-target" class="muted small"></span><button class="btn small" id="terminal-clear">清空</button><button class="btn small" id="terminal-close">关闭</button></div>
+  <pre id="terminal-out"></pre>
+</div>
+<div id="toast" class="toast"></div>
+
+<script>
+const S = {
+  token: localStorage.getItem('idea_token') || new URLSearchParams(location.search).get('token') || '8888',
+  view: new URLSearchParams(location.search).get('view') || 'welcome',
+  services: [], overview: null, data: { dbs: [], db: '', table: '', page: 1, pages: 1, search: '',
+          showAll: sessionStorage.getItem('idea_db_show_all') === '1' },
+  train: { datasets: [], jobs: [], selected: '', selectedJob: '' }, models: null, cfg: null,
+  distill: { datasets: [], jobs: [], job: null, log: [], timer: null, showDerived: false,
+             error: '', busy: '', out: '' },
+  corpus: { jobs: [], job: null, files: [], parsed: null, selected: new Set(),
+            filterRole: '', search: '', result: null, busy: '', error: '',
+            progress: null, parseTimer: null },
+  annotate: { jobs: [], source: '', window: 6, items: [], conversation: [], targets: {},
+              scores: {}, tags: {}, notes: {}, annotated: new Set(), selected: '',
+              filter: 'all', search: '', path: '', result: null, busy: '', error: '',
+              convWarning: '' },
+  timer: null, dlTimer: null, dlTab: 'direct', dlJob: '', modelFilter: 'all'
+};
+const $ = (sel, root=document) => root.querySelector(sel);
+const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtSize = (n) => {
+  n = Number(n || 0);
+  if (!n) return '0 B';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n/1048576).toFixed(1) + ' MB';
+  return (n/1073741824).toFixed(2) + ' GB';
+};
+const ZH_MAP = {
+  status: { created: '已创建', running: '运行中', done: '已完成', failed: '失败',
+            stopped: '已停止', queued: '排队中', starting: '启动中',
+            downloading: '下载中', cancelling: '取消中', cancelled: '已取消' },
+  format: { gguf: 'GGUF 模型', hf: 'HuggingFace 目录', adapter: 'LoRA 适配器',
+            auto: '自动识别', '': '未知' },
+  source: { builtin: '内置', downloaded: '在线下载', imported: '本地导入',
+            models: '模型目录', adapters: '适配器目录', '': '-' },
+  engine: { smoke_lora: '灵魂蒸馏训练', sft_train: '通用 SFT' },
+  train_format: { messages: '对话', instruction: '指令', soul: '蒸馏',
+                  auto: '自动', unknown: '未知' },
+  train_mode: { lora: 'LoRA', 'full-ft': '全参数微调' },
+  job_kind: { train: '训练', export: '导出' },
+  service: { UP: '运行中', DOWN: '未运行', RUNNING: '运行中', STOPPED: '未运行',
+             running: '运行中', stopped: '未运行', on: '运行中', off: '未运行' },
+  config: { auto: '自动', confirm: '草稿', off: '关闭', sender: '微信消息发送器',
+            uia: 'UIA 窗口', wechatauto: 'wechatauto 模块', model: '模型', rule: '规则',
+            static: '静态', slim: '精简', full: '完整', proactive_only: '仅主动消息',
+            all: '全部', legacy: '旧版', modern: '新版' },
+};
+function zh(cat, value) {
+  const table = ZH_MAP[cat] || {};
+  if (value === null || value === undefined || value === '') return '—';
+  return table[value] !== undefined ? table[value] : String(value);
+}
+
+function toast(text, kind='ok') {
+  const box = $('#toast');
+  box.textContent = text;
+  box.className = 'toast show ' + kind;
+  clearTimeout(box._timer);
+  box._timer = setTimeout(() => box.className = 'toast', 3200);
+}
+function setConn(ok, text) {
+  $('#conn-dot').className = 'dot ' + (ok ? 'on' : 'off');
+  $('#conn-text').textContent = text || (ok ? '已连接' : '未连接');
+}
+async function api(path, opts={}) {
+  const headers = Object.assign({'X-Admin-Token': S.token}, opts.headers || {});
+  if (opts.body !== undefined && typeof opts.body !== 'string') {
+    headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(path, Object.assign({}, opts, {headers}));
+  if (res.status === 401) { setConn(false, '令牌无效'); throw new Error('令牌无效'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { setConn(false, '请求失败'); const msg = data.detail || data.error || res.status; throw new Error((res.status === 404 || res.status >= 500) ? ('后端未就绪：' + msg) : msg); }
+  setConn(true);
+  return data;
+}
+const TERM_KEY = 'idea_terminal_width';
+const TERM_MIN = 320;
+const TERM_MAX = 760;
+const TERM_DEFAULT = 420;
+function termClamp(width) {
+  return Math.max(TERM_MIN, Math.min(TERM_MAX, Math.round(width)));
+}
+function termWidthInit() {
+  let stored = 0;
+  try { stored = parseInt(localStorage.getItem(TERM_KEY), 10) || 0; } catch (e) { stored = 0; }
+  document.documentElement.style.setProperty('--term-width', termClamp(stored || TERM_DEFAULT) + 'px');
+}
+function openTerminal(open) {
+  const panel = $('#terminal');
+  panel.classList.toggle('open', open);
+  document.body.classList.toggle('term-open', open);
+}
+function term(text, target='') {
+  const out = $('#terminal-out');
+  out.textContent += (out.textContent ? '\n' : '') + text;
+  out.scrollTop = out.scrollHeight;
+  $('#terminal-target').textContent = target;
+  openTerminal(true);
+}
+function showView(name) {
+  const allowed = ['welcome','overview','services','config','data','train','distill','corpus','annotate','models'];
+  if (!allowed.includes(name)) name = 'welcome';
+  S.view = name;
+  $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
+  $$('.ab-item').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  const url = new URL(location.href);
+  url.searchParams.set('view', name);
+  if (S.token) url.searchParams.set('token', S.token);
+  history.replaceState(null, '', url);
+  if (S.timer) { clearInterval(S.timer); S.timer = null; }
+  if (name !== 'corpus' && S.corpus.parseTimer) { clearInterval(S.corpus.parseTimer); S.corpus.parseTimer = null; }
+  if (name !== 'distill' && S.distill.timer) { clearInterval(S.distill.timer); S.distill.timer = null; }
+  if (name !== 'models' && S.dlTimer) { clearInterval(S.dlTimer); S.dlTimer = null; }
+  if (name === 'overview') loadOverview();
+  if (name === 'services') loadServices();
+  if (name === 'config') loadConfig();
+  if (name === 'data') loadDatabases();
+  if (name === 'train') loadTrain();
+  if (name === 'distill') loadDistill();
+  if (name === 'corpus') loadCorpus();
+  if (name === 'annotate') loadAnnotate();
+  if (name === 'models') loadModels();
+}
+function connect() {
+  S.token = ($('#token').value || '').trim() || '8888';
+  localStorage.setItem('idea_token', S.token);
+  api('/health').then(() => { toast('连接成功'); showView(S.view); }).catch(e => toast(e.message, 'err'));
+}
+
+/* ---------------------------------------------------------------- 概览 */
+async function loadOverview() {
+  try {
+    const d = await api('/api/wb/overview');
+    S.overview = d;
+    const running = (d.services || []).filter(s => s.running).length;
+    const modelRunning = (d.models && d.models.running && d.models.running.running) || 0;
+    const jobs = d.train_jobs || [];
+    const disk = d.models && d.models.disk ? d.models.disk.total : 0;
+    $('#ov-cards').innerHTML = [
+      ['服务', running + '/' + (d.services || []).length, '运行中'],
+      ['模型', modelRunning, 'llama-server'],
+      ['训练任务', jobs.length, '最近'],
+      ['模型磁盘', fmtSize(disk), '占用']
+    ].map(([t, v, s]) => `<div class="card"><div class="card-label">${esc(t)}</div><div class="card-value">${esc(v)}</div><div class="card-sub">${esc(s)}</div></div>`).join('');
+    $('#ov-services').innerHTML = (d.services || []).map(s => `<div class="row"><span>${esc(s.label)} <span class="muted small">:${s.port}</span></span><span class="badge ${s.running ? 'on' : ''}">${s.running ? '运行中' : '未运行'}</span></div>`).join('') || '<div class="muted">暂无</div>';
+    $('#ov-jobs').innerHTML = jobs.map(j => `<div class="row"><span>${esc(j.id)} <span class="muted small">${esc(zh('job_kind', j.kind))}</span></span><span class="badge ${j.status === 'done' ? 'on' : ''}">${esc(zh('status', j.status))}</span></div>`).join('') || '<div class="muted">暂无训练任务</div>';
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------------------------------------------------------------- 服务 */
+async function loadServices() {
+  try {
+    const d = await api('/api/wb/services');
+    S.services = d.items || [];
+    $('#svc-body').innerHTML = S.services.map(s => `<tr>
+      <td>${esc(s.label)}</td><td>${s.port}</td>
+      <td><span class="badge ${s.running ? 'on' : ''}">${s.running ? '运行中' : '未运行'}</span></td>
+      <td>${s.pid ?? '-'}</td>
+      <td class="actions-cell">
+        <button class="btn tiny" data-svc="${esc(s.name)}" data-act="start" ${s.running ? 'disabled' : ''}>启动</button>
+        <button class="btn tiny" data-svc="${esc(s.name)}" data-act="stop" ${s.running ? '' : 'disabled'}>停止</button>
+        <button class="btn tiny" data-svc="${esc(s.name)}" data-act="restart">重启</button>
+        <button class="btn tiny" data-svc="${esc(s.name)}" data-act="log">日志</button>
+      </td></tr>`).join('');
+    $$('#svc-body [data-svc]').forEach(b => b.onclick = () => serviceAction(b.dataset.svc, b.dataset.act));
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function serviceAction(name, act) {
+  try {
+    if (act === 'log') {
+      const d = await api('/api/wb/services/' + encodeURIComponent(name) + '/logs?lines=200');
+      term(d.text || '(空日志)', name + ' 日志');
+      return;
+    }
+    const d = await api('/api/wb/services/' + encodeURIComponent(name) + '/' + act, {method: 'POST'});
+    toast(d.ok ? (act + ' 成功') : (d.error || '失败'), d.ok ? 'ok' : 'err');
+    loadServices();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------------------------------------------------------------- 配置 */
+async function loadConfig() {
+  try {
+    const d = await api('/api/wb/config');
+    S.cfg = d;
+    const groups = {};
+    (d.items || []).forEach(item => (groups[item.group] = groups[item.group] || []).push(item));
+    $('#cfg-form').innerHTML = Object.entries(groups).map(([group, items]) => `<div class="panel config-panel"><div class="panel-head"><h3>${esc(group)}</h3></div><div class="form-grid">${items.map(item => configField(item)).join('')}</div></div>`).join('');
+  } catch (e) { toast(e.message, 'err'); }
+}
+function configField(item) {
+  const id = 'cfg-' + item.key;
+  let input;
+  if (item.type === 'bool') input = `<input type="checkbox" id="${id}" ${item.value ? 'checked' : ''}>`;
+  else if (item.type === 'int' || item.type === 'float') input = `<input type="number" id="${id}" value="${esc(item.value)}" ${item.min !== null ? 'min=' + item.min : ''} ${item.max !== null ? 'max=' + item.max : ''} step="${item.type === 'float' ? '0.01' : '1'}">`;
+  else if (item.enum) input = `<select id="${id}">${item.enum.map(v => `<option value="${esc(v)}" ${v === item.value ? 'selected' : ''}>${esc(zh('config', v))}</option>`).join('')}</select>`;
+  else input = `<input type="text" id="${id}" value="${esc(item.value)}">`;
+  return `<label class="field"><span>${esc(item.label)} ${item.restart ? '<em class="tag">重启</em>' : ''}</span>${input}<small class="muted">${esc(item.desc || '')}</small></label>`;
+}
+async function saveConfig() {
+  if (!S.cfg) return;
+  const patch = {};
+  for (const item of S.cfg.items || []) {
+    const el = $('#cfg-' + item.key);
+    if (!el) continue;
+    let value = item.type === 'bool' ? el.checked : (item.type === 'int' ? parseInt(el.value, 10) : (item.type === 'float' ? parseFloat(el.value) : el.value));
+    if (item.type === 'int' && Number.isNaN(value)) value = 0;
+    patch[item.key] = value;
+  }
+  try {
+    const d = await api('/api/wb/config/save', {method: 'POST', body: {patch}});
+    if (!d.ok) { toast((d.errors || []).map(x => x.key + ': ' + x.message).join('；') || d.error, 'err'); return; }
+    toast('已保存 ' + d.changed.length + ' 项' + (d.restart_required && d.restart_required.length ? '（需重启：' + d.restart_required.join(',') + '）' : ''));
+    loadConfig();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function showConfigBackups() {
+  try {
+    const d = await api('/api/wb/config/backups');
+    term((d.items || []).join('\n') || '(无备份)', '配置备份');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------------------------------------------------------------- 数据 */
+const DB_GROUPS = [['audit', '操作审计'], ['memory', '聊天记忆'], ['persona', '人物画像'], ['other', '其他数据']];
+function dbFileLabel(f) {
+  let label = f.label_zh || f.name || String(f.label || f.path || '').split(/[\\/]/).pop();
+  if (f.hidden && !label.includes('旧')) label += ' · 旧';
+  return label;
+}
+function dbVisibleFiles() {
+  return S.data.dbs.filter(f => S.data.showAll || !f.hidden);
+}
+function renderDbPicker() {
+  const btn = $('#db-select-btn');
+  const menu = $('#db-select-menu');
+  if (!btn || !menu) return;
+  const current = S.data.dbs.find(f => f.id === S.data.db);
+  btn.textContent = current ? dbFileLabel(current) + ' ▾' : '选择数据文件 ▾';
+  const files = dbVisibleFiles();
+  menu.innerHTML = DB_GROUPS.map(([domain, title]) => {
+    const rows = files.filter(f => (f.domain || 'other') === domain);
+    if (!rows.length) return '';
+    return `<div class="db-group-title">${title}（${rows.length}）</div>`
+      + rows.map(f => `<button class="db-option ${f.id === S.data.db ? 'active' : ''}" data-db-pick="${esc(f.id)}">
+          <span>${esc(dbFileLabel(f))}</span>${f.hidden ? '<span class="db-old">旧</span>' : ''}
+        </button>`).join('');
+  }).join('') || '<div class="muted small" style="padding:6px 8px">没有可见的数据文件</div>';
+  menu.querySelectorAll('[data-db-pick]').forEach(item => item.onclick = () => {
+    S.data.db = item.dataset.dbPick;
+    menu.classList.add('hidden');
+    renderDbPicker();
+    loadSchema(S.data.db);
+  });
+}
+async function loadDatabases() {
+  try {
+    if (new URLSearchParams(location.search).get('db_all') === '1') S.data.showAll = true;
+    const d = await api('/api/wb/db/databases');
+    S.data.dbs = d.items || [];
+    const allBox = $('#db-show-all');
+    if (allBox) allBox.checked = S.data.showAll;
+    const visible = dbVisibleFiles();
+    if (!S.data.db || (!S.data.showAll && !visible.some(f => f.id === S.data.db))) {
+      S.data.db = visible[0] ? visible[0].id : (S.data.dbs[0] ? S.data.dbs[0].id : '');
+    }
+    renderDbPicker();
+    const note = $('#db-note');
+    if (note) note.textContent = '已显示 ' + visible.length + ' / ' + S.data.dbs.length
+      + ' 个数据文件（默认只显示常用数据；测试/备份/旧库已折叠）';
+    const current = S.data.dbs.find(f => f.id === S.data.db);
+    $('#db-meta').textContent = current ? ('当前：' + dbFileLabel(current)) : '';
+    if (S.data.db) loadSchema(S.data.db);
+  } catch (e) { toast(e.message, 'err'); $('#db-note').textContent = '数据文件加载失败：' + e.message; }
+}
+function dbFieldLabel(name) {
+  const map = {
+    id: '编号', created_at: '时间', updated_at: '更新时间', ts: '时间',
+    kind: '类型', status: '状态', text: '内容', content: '内容', user: '用户',
+    role: '角色', actor: '操作者', action: '操作', target: '对象', name: '名称',
+    path: '路径', reason: '原因', error: '错误', meta_json: '扩展信息',
+    before_json: '修改前', after_json: '修改后', tags_json: '标签',
+    score: '评分', confidence: '置信度', importance: '重要度', enabled: '启用',
+    size: '大小', mtime: '修改时间', count: '数量', total: '总数',
+  };
+  return map[name] || name;
+}
+async function loadSchema(db) {
+  S.data.db = db;
+  S.data.table = '';
+  S.data.page = 1;
+  if (!db) { $('#db-table-select').innerHTML = '<option value="">先选择数据文件</option>'; return; }
+  try {
+    const d = await api('/api/wb/db/schema?db=' + encodeURIComponent(db));
+    const tables = d.tables || [];
+    $('#db-table-select').innerHTML = tables.map(t => `<option value="${esc(t.name)}">${esc(t.name)}（${t.rows ?? 0} 条）</option>`).join('') || '<option value="">该文件没有数据表</option>';
+    $('#db-title').textContent = (S.data.dbs.find(f => f.id === db) ? dbFileLabel(S.data.dbs.find(f => f.id === db)) : db.split(/[\\/]/).pop());
+    $('#db-path').textContent = db;
+    $('#db-meta').textContent = '当前：' + $('#db-title').textContent;
+    if (tables.length) { $('#db-table-select').value = tables[0].name; loadRows(tables[0].name, 1); }
+    else {
+      $('#db-thead').innerHTML = '<tr><th>提示</th></tr>';
+      $('#db-tbody').innerHTML = '<tr><td class="muted">这个数据文件没有可浏览的数据表。</td></tr>';
+      $('#db-count').textContent = '共 0 条';
+    }
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function loadRows(table, page) {
+  if (!S.data.db || !table) return;
+  S.data.table = table; S.data.page = page || 1;
+  try {
+    const q = '/api/wb/db/rows?db=' + encodeURIComponent(S.data.db)
+      + '&table=' + encodeURIComponent(table)
+      + '&page=' + S.data.page + '&page_size=50'
+      + (S.data.search ? '&q=' + encodeURIComponent(S.data.search) : '');
+    const d = await api(q);
+    if (!d.ok) { toast(d.error || '读取失败', 'err'); return; }
+    const columns = (d.columns || []).map(c => (typeof c === 'string' ? c : (c.name || c.column || ''))).filter(Boolean);
+    $('#db-thead').innerHTML = '<tr>' + columns.map(c => `<th title="${esc(c)}">${esc(dbFieldLabel(c))}</th>`).join('') + '</tr>';
+    $('#db-tbody').innerHTML = (d.rows || []).map(row => '<tr>' + columns.map(c => {
+      const value = row[c];
+      return `<td>${esc(value === null || value === undefined ? '—' : value)}</td>`;
+    }).join('') + '</tr>').join('') || '<tr><td colspan="' + Math.max(1, columns.length) + '" class="muted">没有匹配的数据</td></tr>';
+    S.data.pages = d.pages || 1;
+    S.data.page = d.page || S.data.page;
+    $('#db-page').textContent = '第 ' + S.data.page + ' / ' + S.data.pages + ' 页';
+    $('#db-count').textContent = '共 ' + (d.total ?? 0) + ' 条';
+    $('#db-title').textContent = table + (S.data.search ? ' · 搜索「' + S.data.search + '」' : '');
+    $('#db-table-select').value = table;
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function runSql() {
+  const sql = $('#db-sql').value.trim();
+  if (!sql || !S.data.db) { toast('先选数据文件并输入 SQL', 'err'); return; }
+  const write = $('#db-write').checked;
+  let confirm = '';
+  if (write) {
+    confirm = ($('#db-confirm').value || '').trim();
+    if (confirm !== '确认写入') { toast('写操作需要输入确认语「确认写入」', 'err'); return; }
+  }
+  try {
+    const d = await api('/api/wb/db/sql', {method: 'POST', body: {db: S.data.db, sql, write, confirm}});
+    $('#db-sql-out').textContent = JSON.stringify(d, null, 2);
+    if (d.ok) { toast('SQL 已执行'); if (S.data.table) loadRows(S.data.table, S.data.page); }
+    else toast(d.error || 'SQL 失败', 'err');
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function backupDb() {
+  if (!S.data.db) return;
+  try {
+    const d = await api('/api/wb/db/backup', {method: 'POST', body: {db: S.data.db}});
+    toast(d.ok ? '已备份：' + d.backup : (d.error || '备份失败'), d.ok ? 'ok' : 'err');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------------------------------------------------------------- 训练 */
+async function loadTrainSources() {
+  try {
+    const d = await api('/api/wb/train/sources');
+    const items = d.items || [];
+    const sel = $('#train-source-db');
+    if (sel) sel.innerHTML = items.map(x => `<option value="${esc(x.db)}">${esc(x.contact)} · ${x.rows} 行</option>`).join('') || '<option value="">没有可导出聊天库</option>';
+    const hint = $('#train-export-hint');
+    if (hint && !items.length) hint.textContent = '接口已接但未发现聊天库（或后端 /api/wb/train/sources 未接线）';
+  } catch (err) {
+    const sel = $('#train-source-db');
+    if (sel) sel.innerHTML = '<option value="">后端未接线（/api/wb/train/sources）</option>';
+  }
+}
+async function exportChatDataset() {
+  const source = $('#train-source-db').value;
+  if (!source) { toast('先选聊天库', 'err'); return; }
+  const btn = $('#train-export-btn');
+  btn.disabled = true;
+  try {
+    const body = { source_db: source,
+      out_name: $('#train-export-name').value.trim(),
+      max_rows: parseInt($('#train-export-rows').value, 10) || 2000,
+      window: parseInt($('#train-export-window').value, 10) || 6,
+      split: parseFloat($('#train-export-split').value) || 0,
+      exclude_test: $('#train-export-exclude').checked };
+    const d = await api('/api/wb/train/export_chat', { method: 'POST', body });
+    if (!d.ok) throw new Error(d.error || d.hint || '导出失败');
+    $('#train-export-result').innerHTML = `导出成功：${esc(d.out || '')}<br>行数 ${d.rows || 0}${d.val_out ? ' · 验证集 ' + esc(d.val_out) : ''}`;
+    toast('已导出 ' + (d.rows || 0) + ' 行', 'ok');
+    await loadTrain();
+    if (d.out) {
+      const match = (S.train.datasets || []).find(x => x.path === d.out || (x.rel && d.out.endsWith(x.rel)));
+      if (match) { S.train.selected = match.path; $('#train-dataset').value = match.path; loadPreview(match.path); }
+    }
+  } catch (err) {
+    $('#train-export-result').textContent = '导出失败：' + err.message;
+    toast(err.message, 'err');
+  } finally { btn.disabled = false; }
+}
+async function loadCorpus() {
+  const c = S.corpus;
+  try {
+    const d = await api('/api/wb/corpus/jobs');
+    c.jobs = d.items || d.jobs || [];
+    c.error = '';
+    if (!c.job && c.jobs.length) c.job = c.jobs[0];
+    const id = c.job && (c.job.id || c.job.job_id);
+    if (id && c.jobs.length) {
+      const fresh = c.jobs.find(j => (j.id || j.job_id) === id);
+      if (fresh) c.job = fresh;
+    }
+  } catch (e) {
+    c.error = String(e.message || '').startsWith('后端未就绪') ? e.message : ('后端未就绪：' + e.message);
+    c.jobs = [];
+  }
+  if (new URLSearchParams(location.search).get('corpus_progress') === '1') {
+    c.busy = 'parse';
+    c.progress = { status: 'running', done: 1, total: 3, percent: 33,
+                   current: 'shot_2.png', error: '' };
+  }
+  renderCorpusPage();
+}
+function corpusId(job) { return job ? String(job.id || job.job_id || '') : ''; }
+function corpusFiles(job) { return (job && (job.files || job.uploads)) || []; }
+function corpusParsedItems() { return (S.corpus.parsed && (S.corpus.parsed.items || S.corpus.parsed.rows)) || []; }
+function corpusRole(item) {
+  const role = String(item.role || item.speaker || item.who || '').toLowerCase();
+  if (role === 'me' || role === 'assistant' || role === '我' || role === 'agent') return 'me';
+  if (role === 'you' || role === 'user' || role === '你' || role === 'human') return 'you';
+  return 'you';
+}
+function corpusVisibleItems() {
+  const c = S.corpus;
+  const needle = (c.search || '').toLowerCase();
+  return corpusParsedItems().filter(item => {
+    if (c.filterRole && corpusRole(item) !== c.filterRole) return false;
+    if (needle && !String(item.text || item.content || '').toLowerCase().includes(needle)) return false;
+    return true;
+  });
+}
+function corpusSelectedCount() {
+  const items = corpusParsedItems();
+  return items.filter(item => S.corpus.selected.has(String(item.id ?? item.index ?? ''))).length;
+}
+function renderCorpusPage() {
+  const c = S.corpus;
+  const jobs = c.jobs || [];
+  const cid = corpusId(c.job);
+  $('#corpus-jobs-count').textContent = jobs.length + ' 个';
+  $('#corpus-jobs').innerHTML = jobs.map(j => {
+    const id = corpusId(j);
+    return `<div class="list-row ${cid === id ? 'selected' : ''}" data-corpus-job="${esc(id)}">
+      <span><b>${esc(j.name || j.out_name || id)}</b> <span class="muted small">${esc(zh('status', j.status))}</span></span>
+      <span class="row-tools"><span class="muted small">${esc((corpusFiles(j).length || j.uploaded || 0) + ' 个文件')}</span>
+        <button class="btn small danger" data-corpus-del="${esc(id)}">删除</button></span></div>`;
+  }).join('') || '<div class="muted small">暂无任务；点「新建任务」开始。</div>';
+  $('#corpus-current').textContent = c.job ? ('当前任务：' + (c.job.name || cid)) : '未选择任务';
+  const fileCount = corpusFiles(c.job).length;
+  $('#corpus-upload-hint').textContent = c.busy === 'upload' ? '上传中…'
+    : (!cid ? '先新建任务' : (fileCount ? '支持多图；OCR 约 1–3 秒/张，请耐心等进度条。' : '先上传文件，再开始清洗。'));
+  const parseBtn = $('#corpus-parse');
+  parseBtn.disabled = !cid || c.busy === 'upload' || c.busy === 'parse' || !fileCount;
+  parseBtn.textContent = c.busy === 'parse' ? '清洗中…' : '开始清洗';
+  const progress = c.progress;
+  const pbox = $('#corpus-progress');
+  if (pbox) {
+    const visible = !!(progress && ['starting', 'running', 'failed'].includes(progress.status));
+    pbox.classList.toggle('hidden', !visible);
+    if (progress) {
+      const pct = progress.percent != null ? Math.max(0, Math.min(100, Number(progress.percent)))
+        : (progress.total ? Math.round(100 * (progress.done || 0) / progress.total) : 0);
+      $('#corpus-progress-label').textContent = progress.status === 'failed' ? '清洗失败'
+        : (progress.status === 'done' ? '清洗完成' : '清洗中…');
+      $('#corpus-progress-pct').textContent = Math.round(pct) + '%';
+      $('#corpus-progress-fill').style.width = pct + '%';
+      $('#corpus-progress-fill').classList.toggle('failed', progress.status === 'failed');
+      const current = progress.current ? ('当前 ' + progress.current) : '';
+      const count = progress.total ? ('已清洗 ' + (progress.done || 0) + '/' + progress.total + ' 个文件') : '';
+      $('#corpus-progress-current').textContent = progress.error
+        ? ('错误：' + progress.error) : [count, current].filter(Boolean).join(' · ');
+    }
+  }
+  $('#corpus-uploaded').innerHTML = corpusFiles(c.job).map(f => `<div>${esc(f.name || f.filename || f.path || f)} · ${esc(f.type || '')} · ${fmtSize(f.size)}</div>`).join('') || (cid ? '还没有上传文件' : '');
+  const items = corpusVisibleItems();
+  $('#corpus-stats').textContent = c.parsed ? `总 ${c.parsed.total ?? c.parsed.count ?? corpusParsedItems().length} 条 · 你 ${c.parsed.you ?? c.parsed.user_count ?? '?'} · 我 ${c.parsed.me ?? c.parsed.assistant_count ?? '?'}` : '';
+  $('#corpus-selected-count').textContent = '已选 ' + corpusSelectedCount() + ' 条';
+  $('#corpus-items').innerHTML = items.length ? items.map(item => {
+    const id = String(item.id ?? item.index ?? '');
+    const role = corpusRole(item);
+    return `<label class="corpus-item ${c.selected.has(id) ? 'selected' : ''}" data-corpus-item="${esc(id)}">
+      <input type="checkbox" data-corpus-check="${esc(id)}" ${c.selected.has(id) ? 'checked' : ''}>
+      <span class="role-badge ${role}">${role === 'me' ? '我' : '你'}</span>
+      <span class="corpus-text">${esc(item.text || item.content || '')}</span></label>`;
+  }).join('') : '<div class="muted small">没有匹配的条目。</div>';
+  $('#corpus-result').innerHTML = c.result ? `已保存：${esc(c.result.path || c.result.out || '')} · ${c.result.rows ?? ''} 行
+    <button class="btn small primary" id="corpus-go-train">去训练</button>` : '';
+  const errorBox = c.error ? `<div class="card"><div class="error-text">${esc(c.error)}</div></div>` : '';
+  const first = $('#view-corpus');
+  const existing = first.querySelector('.corpus-error');
+  if (existing) existing.remove();
+  if (errorBox) first.insertAdjacentHTML('afterbegin', `<div class="corpus-error">${errorBox}</div>`);
+  $$('[data-corpus-job]').forEach(row => row.onclick = (e) => {
+    if (e.target.closest('[data-corpus-del]')) return;
+    const id = row.dataset.corpusJob;
+    S.corpus.job = jobs.find(j => corpusId(j) === id) || { id };
+    S.corpus.files = corpusFiles(S.corpus.job);
+    S.corpus.parsed = null; S.corpus.selected = new Set(); S.corpus.result = null;
+    renderCorpusPage();
+  });
+  $$('[data-corpus-del]').forEach(btn => btn.onclick = async (e) => {
+    e.stopPropagation();
+    if (!confirm('删除这个语料任务？')) return;
+    try {
+      await api('/api/wb/corpus/job/' + encodeURIComponent(btn.dataset.corpusDel), { method: 'DELETE' });
+      if (corpusId(S.corpus.job) === btn.dataset.corpusDel) { S.corpus.job = null; S.corpus.parsed = null; }
+      await loadCorpus();
+    } catch (err) { toast('删除失败：' + err.message, 'err'); }
+  });
+  $$('[data-corpus-check]').forEach(box => box.onchange = () => {
+    const id = box.dataset.corpusCheck;
+    if (box.checked) S.corpus.selected.add(id); else S.corpus.selected.delete(id);
+    renderCorpusPage();
+  });
+  $$('[data-corpus-item]').forEach(row => row.onclick = (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    const box = row.querySelector('input');
+    box.checked = !box.checked; box.onchange();
+  });
+  const goTrain = $('#corpus-go-train');
+  if (goTrain) goTrain.onclick = () => { showView('train'); loadTrain(); };
+  $$('[data-corpus-role]').forEach(btn => btn.onclick = () => { S.corpus.filterRole = btn.dataset.corpusRole; renderCorpusPage(); });
+}
+async function createCorpusJob() {
+  const c = S.corpus;
+  try {
+    const d = await api('/api/wb/corpus/jobs', { method: 'POST', body: { name: '语料 ' + new Date().toLocaleString('zh-CN') } });
+    c.job = d.job || d.item || { id: d.id || d.job_id };
+    c.files = []; c.parsed = null; c.selected = new Set(); c.result = null; c.error = '';
+    toast('已创建任务 ' + corpusId(c.job), 'ok');
+    await loadCorpus();
+  } catch (e) { c.error = '后端未就绪：' + e.message; renderCorpusPage(); }
+}
+async function uploadCorpusFiles(fileList) {
+  const c = S.corpus;
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  if (!c.job) { await createCorpusJob(); if (!c.job) return; }
+  const cid = corpusId(c.job);
+  if (!cid) { toast('任务 id 缺失', 'err'); return; }
+  c.busy = 'upload'; renderCorpusPage();
+  const added = [];
+  try {
+    for (const file of files) {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/upload', {
+        method: 'POST', headers: { 'X-Admin-Token': S.token }, body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) throw new Error(data.detail || data.error || ('HTTP ' + res.status));
+      added.push({ name: file.name, type: file.type || file.name.split('.').pop(), size: file.size });
+    }
+    c.files = [...corpusFiles(c.job), ...added];
+    c.error = '';
+    toast('已上传 ' + added.length + ' 个文件', 'ok');
+    await loadCorpus();
+  } catch (e) {
+    c.error = '上传失败：' + e.message; renderCorpusPage();
+  } finally { c.busy = ''; renderCorpusPage(); }
+}
+function applyCorpusParsed(data) {
+  const c = S.corpus;
+  c.parsed = data;
+  c.selected = new Set(corpusParsedItems().map(item => String(item.id ?? item.index ?? '')));
+  c.progress = { status: 'done', done: 1, total: 1, percent: 100 };
+  c.busy = '';
+  if (c.parseTimer) { clearInterval(c.parseTimer); c.parseTimer = null; }
+  renderCorpusPage();
+}
+async function fetchCorpusItems(cid) {
+  const d = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/items');
+  if (d.ok === false) throw new Error(d.error || 'items_failed');
+  return { ok: true, items: d.items || d.rows || [], stats: d.stats || d.counts || d };
+}
+async function parseCorpus() {
+  const c = S.corpus;
+  const cid = corpusId(c.job);
+  if (!cid) { toast('先新建/选择任务', 'err'); return; }
+  if (c.busy === 'parse') return;
+  c.busy = 'parse'; c.error = '';
+  c.progress = { status: 'starting', done: 0, total: corpusFiles(c.job).length || 0,
+                 percent: 0, current: '', error: '' };
+  renderCorpusPage();
+  let started = null;
+  try {
+    started = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/parse', { method: 'POST', body: {} });
+  } catch (e) {
+    // 旧后端/未接线：回退同步模式
+    c.error = '后端未就绪：' + e.message;
+    await parseCorpusSync(cid);
+    return;
+  }
+  if (started && Array.isArray(started.items)) { applyCorpusParsed(started); return; }
+  if (started && started.ok === false) {
+    c.error = '清洗失败：' + (started.error || '');
+    c.progress = { status: 'failed', error: started.error || '', done: 0, total: 0, percent: 0 };
+    c.busy = ''; renderCorpusPage(); return;
+  }
+  if (c.progress) {
+    c.progress.total = started.total || c.progress.total || 0;
+    c.progress.status = 'running';
+  }
+  renderCorpusPage();
+  pollCorpusParse(cid);
+}
+function pollCorpusParse(cid) {
+  const c = S.corpus;
+  if (c.parseTimer) clearInterval(c.parseTimer);
+  const startedAt = Date.now();
+  const tick = async () => {
+    if (S.view !== 'corpus') { clearInterval(c.parseTimer); c.parseTimer = null; return; }
+    if (Date.now() - startedAt > 5 * 60 * 1000) {
+      clearInterval(c.parseTimer); c.parseTimer = null;
+      c.busy = ''; c.error = '清洗超时（>5 分钟），请重试';
+      c.progress = { status: 'failed', error: '清洗超时，请重试', done: c.progress?.done || 0,
+                     total: c.progress?.total || 0, percent: c.progress?.percent || 0 };
+      renderCorpusPage(); toast('清洗超时，请重试', 'err'); return;
+    }
+    try {
+      const d = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/parse/status');
+      if (!d.ok) throw new Error(d.error || 'status_failed');
+      const total = Number(d.total || c.progress?.total || 0);
+      const done = Number(d.done || 0);
+      c.progress = {
+        status: d.status || 'running', done, total,
+        percent: d.percent != null ? Number(d.percent) : (total ? Math.round(100 * done / total) : 0),
+        current: d.current || '', error: d.error || '', stats: d.stats || null,
+      };
+      renderCorpusPage();
+      if (d.status === 'done') {
+        clearInterval(c.parseTimer); c.parseTimer = null;
+        let result = null;
+        try { result = await fetchCorpusItems(cid); } catch (e) { result = { ok: false, items: [], error: e.message }; }
+        c.parsed = result;
+        c.selected = new Set((result.items || []).map(item => String(item.id ?? item.index ?? '')));
+        c.progress = { status: 'done', done: total, total, percent: 100 };
+        c.busy = ''; c.error = '';
+        toast('清洗完成：' + (result.items || []).length + ' 条', 'ok');
+        renderCorpusPage();
+      } else if (d.status === 'failed') {
+        clearInterval(c.parseTimer); c.parseTimer = null;
+        c.busy = ''; c.error = '清洗失败：' + (d.error || '');
+        renderCorpusPage();
+      }
+    } catch (e) {
+      clearInterval(c.parseTimer); c.parseTimer = null;
+      c.busy = '';
+      // 状态接口未接线（404）：回退同步 parse；其它错误直接显示
+      if (String(e.message || '').includes('404') || String(e.message || '').includes('Not Found')) {
+        await parseCorpusSync(cid);
+      } else {
+        c.error = '清洗进度读取失败：' + e.message;
+        renderCorpusPage();
+      }
+    }
+  };
+  c.parseTimer = setInterval(tick, 700);
+  tick();
+}
+async function parseCorpusSync(cid) {
+  const c = S.corpus;
+  try {
+    const d = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/parse', { method: 'POST', body: { sync: true } });
+    if (d.ok === false) throw new Error(d.error || 'parse_failed');
+    applyCorpusParsed(d);
+  } catch (e) {
+    c.busy = ''; c.error = '后端未就绪：' + e.message;
+    c.progress = { status: 'failed', error: e.message, done: 0, total: 0, percent: 0 };
+    renderCorpusPage();
+  }
+}
+async function saveCorpus() {
+  const c = S.corpus;
+  const cid = corpusId(c.job);
+  if (!cid) { toast('先新建/选择任务', 'err'); return; }
+  if (!c.selected.size) { toast('至少勾选一条', 'err'); return; }
+  c.busy = 'save'; renderCorpusPage();
+  try {
+    const d = await api('/api/wb/corpus/job/' + encodeURIComponent(cid) + '/save', {
+      method: 'POST', body: {
+        selected_ids: [...c.selected],
+        format: $('#corpus-format').value,
+        window: parseInt($('#corpus-window').value, 10) || 6,
+        split: parseFloat($('#corpus-split').value) || 0,
+        out_name: $('#corpus-out').value.trim(),
+      }});
+    c.result = d.result || d;
+    toast('已保存数据集：' + (c.result.path || c.result.out || ''), 'ok');
+  } catch (e) { c.error = '保存失败：' + e.message; }
+  finally { c.busy = ''; renderCorpusPage(); }
+}
+async function loadAnnotate() {
+  const a = S.annotate;
+  a.error = '';
+  try {
+    const jobs = await api('/api/wb/corpus/jobs');
+    a.jobs = jobs.items || jobs.jobs || [];
+    if (!a.source && a.jobs.length) a.source = a.jobs[0].id || a.jobs[0].job_id;
+  } catch (e) {
+    a.error = '后端未就绪：' + e.message;
+    a.jobs = [];
+  }
+  if (a.source) await loadAnnotateSource(a.source, false);
+  else renderAnnotatePage();
+}
+async function loadAnnotateSource(jobId, render = true) {
+  const a = S.annotate;
+  a.busy = 'load';
+  if (render) renderAnnotatePage();
+  try {
+    const [d, corpus] = await Promise.all([
+      api('/api/wb/annot/source/' + encodeURIComponent(jobId) + '?window=' + (a.window || 6)),
+      api('/api/wb/corpus/job/' + encodeURIComponent(jobId) + '/items').catch(() => null),
+    ]);
+    a.source = jobId;
+    a.items = d.items || [];
+    a.conversation = (corpus && (corpus.items || corpus.rows))
+      || (d.items || []).map(item => ({ id: item.id, role: 'me', text: item.text }));
+    a.convWarning = corpus ? '' : '完整对话加载失败，仅显示「我」的回复';
+    if (d.window) a.window = d.window;
+    a.targets = {}; a.scores = {}; a.tags = {}; a.notes = {};
+    a.annotated = new Set(); a.selected = '';
+    a.items.forEach(item => {
+      const id = String(item.id);
+      const target = Object.assign({}, (item.suggestion && item.suggestion.target) || {});
+      a.targets[id] = target;
+      a.scores[id] = 5;
+      a.tags[id] = ''; a.notes[id] = '';
+    });
+    if (a.items.length) a.selected = String(a.items[0].id);
+    if (new URLSearchParams(location.search).get('annot_pick')) {
+      const pick = parseInt(new URLSearchParams(location.search).get('annot_pick'), 10);
+      if (a.items[pick]) a.selected = String(a.items[pick].id);
+    }
+    a.error = '';
+  } catch (e) {
+    a.items = []; a.conversation = []; a.targets = {};
+    a.error = String(e.message || '').startsWith('后端未就绪') ? e.message : ('后端未就绪：' + e.message);
+  } finally { a.busy = ''; renderAnnotatePage(); }
+}
+function annotTarget(id) { return S.annotate.targets[id] || {}; }
+function annotStars(id, score) {
+  let html = '';
+  for (let i = 1; i <= 5; i++) {
+    html += `<button class="annot-star ${i <= score ? 'on' : ''}" data-annot-score="${esc(id)}" data-value="${i}" title="${i} 星">★</button>`;
+  }
+  return html;
+}
+function annotEnumSelect(id, field, values, current, labels) {
+  const labelOf = v => (labels && labels[v]) || v;
+  return `<select data-annot-field="${esc(field)}" data-annot-id="${esc(id)}">${values.map(v => `<option value="${esc(v)}" ${v === current ? 'selected' : ''}>${esc(labelOf(v))}</option>`).join('')}</select>`;
+}
+// 标注页把后端字段/枚举翻成中文展示（底层仍提交 short/normal/long）
+const ANNOT_ZH = {
+  'behavior.length': '长度', 'behavior.ask': '会反问', 'behavior.advice': '给建议',
+  'behavior.emoji': '表情', mood: '心情', energy: '精力', sharing: '分享欲',
+  battery: '电量', trust: '信任', stage: '关系阶段', stance: '态度', intent: '意图',
+  monologue: '内心独白', short: '短句', normal: '正常', long: '长句',
+  ask: '会反问', advice: '给建议', emoji: '表情',
+};
+function annotZh(text) {
+  let out = String(text ?? '');
+  out = out.replace(/behavior\.(length|ask|advice|emoji)/g, (m) => ANNOT_ZH[m] || m);
+  out = out.replace(/\b(mood|energy|sharing|battery|trust|stage|stance|intent|monologue)\b/g, (m) => ANNOT_ZH[m] || m);
+  out = out.replace(/\b(short|normal|long)\b/g, (m) => ANNOT_ZH[m] || m);
+  return out;
+}
+function annotVisibleItems() {
+  const a = S.annotate;
+  return a.items.filter(item => {
+    const id = String(item.id);
+    if (a.filter === 'unannotated' && a.annotated.has(id)) return false;
+    if (a.filter === 'low' && (a.scores[id] ?? 5) >= 4) return false;
+    return true;
+  });
+}
+function annotItemHtml(item, index) {
+  const a = S.annotate;
+  const id = String(item.id);
+  const t = annotTarget(id);
+  const sug = (item.suggestion && item.suggestion.target) || {};
+  const reasons = (item.suggestion && item.suggestion.reasons) || [];
+  return `<div class="annot-editor">
+    <div class="panel-head"><h3>#${index + 1} · 我 <span class="muted small">${esc(item.source || '')}</span></h3>
+      <div class="annot-stars">${annotStars(id, a.scores[id] ?? 5)}<button class="btn small" data-annot-reset="${esc(id)}">用建议值</button>
+        <button class="btn small primary" id="annot-save-one">保存本条</button></div></div>
+    <div class="annot-ctx"><div><b>你：</b>${esc(item.prev_user_text || '（无上一条）')}</div>
+      ${(item.context || []).length ? `<details><summary class="muted small">上下文 ${item.context.length} 条</summary><pre class="annot-context">${esc(item.context.map(c => (c.role === 'user' ? '你' : '我') + '：' + c.text).join('\n'))}</pre></details>` : ''}</div>
+    <div class="annot-reply">${esc(item.text || '')}</div>
+    <div class="annot-grid">
+      ${[['mood','情绪'],['energy','精力'],['sharing','分享欲'],['battery','电量'],['trust','信任']].map(([key,label]) => `
+        <label class="annot-slider"><span>${label} <b data-annot-num="${esc(id)}:${key}">${Number(t[key] ?? 0.5).toFixed(2)}</b></span>
+          <input type="range" min="0" max="1" step="0.01" value="${esc(t[key] ?? 0.5)}" data-annot-slider="${esc(id)}" data-annot-key="${key}"></label>`).join('')}
+      <label class="field"><span>关系阶段</span>${annotEnumSelect(id, 'stage', ['陌生','初识','熟悉','亲近','信任'], t.stage || '初识')}</label>
+      <label class="field"><span>态度</span>${annotEnumSelect(id, 'stance', ['平和','温和','简短直接','客气','克制','有点累','先照顾人'], t.stance || '平和')}</label>
+      <label class="field"><span>意图</span>${annotEnumSelect(id, 'intent', ['自然接话','自然接话，可以多聊一句','先听对方说完','不追问，答完就好','简短回应，不展开','接住对方的话，给一句具体建议','确认收到，追问一句进度','先确认对方安全'], t.intent || '自然接话')}</label>
+      <label class="field annot-wide"><span>内心独白（≤40字）</span><input data-annot-field="monologue" data-annot-id="${esc(id)}" value="${esc(t.monologue || '')}" maxlength="40"></label>
+      <label class="field"><span>长度</span>${annotEnumSelect(id, 'behavior.length', ['short','normal','long'], (t.behavior || {}).length || 'normal', {short:'短句', normal:'正常', long:'长句'})}</label>
+      <label class="field"><span>表情</span>${annotEnumSelect(id, 'behavior.emoji', ['偶尔','不用'], (t.behavior || {}).emoji || '不用')}</label>
+      <label class="check"><input type="checkbox" data-annot-field="behavior.ask" data-annot-id="${esc(id)}" ${(t.behavior || {}).ask ? 'checked' : ''}> 会反问</label>
+      <label class="check"><input type="checkbox" data-annot-field="behavior.advice" data-annot-id="${esc(id)}" ${(t.behavior || {}).advice ? 'checked' : ''}> 给建议</label>
+      <label class="field"><span>标签（逗号分隔）</span><input data-annot-field="tags" data-annot-id="${esc(id)}" value="${esc(a.tags[id] || '')}"></label>
+      <label class="field annot-wide"><span>备注</span><input data-annot-field="note" data-annot-id="${esc(id)}" value="${esc(a.notes[id] || '')}"></label>
+    </div>
+    ${reasons.length ? `<details class="annot-reasons"><summary class="muted small">为什么建议这些值（${reasons.length}）</summary><div>${reasons.map(r => `<div class="muted small">• ${esc(annotZh(r))}</div>`).join('')}</div></details>` : ''}
+    <div class="muted small">建议值：心情 ${esc(sug.mood)} · 精力 ${esc(sug.energy)} · 长度 ${esc({short:'短句',normal:'正常',long:'长句'}[(sug.behavior || {}).length] || '')}；可任意改。</div>
+  </div>`;
+}
+function annotHighlight(text, needle) {
+  const raw = String(text || '');
+  if (!needle) return esc(raw);
+  const lower = raw.toLowerCase(), q = needle.toLowerCase();
+  let out = '', pos = 0;
+  while (true) {
+    const at = lower.indexOf(q, pos);
+    if (at < 0) { out += esc(raw.slice(pos)); break; }
+    out += esc(raw.slice(pos, at)) + '<mark>' + esc(raw.slice(at, at + q.length)) + '</mark>';
+    pos = at + q.length;
+  }
+  return out;
+}
+function annotBubbleHtml(item) {
+  const a = S.annotate;
+  const id = String(item.id ?? '');
+  const role = String(item.role || '') === 'me' ? 'me' : 'you';
+  const me = role === 'me';
+  const annot = a.items.find(x => String(x.id) === id);
+  const marked = a.annotated.has(id);
+  const score = a.scores[id] ?? 5;
+  const matchFilter = !me || (a.filter === 'all'
+    || (a.filter === 'unannotated' && !marked)
+    || (a.filter === 'low' && score < 4));
+  const dim = me && !matchFilter;
+  const selected = me && String(a.selected) === id;
+  const text = annotHighlight(item.text || item.content || '', a.search);
+  return `<div class="annot-bubble-row ${role} ${dim ? 'dim' : ''} ${selected ? 'selected' : ''}" ${me ? `data-annot-select="${esc(id)}"` : ''}>
+    <div class="annot-avatar ${role}">${me ? '我' : '你'}</div>
+    <div class="annot-bubble-wrap">
+      <div class="annot-bubble ${role}">${text}</div>
+      ${me ? `<div class="annot-bubble-status">${marked ? '已标注 ★' + score : '未标注'}${annot ? '' : ' · 无建议'}</div>` : ''}
+    </div>
+  </div>`;
+}
+function renderAnnotatePage() {
+  const a = S.annotate;
+  const jobSel = $('#annot-job');
+  if (jobSel) {
+    jobSel.innerHTML = a.jobs.map(j => `<option value="${esc(j.id || j.job_id)}" ${String(j.id || j.job_id) === String(a.source) ? 'selected' : ''}>${esc(j.name || j.id || j.job_id)} · ${esc(j.counts ? (j.counts.me || 0) + ' 个我' : '')}</option>`).join('') || '<option value="">暂无语料任务</option>';
+  }
+  const meta = $('#annot-source-meta');
+  if (meta) meta.textContent = a.items.length
+    ? `可标注 ${a.items.length} 条 · 已标记 ${a.annotated.size} 条 · 对话 ${a.conversation.length} 条` : (a.error ? '' : '暂无可标注回复');
+  const list = $('#annot-list');
+  if (!list) return;
+  const selectedId = a.selected || (a.items[0] && String(a.items[0].id)) || '';
+  const selected = a.items.find(item => String(item.id) === String(selectedId));
+  const selectedIndex = selected ? a.items.indexOf(selected) : 0;
+  list.innerHTML = `${a.error ? `<div class="card"><div class="error-text">${esc(a.error)}</div></div>` : ''}
+    ${a.convWarning ? `<div class="card"><div class="muted small">${esc(a.convWarning)}</div></div>` : ''}
+    ${(a.items.length || a.conversation.length) ? `<div class="annot-stats">
+      <span>已标记 <b>${a.annotated.size}</b> / 可标注 <b>${a.items.length}</b></span>
+      <button class="btn small ${a.filter === 'all' ? 'primary' : ''}" data-annot-filter="all">全部</button>
+      <button class="btn small ${a.filter === 'unannotated' ? 'primary' : ''}" data-annot-filter="unannotated">未标注</button>
+      <button class="btn small ${a.filter === 'low' ? 'primary' : ''}" data-annot-filter="low">低分（&lt;4★）</button>
+      <input id="annot-search" placeholder="搜索对话..." value="${esc(a.search)}" style="width:180px">
+      <span class="grow"></span><span class="muted small">点右侧「我」的气泡编辑</span></div>
+    <div class="annot-split">
+      <div class="annot-chat" id="annot-chat">${a.conversation.map(annotBubbleHtml).join('') || '<div class="muted small">暂无对话</div>'}</div>
+      <div class="annot-editor-wrap">${selected ? annotItemHtml(selected, selectedIndex) : '<div class="panel"><div class="muted small">选一个「我」的气泡开始标注。</div></div>'}</div>
+    </div>` : `<div class="panel"><div class="muted small">暂无可标注的「我」回复；请先在「语料清洗」页创建任务、上传并清洗，或在上方填 JSONL 路径。</div></div>`}
+    ${a.result ? `<div class="panel"><b>已保存：</b>${esc(a.result.out || '')} · 训练 ${a.result.rows || 0} 行 / 验证 ${a.result.val_rows || 0} 行
+      <button class="btn small primary" id="annot-go-train">去训练</button></div>` : ''}`;
+  bindAnnotateInputs();
+  const selectedBubble = document.querySelector('.annot-bubble-row.selected');
+  if (selectedBubble) requestAnimationFrame(() => selectedBubble.scrollIntoView({ block: 'nearest' }));
+}
+function bindAnnotateInputs() {
+  const a = S.annotate;
+  const jobSel = $('#annot-job');
+  if (jobSel) jobSel.onchange = () => { a.source = jobSel.value; loadAnnotateSource(jobSel.value); };
+  $$('[data-annot-filter]').forEach(btn => btn.onclick = () => { a.filter = btn.dataset.annotFilter; renderAnnotatePage(); });
+  $$('[data-annot-select]').forEach(row => row.onclick = () => { a.selected = row.dataset.annotSelect; renderAnnotatePage(); });
+  const search = $('#annot-search');
+  if (search) search.oninput = () => { a.search = search.value.trim(); renderAnnotatePage(); };
+  const saveOne = $('#annot-save-one');
+  if (saveOne) saveOne.onclick = () => {
+    const id = a.selected;
+    if (!id) return;
+    a.annotated.add(String(id));
+    toast('已标记本条（最后统一保存数据集）', 'ok');
+    renderAnnotatePage();
+  };
+  $$('[data-annot-slider]').forEach(slider => {
+    slider.oninput = () => {
+      const id = slider.dataset.annotSlider, key = slider.dataset.annotKey;
+      a.targets[id][key] = parseFloat(slider.value);
+      const label = $(`[data-annot-num="${id}:${key}"]`);
+      if (label) label.textContent = Number(slider.value).toFixed(2);
+    };
+  });
+  $$('[data-annot-field]').forEach(el => {
+    const field = el.dataset.annotField, id = el.dataset.annotId;
+    const apply = () => {
+      if (field === 'tags') { a.tags[id] = el.value; return; }
+      if (field === 'note') { a.notes[id] = el.value; return; }
+      if (!a.targets[id]) return;
+      if (field === 'monologue') { a.targets[id].monologue = el.value; return; }
+      const [parent, child] = field.split('.');
+      if (child) {
+        a.targets[id][parent] = Object.assign({}, a.targets[id][parent] || {});
+        a.targets[id][parent][child] = el.type === 'checkbox' ? el.checked : el.value;
+      } else {
+        a.targets[id][parent] = el.type === 'checkbox' ? el.checked : el.value;
+      }
+    };
+    el.oninput = apply; el.onchange = apply;
+  });
+  $$('[data-annot-score]').forEach(btn => {
+    btn.onclick = () => { a.scores[btn.dataset.annotScore] = parseInt(btn.dataset.value, 10); renderAnnotatePage(); };
+  });
+  $$('[data-annot-reset]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.annotReset;
+      const item = a.items.find(x => String(x.id) === id);
+      if (item && item.suggestion) a.targets[id] = Object.assign({}, item.suggestion.target);
+      renderAnnotatePage();
+    };
+  });
+  const goTrain = $('#annot-go-train');
+  if (goTrain) goTrain.onclick = () => { showView('train'); loadTrain(); };
+}
+async function saveAnnotations() {
+  const a = S.annotate;
+  if (!a.source) { toast('先选语料任务', 'err'); return; }
+  if (!a.items.length) { toast('没有可保存的标注', 'err'); return; }
+  a.busy = 'save'; $('#annot-save').disabled = true;
+  try {
+    const sourceItems = a.annotated.size
+      ? a.items.filter(item => a.annotated.has(String(item.id)))
+      : a.items;
+    if (!sourceItems.length) { toast('没有已标记的条目', 'err'); a.busy = ''; $('#annot-save').disabled = false; return; }
+    const annotations = sourceItems.map(item => {
+      const id = String(item.id);
+      return { item_id: id, target: a.targets[id], score: a.scores[id] ?? 5,
+        tags: String(a.tags[id] || '').split(/[,，]/).map(x => x.trim()).filter(Boolean),
+        note: String(a.notes[id] || '') };
+    });
+    const d = await api('/api/wb/annot/save', { method: 'POST', body: {
+      source: a.source, annotations, window: parseInt($('#annot-window').value, 10) || 6,
+      out_name: $('#annot-out').value.trim(), min_score: parseInt($('#annot-min-score').value, 10) || 0,
+      split: parseFloat($('#annot-split').value) || 0, system: $('#annot-system').value.trim(),
+    }});
+    if (!d.ok) throw new Error(d.error || '保存失败');
+    a.result = d;
+    $('#annot-save-hint').textContent = '训练 ' + d.rows + ' 行 / 验证 ' + d.val_rows + ' 行';
+    toast('已保存 soul 数据集：' + (d.out || ''), 'ok');
+    renderAnnotatePage();
+  } catch (e) {
+    a.error = '保存失败：' + e.message;
+    renderAnnotatePage();
+    toast('保存失败：' + e.message, 'err');
+  } finally { a.busy = ''; $('#annot-save').disabled = false; }
+}
+function distillStatus(v) { return zh('status', v); }
+function distillSourceText(sources) {
+  const map = { golden: '黄金集', messages: '聊天', synthetic: '合成' };
+  const parts = Object.entries(sources || {}).map(([k, v]) => (map[k] || k) + ' ' + v);
+  return parts.join(' · ') || '—';
+}
+function distillCost() {
+  const limit = parseInt($('#dist-limit').value, 10) || 0;
+  const real = document.querySelector('input[name="dist-mode"]:checked')?.value === 'real';
+  const cps = S.distill.costPerSample || 0.001468;
+  const cost = real ? (limit * cps) : 0;
+  const el = $('#distill-estimate');
+  if (el) el.textContent = real ? ('预计约 ' + cost.toFixed(2) + ' 元') : '模拟模式免费';
+}
+function distillJobHtml() {
+  const job = S.distill.job;
+  if (!job) return '';
+  const running = job.status === 'running';
+  return `<div class="distill-job-card">
+    <div class="panel-head"><h3>当前任务 <span class="muted small">${esc(job.id || '')}</span></h3>
+      <span class="badge ${job.status === 'done' ? 'on' : (job.status === 'failed' ? 'danger' : '')}">${esc(distillStatus(job.status))}</span></div>
+    <div class="kv">
+      <span class="k">模式</span><span class="v">${job.real ? '真实生成（DeepSeek）' : '模拟生成（免费）'}</span>
+      <span class="k">目标数量</span><span class="v">${esc(job.limit ?? '')}</span>
+      <span class="k">已生成</span><span class="v">${esc(job.rows ?? '—')} 行</span>
+      <span class="k">耗时</span><span class="v">${job.seconds != null ? esc(job.seconds) + ' 秒' : '—'}</span>
+      <span class="k">输出</span><span class="v mono">${esc(job.out || '')}</span>
+      <span class="k">预计成本</span><span class="v">${job.estimate_cost_cny != null ? esc(job.estimate_cost_cny) + ' 元' : '免费'}</span>
+    </div>
+    ${job.error ? `<div class="err-text">${esc(job.error)}</div>` : ''}
+    <div class="actions">
+      ${running ? '<button class="btn small danger" id="distill-cancel">取消任务</button>' : ''}
+      ${job.status === 'done' && job.out ? '<button class="btn small primary" id="distill-go-train">去训练</button>' : ''}
+    </div>
+    <details class="distill-log" ${(running || job.status === 'done') ? 'open' : ''}><summary class="muted small">任务日志${running ? '（每秒刷新）' : ''}</summary>
+      <pre class="terminal-inline" id="distill-log">${esc((S.distill.log || []).slice(-120).join(String.fromCharCode(10)))}</pre></details>
+  </div>`;
+}
+function distillDatasetsHtml() {
+  const items = (S.distill.datasets || []).filter(x => S.distill.showDerived || !x.derived);
+  if (!items.length) return '<div class="muted small">还没有生成过数据集。先用上方表单生成一份（模拟模式免费）。</div>';
+  return items.map(x => `<div class="distill-dataset-row">
+    <div><b>${esc(x.name)}</b> <span class="muted small">${x.rows} 行 · ${fmtSize(x.size)} · ${new Date((x.mtime || 0) * 1000).toLocaleString()}</span>
+      <div class="muted small">来源：${esc(distillSourceText(x.sources))}${x.derived ? ' · 派生文件' : ''}</div></div>
+    <div class="row"><span class="mono small">${esc(x.path || '')}</span>
+      <button class="btn small primary" data-distill-train="${esc(x.path || '')}">用于训练</button></div>
+  </div>`).join('');
+}
+function renderDistillPage() {
+  const d = S.distill;
+  const jobEl = $('#distill-job');
+  if (jobEl) jobEl.innerHTML = distillJobHtml();
+  const dsEl = $('#distill-datasets');
+  if (dsEl) dsEl.innerHTML = distillDatasetsHtml();
+  const cps = $('#distill-cps');
+  if (cps) cps.textContent = (d.costPerSample || 0.001468).toFixed(6);
+  distillCost();
+  $$('[data-distill-train]').forEach(btn => btn.onclick = () => useDistillDataset(btn.dataset.distillTrain));
+  const cancel = $('#distill-cancel');
+  if (cancel) cancel.onclick = cancelDistill;
+  const go = $('#distill-go-train');
+  if (go) go.onclick = () => { if (S.distill.job && S.distill.job.out) useDistillDataset(S.distill.job.out); };
+}
+async function loadDistill() {
+  const d = S.distill;
+  try {
+    const [datasets, jobs] = await Promise.all([
+      api('/api/wb/distill/datasets').catch(e => ({ok:false, error:e.message, items:[]})),
+      api('/api/wb/distill/jobs').catch(e => ({ok:false, error:e.message, items:[]})),
+    ]);
+    d.datasets = datasets.items || [];
+    d.costPerSample = datasets.cost_per_sample || d.costPerSample;
+    d.jobs = jobs.items || [];
+    d.error = datasets.ok === false ? ('数据集加载失败：' + (datasets.error || '')) : '';
+    const formMode = new URLSearchParams(location.search).get('distill_form') === '1';
+    if (formMode) d.job = null;
+    if (!formMode && !d.job && d.jobs.length) {
+      const running = d.jobs.find(j => j.status === 'running');
+      d.job = running || d.jobs[0];
+    }
+    if (d.job && d.job.id) {
+      try {
+        const log = await api('/api/wb/distill/job/' + encodeURIComponent(d.job.id) + '/log?tail=200');
+        d.log = log.lines || [];
+      } catch (e) { d.log = []; }
+    }
+  } catch (e) { d.error = '后端未就绪：' + e.message; }
+  renderDistillPage();
+  if (d.job && d.job.status === 'running') pollDistill(d.job.id);
+}
+async function startDistill() {
+  const limit = parseInt($('#dist-limit').value, 10) || 300;
+  const real = document.querySelector('input[name="dist-mode"]:checked')?.value === 'real';
+  const confirmText = $('#dist-confirm').value.trim();
+  if (real && confirmText !== '确认生成') { toast('真实生成需要输入确认短语「确认生成」', 'err'); return; }
+  const body = {
+    limit, real, out_name: $('#dist-out').value.trim(),
+    budget_cny: parseFloat($('#dist-budget').value) || 3.05,
+    split: $('#dist-split').checked,
+    max_variants: parseInt($('#dist-variants').value, 10) || 7,
+    confirm: confirmText,
+  };
+  const btn = $('#distill-create'); btn.disabled = true;
+  try {
+    const d = await api('/api/wb/distill/create', {method: 'POST', body});
+    if (!d.ok) throw new Error(d.hint || d.error || '创建失败');
+    S.distill.job = d.job; S.distill.log = [];
+    toast('已开始生成（' + (d.job.real ? '真实' : '模拟') + '）', 'ok');
+    renderDistillPage();
+    pollDistill(d.job.id);
+  } catch (e) {
+    $('#distill-create-hint').textContent = '创建失败：' + e.message;
+    toast('创建失败：' + e.message, 'err');
+  } finally { btn.disabled = false; }
+}
+function pollDistill(id) {
+  const d = S.distill;
+  if (d.timer) clearInterval(d.timer);
+  const tick = async () => {
+    if (S.view !== 'distill') { clearInterval(d.timer); d.timer = null; return; }
+    try {
+      const [job, log] = await Promise.all([
+        api('/api/wb/distill/job/' + encodeURIComponent(id)),
+        api('/api/wb/distill/job/' + encodeURIComponent(id) + '/log?tail=200').catch(() => null),
+      ]);
+      if (job.ok) d.job = job.job;
+      if (log && log.ok) d.log = log.lines || [];
+      renderDistillPage();
+      if (d.job && ['done', 'failed', 'cancelled'].includes(d.job.status)) {
+        clearInterval(d.timer); d.timer = null;
+        if (d.job.status === 'done') { loadDistillDatasetsOnly(); toast('生成完成 → 可去训练', 'ok'); }
+      }
+    } catch (e) { clearInterval(d.timer); d.timer = null; }
+  };
+  d.timer = setInterval(tick, 1000);
+  tick();
+}
+async function loadDistillDatasetsOnly() {
+  try {
+    const d = await api('/api/wb/distill/datasets');
+    S.distill.datasets = d.items || [];
+    S.distill.costPerSample = d.cost_per_sample || S.distill.costPerSample;
+    renderDistillPage();
+  } catch (e) {}
+}
+async function cancelDistill() {
+  if (!S.distill.job) return;
+  if (!confirm('取消当前蒸馏任务？')) return;
+  try {
+    const d = await api('/api/wb/distill/job/' + encodeURIComponent(S.distill.job.id) + '/cancel', {method: 'POST', body: {}});
+    toast(d.ok ? '已取消' : (d.hint || d.error || '取消失败'), d.ok ? 'ok' : 'err');
+    if (d.job) S.distill.job = d.job;
+    renderDistillPage();
+  } catch (e) { toast('取消失败：' + e.message, 'err'); }
+}
+async function useDistillDataset(path) {
+  if (!path) return;
+  showView('train');
+  try {
+    await loadTrain();
+    const select = $('#train-dataset');
+    const opt = [...select.options].find(o => o.value === path);
+    if (opt) {
+      select.value = path; S.train.selected = path;
+      loadPreview(path); loadTrain();
+      toast('已切到训练页并选中数据集', 'ok');
+    } else {
+      toast('已切到训练页；数据集下拉里没找到该文件：' + path, '');
+    }
+  } catch (e) { toast('切到训练页失败：' + e.message, 'err'); }
+}
+async function loadTrain() {
+  try {
+    const d = await api('/api/wb/train/datasets');
+    S.train.datasets = d.items || [];
+    $('#train-ds-count').textContent = S.train.datasets.length + ' 个';
+    $('#train-datasets').innerHTML = S.train.datasets.map(x => `<button class="list-row ${S.train.selected === x.path ? 'selected' : ''}" data-ds="${esc(x.path)}"><span>${esc(x.name)} <span class="muted small">${esc(x.root || '')}</span></span><span class="muted small">${x.rows ?? ''} 行</span></button>`).join('') || '<div class="muted">暂无数据集</div>';
+    $('#train-dataset').innerHTML = S.train.datasets.map(x => `<option value="${esc(x.path)}">${esc(x.name)} (${x.rows ?? '?'} 行)</option>`).join('');
+    $$('#train-datasets [data-ds]').forEach(b => b.onclick = () => { S.train.selected = b.dataset.ds; $('#train-dataset').value = b.dataset.ds; loadPreview(b.dataset.ds); loadTrain(); });
+    loadTrainSources();
+    if (new URLSearchParams(location.search).get('train') === 'chat') {
+      const chatTab = document.querySelector('[data-train-source="chat"]');
+      if (chatTab) chatTab.click();
+    }
+    const jobs = await api('/api/wb/train/jobs');
+    S.train.jobs = jobs.items || [];
+    $('#train-jobs').innerHTML = S.train.jobs.map(j => `<button class="list-row ${S.train.selectedJob === j.id ? 'selected' : ''}" data-job="${esc(j.id)}"><span>${esc(j.id)} <span class="muted small">${esc(zh('job_kind', j.kind))}</span></span><span class="badge ${j.status === 'done' ? 'on' : ''}">${esc(zh('status', j.status))}</span></button>`).join('') || '<div class="muted">暂无任务</div>';
+    $$('#train-jobs [data-job]').forEach(b => b.onclick = () => { S.train.selectedJob = b.dataset.job; loadJob(b.dataset.job); loadTrain(); });
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function loadPreview(path) {
+  try {
+    const d = await api('/api/wb/train/preview?path=' + encodeURIComponent(path) + '&limit=3');
+    $('#train-hint').textContent = '格式：' + zh('train_format', d.format || 'unknown') + ' · 选中：' + path;
+    term(JSON.stringify(d.rows || [], null, 2), '数据集预览');
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function createTrain() {
+  const body = {
+    dataset: $('#train-dataset').value,
+    out_name: $('#train-out').value.trim(),
+    steps: parseInt($('#train-steps').value, 10) || 0,
+    max_len: parseInt($('#train-maxlen').value, 10) || 512,
+    lr: parseFloat($('#train-lr').value) || 0.0002,
+    lora_r: parseInt($('#train-r').value, 10) || 16,
+    lora_alpha: parseInt($('#train-alpha').value, 10) || 32,
+    load_4bit: $('#train-4bit').checked,
+    format: $('#train-format').value,
+    mode: $('#train-mode').value
+  };
+  try {
+    const d = await api('/api/wb/train/create', {method: 'POST', body});
+    if (!d.ok) { toast(d.error || '创建失败', 'err'); return; }
+    toast('已创建任务 ' + ((d.job && d.job.id) || d.job_id));
+    loadTrain();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function startTrain() {
+  if (!S.train.selectedJob) { toast('先选一个任务', 'err'); return; }
+  try {
+    const d = await api('/api/wb/train/start', {method: 'POST', body: {id: S.train.selectedJob}});
+    toast(d.ok ? '已启动' : (d.error || '启动失败'), d.ok ? 'ok' : 'err');
+    pollJob(S.train.selectedJob); loadTrain();
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function stopTrain() {
+  if (!S.train.selectedJob) { toast('先选一个任务', 'err'); return; }
+  try {
+    const d = await api('/api/wb/train/stop', {method: 'POST', body: {id: S.train.selectedJob}});
+    toast(d.ok ? '已停止' : (d.error || '停止失败'), d.ok ? 'ok' : 'err');
+    loadTrain();
+  } catch (e) { toast(e.message, 'err'); }
+}
+function pollJob(id) {
+  if (S.timer) clearInterval(S.timer);
+  const tick = async () => {
+    try {
+      const d = await api('/api/wb/train/job/' + encodeURIComponent(id) + '?tail=120');
+      $('#train-log').textContent = (d.tail || []).join('\n');
+      if (['done','failed','stopped'].includes(d.status)) { clearInterval(S.timer); S.timer = null; loadTrain(); }
+    } catch (e) { clearInterval(S.timer); S.timer = null; }
+  };
+  tick(); S.timer = setInterval(tick, 2500);
+}
+async function loadJob(id) {
+  try {
+    const d = await api('/api/wb/train/job/' + encodeURIComponent(id) + '?tail=200');
+    $('#train-log').textContent = (d.tail || []).join('\n');
+    if (d.status === 'running') pollJob(id);
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------------------------------------------------------------- 模型 */
+async function withBusy(btn, fn) {
+  if (!btn) return fn();
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '处理中…';
+  try { return await fn(); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+function inventoryBadge(fmt) {
+  return `<span class="badge ${fmt === 'gguf' ? 'on' : ''}">${esc(zh('format', fmt || 'unknown'))}</span>`;
+}
+function sourceLabel(src) {
+  return zh('source', src && src !== '' ? src : '-');
+}
+async function loadModels() {
+  try {
+    const [status, inv, downloads] = await Promise.all([
+      api('/api/wb/models/status'),
+      api('/api/wb/models/inventory'),
+      api('/api/wb/models/downloads')
+    ]);
+    S.models = status;
+    const running = (status.running && status.running.items) || [];
+    const runningCount = (status.running && status.running.running) || 0;
+    const disk = status.disk || {};
+    const allItems = inv.items || [];
+    const counts = inv.counts || {};
+    const items = S.modelFilter === 'all' ? allItems : allItems.filter(x => x.format === S.modelFilter);
+    $('#models-cards').innerHTML = [
+      ['清单', allItems.length, '模型条目'],
+      ['GGUF 模型', counts.gguf || 0, '可服务'],
+      ['HuggingFace 目录', counts.hf || 0, '可训练'],
+      ['LoRA 适配器', counts.adapter || 0, 'LoRA'],
+      ['运行中', runningCount, '服务'],
+      ['磁盘', fmtSize(disk.total), 'agent']
+    ].map(([t, v, s]) => `<div class="card"><div class="card-label">${esc(t)}</div><div class="card-value">${esc(v)}</div><div class="card-sub">${esc(s)}</div></div>`).join('');
+    $('#models-running').innerHTML = running.map(x => `<div class="row"><span>端口 ${x.port} ${x.model_path ? '<span class="muted small">' + esc(x.model_path) + '</span>' : ''}</span><span class="badge ${x.running ? 'on' : ''}">${x.running ? '运行中' : '未运行'}</span></div>`).join('') || '<div class="muted">无</div>';
+    $('#models-count').textContent = items.length + ' 项';
+    $('#models-list').innerHTML = items.map(x => `<tr>
+      <td title="${esc(x.path)}">${esc(x.name)}</td>
+      <td>${inventoryBadge(x.format)}</td>
+      <td>${esc(sourceLabel(x.source))}</td>
+      <td>${x.usable_for_serve ? '<span class="badge on">服务</span> ' : ''}${x.usable_for_train ? '<span class="badge on">训练</span>' : ''}${!x.usable_for_serve && !x.usable_for_train ? '<span class="muted">存档</span>' : ''}</td>
+      <td>${fmtSize(x.size)}</td>
+      <td><button class="btn tiny danger" data-del-path="${esc(x.path)}" data-del-name="${esc(x.name)}">删除</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">暂无模型</td></tr>';
+    $$('#models-list [data-del-path]').forEach(b => b.onclick = () => withBusy(b, () => deleteModel(b.dataset.delPath, b.dataset.delName)));
+    renderDownloads(downloads.items || []);
+  } catch (e) { toast(e.message, 'err'); }
+}
+function renderDownloads(items) {
+  const active = items.filter(j => ['queued', 'downloading', 'cancelling'].includes(j.status));
+  $('#downloads-list').innerHTML = items.map(j => {
+    const total = Number(j.total || 0), done = Number(j.bytes_done || 0);
+    const pct = total > 0 ? Math.min(100, Math.round(done * 1000 / total) / 10) : (j.status === 'done' ? 100 : 0);
+    const label = {queued:'排队', downloading:'下载中', cancelling:'取消中', done:'完成', failed:'失败', cancelled:'已取消'}[j.status] || j.status;
+    return `<div class="download-row">
+      <div class="download-head"><span>${esc(j.name || j.job_id)} <span class="muted small">${esc(j.file || '')} · ${esc(j.job_id || '')}</span></span><span class="badge ${j.status === 'done' ? 'on' : (j.status === 'failed' ? 'danger' : '')}">${esc(label)}</span></div>
+      <div class="progress"><span style="width:${pct}%"></span></div>
+      <div class="download-foot"><span class="muted small">${done ? fmtSize(done) : '0 B'} / ${total ? fmtSize(total) : '?'} · ${pct}%${j.error ? ' · ' + esc(j.error) : ''}</span>${['queued','downloading','cancelling'].includes(j.status) ? `<button class="btn tiny" data-cancel="${esc(j.job_id)}">取消</button>` : ''}</div>
+    </div>`;
+  }).join('') || '<div class="muted small">暂无下载任务</div>';
+  $$('#downloads-list [data-cancel]').forEach(b => b.onclick = () => withBusy(b, () => cancelDownload(b.dataset.cancel)));
+  if (active.length && !S.dlTimer) {
+    S.dlTimer = setInterval(async () => {
+      try {
+        const d = await api('/api/wb/models/downloads');
+        renderDownloads(d.items || []);
+        if (!(d.items || []).some(j => ['queued','downloading','cancelling'].includes(j.status))) {
+          clearInterval(S.dlTimer); S.dlTimer = null; loadModels();
+        }
+      } catch (e) { clearInterval(S.dlTimer); S.dlTimer = null; }
+    }, 2000);
+  }
+}
+async function validateImport() {
+  const path = $('#import-path').value.trim();
+  if (!path) { toast('先填本地路径', 'err'); return; }
+  try {
+    const d = await api('/api/wb/models/validate', {method: 'POST', body: {path}});
+    const text = d.ok ? `校验通过：${zh('format', d.format)} · ${fmtSize(d.size)} · ${d.files} 个文件` : `校验失败：${(d.reasons || []).join(', ') || d.error || ''}`;
+    $('#import-result').textContent = text;
+    $('#import-result').className = 'small ' + (d.ok ? 'ok-text' : 'err-text');
+    if (d.ok && !$('#import-name').value.trim()) $('#import-name').value = path.split(/[\\/]/).pop().replace(/\.gguf$/i, '');
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function runImport() {
+  const path = $('#import-path').value.trim();
+  let name = $('#import-name').value.trim();
+  const format = $('#import-format').value;
+  if (!path) { toast('路径必填', 'err'); return; }
+  if (!name) name = path.split(/[\\/]/).pop().replace(/\.gguf$/i, '');
+  try {
+    const d = await api('/api/wb/models/import', {method: 'POST', body: {path, name, format, overwrite: $('#import-overwrite').checked}});
+    $('#import-result').textContent = d.ok ? `已导入：${d.path}（${zh('format', d.format)}, ${fmtSize(d.size)}）` : `导入失败：${d.error || ''} ${(d.reasons || []).join(', ')}`;
+    $('#import-result').className = 'small ' + (d.ok ? 'ok-text' : 'err-text');
+    toast(d.ok ? '导入完成' : (d.error || '导入失败'), d.ok ? 'ok' : 'err');
+    if (d.ok) loadModels();
+  } catch (e) { toast(e.message, 'err'); }
+}
+function setDlTab(tab) {
+  S.dlTab = tab;
+  $$('[data-dl-tab]').forEach(b => b.classList.toggle('active', b.dataset.dlTab === tab));
+  $('#dl-direct-url').style.display = tab === 'direct' ? '' : 'none';
+  $('#dl-filename-wrap').style.display = tab === 'direct' ? '' : 'none';
+  $('#dl-repo-wrap').style.display = tab === 'hf' ? '' : 'none';
+  $('#dl-file-wrap').style.display = tab === 'hf' ? '' : 'none';
+  $('#dl-mirror-wrap').style.display = tab === 'hf' ? '' : 'none';
+}
+async function startDownload() {
+  const name = $('#dl-name').value.trim();
+  if (!name) { toast('保存名称必填', 'err'); return; }
+  const body = {name, overwrite: $('#dl-overwrite').checked};
+  if (S.dlTab === 'direct') {
+    body.url = $('#dl-url').value.trim();
+    body.filename = $('#dl-filename').value.trim();
+  } else {
+    body.repo = $('#dl-repo').value.trim();
+    body.file = $('#dl-file').value.trim() || 'model.safetensors';
+    body.mirror = $('#dl-mirror').value.trim() || 'hf-mirror.com';
+  }
+  try {
+    const d = await api('/api/wb/models/download', {method: 'POST', body});
+    if (!d.ok) { toast(d.error || d.hint || '下载失败', 'err'); return; }
+    toast('已开始下载 ' + d.job_id);
+    S.dlJob = d.job_id;
+    const list = await api('/api/wb/models/downloads');
+    renderDownloads(list.items || []);
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function cancelDownload(jobId) {
+  try {
+    const d = await api('/api/wb/models/download/cancel', {method: 'POST', body: {job_id: jobId}});
+    toast(d.ok ? '已请求取消' : (d.error || '取消失败'), d.ok ? 'ok' : 'err');
+    const list = await api('/api/wb/models/downloads');
+    renderDownloads(list.items || []);
+  } catch (e) { toast(e.message, 'err'); }
+}
+async function deleteModel(path, name) {
+  if (!confirm(`删除「${name}」？会移入回收站（models/.trash），可恢复。`)) return;
+  try {
+    const d = await api('/api/wb/models/delete', {method: 'POST', body: {name, path}});
+    toast(d.ok ? '已移入回收站：' + (d.moved_to || '') : (d.error || '删除失败'), d.ok ? 'ok' : 'err');
+    if (d.ok) loadModels();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+/* ---------------------------------------------------------------- 事件 */
+$('#brand').onclick = () => showView('welcome');
+$('#connect').onclick = connect;
+$('#token').addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
+$$('.ab-item').forEach(b => b.onclick = () => showView(b.dataset.view));
+$$('[data-go]').forEach(b => b.onclick = () => showView(b.dataset.go));
+termWidthInit();
+$('#terminal-toggle').onclick = () => openTerminal(!$('#terminal').classList.contains('open'));
+$('#terminal-close').onclick = () => openTerminal(false);
+$('#terminal-clear').onclick = () => { $('#terminal-out').textContent = ''; };
+(() => {
+  const handle = $('#terminal-resize');
+  let dragging = false;
+  const setWidth = (px, save) => {
+    const width = termClamp(px);
+    document.documentElement.style.setProperty('--term-width', width + 'px');
+    if (save) { try { localStorage.setItem(TERM_KEY, String(width)); } catch (e) {} }
+    return width;
+  };
+  handle.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    dragging = true;
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add('term-resizing');
+  });
+  handle.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    setWidth(window.innerWidth - event.clientX, false);
+  });
+  const stop = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('term-resizing');
+    setWidth(window.innerWidth - event.clientX, true);
+  };
+  handle.addEventListener('pointerup', stop);
+  handle.addEventListener('pointercancel', stop);
+  handle.addEventListener('dblclick', () => setWidth(TERM_DEFAULT, true));
+})();
+if (new URLSearchParams(location.search).get('term') === '1') {
+  setTimeout(() => {
+    openTerminal(true);
+    if (!$('#terminal-out').textContent) term('# 终端（右侧停靠；拖动左边缘调宽度）', '截图');
+  }, 300);
+}
+$('#ov-refresh').onclick = loadOverview;
+$('#svc-refresh').onclick = loadServices;
+$('#cfg-save').onclick = saveConfig;
+$('#cfg-backups').onclick = showConfigBackups;
+$('#distill-refresh').onclick = loadDistill;
+$('#distill-create').onclick = startDistill;
+$('#distill-derived').onchange = () => { S.distill.showDerived = $('#distill-derived').checked; renderDistillPage(); };
+function updateDistillCreateState() {
+  const real = document.querySelector('input[name="dist-mode"]:checked')?.value === 'real';
+  const ok = !real || $('#dist-confirm').value.trim() === '确认生成';
+  const btn = $('#distill-create');
+  if (btn) btn.disabled = !ok;
+  $('#distill-create-hint').textContent = real && !ok ? '真实生成需输入确认语「确认生成」' : '';
+}
+$$('input[name="dist-mode"]').forEach(radio => radio.onchange = () => {
+  $('#dist-real-box').classList.toggle('hidden', radio.value !== 'real' || !radio.checked);
+  distillCost();
+  updateDistillCreateState();
+});
+$('#dist-confirm').oninput = updateDistillCreateState;
+updateDistillCreateState();
+['#dist-limit', '#dist-budget'].forEach(sel => { const el = $(sel); if (el) el.oninput = distillCost; });
+$('#distill-cps').textContent = '0.001468';
+$('#db-refresh').onclick = loadDatabases;
+$('#db-refresh2').onclick = () => loadDatabases();
+$('#db-select-btn').onclick = () => $('#db-select-menu').classList.toggle('hidden');
+$('#db-show-all').checked = S.data.showAll;
+$('#db-show-all').onchange = () => {
+  S.data.showAll = $('#db-show-all').checked;
+  try { sessionStorage.setItem('idea_db_show_all', S.data.showAll ? '1' : '0'); } catch (e) {}
+  if (S.data.db && !dbVisibleFiles().some(f => f.id === S.data.db)) {
+    S.data.db = dbVisibleFiles()[0] ? dbVisibleFiles()[0].id : '';
+  }
+  renderDbPicker();
+  const note = $('#db-note');
+  if (note) note.textContent = '已显示 ' + dbVisibleFiles().length + ' / ' + S.data.dbs.length
+    + ' 个数据文件（' + (S.data.showAll ? '含测试/备份/旧库' : '默认只显示常用数据；测试/备份/旧库已折叠') + '）';
+  if (S.data.db) loadSchema(S.data.db);
+};
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.db-picker-field')) $('#db-select-menu').classList.add('hidden');
+});
+if (new URLSearchParams(location.search).get('db_menu') === '1') {
+  setTimeout(() => $('#db-select-menu').classList.remove('hidden'), 900);
+}
+$('#db-table-select').onchange = e => loadRows(e.target.value, 1);
+$('#db-prev').onclick = () => { if (S.data.table && S.data.page > 1) loadRows(S.data.table, S.data.page - 1); };
+$('#db-next').onclick = () => { if (S.data.table && S.data.page < S.data.pages) loadRows(S.data.table, S.data.page + 1); };
+$('#db-search-btn').onclick = () => { S.data.search = ($('#db-search').value || '').trim(); if (S.data.table) loadRows(S.data.table, 1); };
+$('#db-search').onkeydown = e => { if (e.key === 'Enter') $('#db-search-btn').onclick(); };
+$('#db-write').onchange = () => { $('#db-confirm-wrap').classList.toggle('hidden', !$('#db-write').checked); };
+$('#db-run').onclick = runSql;
+$('#db-backup').onclick = backupDb;
+if (new URLSearchParams(location.search).get('db_adv') === '1') $('#db-advanced').open = true;
+$('#annot-reload').onclick = () => loadAnnotateSource(S.annotate.source || '');
+$('#annot-path-load').onclick = () => {
+  const path = $('#annot-path').value.trim();
+  if (!path) { toast('先填 JSONL 路径', 'err'); return; }
+  loadAnnotateSource(path);
+};
+$('#annot-window').addEventListener('change', () => { S.annotate.window = parseInt($('#annot-window').value, 10) || 6; if (S.annotate.source) loadAnnotateSource(S.annotate.source); });
+$('#annot-save').onclick = saveAnnotations;
+$('#corpus-refresh').onclick = loadCorpus;
+$('#corpus-new').onclick = createCorpusJob;
+$('#corpus-parse').onclick = parseCorpus;
+$('#corpus-save').onclick = saveCorpus;
+$('#corpus-files').addEventListener('change', e => uploadCorpusFiles(e.target.files));
+$('#corpus-select-all').onclick = () => { S.corpus.selected = new Set(corpusVisibleItems().map(item => String(item.id ?? item.index ?? ''))); renderCorpusPage(); };
+$('#corpus-invert').onclick = () => {
+  corpusVisibleItems().forEach(item => {
+    const id = String(item.id ?? item.index ?? '');
+    if (S.corpus.selected.has(id)) S.corpus.selected.delete(id); else S.corpus.selected.add(id);
+  });
+  renderCorpusPage();
+};
+$('#corpus-search').addEventListener('input', e => { S.corpus.search = e.target.value.trim(); renderCorpusPage(); });
+(() => {
+  const drop = $('#corpus-drop');
+  if (!drop) return;
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); }));
+  drop.addEventListener('drop', e => uploadCorpusFiles(e.dataTransfer.files));
+})();
+$('#train-refresh').onclick = loadTrain;
+$('#train-export-btn').onclick = exportChatDataset;
+$$('[data-train-source]').forEach(b => b.onclick = () => {
+  $$('[data-train-source]').forEach(x => x.classList.toggle('active', x === b));
+  $('#train-source-existing').style.display = b.dataset.trainSource === 'existing' ? '' : 'none';
+  $('#train-source-chat').style.display = b.dataset.trainSource === 'chat' ? '' : 'none';
+  if (b.dataset.trainSource === 'chat') loadTrainSources();
+});
+$('#train-create').onclick = createTrain;
+$('#train-start').onclick = startTrain;
+$('#train-stop').onclick = stopTrain;
+$('#models-refresh').onclick = () => withBusy($('#models-refresh'), loadModels);
+$('#models-filter').onchange = e => { S.modelFilter = e.target.value; loadModels(); };
+$('#import-validate').onclick = () => withBusy($('#import-validate'), validateImport);
+$('#import-run').onclick = () => withBusy($('#import-run'), runImport);
+$('#dl-start').onclick = () => withBusy($('#dl-start'), startDownload);
+$$('[data-dl-tab]').forEach(b => b.onclick = () => setDlTab(b.dataset.dlTab));
+$('#import-path').addEventListener('change', () => { if (!$('#import-name').value.trim()) $('#import-name').value = $('#import-path').value.split(/[\\/]/).pop().replace(/\.gguf$/i, ''); });
+$('#dl-url').addEventListener('input', () => { if (!$('#dl-name').value.trim()) { const v = $('#dl-url').value.split('/').pop() || ''; $('#dl-name').value = v.split('?')[0].replace(/\.gguf$/i, '').replace(/\.safetensors$/i, ''); } });
+$('#token').value = S.token;
+$('#token').addEventListener('change', () => { S.token = $('#token').value.trim() || '8888'; localStorage.setItem('idea_token', S.token); });
+connect();
+showView(S.view);
+</script>
+</body>
+</html>

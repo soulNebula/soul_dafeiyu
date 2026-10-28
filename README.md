@@ -27,6 +27,8 @@
 - **日记 / 周复盘**：每天 23:00 写第一人称日记；周日 23:30 后做周复盘并提炼进核心人格层。
 - **上网**：天气/新闻/网页搜索（`agi/integrations/web_lookup.py`）；B站素材摄取（见「外部依赖」）。
 - **可观测**：802 控制台能看每条回复的 prompt/记忆/内状态/心情/生成/润色/护栏/耗时（`turn_traces`）。
+- **803 工作台（`idea/`）**：模型中心 / 训练工厂（LoRA/全参/蒸馏数据）/ 数据工作室 /
+  语料清洗（截图 OCR + 你·我分离）/ 用户标注（InnerState 打分）/ 蒸馏语义生成；中文化界面，独立测试。
 - **测试**：根 `tests/` + `agi/tests/` 两套离线测试；CI 跑密钥扫描与两套测试
   （`.github/workflows/ci.yml`）。
 
@@ -71,7 +73,10 @@ C:\Python314\python.exe tools\console\server.py --port 802    :: 控制台 802
 C:\Python314\python.exe tools\soul_serve\serve_local3b.py     :: 本地 3B 8125（可选）
 E:\agent\llama\cuda\llama-server.exe -m E:\agent\output\gguf\soul_qwen25_05b_v1b-q4_k_m.gguf --port 8123  :: 内状态 8123（可选）
 
-:: 3) 桌面 GUI（可选；--fake 不连微信）
+:: 3) 803 工作台（IDEA，先在 idea/ 下建 venv 并 pip install -r requirements.txt）
+cd idea && .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 803
+
+:: 4) 桌面 GUI（可选；--fake 不连微信）
 C:\Python314\python.exe app.py --fake
 ```
 
@@ -132,6 +137,7 @@ SoulAgent/
 ├── Demo/                  独立工具实现（tools_impl 被 tools/ 动态 import）
 ├── legacy/                死代码归档（只 mv 不删；清单见 legacy/README.md）
 ├── tests/ docs/ scripts/  测试 / 文档 / 发布脚本
+├── idea/                  803 工作台（独立 git 历史，作为 subtree 合入；app/web/tests/docs）
 ├── app.py web_app.py      桌面 GUI / legacy 网页端入口
 └── README.md
 ```
@@ -143,6 +149,7 @@ SoulAgent/
 - [架构说明](docs/architecture/ARCHITECTURE.md)（双后端、801/802、发送闸门、主动链、数据层）
 - [文档总入口](docs/INDEX.md)
 - [当前状态与可复现测试数字](docs/quality/STATUS.md)
+- [803 工作台说明](idea/README.md)（语料清洗/标注/蒸馏/训练/模型中心）
 - [迭代计划索引](docs/plans/README.md)
 - [使用与运维说明](docs/guides/README-usage.md)
 - [死代码归档清单](legacy/README.md)

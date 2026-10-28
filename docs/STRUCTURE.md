@@ -12,6 +12,10 @@ SoulAgent/
 ├── README.md                 项目首页
 ├── SECURITY.md               安全披露
 ├── CONTRIBUTING.md           贡献指南
+├── idea/                     803 工作台（独立 git 历史，subtree 合入；见 idea/README.md）
+│   ├── app/ web/ tests/      后端 studio / 前端页面 / 测试
+│   ├── scripts/ docs/        启动、冒烟、验收脚本与结构说明
+│   └── reports/             验收报告（archive/ 历史）
 ├── docs/
 │   ├── INDEX.md              唯一文档入口（按主题索引）
 │   ├── STRUCTURE.md          本文件：目录职责与放文档规则

@@ -27,6 +27,7 @@
 | [`guides/PATHS.md`](guides/PATHS.md) | 数据根/模型/日志路径解析与迁移 |
 | [`guides/常见问题.md`](guides/常见问题.md) | FAQ |
 | [`guides/网页端使用说明.md`](guides/网页端使用说明.md) | 控制台/网页端操作 |
+| [`../idea/README.md`](../idea/README.md) | 803 工作台：语料清洗/用户标注/蒸馏/训练/模型中心 |
 | [`guides/风控与合规说明.md`](guides/风控与合规说明.md) | 风险边界与合规 |
 | [`guides/微信接入与自主能力_路线图.md`](guides/微信接入与自主能力_路线图.md) | 微信接入与自主能力路线（历史路线，现役参考） |
 | [`guides/OPENSOURCE.md`](guides/OPENSOURCE.md) | 开源发布流程与数据剥离 |

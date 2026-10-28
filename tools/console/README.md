@@ -156,6 +156,23 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
   inner.log / prompt_override.log / regen_failed 计数；关键词+kind 过滤、时间倒序、错误行红色、点行看整条 JSON。
 - 顶部导航新增「对话测试 / 模型配置 / 日志」三项。
 
+## 发送模式 / 朋友圈 / 模型库（P39）
+
+- **发送模式开关**：顶栏 `发送 [自动|草稿|关闭]`；`GET /api/control/send_mode`、`POST /api/control/send_mode {mode}`；
+  写前备份 config 到 `E:/agent/backups/config_before_send_mode_*.json` + 审计 `send_mode`。自动=直接发、
+  草稿=生成草稿等批准、关闭=不自动回复。
+- **朋友圈**：侧栏「内容 · 朋友圈」；`GET /api/moments?limit=&keyword=&refresh=`、`POST /api/moments/refresh {limit}`、
+  `GET /api/moments/{tid}`、`GET /api/moments/media?md5=`（支持 `?token=` 给 `<img>`）、
+  `POST /api/moments/analyze {limit,question}`、`GET /api/moments/analyses`。
+  抓取复用 `tools/moments_fetch.py`（`E:/agent/venv_wx312`，180s 超时），缓存 `agi/data/moments/<date>.jsonl` 去重；
+  分析走 `agi.llm.router.Router().chat("chat_reply", ...)`，严格 JSON，缓存 `agi/data/moments/analysis_*.json`。
+- **模型库管理**（现有「模型」页内）：`GET /api/models` 增加 `items/counts` 聚合（gguf/hf/adapter，
+  含 `E:/agent/models` 与 `output/adapters`/`output/*`）；`POST /api/models/import {path,name?,format?}`（复制到
+  `models/imported/<name>`，.gguf 校验 GGUF 头 / hf config.json / adapter adapter_config.json）、
+  `POST /api/models/delete {path}`（只允许 models 下，移 `.trash/<ts>/`）、
+  `POST /api/models/download {url,name?}`（后台线程直链 .gguf → `models/downloads/<name>/`）、
+  `GET /api/models/download/status`。
+
 ## 素材库页（P17）
 
 独立侧栏「素材」组 · 「素材库」页：统计（贴纸/图片/GIF/软删）、搜索/类型筛选/只看启用、网格缩略图；

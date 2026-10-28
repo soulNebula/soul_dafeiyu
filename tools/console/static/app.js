@@ -57,6 +57,59 @@ const PAGES = {
   settings: '设置',
 };
 
+/* 统一枚举中文映射：接口仍返回英文，前端只负责展示。 */
+const ENUM_LABELS = {
+  memory_kind: {
+    preference: '偏好', insight: '洞察', fact: '事实', plan: '计划', event: '事件',
+    skill: '技能', relation: '关系', identity: '身份', habit: '习惯', goal: '目标',
+    emotion: '情绪', mood: '心情', rule: '规则', summary: '摘要', preference_note: '偏好补充', other: '其他',
+  },
+  memory_status: {
+    pending: '待生效', active: '生效中', archived: '已归档', superseded: '已替代', forgotten: '已遗忘', full: '完整', decayed: '已衰减', dormant: '休眠', invalid: '已失效',
+    merged: '已合并', archived: '已归档',
+  },
+  memory_tier: { hot: '近期', warm: '中期', cold: '长期' },
+  event_kind: {
+    event: '事件', inbound: '收到消息', outbound: '回消息', message: '消息',
+    surf_skipped: '冲浪跳过', surf_started: '开始冲浪', surf_finished: '冲浪结束',
+    quiet_hours: '静音时段', outside_window: '不在允许时段', engine_disabled: '引擎已关闭',
+    proactive_skipped: '概率跳过', proactive_stopped: '已停发',
+    proactive_send: '主动发送', proactive_schedule: '主动调度', proactive_skipped: '概率跳过',
+    proactive_stopped: '已停发', send_blocked: '发送被拦', send_probe: '发送探针',
+    draft: '草稿', context_budget: '上下文裁剪', voice_polished: '语气润色',
+    config_reloaded: '配置热加载', gateway_started: '网关启动', gateway_stale: '死区告警',
+    gate: '闸门', memory: '记忆', claim: '事实', media: '媒体',
+  },
+  event_status: {
+    pending: '待处理', planned: '计划中', sent: '已发送', delivered: '已送达', blocked: '已拦截',
+    failed: '失败', error: '失败', queued: '排队中', running: '运行中',
+    done: '完成', dry_run: '演练', skipped: '已跳过', cancelled: '已取消', draft: '草稿',
+    ok: '正常', active: '生效中',
+  },
+  log_level: { debug: '调试', info: '信息', warn: '警告', warning: '警告', error: '错误', critical: '严重', fatal: '致命' },
+  model_format: { gguf: 'GGUF 模型', hf: 'HuggingFace 目录', adapter: '适配器', safetensors: 'HF 权重', unknown: '未知格式' },
+  model_source: { builtin: '内置', downloaded: '在线下载', imported: '本地导入', static: '内置' },
+  model_role: { soul: '灵魂模型', chat: '对话模型', inner: '内状态', vision: '视觉模型', embed: '向量模型', reserved: '预留', research: '研究模型', local: '本地', remote: '远程', base: '基础模型' },
+  model_status: { running: '运行中', stopped: '已停止', error: '异常', unknown: '未知', reserved: '预留', external: '外部启动', ready: '就绪', reference: '参考模型' },
+  media_type: { text: '文本', emoji_text: '表情', emoji: '表情', image: '图片', gif: 'GIF', sticker: '贴纸', sticker_as_image: '贴纸（图片）', video: '视频', voice: '语音', file: '文件' },
+  bili_status: { waiting: '等待扫码', scanned: '已扫码待确认', expired: '已过期', ok: '成功', error: '失败', running: '运行中', skipped: '跳过', pending: '待运行', done: '完成', failed: '失败', outside_window: '不在允许时段', quiet_hours: '静音时段', no_contact: '无联系人' },
+  send_mode: { auto: '自动发送', confirm: '确认后发送', off: '不发送' },
+  trace_mode: { chat: '聊天', proactive: '主动消息' },
+  chat_role: { user: '用户', assistant: '她', system: '系统' },
+  guard_level: { L0: '通过', L1: '提示', L2: '拦截重写', L3: '拦截' },
+  inner_mode: { off: '关闭', static: '静态', rule: '规则', model: '模型' },
+  inner_scope: { all: '全部', proactive_only: '仅主动消息', off: '关闭' },
+  inner_schema: { slim: '精简', full: '完整' },
+};
+function enumLabel(group, value, fallback) {
+  const table = ENUM_LABELS[group] || {};
+  const key = String(value === null || value === undefined ? '' : value);
+  return table[key] || table[key.toLowerCase()] || fallback || (key || '—');
+}
+function enumBadge(group, value, cls) {
+  return badge(enumLabel(group, value), cls);
+}
+
 const FEED_KINDS = [
   ['', '全部事件'],
   ['inbound', '收消息'],
@@ -203,9 +256,9 @@ function renderPills() {
     pills.push(pill('gateway 在线', 'ok'));
     const proactive = status.status.proactive || {};
     pills.push(pill(proactive.enabled ? '主动消息开' : '主动消息关', proactive.enabled ? 'info' : ''));
-    if (proactive.stopped) pills.push(pill('STOP 已停发', 'err'));
+    if (proactive.stopped) pills.push(pill('紧急停止已启用', 'err'));
   } else if (status) {
-    pills.push(pill('gateway 未连接', 'err'));
+    pills.push(pill('网关未连接', 'err'));
   }
   const engine = state.engine || (status && status.status && status.status.engine);
   if (engine) {
@@ -213,8 +266,8 @@ function renderPills() {
   }
   if (state.config && state.config.config) {
     const cfg = state.config.config;
-    pills.push(pill('inner: ' + (cfg.inner_mode || 'off'), cfg.inner_mode && cfg.inner_mode !== 'off' ? 'info' : ''));
-    if (cfg.inner_shadow_only) pills.push(pill('shadow 只记录', 'warn'));
+    pills.push(pill('内状态：' + enumLabel('inner_mode', cfg.inner_mode || 'off'), cfg.inner_mode && cfg.inner_mode !== 'off' ? 'info' : ''));
+    if (cfg.inner_shadow_only) pills.push(pill('内状态只记录不注入', 'warn'));
   }
   const wrap = $('#status-pills');
   if (wrap) wrap.innerHTML = pills.join('');
@@ -236,7 +289,7 @@ async function renderOverview() {
   if (!status || !status.ok) {
     const reason = (status && status.error) || (errors[0] || '未知错误');
     $('#app').innerHTML = renderEngineCard(engine) +
-      card('网关状态', `<div class="error-text">gateway 未连接：${esc(reason)}</div>
+      card('网关状态', `<div class="error-text">网关未连接：${esc(reason)}</div>
       <p class="hint">确认 <code>python -m agi.wechat_gateway.server</code> 正在 127.0.0.1:801 运行；本页数据仍会显示本机文件部分。</p>`) +
       card('最近事件', renderEventList((feed && feed.items) || []));
     bindEngineActions();
@@ -253,9 +306,9 @@ async function renderOverview() {
   const modelItems = (models && models.models) || [];
   const soul = modelItems.find((m) => m.name === 'soul-05b');
   const innerRows = `<div class="kv">
-      <span class="k">模式</span><span class="v">${esc(innerMode)}${innerShadow ? '（shadow 只记录）' : ''}</span>
-      <span class="k">scope</span><span class="v">${esc((config && config.config && config.config.inner_mode_scope) || '—')}</span>
-      <span class="k">schema</span><span class="v">${esc((config && config.config && config.config.inner_schema) || '—')}</span>
+      <span class="k">模式</span><span class="v">${esc(enumLabel('inner_mode', innerMode))}${innerShadow ? '（只记录不注入）' : ''}</span>
+      <span class="k">作用范围</span><span class="v">${esc(enumLabel('inner_scope', (config && config.config && config.config.inner_mode_scope), '—'))}</span>
+      <span class="k">字段集</span><span class="v">${esc(enumLabel('inner_schema', config && config.config && config.config.inner_schema, '—'))}</span>
       <span class="k">soul-05b</span><span class="v">${soul ? (soul.healthy ? '健康（端口 ' + esc(soul.port) + '）' : '未运行（端口 ' + esc(soul.port) + '）') : '未登记'}</span>
     </div>`;
 
@@ -265,8 +318,8 @@ async function renderOverview() {
     <div class="grid cols-4">
       ${card('主动消息', `<div class="big">${proactive.enabled ? '开' : '关'}</div>
         <div class="muted">概率 ${num((proactive.probability || {}).min)}–${num((proactive.probability || {}).max)} · 间隔 ${num((proactive.interval_s || {}).min)}–${num((proactive.interval_s || {}).max)}s</div>
-        <div class="row" style="margin-top:8px">${proactive.stopped ? pill('STOP 已停发', 'err') : pill('未停发', 'ok')}</div>`)}
-      ${card('今日发送', `<div class="big">${num(sent)}</div><div class="muted">失败 ${num((st.send || {}).failed)} · dry_run ${(st.send || {}).dry_run ? '是' : '否'}</div>`)}
+        <div class="row" style="margin-top:8px">${proactive.stopped ? pill('紧急停止已启用', 'err') : pill('未停发', 'ok')}</div>`)}
+      ${card('今日发送', `<div class="big">${num(sent)}</div><div class="muted">失败 ${num((st.send || {}).failed)} · 演练模式 ${(st.send || {}).dry_run ? '开' : '关'}</div>`)}
       ${card('后台监听', `<div class="big">${active ? '运行' : '未运行'}</div><div class="muted">最近事件 ${fmtAgo(state.lastRefresh / 1000)}刷新</div>
         <div class="muted">${proactive.stale ? pill('死区告警', 'warn') : pill('无死区', 'ok')}</div>`)}
       ${card('内状态 / 模型', innerRows)}
@@ -338,7 +391,7 @@ function renderEventList(items) {
     const cls = kindCls(kind);
     return `<div class="list-item" data-json='${esc(JSON.stringify(event))}'>
       <span class="time">${fmtTime(event.ts)}</span>
-      <div class="grow"><div class="title">${badge(kind, cls)} ${esc(String(text).slice(0, 140))}</div></div>
+      <div class="grow"><div class="title">${badge(enumLabel('event_kind', kind), cls)} ${esc(String(text).slice(0, 140))}</div></div>
       <span class="badge">${esc(event.friend || event.contact || '')}</span>
     </div>`;
   }).join('') + '</div>';
@@ -349,7 +402,7 @@ function renderMiniMessages(items) {
   return '<div class="feed">' + items.map((m) => {
     const mine = m.role !== 'user';
     return `<div class="bubble-row ${mine ? 'mine' : ''}">
-      <div class="bubble"><div class="meta">${esc(m.role)} · ${fmtTime(m.ts)}</div>
+      <div class="bubble"><div class="meta">${esc(enumLabel('chat_role', m.role))} · ${fmtTime(m.ts)}</div>
       <div class="text">${esc(String(m.text || '').slice(0, 240))}</div></div></div>`;
   }).join('') + '</div>';
 }
@@ -375,7 +428,7 @@ function feedList(items) {
     } else {
       rows.push(`<div class="list-item" data-json='${esc(JSON.stringify(event))}'>
         <span class="time">${fmtTime(event.ts)}</span>
-        <div class="grow"><div class="title">${badge(kind, kindCls(kind))} ${esc(feedSummary(event))}</div></div>
+        <div class="grow"><div class="title">${badge(enumLabel('event_kind', kind), kindCls(kind))} ${esc(feedSummary(event))}</div></div>
       </div>`);
     }
   }
@@ -384,9 +437,9 @@ function feedList(items) {
 
 function feedSummary(event) {
   if (event.kind === 'proactive_schedule') return '下次检查间隔 ' + num(event.next_delay_s) + 's';
-  if (event.kind === 'proactive_skipped') return '概率跳过 p=' + num(event.probability) + ' roll=' + num(event.roll);
+  if (event.kind === 'proactive_skipped') return '概率跳过（概率 ' + num(event.probability) + ' / 随机值 ' + num(event.roll) + '）';
   if (event.kind === 'send_blocked') return '被拦：' + (event.reason || event.error || '');
-  if (event.kind === 'context_budget') return 'tokens=' + num(event.tokens) + ' dropped=' + esc((event.dropped || []).join(','));
+  if (event.kind === 'context_budget') return '用量=' + num(event.tokens) + ' · 丢弃=' + esc((event.dropped || []).join('，'));
   if (event.kind === 'config_reloaded') return '配置变化：' + esc((event.changed || []).join(','));
   if (event.kind === 'gateway_stale') return '空闲 ' + num(event.idle_s) + 's';
   return event.error || event.reason || event.source || '';
@@ -399,11 +452,11 @@ function feedBubble(event) {
   const blocked = kind === 'send_blocked';
   const cls = [mine ? 'mine' : '', kind === 'proactive_send' ? 'proactive' : '',
     blocked ? 'blocked' : ''].join(' ');
-  const status = event.status ? badge(String(event.status), blocked ? 'red' : 'green') : '';
+  const status = event.status ? badge(enumLabel('event_status', event.status), blocked ? 'red' : 'green') : '';
   const reason = blocked ? `<div class="hint" style="color:var(--error)">${esc(event.reason || event.error || '被拦截')}</div>` : '';
   return `<div class="bubble-row ${cls}">
     <div class="bubble" data-json='${esc(JSON.stringify(event))}'>
-      <div class="meta">${badge(kind, kindCls(kind))} ${status} <span>${fmtTime(event.ts)}</span>
+      <div class="meta">${badge(enumLabel('event_kind', kind), kindCls(kind))} ${status} <span>${fmtTime(event.ts)}</span>
         ${event.friend ? `<span>· ${esc(event.friend)}</span>` : ''}</div>
       <div class="text">${esc(String(text || '（无文本）').slice(0, 1000))}</div>
       ${reason}
@@ -485,7 +538,7 @@ function moodTimelineHtml(timeline) {
   const labelOf = {};
   MOOD_DIMS.forEach(([key, label]) => { labelOf[key] = label; });
   return `<div style="overflow:auto"><table><thead><tr>
-      <th>时间</th><th>mood</th><th>主要变化</th><th>reason</th><th>confidence</th><th>mode</th>
+      <th>时间</th><th>心情</th><th>主要变化</th><th>原因</th><th>置信度</th><th>模式</th>
     </tr></thead><tbody>${rows.map((row) => {
     const delta = row.dims_delta || {};
     const top = Object.entries(delta)
@@ -499,7 +552,7 @@ function moodTimelineHtml(timeline) {
       <td>${esc(top || '—')}</td>
       <td>${esc(String(row.reason || '').slice(0, 80))}</td>
       <td class="num">${esc(row.confidence === undefined ? '—' : row.confidence)}</td>
-      <td>${badge(row.mode || '')}</td></tr>`;
+      <td>${badge(enumLabel('trace_mode', row.mode), '')}</td></tr>`;
   }).join('')}</tbody></table></div>`;
 }
 
@@ -528,7 +581,7 @@ function moodCardHtml(mood) {
           ${judgeOn ? badge('判定开', 'green') : badge('判定关', 'orange')}
           ${injectOn ? badge('注入开', 'green') : badge('注入关', '')}
           ${pending ? badge('有待注入变化', 'blue') : badge('无待注入', '')}
-          <span class="hint">后端 ${esc(settings.backend || 'rule/model')} · 门槛 ≥${esc(confidenceMin)}</span>
+          <span class="hint">后端 ${esc(enumLabel('inner_mode', settings.backend, settings.backend || '规则/模型'))} · 门槛 ≥${esc(confidenceMin)}</span>
         </div>
       </div>
       <div class="row">
@@ -611,7 +664,7 @@ function innerCard(item) {
   const latency = item.latency_ms !== undefined && item.latency_ms !== null
     ? badge(Number(item.latency_ms).toFixed(0) + 'ms') : '';
   const fallback = item.fallback ? badge('fallback', 'red') : '';
-  const source = item.source ? badge('source: ' + item.source, '') : '';
+  const source = item.source ? badge('来源：' + enumLabel('inner_mode', item.source, item.source), '') : '';
   return `<div class="inner-card">
     <div class="top">${modeBadge} ${injected} ${latency} ${fallback} ${source}
       <span class="hint">${fmtDateTime(item.created_at)}</span></div>
@@ -652,11 +705,11 @@ async function renderMemory() {
   const metricCards = `
     <div class="grid cols-4">
       ${card('记忆总数', `<div class="big">${num(memories.total)}</div>
-        <div class="muted">active ${num(status.active)} · dormant ${num(status.dormant)} · pending ${num(status.pending)}</div>`)}
-      ${card('时间分层（active）', `<div class="big">${num(tiers.hot)} / ${num(tiers.warm)} / ${num(tiers.cold)}</div>
-        <div class="muted">hot ≤30d · warm 30–90d · cold >90d</div>`)}
+        <div class="muted">生效中 ${num(status.active)} · 休眠 ${num(status.dormant)} · 待生效 ${num(status.pending)}</div>`)}
+      ${card('时间分层（生效中）', `<div class="big">${num(tiers.hot)} / ${num(tiers.warm)} / ${num(tiers.cold)}</div>
+        <div class="muted">近期 ≤30 天 · 中期 30–90 天 · 长期 >90 天</div>`)}
       ${card('休眠率', `<div class="big">${pct(memories.dormant_rate)}</div>
-        <div class="muted">阈值 >40% 告警（nightly）</div>`)}
+        <div class="muted">阈值 >40% 告警（夜间任务）</div>`)}
       ${card('检索命中率', `<div class="big">${pct(retrieval.hit_rate)}</div>
         <div class="muted">调用 ${num(retrieval.calls)} · 平均 ${num(retrieval.avg_items)} 条/次 · 未落盘 ${num(retrieval.pending)}</div>`)}
     </div>
@@ -670,16 +723,16 @@ async function renderMemory() {
         <span class="k">30 天内合并</span><span class="v">${num(memories.merged_within_30d)}</span>
         <span class="k">平均重要性</span><span class="v">${num(memories.avg_importance)}</span>
         <span class="k">中位重要性</span><span class="v">${num(memories.median_importance)}</span></div>`)}
-      ${card('摘要 / claims', `<div class="kv">
-        <span class="k">claims</span><span class="v">${num((m.claims || {}).total)}</span>
+      ${card('摘要 / 事实', `<div class="kv">
+        <span class="k">事实</span><span class="v">${num((m.claims || {}).total)}</span>
         <span class="k">摘要</span><span class="v">${num((m.summaries || {}).total)}</span>
-        <span class="k">月 gist</span><span class="v">${num((m.summaries || {}).monthly)}（${esc((m.summaries || {}).latest_month || '—')}）</span></div>`)}
+        <span class="k">月度摘要</span><span class="v">${num((m.summaries || {}).monthly)}（${esc((m.summaries || {}).latest_month || '—')}）</span></div>`)}
     </div>`;
 
-  const memoryTable = `<table><thead><tr><th>内容</th><th>kind</th><th>重要性</th><th>状态</th><th>创建</th><th>访问</th></tr></thead>
+  const memoryTable = `<table><thead><tr><th>内容</th><th>类型</th><th>重要性</th><th>状态</th><th>创建时间</th><th>访问次数</th></tr></thead>
     <tbody>${recent.map((row) => `<tr><td>${esc(String(row.content || '').slice(0, 120))}</td>
-      <td>${badge(row.kind || '')}</td><td class="num">${num(row.importance)}</td>
-      <td>${badge(row.status || '', row.status === 'active' ? 'green' : (row.status === 'dormant' ? 'orange' : ''))}</td>
+      <td>${badge(enumLabel('memory_kind', row.kind))}</td><td class="num">${num(row.importance)}</td>
+      <td>${badge(enumLabel('memory_status', row.status), row.status === 'active' ? 'green' : (row.status === 'dormant' ? 'orange' : ''))}</td>
       <td>${fmtDateTime(row.created_at)}</td><td class="num">${num(row.access_count)}</td></tr>`).join('') ||
       '<tr><td colspan="6" class="empty">暂无记忆</td></tr>'}</tbody></table>`;
 
@@ -889,15 +942,15 @@ async function renderModels() {
   const cards = items.map((model) => `
     <div class="card">
       <div class="row between">
-        <div><b>${esc(model.name)}</b> ${badge(model.role || '')} ${model.reserved ? badge('reserved', 'orange') : ''}</div>
+        <div><b>${esc(model.name)}</b> ${badge(enumLabel('model_role', model.role))} ${model.reserved ? badge('预留', 'orange') : ''}</div>
         ${model.running
           ? (model.external ? badge('运行中（外部启动）', 'orange') : pill('运行中', 'ok'))
           : (model.healthy ? pill('健康', 'ok') : pill('未运行', ''))}
       </div>
       <div class="kv" style="margin-top:8px">
         <span class="k">端口</span><span class="v">${num(model.port)}</span>
-        <span class="k">状态</span><span class="v">${esc(model.status || '—')}</span>
-        ${model.pid ? `<span class="k">PID</span><span class="v">${num(model.pid)}</span>` : ''}
+        <span class="k">状态</span><span class="v">${esc(enumLabel('model_status', model.status, model.status || '—'))}</span>
+        ${model.pid ? `<span class="k">进程号</span><span class="v">${num(model.pid)}</span>` : ''}
         <span class="k">用途</span><span class="v">${esc(model.purpose || '')}</span>
       </div>
       <div class="row" style="margin-top:10px">
@@ -910,26 +963,26 @@ async function renderModels() {
   const cfg = (config && config.config) || {};
   const innerForm = `
     <div class="grid cols-2">
-      <div class="field"><label>inner_mode</label>
+      <div class="field"><label>内状态模式</label>
         <select id="cfg-inner-mode">${['off', 'static', 'rule', 'model'].map((mode) =>
-          `<option value="${mode}" ${cfg.inner_mode === mode ? 'selected' : ''}>${mode}</option>`).join('')}</select></div>
-      <div class="field"><label>scope</label>
+          `<option value="${mode}" ${cfg.inner_mode === mode ? 'selected' : ''}>${enumLabel('inner_mode', mode)}</option>`).join('')}</select></div>
+      <div class="field"><label>作用范围</label>
         <select id="cfg-inner-scope">${['proactive_only', 'all', 'off'].map((scope) =>
-          `<option value="${scope}" ${cfg.inner_mode_scope === scope ? 'selected' : ''}>${scope}</option>`).join('')}</select></div>
-      <div class="field"><label>schema</label>
+          `<option value="${scope}" ${cfg.inner_mode_scope === scope ? 'selected' : ''}>${enumLabel('inner_scope', scope)}</option>`).join('')}</select></div>
+      <div class="field"><label>字段集</label>
         <select id="cfg-inner-schema">${['slim', 'full'].map((schema) =>
-          `<option value="${schema}" ${cfg.inner_schema === schema ? 'selected' : ''}>${schema}</option>`).join('')}</select></div>
-      <div class="field"><label>shadow（只记录不注入）</label>
-        <label class="switch"><input type="checkbox" id="cfg-inner-shadow" ${cfg.inner_shadow_only ? 'checked' : ''}> inner_shadow_only</label></div>
+          `<option value="${schema}" ${cfg.inner_schema === schema ? 'selected' : ''}>${enumLabel('inner_schema', schema)}</option>`).join('')}</select></div>
+      <div class="field"><label>影子模式（只记录不注入）</label>
+        <label class="switch"><input type="checkbox" id="cfg-inner-shadow" ${cfg.inner_shadow_only ? 'checked' : ''}> 只记录不注入</label></div>
     </div>
     <div class="row" style="margin-top:12px"><button class="btn primary" id="btn-save-inner">保存内状态设置</button>
-      <span class="hint">当前 shadow 灰度：mode=${esc(cfg.inner_mode || '—')} · shadow=${cfg.inner_shadow_only ? '开' : '关'} · scope=${esc(cfg.inner_mode_scope || '—')}</span></div>`;
+      <span class="hint">当前影子灰度：模式=${esc(enumLabel('inner_mode', cfg.inner_mode, '—'))} · 只记录不注入=${cfg.inner_shadow_only ? '开' : '关'} · 作用范围=${esc(enumLabel('inner_scope', cfg.inner_mode_scope, '—'))}</span></div>`;
 
   $('#app').innerHTML = `${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
     <div class="grid cols-3">${cards}</div>
     ${card('内状态注入开关（热加载，保存后下一条消息生效）', innerForm)}
-    ${card('模型库管理（本地导入 / URL 下载 / 回收站删除）', modelAdminHtml(models))}
-    ${card('说明', `<p class="hint">启停按钮只允许 ${esc(allow.join(', ') || 'soul-05b')}；1.5B 为 reserved，故意拒绝。外部启动的 llama-server 停止前会二次确认；不会误杀其它进程。</p>`)}`;
+    ${card('模型库管理（本地导入 / 网址下载 / 回收站删除）', modelAdminHtml(models))}
+    ${card('说明', `<p class="hint">启停按钮只允许 ${esc(allow.join(', ') || 'soul-05b')}；1.5B 为 预留模型，故意拒绝。外部启动的 llama-server 停止前会二次确认；不会误杀其它进程。</p>`)}`;
 
   $$('[data-model-start]').forEach((btn) => {
     btn.onclick = async () => {
@@ -1044,9 +1097,9 @@ async function renderSettings() {
   $('#app').innerHTML = `
     ${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
     ${card('主动消息', configCardHtml(cfg))}
-    ${card('紧急停止（STOP 文件）', `
+    ${card('紧急停止（停止文件）', `
       <div class="row between">
-        <div>${stopped ? pill('STOP 已启用：所有外发被拦', 'err') : pill('未停发', 'ok')}
+        <div>${stopped ? pill('紧急停止已启用：所有外发被拦截', 'err') : pill('未停发', 'ok')}
           <span class="hint">文件：agi/data/wechat/STOP；创建即停发，删除即恢复。</span></div>
         <div class="row">
           <button class="btn danger" id="btn-stop" ${stopped ? 'disabled' : ''}>立即停发</button>
@@ -1097,7 +1150,7 @@ function factoryStatsHtml(stats) {
   const items = [
     ['条对话', stats.messages],
     ['条记忆', stats.memories],
-    ['条 claim', stats.claims],
+    ['条事实', stats.claims],
     ['个联系人', stats.contacts],
   ];
   return '<div class="stat">' + items.map(([label, value]) =>
@@ -1235,7 +1288,7 @@ async function doFactoryReset() {
       <p class="lead" style="color:var(--success)">已清空完成。</p>
       <p>备份：<code>${esc(result.backup_path || '')}</code>（${esc(result.files_backed || 0)} 个文件）</p>
       <p>删除统计：${esc(deleted.messages || 0)} 条对话 / ${esc(deleted.memories || 0)} 条记忆 /
-        ${esc(deleted.claims || 0)} 条 claim / ${esc(deleted.files || 0)} 个文件（${esc(result.took_s || 0)}s）</p>
+        ${esc(deleted.claims || 0)} 条事实 / ${esc(deleted.files || 0)} 个文件（${esc(result.took_s || 0)}s）</p>
       <p class="warn">${esc(result.restart_hint || '建议重启网关，让内存状态一起归零')}</p>
       <p class="hint">控制台不会替你杀网关进程；需要时按 README 手动重启。备份 zip 可直接解压恢复。</p>
     </div>`;
@@ -1278,7 +1331,7 @@ function mediaStatusBadge(status) {
 }
 
 function mediaKindLabel(kind) {
-  return ({ text: '文本', emoji_text: 'Unicode emoji', image: '图片',
+  return ({ text: '文本', emoji_text: '表情', image: '图片',
     gif: 'GIF', sticker: '贴纸', sticker_as_image: '贴纸(降级图片)' })[kind] || kind;
 }
 
@@ -1694,11 +1747,11 @@ async function clearChatTest() {
 
 /* ---------------- 模型配置（P7-b Providers） ---------------- */
 const MODEL_FIELDS = [
-  ['llm_model', 'LLM 模型名', 'text'],
-  ['llm_temperature', '温度 temperature（0–2）', 'number'],
-  ['llm_max_tokens', '最大 tokens（1–32000）', 'number'],
-  ['soul_server_url', '内状态服务地址 soul_server_url', 'text'],
-  ['soul_timeout_s', '内状态超时 soul_timeout_s（秒）', 'number'],
+  ['llm_model', '对话模型名称', 'text'],
+  ['llm_temperature', '语气变化（0–2，越高越活泼）', 'number'],
+  ['llm_max_tokens', '单次最多字数（1–32000）', 'number'],
+  ['soul_server_url', '内状态服务地址', 'text'],
+  ['soul_timeout_s', '内状态超时（秒）', 'number'],
 ];
 
 async function renderProviders() {
@@ -1730,11 +1783,11 @@ async function renderProviders() {
                  ${type === 'number' ? 'step="any"' : ''}>
           <span class="hint mono">${esc(key)}</span>
         </div>`).join('')}
-        <div class="field"><label>inner_schema</label>
+        <div class="field"><label>内状态字段集</label>
           <select id="mc-inner_schema">
-            <option value="slim" ${cfg.inner_schema === 'slim' ? 'selected' : ''}>slim（4 字段省 token）</option>
-            <option value="full" ${cfg.inner_schema === 'full' ? 'selected' : ''}>full（对照）</option>
-          </select><span class="hint mono">inner_schema</span></div>
+            <option value="slim" ${cfg.inner_schema === 'slim' ? 'selected' : ''}>精简（4 个字段，省资源）</option>
+            <option value="full" ${cfg.inner_schema === 'full' ? 'selected' : ''}>完整（对照）</option>
+          </select></div>
       </div>
       <div class="row" style="margin-top:12px">
         <button class="btn primary" id="mc-save">保存配置</button>
@@ -1797,11 +1850,11 @@ async function loadLogs() {
   const items = data.items || [];
   const rows = items.length ? items.map((entry) => {
     const ts = entry.ts ? fmtDateTime(entry.ts) : '—';
-    const summary = entry.text || entry.raw || entry.reason || entry.key
-      || (entry.kind ? '' : '');
+    const summary = entry.text || entry.raw || (entry.reason ? enumLabel('bili_status', entry.reason, entry.reason) : '')
+      || (entry.kind ? enumLabel('event_kind', entry.kind, '') : '');
     return `<div class="log-row ${entry.error ? 'err' : ''}" data-json='${esc(JSON.stringify(entry))}'>
       <span class="time">${esc(ts)}</span>
-      <span class="badge ${entry.error ? 'red' : ''}">${esc(entry.kind || 'log')}</span>
+      <span class="badge ${entry.error ? 'red' : ''}">${esc(entry.kind ? enumLabel('event_kind', entry.kind, enumLabel('log_level', entry.level, '信息')) : (entry.error ? '错误' : enumLabel('log_level', entry.level, '信息')))}</span>
       <span class="log-text">${esc(String(summary).slice(0, 240))}</span>
       <span class="hint mono">${esc(entry._file || '')}:${esc(entry._line || '')}</span>
     </div>`;
@@ -1811,10 +1864,10 @@ async function loadLogs() {
       <div class="row">
         <select id="log-source">${LOG_SOURCE_OPTIONS.map(([value, label]) =>
           `<option value="${value}" ${value === params.source ? 'selected' : ''}>${label}</option>`).join('')}</select>
-        <input type="text" id="log-q" placeholder="关键词（JSON 内容搜索）" value="${esc(params.q)}" style="max-width:280px">
-        <input type="text" id="log-kind" placeholder="kind 过滤" value="${esc(params.kind)}" style="max-width:160px">
+        <input type="text" id="log-q" placeholder="关键词搜索" value="${esc(params.q)}" style="max-width:280px">
+        <input type="text" id="log-kind" placeholder="类型筛选" value="${esc(params.kind)}" style="max-width:160px">
         <button class="btn primary" id="log-search">搜索</button>
-        <span class="hint">${items.length} 条 · 按时间倒序 · 点一行看 JSON</span>
+        <span class="hint">${items.length} 条 · 按时间倒序 · 点一行看详情</span>
       </div>
       <div class="hint" style="margin-top:6px">文件：${esc((data.files || []).join(' · ') || data.note || '—')}</div>
       <div class="log-list" style="margin-top:10px">${rows}</div>`)}`;
@@ -1882,7 +1935,7 @@ async function renderData() {
   const aliases = (info.aliases || []);
   const cards = `<div class="grid cols-4">
     ${card('运行数据体积', `<div class="big">${esc(fmtBytes(info.selflearn_bytes))}</div><div class="muted">agi/data/selflearn/</div>`)}
-    ${card('联系人库', `<div class="big">${num(info.contacts)}</div><div class="muted">${num(info.messages)} 条消息 · ${num(info.memories)} 条记忆 · ${num(info.claims)} 条 claim</div>`)}
+    ${card('联系人库', `<div class="big">${num(info.contacts)}</div><div class="muted">${num(info.messages)} 条消息 · ${num(info.memories)} 条记忆 · ${num(info.claims)} 条事实</div>`)}
     ${card('网关日志', `<div class="big">${num(info.gateway_log_lines)}</div><div class="muted">行 · ${esc(fmtBytes(info.gateway_log_bytes))}</div>`)}
     ${card('媒体素材', `<div class="big">${num(info.media_files)}</div><div class="muted">本地图片/GIF 文件</div>`)}
   </div>`;
@@ -1905,15 +1958,15 @@ async function renderData() {
     return `<tr>
       <td><b>${esc(row.alias || row.stem)}</b><br><span class="mono hint">${esc(row.stem)}</span>
         ${row.migrated ? badge('已拆分', 'green') : badge(row.single ? '旧版单库' : '待迁移', 'orange')}</td>
-      <td>${memory.name ? `<span class="mono hint">${esc(memory.name)}</span><br>${esc(fmtBytes(memory.bytes))} · ${num(memory.messages)} 消息 / ${num(memory.memories)} 记忆 / ${num(memory.claims)} claim` : '<span class="hint">—</span>'}</td>
+      <td>${memory.name ? `<span class="mono hint">${esc(memory.name)}</span><br>${esc(fmtBytes(memory.bytes))} · ${num(memory.messages)} 消息 / ${num(memory.memories)} 记忆 / ${num(memory.claims)} 条事实` : '<span class="hint">—</span>'}</td>
       <td>${persona.name ? `<span class="mono hint">${esc(persona.name)}</span><br>${esc(fmtBytes(persona.bytes))} · ${num(persona.rows)} 行（人格/状态）` : '<span class="hint">—</span>'}</td>
       <td>${row.legacy ? `<span class="badge orange">legacy</span><br><span class="mono hint">${esc(row.legacy.name)}</span><br>${esc(fmtBytes(row.legacy.bytes))}<br><span class="hint">可删除/可回滚</span>` : '<span class="hint">无</span>'}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="4" class="empty">还没有联系人库</td></tr>';
   const splitCard = card('库文件（记忆库 / 人格库）', `
-    <p class="hint">记忆库=<code>*.memory.sqlite3</code>（对话/记忆/claims），人格库=<code>*.persona.sqlite3</code>（人格/状态）；
+    <p class="hint">记忆库存对话/记忆/事实，人格库存人格/状态；
       未迁移旧库显示为单库，迁移后旧库改名 <code>*.legacy.sqlite3</code>（可删除/可回滚，不计入统计）。</p>
-    <div style="overflow:auto"><table><thead><tr><th>联系人</th><th>记忆库（对话/记忆）</th><th>人格库（人格/状态）</th><th>旧库 legacy</th></tr></thead>
+    <div style="overflow:auto"><table><thead><tr><th>联系人</th><th>记忆库（对话/记忆）</th><th>人格库（人格/状态）</th><th>旧版库</th></tr></thead>
       <tbody>${splitRows}</tbody></table></div>`);
   $('#app').innerHTML = `
     ${cards}
@@ -2025,7 +2078,7 @@ async function doDataImport() {
 }
 
 /* ---------------- 记忆编辑（P7-c KnowledgePage 写操作） ---------------- */
-const MEMORY_STATUS_OPTIONS = [['active', 'active'], ['dormant', 'dormant'], ['invalid', 'invalid']];
+const MEMORY_STATUS_OPTIONS = [['active', '生效中'], ['dormant', '休眠'], ['invalid', '已失效']];
 
 async function renderMemoryEdit() {
   const prev = state.memoryEdit || {};
@@ -2054,7 +2107,7 @@ async function loadMemoryEdit() {
   const total = (data && data.total) || 0;
   const memMetrics = (metrics && metrics.metrics && metrics.metrics.memories) || {};
   const summary = `<div class="grid cols-4">
-    ${card('记忆总数', `<div class="big">${num(memMetrics.total)}</div><div class="muted">active ${num((memMetrics.by_status || {}).active)} · dormant ${num((memMetrics.by_status || {}).dormant)}</div>`)}
+    ${card('记忆总数', `<div class="big">${num(memMetrics.total)}</div><div class="muted">生效中 ${num((memMetrics.by_status || {}).active)} · 休眠 ${num((memMetrics.by_status || {}).dormant)}</div>`)}
     ${card('休眠率', `<div class="big">${pct(memMetrics.dormant_rate)}</div><div class="muted">阈值 >40% 告警</div>`)}
     ${card('检索命中', `<div class="big">${pct((metrics && metrics.metrics && metrics.metrics.retrieval || {}).hit_rate)}</div><div class="muted">调用 ${num(((metrics || {}).metrics || {}).retrieval ? metrics.metrics.retrieval.calls : null)}</div>`)}
     ${card('当前筛选', `<div class="big">${num(total)}</div><div class="muted">条匹配</div>`)}
@@ -2063,7 +2116,7 @@ async function loadMemoryEdit() {
   const rows = items.length ? items.map((item) => `<tr data-memory-id="${esc(item.id)}">
     <td><input type="checkbox" data-merge-pick="${esc(item.id)}" ${(edit.selected || []).includes(item.id) ? 'checked' : ''}></td>
     <td class="mono hint">${esc(item.id)}</td>
-    <td>${badge(item.kind || '')}</td>
+    <td>${badge(enumLabel('memory_kind', item.kind))}</td>
     <td><input type="text" class="memory-content" data-memory-content="${esc(item.id)}" value="${esc(item.content || '')}" maxlength="500"></td>
     <td><input type="number" class="memory-importance" data-memory-importance="${esc(item.id)}" value="${esc(item.importance ?? '')}" min="0" max="1" step="0.05" style="width:80px"></td>
     <td><select data-memory-status="${esc(item.id)}">${MEMORY_STATUS_OPTIONS.map(([value, label]) =>
@@ -2078,8 +2131,8 @@ async function loadMemoryEdit() {
 
   const claimRows = ((claims && claims.items) || []).length ? (claims.items || []).map((item) => `<tr>
     <td>${esc(item.subject || '')}</td><td>${esc(item.predicate || '')}</td><td>${esc(item.object || '')}</td>
-    <td class="num">${num(item.confidence)}</td><td>${badge(item.status || '')}</td></tr>`).join('')
-    : '<tr><td colspan="5" class="empty">暂无 claims</td></tr>';
+    <td class="num">${num(item.confidence)}</td><td>${badge(enumLabel('memory_status', item.status))}</td></tr>`).join('')
+    : '<tr><td colspan="5" class="empty">暂无事实</td></tr>';
 
   const page = Math.floor(edit.offset / edit.limit) + 1;
   const pages = Math.max(1, Math.ceil(total / edit.limit));
@@ -2088,7 +2141,7 @@ async function loadMemoryEdit() {
     ${card('记忆列表', `
       <div class="row between" style="margin-bottom:10px">
         <div class="row">
-          <input type="text" id="mem-q" placeholder="搜索内容/kind/evidence" value="${esc(edit.q)}" style="max-width:260px">
+          <input type="text" id="mem-q" placeholder="搜索内容/类型/证据" value="${esc(edit.q)}" style="max-width:260px">
           <select id="mem-status"><option value="">全部状态</option>
             ${MEMORY_STATUS_OPTIONS.map(([value, label]) => `<option value="${value}" ${edit.status === value ? 'selected' : ''}>${label}</option>`).join('')}
           </select>
@@ -2101,11 +2154,11 @@ async function loadMemoryEdit() {
           <button class="btn small" id="mem-next" ${edit.offset + edit.limit >= total ? 'disabled' : ''}>下一页</button>
         </div>
       </div>
-      <div style="overflow:auto"><table><thead><tr><th></th><th>id</th><th>kind</th><th>content（行内编辑，≤500）</th>
-        <th>importance</th><th>status</th><th>创建</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <p class="hint" style="margin-top:8px">删除=软删除（status=invalid，不物理删除）；合并会保留较早的一条、另一条标 invalid。</p>`)}
-    ${card('claims（只读）', `<div style="overflow:auto"><table><thead><tr><th>subject</th><th>predicate</th><th>object</th>
-      <th>confidence</th><th>status</th></tr></thead><tbody>${claimRows}</tbody></table></div>`)}`;
+      <div style="overflow:auto"><table><thead><tr><th></th><th>编号</th><th>类型</th><th>内容（行内编辑，≤500）</th>
+        <th>重要性</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="hint" style="margin-top:8px">删除=软删除（状态改为已失效，不物理删除）；合并会保留较早的一条、另一条标为已失效。</p>`)}
+    ${card('事实（只读）', `<div style="overflow:auto"><table><thead><tr><th>主体</th><th>关系</th><th>宾语</th>
+      <th>置信度</th><th>状态</th></tr></thead><tbody>${claimRows}</tbody></table></div>`)}`;
 
   $('#mem-search').onclick = () => {
     edit.q = $('#mem-q').value.trim(); edit.status = $('#mem-status').value;
@@ -2154,7 +2207,7 @@ async function loadMemoryEdit() {
   });
   $$('[data-memory-delete]').forEach((button) => {
     button.onclick = async () => {
-      const confirmText = window.prompt('软删除这条记忆（status=invalid，不物理删除）。输入「删除记忆」确认：');
+      const confirmText = window.prompt('软删除这条记忆（状态改为已失效，不物理删除）。输入「删除记忆」确认：');
       if (confirmText === null) return;
       try {
         await api('/api/memory/delete', {
@@ -2259,7 +2312,7 @@ async function loadStats() {
   const recentRows = (data.recent_blocked || []).length
     ? data.recent_blocked.map((row) => `<tr>
         <td>${row.ts ? fmtDateTime(row.ts) : '—'}</td>
-        <td>${badge(row.kind || '', row.kind === 'send_blocked' ? 'red' : 'orange')}</td>
+        <td>${badge(enumLabel('event_kind', row.kind), row.kind === 'send_blocked' ? 'red' : 'orange')}</td>
         <td>${esc(row.reason || '')}</td>
         <td>${esc(String(row.text || '').slice(0, 40))}</td>
       </tr>`).join('')
@@ -2430,7 +2483,7 @@ async function renderBili() {
       ${card('今日状态', `<div class="kv">
         <span class="k">日期</span><span class="v">${esc(stateInfo.day || '—')}</span>
         <span class="k">已跑/已挑</span><span class="v">${num(stateInfo.count)} / ${num(stateInfo.picked)}（额度 ${num(config.perDay)}）</span>
-        <span class="k">最近运行</span><span class="v">${esc(stateInfo.lastRunAt || '—')} ${stateInfo.lastWhy ? '· ' + esc(stateInfo.lastWhy) : ''}</span>
+        <span class="k">最近运行</span><span class="v">${esc(stateInfo.lastRunAt || '—')} ${stateInfo.lastWhy ? '· ' + enumLabel('bili_status', stateInfo.lastWhy, stateInfo.lastWhy) : ''}</span>
         <span class="k">窗口</span><span class="v">${esc(JSON.stringify(stateInfo.windows || {}))}</span></div>`)}
       ${card('家目录/报告', `<div class="kv">
         <span class="k">家目录</span><span class="v mono">${esc(biliStatus.home || '')}</span>
@@ -2669,12 +2722,12 @@ function renderTracePage() {
     const active = trace.selected === item.id;
     return `<div class="trace-turn ${active ? 'active' : ''}" data-trace-id="${esc(item.id)}">
       <div class="row between"><span class="hint">${item.ts ? fmtDateTime(item.ts) : '—'}</span>
-        ${badge(item.mode || 'chat', item.mode === 'proactive' ? 'purple' : 'blue')}
+        ${badge(enumLabel('trace_mode', item.mode || 'chat'), item.mode === 'proactive' ? 'purple' : 'blue')}
         ${item.skipped ? badge('跳过', 'orange') : ''}</div>
       <div class="trace-turn-user">${traceSummaryText(item.user_text, 40) || '<span class="hint">（无用户原文）</span>'}</div>
       <div class="trace-turn-reply">${traceSummaryText(item.final_reply, 40) || '<span class="hint">（无回复）</span>'}</div>
       <div class="row between"><span class="hint">延迟 ${item.latency_ms === undefined || item.latency_ms === null ? '—' : num(item.latency_ms) + 'ms'}</span>
-        ${item.kind ? badge(item.kind, '') : ''}</div>
+        ${item.kind ? badge(enumLabel('event_kind', item.kind), '') : ''}</div>
     </div>`;
   }).join('') : '<div class="empty">还没有 trace 记录（trace_enabled 关着或还没跑过新 turn）</div>';
 
@@ -2783,12 +2836,12 @@ function traceDetailHtml(raw) {
       <div class="row" style="justify-content:flex-end">${traceCopyButton(promptUser)}</div>${tracePre(promptUser)}</details>` : ''}`;
 
   const memoriesBody = (Array.isArray(memories) && memories.length)
-    ? `<div style="overflow:auto"><table><thead><tr><th>id</th><th>kind</th><th>content</th><th>score</th></tr></thead><tbody>
-      ${memories.map((item) => `<tr><td class="mono hint">${esc(item.id || '')}</td><td>${badge(item.kind || '')}</td>
+    ? `<div style="overflow:auto"><table><thead><tr><th>编号</th><th>类型</th><th>内容</th><th>评分</th></tr></thead><tbody>
+      ${memories.map((item) => `<tr><td class="mono hint">${esc(item.id || '')}</td><td>${badge(enumLabel('memory_kind', item.kind))}</td>
         <td>${esc(item.content || '')}</td><td class="num">${item.score === undefined ? '—' : esc(item.score)}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="hint">无（本轮没有命中记忆）</div>';
 
-  const innerBody = `<div class="row">${badge('mode: ' + (inner.mode || '—'))}${badge('source: ' + (inner.source || '—'))}
+  const innerBody = `<div class="row">${badge('模式：' + enumLabel('trace_mode', inner.mode, '—'))}${badge('来源：' + esc(inner.source || '—'))}
     ${inner.injected ? badge('已注入 prompt', 'green') : badge('未注入', 'orange')}
     <span class="hint">latency ${inner.latency_ms === undefined ? '—' : num(inner.latency_ms) + 'ms'}</span></div>
     ${inner.state_json ? tracePre(traceText(traceJson(inner.state_json, inner.state_json))) : traceKV([
@@ -2833,7 +2886,7 @@ function traceDetailHtml(raw) {
 
   return `<div class="trace-head">
     <div class="row between"><b class="mono">${esc(detail.id || '')}</b>
-      ${badge(detail.mode || 'chat', detail.mode === 'proactive' ? 'purple' : 'blue')}
+      ${badge(enumLabel('trace_mode', detail.mode || 'chat'), detail.mode === 'proactive' ? 'purple' : 'blue')}
       ${detail.skipped ? badge('跳过', 'orange') : ''}
       <span class="hint">${detail.ts ? fmtDateTime(detail.ts) : ''} · ${detail.latency_ms === undefined ? '—' : num(detail.latency_ms) + 'ms'}</span></div>
     <div class="hint">trace 含用户原文与模型输出，只在本机展示，勿外传。</div>
@@ -3230,11 +3283,11 @@ function momentsAnalysisHtml(analysis) {
   return `<div class="moments-analysis">
     ${analysis.summary ? `<div class="moments-summary">${esc(analysis.summary)}</div>` : ''}
     <div class="grid cols-2">
-      <div><div class="hint">topics</div><div class="row wrap">${(analysis.topics || []).map((topic) => `<span class="badge">${esc(typeof topic === 'object' ? JSON.stringify(topic) : topic)}</span>`).join('') || '—'}</div></div>
-      <div><div class="hint">mood</div><div>${esc(typeof analysis.mood === 'object' ? JSON.stringify(analysis.mood) : (analysis.mood || '—'))}</div></div>
-      <div><div class="hint">social_signals</div>${list(analysis.social_signals)}</div>
-      <div><div class="hint">notable</div>${list(analysis.notable)}</div>
-      <div style="grid-column:1/-1"><div class="hint">suggestions</div>${list(analysis.suggestions)}</div>
+      <div><div class="hint">话题</div><div class="row wrap">${(analysis.topics || []).map((topic) => `<span class="badge">${esc(typeof topic === 'object' ? JSON.stringify(topic) : topic)}</span>`).join('') || '—'}</div></div>
+      <div><div class="hint">心情</div><div>${esc(typeof analysis.mood === 'object' ? JSON.stringify(analysis.mood) : (analysis.mood || '—'))}</div></div>
+      <div><div class="hint">社交信号</div>${list(analysis.social_signals)}</div>
+      <div><div class="hint">值得注意</div>${list(analysis.notable)}</div>
+      <div style="grid-column:1/-1"><div class="hint">建议</div>${list(analysis.suggestions)}</div>
     </div></div>`;
 }
 
@@ -3335,9 +3388,9 @@ function modelAdminHtml(models) {
   const items = (models && models.items) || [];
   const counts = (models && models.counts) || {};
   const rows = items.map((item) => `<tr>
-    <td><b>${esc(item.name)}</b></td><td>${badge(item.format || '?')}</td>
+    <td><b>${esc(item.name)}</b></td><td>${badge(enumLabel('model_format', item.format, '?'))}</td>
     <td>${formatBytes(item.size || 0)}</td><td class="mono">${esc(item.path || '')}</td>
-    <td>${esc(item.source || '')}</td>
+    <td>${esc(enumLabel('model_source', item.source || 'builtin', '内置'))}</td>
     <td><button class="btn small danger" data-model-delete="${esc(item.path || '')}">删除</button></td></tr>`).join('')
     || '<tr><td colspan="6" class="hint">E:/agent/models 下没有识别到模型（gguf/hf/adapter）</td></tr>';
   return `<div class="grid cols-2">
@@ -3345,16 +3398,16 @@ function modelAdminHtml(models) {
       <input id="model-import-path" placeholder="E:/.../模型目录 或 xxx.gguf">
       <div class="row" style="margin-top:6px">
         <input id="model-import-name" placeholder="名称（可选）" style="width:150px">
-        <select id="model-import-format"><option value="auto">自动格式</option><option value="gguf">gguf</option><option value="hf">hf</option><option value="adapter">adapter</option></select>
+        <select id="model-import-format"><option value="auto">自动识别</option><option value="gguf">GGUF 模型</option><option value="hf">HuggingFace 模型目录</option><option value="adapter">适配器</option></select>
         <button class="btn primary small" id="model-import-btn">导入</button></div></div>
-    <div class="field"><label>URL 下载（.gguf 直链）</label>
+    <div class="field"><label>网址下载（GGUF 直链）</label>
       <input id="model-download-url" placeholder="https://.../model.gguf">
       <div class="row" style="margin-top:6px">
         <input id="model-download-name" placeholder="名称（可选）" style="width:150px">
         <button class="btn primary small" id="model-download-btn">开始下载</button>
         <button class="btn small" id="model-download-refresh">刷新进度</button></div></div>
   </div>
-  <div class="hint">统计：gguf ${counts.gguf || 0} · hf ${counts.hf || 0} · adapter ${counts.adapter || 0}；删除只移入 models/.trash，不直接物理删。</div>
+  <div class="hint">统计：GGUF 模型 ${counts.gguf || 0} 个 · HuggingFace 模型目录 ${counts.hf || 0} 个 · 适配器 ${counts.adapter || 0} 个；删除只移入回收站，不直接物理删除。</div>
   <div id="model-admin-result"></div>
   <div class="scroll-box"><table class="table"><thead><tr><th>名称</th><th>格式</th><th>大小</th><th>路径</th><th>来源</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>
   <div id="model-download-status"></div>`;
@@ -3392,7 +3445,7 @@ function bindModelAdmin() {
         path, name: $('#model-import-name').value.trim(),
         format: $('#model-import-format').value } });
       toast('已导入：' + (result.path || ''), 'ok');
-      $('#model-admin-result').innerHTML = `<div class="hint">导入成功：${esc(result.path || '')}（${esc(result.format || '')}）</div>`;
+      $('#model-admin-result').innerHTML = `<div class="hint">导入成功：${esc(result.path || '')}（${esc(enumLabel('model_format', result.format))}）</div>`;
       await renderModels();
     } catch (err) { toast('导入失败：' + err.message, 'err'); importBtn.disabled = false; }
   };

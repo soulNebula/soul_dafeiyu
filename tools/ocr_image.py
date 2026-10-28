@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +38,10 @@ if str(ROOT) not in sys.path:
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 MAX_WIDTH = 1600
+#: 超长截图（聊天长图常见 700×14000+）分块 OCR；块高/重叠
+TILE_MAX_H = 1800
+TILE_OVERLAP = 80
+TILE_MIN_H = 400
 
 
 def _load_image(path: Path):
@@ -50,16 +56,192 @@ def _load_image(path: Path):
     return img, width, height, scale
 
 
-def _ocr(img):
-    """返回 (lines, engine, ms)；异常时抛出，由调用方兜底。"""
+_WORKER = None
+
+
+def _new_worker():
     from wx_core.ocr import OCRWorker
+    return OCRWorker()
+
+
+def _init_tile_worker():
+    """ProcessPoolExecutor initializer：每个子进程只加载一次 OCR 引擎。"""
+    global _WORKER
+    try:
+        _WORKER = _new_worker()
+        _WORKER.__enter__()
+    except Exception:  # noqa: BLE001
+        _WORKER = None
+
+
+def _ocr_with(img, worker=None):
+    """用给定/临时 worker 做一次 OCR，返回 (lines, engine, ms)。"""
     started = time.time()
-    with OCRWorker() as worker:
+    own = worker is None
+    if own:
+        worker = _new_worker()
+        worker.__enter__()
+    try:
         lines = worker.ocr(img) or []
-        engine = str(getattr(worker, "last_engine", "") or "")
-        if not engine:
-            engine = "rapidocr" if "rapidocr" in repr(worker).lower() else "windows"
+    finally:
+        if own:
+            try:
+                worker.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
+    engine = str(getattr(worker, "last_engine", "") or "")
+    if not engine:
+        engine = "rapidocr" if "rapidocr" in repr(worker).lower() else "windows"
     return lines, engine, round((time.time() - started) * 1000.0, 1)
+
+
+_RAPID = None
+
+
+def _rapid_engine():
+    """进程内 RapidOCR 单例（比 OCRWorker 少一层多尺度/降级开销，实测快 2 倍+）。"""
+    global _RAPID
+    if _RAPID is None:
+        from rapidocr_onnxruntime import RapidOCR
+        import os as _os
+        try:
+            threads = int(_os.environ.get("IDEA_OCR_ORT_THREADS") or 2)
+        except (TypeError, ValueError):
+            threads = 2
+        try:
+            _RAPID = RapidOCR(intra_op_num_threads=max(1, min(8, threads)))
+        except Exception:  # noqa: BLE001 - 老版本不支持线程参数
+            _RAPID = RapidOCR()
+    return _RAPID
+
+
+def _ocr_direct(img):
+    """直接用 RapidOCR（失败返回 None），返回 (lines, engine, ms)。"""
+    try:
+        import numpy as np
+        engine = _rapid_engine()
+        started = time.time()
+        result, _elapse = engine(np.array(img))
+        elapsed = round((time.time() - started) * 1000.0, 1)
+    except Exception:  # noqa: BLE001 - 没装/推理失败 → 交给上层降级
+        return None
+    out = []
+    for item in result or []:
+        try:
+            box, text = item[0], item[1]
+            xs = [float(pt[0]) for pt in box]
+            ys = [float(pt[1]) for pt in box]
+            out.append((str(text), (int(min(xs)), int(min(ys)),
+                                    int(max(xs)), int(max(ys)))))
+        except Exception:  # noqa: BLE001
+            continue
+    return out, "rapidocr", elapsed
+
+
+def _ocr(img):
+    """返回 (lines, engine, ms)；优先 RapidOCR 直连，失败回退 OCRWorker。"""
+    direct = _ocr_direct(img)
+    if direct is not None:
+        raw, engine, ms = direct
+        from wx_core.models import OcrLine
+        return [OcrLine(text=text, box=box) for text, box in raw], engine, ms
+    return _ocr_with(img, None)
+
+
+def _tile_ranges(height: int) -> list[tuple[int, int]]:
+    """把超高图片切成有重叠的竖条；返回 [(y0, y1)]。"""
+    if height <= TILE_MAX_H * 1.3:
+        return [(0, height)]
+    ranges = []
+    y = 0
+    while y < height:
+        y1 = min(height, y + TILE_MAX_H)
+        if y1 - y < TILE_MIN_H and ranges:
+            ranges[-1] = (ranges[-1][0], height)
+            break
+        ranges.append((y, y1))
+        if y1 >= height:
+            break
+        y = y1 - TILE_OVERLAP
+    return ranges
+
+
+def _tile_worker(args):
+    """子进程/线程：对一块图做 OCR（复用进程内 worker），返回可序列化结果。"""
+    data, (w, h) = args
+    from PIL import Image
+    img = Image.frombytes("RGB", (w, h), data)
+    worker = globals().get("_WORKER")
+    lines, engine, ms = _ocr_with(img, worker)
+    return [{"text": line.text, "box": [int(v) for v in line.box]} for line in lines], engine, ms
+
+
+def _ocr_tiles(img, workers: int = 3):
+    """整图或分块 OCR；返回 (rows, engine, ms)。分块时按 y 偏移还原坐标并去掉重叠重复。"""
+    width, height = img.size
+    ranges = _tile_ranges(height)
+    if len(ranges) <= 1:
+        lines, engine, ms = _ocr(img)
+        return lines, engine, ms
+    crops = []
+    for y0, y1 in ranges:
+        crop = img.crop((0, y0, width, y1))
+        crops.append((crop.tobytes(), crop.size, y0))
+    if workers <= 1:
+        raw_results = []
+        try:
+            worker = _new_worker()
+            worker.__enter__()
+        except Exception:  # noqa: BLE001
+            worker = None
+        try:
+            for data, size, y0 in crops:
+                lines, engine, ms = _ocr_with(
+                    __import__("PIL.Image", fromlist=["Image"]).frombytes("RGB", size, data),
+                    worker)
+                raw_results.append((([{"text": ln.text, "box": [int(v) for v in ln.box]}
+                                      for ln in lines], engine, ms), y0))
+        finally:
+            if worker is not None:
+                try:
+                    worker.__exit__(None, None, None)
+                except Exception:  # noqa: BLE001
+                    pass
+    else:
+        raw_results = []
+        with ProcessPoolExecutor(max_workers=max(1, min(workers, len(crops))),
+                                 initializer=_init_tile_worker) as pool:
+            futures = [(pool.submit(_tile_worker, (data, size)), y0)
+                       for data, size, y0 in crops]
+            for future, y0 in futures:
+                try:
+                    raw_results.append((future.result(), y0))
+                except Exception:  # noqa: BLE001 - 单块失败跳过
+                    raw_results.append((([], "", 0.0), y0))
+    from wx_core.models import OcrLine
+    rows = []
+    engine = ""
+    ms_total = 0.0
+    for (lines, eng, ms), y0 in raw_results:
+        engine = engine or eng
+        ms_total += float(ms or 0)
+        for line in lines:
+            box = list(line.get("box") or [0, 0, 0, 0])
+            box[1] += y0
+            box[3] += y0
+            rows.append(OcrLine(text=str(line.get("text") or ""), box=tuple(box)))
+    rows.sort(key=lambda r: (r.box[1], r.box[0]))
+    dedup = []
+    for row in rows:
+        if dedup:
+            prev = dedup[-1]
+            if (row.text == prev.text
+                    and abs((row.box[1] + row.box[3]) / 2 - (prev.box[1] + prev.box[3]) / 2)
+                    <= max(8, (prev.box[3] - prev.box[1]) * 0.8)):
+                dedup[-1] = row if (row.box[3] - row.box[1]) > (prev.box[3] - prev.box[1]) else prev
+                continue
+        dedup.append(row)
+    return dedup, engine, ms_total
 
 
 def _sort_lines(lines):
@@ -229,7 +411,15 @@ def _process_one(path: Path, *, infer_role: bool, detect_media: bool = True) -> 
         result["error"] = f"{type(exc).__name__}: {exc}"[:200]
         return result
     try:
-        lines, engine, ms = _ocr(img)
+        # 默认整图直连 RapidOCR；分块只在显式 IDEA_OCR_TILE_WORKERS>1 时启用（实测无收益）
+        try:
+            tile_workers = int(os.environ.get("IDEA_OCR_TILE_WORKERS") or 0)
+        except (TypeError, ValueError):
+            tile_workers = 0
+        if tile_workers > 1:
+            lines, engine, ms = _ocr_tiles(img, min(4, tile_workers))
+        else:
+            lines, engine, ms = _ocr(img)
     except Exception as exc:  # noqa: BLE001
         result.update({"width": width, "height": height, "scale": round(scale, 3),
                        "error": f"{type(exc).__name__}: {exc}"[:200]})
@@ -279,12 +469,16 @@ def main(argv=None) -> int:
     parser.add_argument("--detect-media", dest="detect_media", action="store_true",
                         default=True, help="识别无文字的图片/贴纸气泡并插占位符（默认开）")
     parser.add_argument("--no-detect-media", dest="detect_media", action="store_false")
+    parser.add_argument("--tile-workers", type=int, default=0,
+                        help="超长截图分块 OCR 的并发进程数（默认 env IDEA_OCR_TILE_WORKERS 或 3）")
     args = parser.parse_args(argv)
 
     images: list[str] = []
     for item in args.image:
         images.extend(item.split(",") if "," in item else [item])
     images = [p for p in (str(x).strip() for x in images) if p]
+    if getattr(args, "tile_workers", 0):
+        os.environ["IDEA_OCR_TILE_WORKERS"] = str(int(args.tile_workers))
     if not images:
         print(json.dumps({"ok": False, "error": "no_image"}, ensure_ascii=False))
         return 2

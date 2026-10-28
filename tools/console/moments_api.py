@@ -40,7 +40,9 @@ def _date_of(ts: int) -> str:
 
 
 def _id(row: dict) -> str:
-    return str(row.get("tid") or row.get("id") or "").strip()
+    """唯一键：优先用动态 id；``tid`` 在朋友圈数据里通常等于「账号 wxid」，
+    多条动态会共享同一个 tid，用它去重会把整条时间线并成 1-2 条（2026-10-29 用户发现）。"""
+    return str(row.get("id") or row.get("tid") or "").strip()
 
 
 def _norm(row: dict) -> dict:

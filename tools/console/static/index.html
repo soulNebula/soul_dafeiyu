@@ -29,6 +29,8 @@
     <div class="nav-item" data-page="memory"><span class="ico">▤</span>记忆</div>
     <div class="nav-item" data-page="knowledge"><span class="ico">✏️</span>记忆编辑</div>
     <div class="nav-item" data-page="prompts"><span class="ico">✎</span>提示词</div>
+    <div class="nav-group">内容</div>
+    <div class="nav-item" data-page="moments"><span class="ico">🌀</span>朋友圈</div>
     <div class="nav-group">系统</div>
     <div class="nav-item" data-page="stats"><span class="ico">📊</span>统计</div>
     <div class="nav-item" data-page="models"><span class="ico">▣</span>模型</div>
@@ -46,6 +48,13 @@
     <header class="header">
       <h1 id="page-title">总览</h1>
       <div class="pills" id="status-pills"></div>
+      <div class="send-mode" id="send-mode" title="发送模式：自动/草稿/关闭">
+        <span class="send-mode-title">发送</span>
+        <button data-send-mode="auto">自动</button>
+        <button data-send-mode="confirm">草稿</button>
+        <button data-send-mode="off">关闭</button>
+        <span class="hint" id="send-mode-note"></span>
+      </div>
       <div class="spacer"></div>
       <div class="refresh-bar">
         <span id="last-refresh">尚未刷新</span>

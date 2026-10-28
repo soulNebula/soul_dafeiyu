@@ -29,7 +29,7 @@ import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:            # 以脚本方式启动时也能 import agi.*
@@ -4043,6 +4043,101 @@ def _library_store():
 
 
 # --------------------------------------------------------------------------- #
+# P39：发送模式 / 朋友圈 / 模型管理（802 控制台新增）
+# --------------------------------------------------------------------------- #
+SEND_MODES = ("auto", "confirm", "off")
+SEND_MODE_LABELS = {"auto": "自动", "confirm": "草稿", "off": "关闭"}
+
+
+def _load_console_feature(name: str):
+    try:
+        import importlib.util
+        target = Path(__file__).resolve().parent / f"{name}.py"
+        if not target.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location(f"console_{name}", target)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def moments_module():
+    return _load_console_feature("moments_api")
+
+
+def model_admin_module():
+    return _load_console_feature("model_admin")
+
+
+def send_mode_state() -> dict:
+    raw = gateway_config()
+    mode = str(raw.get("send_mode") or "auto").strip().lower()
+    if mode not in SEND_MODES:
+        mode = "auto"
+    contact_modes = raw.get("contact_modes") if isinstance(raw.get("contact_modes"), dict) else {}
+    summary = {"auto": 0, "confirm": 0, "off": 0, "other": 0}
+    for value in contact_modes.values():
+        text = str(value or "").strip().lower()
+        summary[text if text in ("auto", "confirm", "off") else "other"] += 1
+    return {"ok": True, "mode": mode, "label": SEND_MODE_LABELS[mode],
+            "contact_modes": contact_modes, "contact_summary": summary,
+            "path": str(GATEWAY_CONFIG),
+            "labels": SEND_MODE_LABELS}
+
+
+def set_send_mode(mode: str, *, client: str = "") -> dict:
+    value = str(mode or "").strip().lower()
+    if value not in SEND_MODES:
+        audit("send_mode", {"mode": str(mode)[:40], "ok": False}, ok=False,
+              note="invalid_mode", client=client)
+        return {"ok": False, "error": "invalid_mode", "allowed": list(SEND_MODES)}
+    raw = gateway_config()
+    before = str(raw.get("send_mode") or "")
+    if before == value:
+        return {**send_mode_state(), "changed": False, "note": "模式未变化"}
+    backup = None
+    try:
+        if Path(GATEWAY_CONFIG).is_file():
+            Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
+            suffix = time.strftime("%Y%m%d_%H%M%S")
+            backup = Path(BACKUP_DIR) / f"config_before_send_mode_{suffix}.json"
+            shutil.copy2(GATEWAY_CONFIG, backup)
+        raw["send_mode"] = value
+        write_json_atomic(GATEWAY_CONFIG, raw)
+    except OSError as exc:
+        audit("send_mode", {"mode": value, "before": before, "ok": False}, ok=False,
+              note=str(exc), client=client)
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    audit("send_mode", {"mode": value, "before": before,
+                        "backup": str(backup) if backup else ""}, ok=True, client=client)
+    return {**send_mode_state(), "changed": True,
+            "backup": str(backup) if backup else "",
+            "note": "已保存；网关热加载，下一条消息生效"}
+
+
+def models_page_payload() -> dict:
+    base = models_snapshot()
+    module = model_admin_module()
+    if module is None:
+        base["items"] = []
+        base["manage_error"] = "model_admin_unavailable"
+        return base
+    try:
+        managed = module.list_models()
+        base["items"] = managed.get("items") or []
+        base["counts"] = managed.get("counts") or {}
+        base["manage_root"] = managed.get("root")
+    except Exception as exc:  # noqa: BLE001
+        base["items"] = []
+        base["manage_error"] = f"{type(exc).__name__}: {exc}"
+    return base
+
+
+# --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
 def host_ok(host: str) -> bool:
@@ -4202,8 +4297,57 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, memory_strength()); return
             if path == "/api/tone":
                 self._json(200, tone_snapshot(self._limit(query, 100))); return
+            if path == "/api/control/send_mode":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, send_mode_state()); return
+            if path.startswith("/api/moments"):
+                if not token_ok(self.headers):
+                    # 图片 <img> 无法带 header：仅 /api/moments/media 允许 ?token=
+                    expected = admin_token()
+                    presented = str((query.get("token") or [""])[0] or "")
+                    if not (path == "/api/moments/media" and expected and presented
+                            and hmac.compare_digest(expected, presented)):
+                        self._json(401, {"ok": False, "error": "admin token required"}); return
+                module = moments_module()
+                if module is None:
+                    self._json(501, {"ok": False, "error": "moments_backend_unavailable"}); return
+                try:
+                    if path == "/api/moments":
+                        limit = self._limit(query, 50)
+                        keyword = str((query.get("keyword") or [""])[0] or "")
+                        refresh = str((query.get("refresh") or [""])[0] or "").lower() in ("1", "true", "yes")
+                        result = module.fetch_moments(limit, keyword) if refresh else module.load_cache(limit, keyword)
+                    elif path == "/api/moments/media":
+                        md5 = str((query.get("md5") or [""])[0] or "")
+                        found = module.find_media(md5)
+                        if not found.get("ok"):
+                            self._json(404, found); return
+                        target = Path(str(found.get("path") or ""))
+                        if not target.is_file():
+                            self._json(404, {"ok": False, "error": "media_not_found"}); return
+                        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+                        self._bytes(200, target.read_bytes(), content_type); return
+                    elif path == "/api/moments/analyses":
+                        result = module.list_analyses(self._limit(query, 10))
+                    elif path.startswith("/api/moments/analysis/"):
+                        result = module.get_analysis(unquote(path.split("/api/moments/analysis/", 1)[1]))
+                    elif path.startswith("/api/moments/"):
+                        result = module.get_moment(unquote(path.split("/api/moments/", 1)[1]))
+                    else:
+                        result = {"ok": False, "error": "not_found"}
+                except Exception as exc:  # noqa: BLE001
+                    result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                self._json(200 if result.get("ok") else (404 if result.get("error") == "not_found" else 400), result); return
+            if path == "/api/models/download/status":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                module = model_admin_module()
+                if module is None:
+                    self._json(501, {"ok": False, "error": "model_admin_unavailable"}); return
+                self._json(200, module.download_status()); return
             if path == "/api/models":
-                self._json(200, models_snapshot()); return
+                self._json(200, models_page_payload()); return
             # P30：每日语料/训练门禁只读接口
             if path == "/api/train/status":
                 self._json(200, train_status()); return
@@ -4419,6 +4563,58 @@ class Handler(BaseHTTPRequestHandler):
                 updates = body.get("updates", body)
                 result = apply_config(updates if isinstance(updates, dict) else {},
                                       client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/control/send_mode":
+                result = set_send_mode(str(body.get("mode") or ""), client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/moments/refresh":
+                module = moments_module()
+                if module is None:
+                    self._json(501, {"ok": False, "error": "moments_backend_unavailable"}); return
+                result = module.fetch_moments(int(body.get("limit") or 50))
+                audit("moments_refresh", {"fetched": result.get("fetched"), "added": result.get("added"),
+                                          "ok": bool(result.get("ok"))},
+                      ok=bool(result.get("ok")), client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/moments/analyze":
+                module = moments_module()
+                if module is None:
+                    self._json(501, {"ok": False, "error": "moments_backend_unavailable"}); return
+                result = module.analyze(int(body.get("limit") or 30),
+                                        str(body.get("question") or ""), client=client)
+                audit("moments_analyze", {"ok": bool(result.get("ok")),
+                                          "name": result.get("name")},
+                      ok=bool(result.get("ok")), client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/models/import":
+                module = model_admin_module()
+                if module is None:
+                    self._json(501, {"ok": False, "error": "model_admin_unavailable"}); return
+                result = module.import_model(str(body.get("path") or ""),
+                                             str(body.get("name") or ""),
+                                             str(body.get("format") or "auto"))
+                audit("model_import", {"path": body.get("path"), "name": body.get("name"),
+                                       "ok": bool(result.get("ok"))},
+                      ok=bool(result.get("ok")), client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/models/delete":
+                module = model_admin_module()
+                if module is None:
+                    self._json(501, {"ok": False, "error": "model_admin_unavailable"}); return
+                result = module.delete_model(str(body.get("path") or ""))
+                audit("model_delete", {"path": body.get("path"), "ok": bool(result.get("ok")),
+                                       "moved_to": result.get("moved_to")},
+                      ok=bool(result.get("ok")), client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/models/download":
+                module = model_admin_module()
+                if module is None:
+                    self._json(501, {"ok": False, "error": "model_admin_unavailable"}); return
+                result = module.download_model(str(body.get("url") or ""),
+                                               str(body.get("name") or ""))
+                audit("model_download", {"url": body.get("url"), "name": body.get("name"),
+                                         "ok": bool(result.get("ok"))},
+                      ok=bool(result.get("ok")), client=client)
                 self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/models/start":
                 result = start_model(str(body.get("name") or ""), client=client)

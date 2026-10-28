@@ -423,3 +423,34 @@ table td input[type="number"], table td select { padding: 3px 6px; font-size: 12
 .library-caption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .library-tags { display: flex; gap: 4px; flex-wrap: wrap; }
 .library-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* ---------------- P39 发送模式 / 朋友圈 / 模型库 ---------------- */
+.send-mode { display: flex; align-items: center; gap: 3px; border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px 4px; }
+.send-mode-title { color: var(--dim); font-size: 11px; margin: 0 3px; }
+.send-mode button { background: transparent; border: 1px solid transparent; border-radius: 4px;
+  color: var(--dim); padding: 2px 8px; font-size: 12px; cursor: pointer; }
+.send-mode button:hover { color: #fff; border-color: var(--border); }
+.send-mode button.active { background: var(--primary-2); color: #fff; border-color: var(--primary-2); }
+.send-mode .hint { margin-left: 3px; white-space: nowrap; }
+
+.moments-grid { align-items: start; }
+.moments-list { display: flex; flex-direction: column; gap: 8px; max-height: 68vh; overflow: auto; }
+.moment-card { border: 1px solid var(--border); background: #202123; border-radius: 8px; padding: 9px 11px; }
+.moment-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 5px; }
+.moment-text { white-space: pre-wrap; font-size: 13px; line-height: 1.45; cursor: pointer; }
+.moment-text:hover { color: #fff; }
+.moment-images { display: flex; gap: 5px; flex-wrap: wrap; margin: 7px 0; }
+.moment-images img { width: 84px; height: 84px; object-fit: cover; border-radius: 4px; background: #111; }
+.moment-stats { display: flex; align-items: center; gap: 14px; color: var(--dim); font-size: 12px; }
+.moment-stats .btn { margin-left: auto; }
+.col-stack { display: flex; flex-direction: column; gap: 12px; }
+.moments-summary { background: #1c2430; border: 1px solid #2f4358; border-radius: 5px;
+  padding: 8px 10px; white-space: pre-wrap; margin-bottom: 8px; }
+.moments-analysis .grid { margin-top: 6px; }
+.row.wrap { flex-wrap: wrap; }
+.scroll-box { max-height: 44vh; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+.table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.table th, .table td { padding: 4px 8px; border-bottom: 1px solid #2c2c34; text-align: left; }
+.table th { position: sticky; top: 0; background: #26262a; color: var(--dim); }
+.mono { font-family: Consolas, monospace; font-size: 11px; }

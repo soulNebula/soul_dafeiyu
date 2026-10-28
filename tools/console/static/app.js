@@ -28,6 +28,8 @@ const state = {
   statsState: null,
   bili: null,
   trace: null,
+  moments: null,
+  sendMode: null,
   library: null,
   status: null,
   inner: null,
@@ -51,6 +53,7 @@ const PAGES = {
   providers: '模型配置',
   logs: '日志',
   bili: 'B站',
+  moments: '朋友圈',
   settings: '设置',
 };
 
@@ -925,6 +928,7 @@ async function renderModels() {
   $('#app').innerHTML = `${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
     <div class="grid cols-3">${cards}</div>
     ${card('内状态注入开关（热加载，保存后下一条消息生效）', innerForm)}
+    ${card('模型库管理（本地导入 / URL 下载 / 回收站删除）', modelAdminHtml(models))}
     ${card('说明', `<p class="hint">启停按钮只允许 ${esc(allow.join(', ') || 'soul-05b')}；1.5B 为 reserved，故意拒绝。外部启动的 llama-server 停止前会二次确认；不会误杀其它进程。</p>`)}`;
 
   $$('[data-model-start]').forEach((btn) => {
@@ -986,6 +990,7 @@ async function renderModels() {
       } finally { modelBusy.delete(name); btn.disabled = false; }
     };
   });
+  bindModelAdmin();
   const saveInner = $('#btn-save-inner');
   if (saveInner) saveInner.onclick = async () => {
     if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
@@ -3150,6 +3155,277 @@ async function deleteLibraryAsset(id, hard) {
 }
 
 /* ---------------- 路由 ---------------- */
+
+/* ============================================================
+ * P39：发送模式 / 朋友圈 / 模型库管理
+ * ============================================================ */
+const SEND_MODE_LABELS = { auto: '自动', confirm: '草稿', off: '关闭' };
+
+function renderSendMode(stateData) {
+  const wrap = $('#send-mode');
+  if (!wrap) return;
+  const mode = stateData && stateData.mode ? stateData.mode : '';
+  wrap.querySelectorAll('[data-send-mode]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.sendMode === mode);
+  });
+  const note = $('#send-mode-note');
+  if (note) note.textContent = mode ? '当前：' + (SEND_MODE_LABELS[mode] || mode) : '未连接';
+}
+
+async function loadSendMode() {
+  try {
+    const data = await api('/api/control/send_mode');
+    state.sendMode = data;
+    renderSendMode(data);
+  } catch (err) {
+    renderSendMode({ mode: '' });
+  }
+}
+
+async function setSendMode(mode) {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const label = SEND_MODE_LABELS[mode] || mode;
+  if (!confirm('把发送模式切换为「' + label + '」？\n自动=直接发；草稿=生成后等你批准；关闭=不自动回复。')) return;
+  try {
+    const result = await api('/api/control/send_mode', { method: 'POST', body: { mode } });
+    state.sendMode = result;
+    renderSendMode(result);
+    toast('已切换为：' + (SEND_MODE_LABELS[result.mode] || result.mode), 'ok');
+    if (result.backup) toast('已备份原配置：' + result.backup, '');
+  } catch (err) { toast('切换失败：' + err.message, 'err'); }
+}
+
+function bindSendMode() {
+  const wrap = $('#send-mode');
+  if (!wrap) return;
+  wrap.querySelectorAll('[data-send-mode]').forEach((btn) => {
+    btn.onclick = () => setSendMode(btn.dataset.sendMode);
+  });
+}
+
+/* ---------------- 朋友圈（802 控制台） ---------------- */
+function momentsRelTime(ts) {
+  const value = Number(ts || 0);
+  if (!value) return '';
+  const date = new Date(value * 1000);
+  const now = new Date();
+  const day = 86400000;
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const diff = start - new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const hm = date.toTimeString().slice(0, 5);
+  if (diff === 0) return '今天 ' + hm;
+  if (diff === day) return '昨天 ' + hm;
+  if (diff === 2 * day) return '前天 ' + hm;
+  return date.toLocaleDateString('zh-CN') + ' ' + hm;
+}
+function momentsImageUrl(md5) {
+  const token = state.token ? '&token=' + encodeURIComponent(state.token) : '';
+  return '/api/moments/media?md5=' + encodeURIComponent(md5 || '') + token;
+}
+function momentsAnalysisHtml(analysis) {
+  if (!analysis) return '';
+  const list = (value) => !value ? '<span class="hint">—</span>'
+    : (Array.isArray(value) ? value.map((item) => `<div class="hint">• ${esc(typeof item === 'object' ? JSON.stringify(item) : item)}</div>`).join('')
+      : (typeof value === 'object' ? `<pre class="json">${esc(JSON.stringify(value, null, 2))}</pre>` : `<div>${esc(String(value))}</div>`));
+  return `<div class="moments-analysis">
+    ${analysis.summary ? `<div class="moments-summary">${esc(analysis.summary)}</div>` : ''}
+    <div class="grid cols-2">
+      <div><div class="hint">topics</div><div class="row wrap">${(analysis.topics || []).map((topic) => `<span class="badge">${esc(typeof topic === 'object' ? JSON.stringify(topic) : topic)}</span>`).join('') || '—'}</div></div>
+      <div><div class="hint">mood</div><div>${esc(typeof analysis.mood === 'object' ? JSON.stringify(analysis.mood) : (analysis.mood || '—'))}</div></div>
+      <div><div class="hint">social_signals</div>${list(analysis.social_signals)}</div>
+      <div><div class="hint">notable</div>${list(analysis.notable)}</div>
+      <div style="grid-column:1/-1"><div class="hint">suggestions</div>${list(analysis.suggestions)}</div>
+    </div></div>`;
+}
+
+async function renderMoments(auto) {
+  const wrap = $('#app');
+  if (!auto) wrap.innerHTML = '<div class="empty">加载朋友圈…</div>';
+  const prev = state.moments || {};
+  const keyword = prev.keyword || '';
+  const errors = [];
+  let data = null, analyses = null;
+  try { data = await api('/api/moments?limit=100' + (keyword ? '&keyword=' + encodeURIComponent(keyword) : '')); }
+  catch (e) { errors.push('朋友圈: ' + e.message); }
+  try { analyses = await api('/api/moments/analyses?limit=10'); } catch (e) { errors.push('历史分析: ' + e.message); }
+  const items = (data && data.items) || [];
+  const analysisItems = analyses && analyses.items ? analyses.items : [];
+  const analysis = prev.analysis || (analysisItems[0] && analysisItems[0].analysis) || null;
+  state.moments = { ...prev, items, analyses: analysisItems, keyword, analysis, errors };
+  const cards = items.map((item) => {
+    const tid = item.tid || item.id || '';
+    const images = (item.images || []).map((image) => image.md5
+      ? `<img src="${momentsImageUrl(image.md5)}" loading="lazy" onerror="this.style.display='none'">` : '').join('');
+    return `<div class="moment-card">
+      <div class="moment-head"><b>${esc(item.nickname || item.username || '未知')}</b>
+        <span class="hint">${esc(momentsRelTime(item.create_time))}</span></div>
+      <div class="moment-text" data-moment-open="${esc(tid)}">${esc(item.text || '（无正文）')}</div>
+      ${images ? `<div class="moment-images">${images}</div>` : ''}
+      <div class="moment-stats"><span>👍 ${(item.likes || []).length}</span><span>💬 ${(item.comments || []).length}</span>
+        <button class="btn small" data-moment-open="${esc(tid)}">详情</button></div></div>`;
+  }).join('') || '<div class="empty">还没有朋友圈缓存，点「刷新朋友圈」抓一次</div>';
+  const history = (state.moments.analyses || []).map((entry) => `<div class="tree-row" data-moment-analysis="${esc(entry.name)}">
+    ${esc(entry.name)} <span class="hint">${esc(entry.summary || '')}</span></div>`).join('') || '<div class="hint">暂无历史分析</div>';
+  wrap.innerHTML = `${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
+    <div class="card">
+      <div class="row wrap between">
+        <div class="row"><button class="btn primary small" id="moments-refresh">刷新朋友圈</button>
+          <input id="moments-keyword" placeholder="搜索关键词…" value="${esc(keyword)}" style="width:220px">
+          <button class="btn small" id="moments-search">搜索</button>
+          <button class="btn small" id="moments-analyze">AI 分析最近 ${Math.min(items.length, 30)} 条</button>
+          ${prev.busy ? '<span class="hint">分析中，最长 180s…</span>' : ''}</div>
+        <span class="hint">${items.length} 条 · 只读缓存</span>
+      </div></div>
+    <div class="grid cols-2 moments-grid">
+      <div class="card"><h3>朋友圈</h3><div class="moments-list">${cards}</div></div>
+      <div class="col-stack">
+        <div class="card"><h3>AI 分析结果</h3>${analysis ? momentsAnalysisHtml(analysis) : '<div class="hint">还没分析。点上方「AI 分析」。</div>'}</div>
+        <div class="card"><h3>历史分析（最近 10 次）</h3><div class="tree">${history}</div></div>
+      </div>
+    </div>`;
+  const refresh = $('#moments-refresh');
+  if (refresh) refresh.onclick = async () => {
+    refresh.disabled = true; refresh.textContent = '抓取中…（最长 180s）';
+    try {
+      const result = await api('/api/moments/refresh', { method: 'POST', body: { limit: 50 } });
+      toast('刷新完成：抓取 ' + (result.fetched || 0) + ' 条，新增 ' + (result.added || 0) + ' 条', 'ok');
+      await renderMoments();
+    } catch (err) { toast('刷新失败：' + err.message, 'err'); refresh.disabled = false; refresh.textContent = '刷新朋友圈'; }
+  };
+  const search = $('#moments-search');
+  if (search) search.onclick = async () => {
+    state.moments.keyword = $('#moments-keyword').value.trim();
+    await renderMoments();
+  };
+  const analyze = $('#moments-analyze');
+  if (analyze) analyze.onclick = async () => {
+    if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+    state.moments.busy = true; analyze.disabled = true; analyze.textContent = '分析中…';
+    try {
+      const result = await api('/api/moments/analyze', { method: 'POST', body: { limit: 30 } });
+      state.moments.analysis = result.analysis || result;
+      state.moments.busy = false;
+      toast('分析完成', 'ok');
+      await renderMoments();
+    } catch (err) { state.moments.busy = false; toast('分析失败：' + err.message, 'err'); analyze.disabled = false; analyze.textContent = 'AI 分析'; }
+  };
+  $$('[data-moment-open]').forEach((btn) => {
+    btn.onclick = async () => {
+      const tid = btn.dataset.momentOpen;
+      if (!tid) return;
+      try {
+        const result = await api('/api/moments/' + encodeURIComponent(tid));
+        showModal('朋友圈详情', result.item || result);
+      } catch (err) { toast('详情失败：' + err.message, 'err'); }
+    };
+  });
+  $$('[data-moment-analysis]').forEach((row) => {
+    row.onclick = async () => {
+      try {
+        const result = await api('/api/moments/analysis/' + encodeURIComponent(row.dataset.momentAnalysis));
+        state.moments.analysis = result.analysis || result;
+        await renderMoments();
+      } catch (err) { toast('读取历史分析失败：' + err.message, 'err'); }
+    };
+  });
+}
+
+/* ---------------- 模型库管理（现有模型页内嵌） ---------------- */
+function modelAdminHtml(models) {
+  const items = (models && models.items) || [];
+  const counts = (models && models.counts) || {};
+  const rows = items.map((item) => `<tr>
+    <td><b>${esc(item.name)}</b></td><td>${badge(item.format || '?')}</td>
+    <td>${formatBytes(item.size || 0)}</td><td class="mono">${esc(item.path || '')}</td>
+    <td>${esc(item.source || '')}</td>
+    <td><button class="btn small danger" data-model-delete="${esc(item.path || '')}">删除</button></td></tr>`).join('')
+    || '<tr><td colspan="6" class="hint">E:/agent/models 下没有识别到模型（gguf/hf/adapter）</td></tr>';
+  return `<div class="grid cols-2">
+    <div class="field"><label>本地导入（文件夹或单文件）</label>
+      <input id="model-import-path" placeholder="E:/.../模型目录 或 xxx.gguf">
+      <div class="row" style="margin-top:6px">
+        <input id="model-import-name" placeholder="名称（可选）" style="width:150px">
+        <select id="model-import-format"><option value="auto">自动格式</option><option value="gguf">gguf</option><option value="hf">hf</option><option value="adapter">adapter</option></select>
+        <button class="btn primary small" id="model-import-btn">导入</button></div></div>
+    <div class="field"><label>URL 下载（.gguf 直链）</label>
+      <input id="model-download-url" placeholder="https://.../model.gguf">
+      <div class="row" style="margin-top:6px">
+        <input id="model-download-name" placeholder="名称（可选）" style="width:150px">
+        <button class="btn primary small" id="model-download-btn">开始下载</button>
+        <button class="btn small" id="model-download-refresh">刷新进度</button></div></div>
+  </div>
+  <div class="hint">统计：gguf ${counts.gguf || 0} · hf ${counts.hf || 0} · adapter ${counts.adapter || 0}；删除只移入 models/.trash，不直接物理删。</div>
+  <div id="model-admin-result"></div>
+  <div class="scroll-box"><table class="table"><thead><tr><th>名称</th><th>格式</th><th>大小</th><th>路径</th><th>来源</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <div id="model-download-status"></div>`;
+}
+
+function formatBytes(value) {
+  const n = Number(value || 0);
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+
+async function refreshModelDownloads() {
+  try {
+    const data = await api('/api/models/download/status');
+    const el = $('#model-download-status');
+    if (!el) return;
+    const items = data.items || [];
+    el.innerHTML = items.length ? `<div class="hint">下载任务：</div>${items.map((item) => `<div class="kv">
+      <span class="k">${esc(item.name || item.id)}</span><span class="v">${esc(item.status)}
+      ${item.total ? Math.round((item.bytes || 0) / item.total * 100) + '%' : ''}
+      ${item.error ? esc(item.error) : ''}</span></div>`).join('')}` : '';
+  } catch (err) { /* 状态接口失败不打扰页面 */ }
+}
+
+function bindModelAdmin() {
+  const importBtn = $('#model-import-btn');
+  if (importBtn) importBtn.onclick = async () => {
+    const path = $('#model-import-path').value.trim();
+    if (!path) { toast('先填本地路径', 'err'); return; }
+    importBtn.disabled = true;
+    try {
+      const result = await api('/api/models/import', { method: 'POST', body: {
+        path, name: $('#model-import-name').value.trim(),
+        format: $('#model-import-format').value } });
+      toast('已导入：' + (result.path || ''), 'ok');
+      $('#model-admin-result').innerHTML = `<div class="hint">导入成功：${esc(result.path || '')}（${esc(result.format || '')}）</div>`;
+      await renderModels();
+    } catch (err) { toast('导入失败：' + err.message, 'err'); importBtn.disabled = false; }
+  };
+  const downloadBtn = $('#model-download-btn');
+  if (downloadBtn) downloadBtn.onclick = async () => {
+    const url = $('#model-download-url').value.trim();
+    if (!url) { toast('先填 URL', 'err'); return; }
+    downloadBtn.disabled = true;
+    try {
+      const result = await api('/api/models/download', { method: 'POST', body: {
+        url, name: $('#model-download-name').value.trim() } });
+      toast('下载已开始：' + (result.name || ''), 'ok');
+      $('#model-download-url').value = '';
+      $('#model-admin-result').innerHTML = `<div class="hint">下载中：${esc(result.name || '')} → ${esc(result.path || '')}</div>`;
+      setTimeout(refreshModelDownloads, 1000);
+    } catch (err) { toast('下载失败：' + err.message, 'err'); downloadBtn.disabled = false; }
+  };
+  const refresh = $('#model-download-refresh');
+  if (refresh) refresh.onclick = refreshModelDownloads;
+  $$('[data-model-delete]').forEach((btn) => {
+    btn.onclick = async () => {
+      const path = btn.dataset.modelDelete;
+      if (!confirm('删除模型（移到 models/.trash，不物理删）？\n' + path)) return;
+      try {
+        const result = await api('/api/models/delete', { method: 'POST', body: { path } });
+        toast('已移入回收站：' + (result.moved_to || ''), 'ok');
+        await renderModels();
+      } catch (err) { toast('删除失败：' + err.message, 'err'); }
+    };
+  });
+  refreshModelDownloads();
+}
+
 const RENDERERS = {
   overview: renderOverview,
   feed: renderFeed,
@@ -3167,6 +3443,7 @@ const RENDERERS = {
   providers: renderProviders,
   logs: renderLogs,
   bili: renderBili,
+  moments: renderMoments,
   settings: renderSettings,
 };
 
@@ -3219,6 +3496,7 @@ function bindGlobal() {
       const st = await api('/api/status');
       if (st && st.ok) {
         toast('已连接', 'ok');
+        await loadSendMode();
         await go(state.page);
       } else {
         toast('连接失败：token 可能无效', 'err');
@@ -3238,6 +3516,7 @@ function bindGlobal() {
       state.token = data.token;
       tokenInput.value = state.token;
       sessionStorage.setItem('console_token', state.token);
+      loadSendMode();
       go(state.page);
     }
   }).catch(() => {});
@@ -3248,4 +3527,6 @@ function bindGlobal() {
 }
 
 bindGlobal();
+bindSendMode();
+loadSendMode();
 go(location.hash.replace('#', '') || 'overview');

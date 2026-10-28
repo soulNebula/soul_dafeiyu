@@ -909,8 +909,8 @@ const ANNOT_ZH = {
 function annotZh(text) {
   let out = String(text ?? '');
   out = out.replace(/behavior\.(length|ask|advice|emoji)/g, (m) => ANNOT_ZH[m] || m);
-  out = out.replace(/(mood|energy|sharing|battery|trust|stage|stance|intent|monologue)/g, (m) => ANNOT_ZH[m] || m);
-  out = out.replace(/(short|normal|long)/g, (m) => ANNOT_ZH[m] || m);
+  out = out.replace(/\b(mood|energy|sharing|battery|trust|stage|stance|intent|monologue)\b/g, (m) => ANNOT_ZH[m] || m);
+  out = out.replace(/\b(short|normal|long)\b/g, (m) => ANNOT_ZH[m] || m);
   return out;
 }
 function annotVisibleItems() {

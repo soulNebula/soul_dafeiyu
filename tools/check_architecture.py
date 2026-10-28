@@ -47,6 +47,7 @@ TOP_LEVEL_DIRS: dict[str, str] = {
     "Demo": "独立工具实现（tools_impl 被 tools/ 动态 import；其余已归档到 legacy/）",
     "legacy": "死代码归档区（只归档不删除，见 legacy/README.md）",
     "docs": "文档（含历史快照 archive/、来源材料 sources/）",
+    "idea": "803 IDEA 工作台（独立 git 历史，subtree 合入；有自己的一套 app/web/tests）",
     "media": "本地素材/媒体数据（运行数据，不入库）",
     "__pycache__": "字节码缓存",
     "log": "运行时日志目录（gitignore，不参与代码）",
@@ -107,6 +108,8 @@ LINE_BUDGET: dict[str, int] = {
 SKIP_DIRS = {
     ".git", "__pycache__", ".venv", "venv", "venv312", "node_modules",
     ".pytest_cache", ".mypy_cache", "media", "docs", "legacy", "Demo",
+    # 803 工作台是独立项目（自己一套 app/web/tests，subtree 合入），不按主仓模块规则扫
+    "idea",
 }
 ENTRY_DIR_PREFIXES = ("tools/", "tests/", "scripts/", "agi/tests/")
 ENTRY_FILE_NAMES = {"__init__.py", "conftest.py", "app.py", "web_app.py", "setup.py"}

@@ -77,6 +77,18 @@ function Open-Console {
     }
 }
 
+function Open-Workbench {
+    try {
+        if ($script:Python -and (Test-Path $script:Python) -and (Test-Path $script:Launcher)) {
+            Start-Process -FilePath $script:Python -ArgumentList @($script:Launcher, "--open-workbench") -WindowStyle Hidden
+        } else {
+            Start-Process "http://127.0.0.1:803/"
+        }
+    } catch {
+        Show-Balloon "打开工作台失败" $_.Exception.Message "Error"
+    }
+}
+
 function Invoke-ConsoleJson {
     param([string]$Url, [string]$Method = "GET", $Body = $null)
     $headers = @{}
@@ -201,6 +213,10 @@ $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $itemOpen = New-Object System.Windows.Forms.ToolStripMenuItem("打开控制台")
 $itemOpen.add_Click({ Open-Console })
 [void]$menu.Items.Add($itemOpen)
+
+$itemWorkbench = New-Object System.Windows.Forms.ToolStripMenuItem("打开工作台")
+$itemWorkbench.add_Click({ Open-Workbench })
+[void]$menu.Items.Add($itemWorkbench)
 
 [void]$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 

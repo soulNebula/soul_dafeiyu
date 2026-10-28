@@ -86,6 +86,12 @@ def env_info():
     return {"ok": True, **info}
 
 
+@app.get("/api/wb/health")
+def workbench_health():
+    """桌面启动器/健康检查用：不需要 token，只报活着。"""
+    return {"ok": True, "service": "idea-workbench"}
+
+
 @app.get("/api/wb/overview", dependencies=[Depends(require_token)])
 def overview():
     svc = services.list_services()

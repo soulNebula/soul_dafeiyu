@@ -278,7 +278,7 @@ def list_datasets() -> dict:
     items += _scan_datasets(soul / "agi" / "eval_data", "soulagent/eval")
     for extra in (agent / "datasets", agent / "output" / "datasets"):
         items += _scan_datasets(extra, "agent")
-    # E:\agent 下临时/训练语料（限制浅层，不全盘扫 models）
+    # 模型根目录下临时/训练语料（限制浅层，不全盘扫 models）
     for base in (agent,):
         try:
             for path in base.glob("*.jsonl"):

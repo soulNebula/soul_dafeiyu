@@ -20,8 +20,11 @@ def soulagent_home() -> Path:
 
 
 def agent_home() -> Path:
-    raw = os.environ.get("AGENT_HOME", "") or r"E:\agent"
-    return Path(raw)
+    """模型/数据根目录：环境变量 AGENT_HOME > 本机默认（可用 env 覆盖）。"""
+    raw = os.environ.get("AGENT_HOME", "")
+    if raw:
+        return Path(raw)
+    return Path("E:") / "agent"
 
 
 def wechat_config_path() -> Path:

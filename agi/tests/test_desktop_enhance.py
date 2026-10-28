@@ -344,7 +344,7 @@ def test_main_tray_no_open_starts_tray_and_keeps_services(tmp_path, monkeypatch)
     code = launcher.main(["--tray", "--no-open", "--no-notify",
                           "--state-path", str(state_path)])
     assert code == 0
-    assert started == ["gateway", "console"]
+    assert started == ["gateway", "console", "workbench"]
     assert tray_kwargs["no_notify"] is True
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["tray_pid"] == 777 and state["tray_no_notify"] is True
@@ -458,3 +458,20 @@ def test_main_autostart_commands(tmp_path, monkeypatch, fake_registry, capsys):
     code = launcher.main(["--autostart", "uninstall"])
     payload = json.loads(capsys.readouterr().out)
     assert code == 0 and payload["bat_installed"] is False
+
+def test_workbench_service_spec_and_cwd(tmp_path, monkeypatch):
+    specs = launcher.service_commands()
+    wb = specs["workbench"]
+    assert wb["port"] == 803
+    assert wb["cwd"] == str(launcher.ROOT / "idea")
+    assert wb["cmd"][1:4] == ["-m", "uvicorn", "app.main:app"]
+    assert "--port" in wb["cmd"] and "803" in wb["cmd"]
+    # 子进程 spawn 使用 spec 里的 cwd（不落成仓库根）
+    captured = {}
+    monkeypatch.setattr(launcher, "_spawn_service",
+                        lambda cmd, log, cwd=None: captured.update(cmd=cmd, cwd=cwd) or type("P", (), {"pid": 1})())
+    monkeypatch.setattr(launcher, "port_open", lambda *_a, **_k: False)
+    monkeypatch.setattr(launcher, "wait_for", lambda fn, timeout=0: True)
+    monkeypatch.setattr(launcher, "http_ok", lambda *_a, **_k: True)
+    launcher.ensure_service("workbench", wb, tmp_path)
+    assert captured["cwd"] == str(launcher.ROOT / "idea")

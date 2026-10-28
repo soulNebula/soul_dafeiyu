@@ -34,7 +34,14 @@ if not exist "%PY%" (
     set "PY=python"
 )
 
-"%PY%" tools\desktop\launcher.py %*
+set "EXE=%~dp0tools\desktop\dist\SoulAgentDesktop\SoulAgentDesktop.exe"
+if exist "%EXE%" (
+    "%EXE%" %*
+    set "RC=%ERRORLEVEL%"
+) else (
+    "%PY%" tools\desktop\launcher.py %*
+    set "RC=%ERRORLEVEL%"
+)
 set "RC=%ERRORLEVEL%"
 
 if not "%RC%"=="0" (

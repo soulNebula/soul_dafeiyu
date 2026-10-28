@@ -35,7 +35,29 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
-ROOT = Path(__file__).resolve().parents[2]
+def _find_repo_root() -> Path:
+    """源码运行 / PyInstaller exe 运行都能找到仓库根（含 agi/ 与 tools/desktop/）。"""
+    env = str(os.environ.get("SOULAGENT_DESKTOP_ROOT") or "").strip()
+    candidates: list[Path] = []
+    if env:
+        candidates.append(Path(env))
+    here = Path(__file__).resolve()
+    candidates.extend([here.parent, *here.parents])
+    exe = Path(sys.executable).resolve()
+    candidates.extend([exe.parent, *exe.parents])
+    candidates.append(Path.cwd().resolve())
+    seen: set[str] = set()
+    for cand in candidates:
+        key = str(cand).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if (cand / "agi" / "wechat_gateway").is_dir() and (cand / "tools" / "desktop").is_dir():
+            return cand
+    return here.parents[2]
+
+
+ROOT = _find_repo_root()
 if str(ROOT) not in sys.path:            # 以脚本方式启动时也能 import agi.*
     sys.path.insert(0, str(ROOT))
 
@@ -47,9 +69,12 @@ PROFILE_DIR = ROOT / "agi" / "data" / "desktop_profile"
 GATEWAY_HOST = "127.0.0.1"
 GATEWAY_PORT = 801
 CONSOLE_PORT = 802
+WORKBENCH_PORT = 803
 CONSOLE_URL = f"http://{GATEWAY_HOST}:{CONSOLE_PORT}/"
+WORKBENCH_URL = f"http://{GATEWAY_HOST}:{WORKBENCH_PORT}/"
 GATEWAY_HEALTH = f"http://{GATEWAY_HOST}:{GATEWAY_PORT}/health"
 CONSOLE_HEALTH = f"http://{GATEWAY_HOST}:{CONSOLE_PORT}/api/health"
+WORKBENCH_HEALTH = f"http://{GATEWAY_HOST}:{WORKBENCH_PORT}/api/wb/health"
 WINDOW_SIZE = "1440,900"
 
 #: <AGENT_HOME>\logs 是约定位置（和训练/评测日志放一起）；不可写时回退仓库内目录
@@ -134,12 +159,13 @@ def resolve_log_dir(explicit: str | None = None) -> Path:
     return FALLBACK_LOG_DIR
 
 
-def _spawn_service(cmd: list[str], log_path: Path) -> Any:
+def _spawn_service(cmd: list[str], log_path: Path,
+                   cwd: Path | str | None = None) -> Any:
     """拉起后台服务：stdout/stderr 追加到日志，不弹新控制台窗口。"""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = open(log_path, "ab", buffering=0)  # noqa: SIM115 - 交给子进程继承后关闭
     kwargs: dict[str, Any] = {
-        "cwd": str(ROOT),
+        "cwd": str(cwd) if cwd else str(ROOT),
         "stdin": subprocess.DEVNULL,
         "stdout": log_file,
         "stderr": subprocess.STDOUT,
@@ -223,21 +249,53 @@ def _terminate_pid(pid: int | None, *, timeout: float = 8.0) -> bool:
 # --------------------------------------------------------------------------- #
 # 服务管理
 # --------------------------------------------------------------------------- #
+def _service_python() -> str:
+    """主服务用哪个 Python：env > 源码解释器 > 打包 exe 时的默认 C:/Python314。"""
+    env = str(os.environ.get("SOULAGENT_PYTHON") or "").strip()
+    if env:
+        return env
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    default = Path(r"C:\Python314\python.exe")
+    if default.is_file():
+        return str(default)
+    return "python"
+
+
+def _workbench_python() -> str:
+    """803 工作台用 idea/.venv（缺省回落到主 Python）。"""
+    env = str(os.environ.get("SOULAGENT_WORKBENCH_PYTHON") or "").strip()
+    if env:
+        return env
+    candidate = ROOT / "idea" / ".venv" / "Scripts" / "python.exe"
+    if candidate.is_file():
+        return str(candidate)
+    return _service_python()
+
+
 def service_commands() -> dict[str, dict[str, Any]]:
-    """两个后台服务的启动方式（都用当前 Python 解释器，零额外依赖）。"""
+    """三个后台服务：801 网关 / 802 控制台 / 803 工作台（最后一个是 idea/.venv）。"""
     return {
         "gateway": {
             "port": GATEWAY_PORT,
             "health": GATEWAY_HEALTH,
             "log": "desktop_gateway.log",
-            "cmd": [sys.executable, "-m", "agi.wechat_gateway.server"],
+            "cmd": [_service_python(), "-m", "agi.wechat_gateway.server"],
         },
         "console": {
             "port": CONSOLE_PORT,
             "health": CONSOLE_HEALTH,
             "log": "desktop_console.log",
-            "cmd": [sys.executable, str(ROOT / "tools" / "console" / "server.py"),
+            "cmd": [_service_python(), str(ROOT / "tools" / "console" / "server.py"),
                     "--port", str(CONSOLE_PORT)],
+        },
+        "workbench": {
+            "port": WORKBENCH_PORT,
+            "health": WORKBENCH_HEALTH,
+            "log": "desktop_workbench.log",
+            "cwd": str(ROOT / "idea"),
+            "cmd": [_workbench_python(), "-m", "uvicorn", "app.main:app",
+                    "--host", GATEWAY_HOST, "--port", str(WORKBENCH_PORT)],
         },
     }
 
@@ -261,7 +319,7 @@ def ensure_service(name: str, spec: dict[str, Any], log_dir: Path, *,
                 "reused": True, "healthy": True}
 
     log_path = Path(log_dir) / str(spec["log"])
-    proc = _spawn_service(list(spec["cmd"]), log_path)
+    proc = _spawn_service(list(spec["cmd"]), log_path, cwd=spec.get("cwd"))
     pid = int(getattr(proc, "pid", 0) or 0)
     ok = wait_for(lambda: port_open(port) and http_ok(health), timeout=start_timeout)
     if not ok:
@@ -927,8 +985,10 @@ def status_report(state: dict[str, Any] | None = None,
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python tools/desktop/launcher.py",
-        description="零依赖桌面启动器：确保 801/802 在跑，并用 Edge app 模式打开控制台窗口")
+        description="零依赖桌面启动器：确保 801/802/803 在跑，并用 Edge app 模式打开控制台/工作台窗口")
     parser.add_argument("--no-open", action="store_true", help="只起服务，不打开窗口")
+    parser.add_argument("--open-workbench", action="store_true",
+                        help="打开 803 工作台窗口（默认打开 802 控制台）")
     parser.add_argument("--stop", action="store_true", help="停掉本启动器拉起的服务/窗口")
     parser.add_argument("--status", action="store_true", help="打印 JSON 状态后退出")
     group = parser.add_mutually_exclusive_group()
@@ -966,7 +1026,7 @@ def _start_services(log_dir: Path, start_timeout: float,
         started_pids = {}
     specs = service_commands()
     results: dict[str, Any] = {}
-    for name in ("gateway", "console"):
+    for name in ("gateway", "console", "workbench"):
         result = ensure_service(name, specs[name], log_dir, start_timeout=start_timeout)
         results[name] = result
         if result.get("started") and result.get("pid"):
@@ -1033,10 +1093,11 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"[desktop] 托盘已在运行 pid={tray.get('pid')}")
         if not args.no_open:
-            window = launch_window(url=CONSOLE_URL, profile_dir=profile_dir)
+            target = WORKBENCH_URL if args.open_workbench else CONSOLE_URL
+            window = launch_window(url=target, profile_dir=profile_dir)
             state["window"] = window
             state["launcher_pid"] = os.getpid()
-            print(f"[desktop] 窗口已打开（{window['mode']} app 模式）：{CONSOLE_URL}")
+            print(f"[desktop] 窗口已打开（{window['mode']} app 模式）：{target}")
         save_state(state, state_path)
         return 0
 
@@ -1083,8 +1144,9 @@ def main(argv: list[str] | None = None) -> int:
         save_state(state, state_path)
         return 0
 
+    target = WORKBENCH_URL if args.open_workbench else CONSOLE_URL
     try:
-        window = launch_window(url=CONSOLE_URL, profile_dir=profile_dir)
+        window = launch_window(url=target, profile_dir=profile_dir)
     except LauncherError as exc:
         print(f"[desktop] 打开窗口失败：{exc}", file=sys.stderr)
         if started_pids:
@@ -1094,7 +1156,7 @@ def main(argv: list[str] | None = None) -> int:
 
     state["window"] = window
     save_state(state, state_path)
-    print(f"[desktop] 窗口已打开（{window['mode']} app 模式）：{CONSOLE_URL}")
+    print(f"[desktop] 窗口已打开（{window['mode']} app 模式）：{target}")
     print("[desktop] 关闭窗口后服务默认保留；要一起收尾用 --exit-with-window，"
           "手动停服务用 --stop")
 

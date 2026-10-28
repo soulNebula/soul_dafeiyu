@@ -1,11 +1,12 @@
 # 桌面版（P7-a 启动器 + P7-d 托盘/通知/自启，零依赖）
 
-把已有的两个本机 HTTP 服务开成"桌面应用"：
+把已有的三个本机 HTTP 服务开成"桌面应用"：
 
 - `801` = 微信网关（`python -m agi.wechat_gateway.server`）
 - `802` = Soul Console 调试控制台（`tools/console/server.py`）
+- `803` = IDEA 工作台（`idea/.venv\Scripts\python.exe -m uvicorn app.main:app`）
 
-桌面版 = **确保这两个服务在跑 → 用 Edge/Chrome 的 `--app` 模式把 802 打开成独立窗口**，
+桌面版 = **确保三个服务在跑 → 用 Edge/Chrome 的 `--app` 模式把 802（或 803）打开成独立窗口**，
 外加**系统托盘**（打开控制台 / 主动消息开关 / STOP / 状态 / 日志 / 退出）、
 **桌面通知**（主动发送、被拦、死区、熔断等）和**开机自启**。
 纯 Python 标准库 + 系统自带 PowerShell/.NET，**不需要 pip 安装任何东西**；
@@ -25,7 +26,7 @@ Tauri 打包留到后续（见文末迁移说明）。
 
 首次启动会自动：
 
-1. 探测 801/802；没跑就用当前 Python 起后台进程（不弹控制台窗口），
+1. 探测 801/802/803；没跑就用对应 Python 起后台进程（不弹控制台窗口；803 用 `idea/.venv`），
    日志追加到 `E:\agent\logs\desktop_gateway.log` / `desktop_console.log`
    （E 盘不可写时回退 `agi\data\desktop_logs\`）；
 2. 等两个服务健康（`/health`、`/api/health`，默认每个最多 60s）；
@@ -44,6 +45,7 @@ msedge.exe --app=http://127.0.0.1:802/ --window-size=1440,900 \
 | 参数 | 作用 |
 | --- | --- |
 | `--no-open` | 只保证服务在跑，不打开窗口 |
+| `--open-workbench` | 打开 803 工作台窗口（默认打开 802 控制台） |
 | `--tray` | 确保服务后拉起系统托盘（单实例；PID 记进 state，`--stop` 会一起收） |
 | `--no-notify` | 关闭桌面通知（托盘不轮询 gateway.log；自启场景常用） |
 | `--persist`（默认） | 窗口关闭后**保留**服务（下次打开更快） |
@@ -194,3 +196,18 @@ python -m pytest agi/tests/test_desktop_launcher.py agi/tests/test_desktop_enhan
 6. `--app` Edge 窗口 → Tauri WebView 窗口，`desktop_profile` 不再需要。
 
 在 Tauri 版本就绪前，这个启动器 + 托盘 + 通知 + 自启就是可用的桌面入口。
+
+
+## 打包成 exe（Windows 单目录，PyInstaller）
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\desktopuild_exe.ps1
+# 产物：tools/desktop/dist/SoulAgentDesktop/SoulAgentDesktop.exe
+```
+
+- 打包后入口与 `launcher.py` 完全一致（参数透传）：双击=起服务+开 802 窗口；
+  `--tray` 加托盘，`--open-workbench` 开 803 工作台，`--status/--stop/--autostart` 照常可用。
+- 仓库根的 `启动桌面版.bat` 会**优先调用 exe**（存在时），没有再回落到 `python launcher.py`。
+- exe 运行时会自动找到仓库根（向上查找 `agi/` + `tools/desktop/`），可放在仓库任意子目录；
+  换机器/换路径可用环境变量 `SOULAGENT_DESKTOP_ROOT` 指定。
+- `dist/`、`build/`、`*.spec` 已加入 `.gitignore`，不入库。

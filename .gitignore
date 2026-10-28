@@ -68,3 +68,11 @@ agi/eval_data/human_tone/style_preview_ai.jsonl
 # 根目录运行日志目录（只读排查用；文件已在 *.log 忽略）
 wxauto_logs/
 wechatauto_logs/
+
+# 桌面版 PyInstaller 产物
+tools/desktop/dist/
+tools/desktop/build/
+*.spec
+
+# 临时目录（acceptance/Edge 等）
+tmp*/

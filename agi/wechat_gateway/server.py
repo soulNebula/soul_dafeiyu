@@ -1972,6 +1972,12 @@ class Gateway:
             return None
 
     def status(self) -> dict:
+        # 2026-10-29 验收发现：外部（802 控制台）改 config.json 后 /status 不更新。
+        # 这里按 mtime 懒重载一次，保证状态页与实际配置一致（发送本身已有同样懒加载）。
+        try:
+            self.reload_config_now()
+        except Exception:  # noqa: BLE001 - 状态观测失败不影响 /status
+            pass
         state = {}
         try:
             if self.backend is not None:

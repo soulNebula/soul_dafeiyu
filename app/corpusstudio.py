@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import uuid
 from pathlib import Path
@@ -389,6 +390,15 @@ def _parse_text_file(path: Path, me_names: set[str], you_names: set[str]) -> lis
     return _parse_alternating(lines)
 
 
+
+def _ocr_concurrency() -> int:
+    """图片 OCR 并发数：默认 3，可用 IDEA_OCR_CONCURRENCY 覆盖（1-4）。"""
+    try:
+        value = int(os.environ.get("IDEA_OCR_CONCURRENCY") or 3)
+    except (TypeError, ValueError):
+        value = 3
+    return max(1, min(4, value))
+
 # --------------------------------------------------------------------------- #
 # 图片 OCR
 # --------------------------------------------------------------------------- #
@@ -405,7 +415,13 @@ def _parse_image_file(path: Path, *, timeout: float = 120.0) -> list[dict]:
     if not script.is_file():
         return []
     cmd = [_ocr_python(), str(script), "--image", str(path), "--infer-role"]
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    try:
+        threads = str(max(1, min(4, int(os.environ.get("IDEA_OCR_THREADS_PER_PROC") or 2))))
+    except (TypeError, ValueError):
+        threads = "2"
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
+           "OMP_NUM_THREADS": threads, "OPENBLAS_NUM_THREADS": threads,
+           "MKL_NUM_THREADS": threads, "NUMEXPR_NUM_THREADS": threads}
     try:
         proc = subprocess.run(cmd, cwd=str(Path(paths.soulagent_home())),
                               capture_output=True, timeout=timeout, env=env)
@@ -496,35 +512,74 @@ def _parse_impl(job_id: str, *, me_names: Any = "我,me,assistant,小鱼,她",
     skipped = 0
     files = 0
     file_list = [f for f in (meta.get("files") or []) if isinstance(f, dict)]
-    total_files = len(file_list)
+    resolved = []
     for order, record in enumerate(file_list):
-        if callable(progress):
-            try:
-                progress(order, total_files, str(record.get("name") or ""))
-            except Exception:  # noqa: BLE001 - 进度回调失败不影响清洗
-                pass
         path = Path(str(record.get("path") or ""))
         if not path.is_file():
-            # 任务目录可能迁移：按名字在 raw/ 里找
             candidate = _job_dir(job_id, root) / "raw" / str(record.get("name") or "")
             path = candidate if candidate.is_file() else path
         if not path.is_file():
             skipped += 1
             continue
-        files += 1
         kind = record.get("kind")
         ext = path.suffix.lower()
-        parsed: list[dict] = []
-        if kind == "image" or ext in IMAGE_EXTS:
-            parsed = _parse_image_file(path)
+        resolved.append((order, path, bool(kind == "image" or ext in IMAGE_EXTS)))
+    total_files = len(resolved)
+
+    def _parse_one(path: Path, is_image: bool) -> list[dict]:
+        if is_image:
+            return _parse_image_file(path)
+        return _parse_text_file(path, me_set, you_set)
+
+    parsed_by_order = {}
+    completed = 0
+    if total_files:
+        workers = _ocr_concurrency() if any(is_image for _, _, is_image in resolved) else 1
+        workers = max(1, min(workers, total_files))
+        if callable(progress):
+            try:
+                progress(0, total_files, "")
+            except Exception:
+                pass
+        if workers <= 1:
+            for order, path, is_image in resolved:
+                parsed_by_order[order] = _parse_one(path, is_image)
+                completed += 1
+                if callable(progress):
+                    try:
+                        progress(completed, total_files, path.name)
+                    except Exception:
+                        pass
         else:
-            parsed = _parse_text_file(path, me_set, you_set)
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="corpus-ocr") as pool:
+                futures = {pool.submit(_parse_one, path, is_image): (order, path)
+                           for order, path, is_image in resolved}
+                for future in as_completed(futures):
+                    order, path = futures[future]
+                    try:
+                        parsed_by_order[order] = future.result()
+                    except Exception:
+                        parsed_by_order[order] = []
+                    completed += 1
+                    if callable(progress):
+                        try:
+                            progress(completed, total_files, path.name)
+                        except Exception:
+                            pass
+
+    by_order = {order: path for order, path, _ in resolved}
+    for order in sorted(parsed_by_order):
+        parsed = parsed_by_order[order]
+        path = by_order.get(order)
+        source_name = path.name if path is not None else ""
+        files += 1
         for row in parsed:
             if len(items) >= MAX_ITEMS:
                 break
             items.append({"id": f"i{len(items) + 1:04d}",
                           "role": row["role"], "text": row["text"],
-                          "source": path.name})
+                          "source": source_name})
+
     if not items:
         return {"ok": False, "error": "no_items", "files": files}
     stats = {"total": len(items),

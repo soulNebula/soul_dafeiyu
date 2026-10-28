@@ -182,3 +182,20 @@ def test_parse_keeps_emoji_and_media_placeholders(root):
     texts = [i["text"] for i in parsed["items"]]
     assert "😄" in texts
     assert "[表情]" in texts and "[图片]" in texts
+
+def test_parse_images_concurrently_and_preserve_order(root, monkeypatch):
+    import threading, time
+    jid = _job(root)
+    for name in ("a.png", "b.png", "c.png"):
+        assert cs.save_upload(jid, name, b"fake-image", root=root)["ok"]
+    threads = set()
+    def fake_parse(path, timeout=120.0):
+        threads.add(threading.get_ident())
+        time.sleep(0.05)
+        return [{"role": "you", "text": path.name}]
+    monkeypatch.setattr(cs, "_parse_image_file", fake_parse)
+    monkeypatch.setenv("IDEA_OCR_CONCURRENCY", "3")
+    parsed = cs.parse_job(jid, root=root)
+    assert parsed["ok"] and len(parsed["items"]) == 3
+    assert [i["text"] for i in parsed["items"]] == ["a.png", "b.png", "c.png"]
+    assert len(threads) >= 2

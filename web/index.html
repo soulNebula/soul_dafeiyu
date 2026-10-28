@@ -894,8 +894,24 @@ function annotStars(id, score) {
   }
   return html;
 }
-function annotEnumSelect(id, field, values, current) {
-  return `<select data-annot-field="${esc(field)}" data-annot-id="${esc(id)}">${values.map(v => `<option ${v === current ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+function annotEnumSelect(id, field, values, current, labels) {
+  const labelOf = v => (labels && labels[v]) || v;
+  return `<select data-annot-field="${esc(field)}" data-annot-id="${esc(id)}">${values.map(v => `<option value="${esc(v)}" ${v === current ? 'selected' : ''}>${esc(labelOf(v))}</option>`).join('')}</select>`;
+}
+// 标注页把后端字段/枚举翻成中文展示（底层仍提交 short/normal/long）
+const ANNOT_ZH = {
+  'behavior.length': '长度', 'behavior.ask': '会反问', 'behavior.advice': '给建议',
+  'behavior.emoji': '表情', mood: '心情', energy: '精力', sharing: '分享欲',
+  battery: '电量', trust: '信任', stage: '关系阶段', stance: '态度', intent: '意图',
+  monologue: '内心独白', short: '短句', normal: '正常', long: '长句',
+  ask: '会反问', advice: '给建议', emoji: '表情',
+};
+function annotZh(text) {
+  let out = String(text ?? '');
+  out = out.replace(/behavior\.(length|ask|advice|emoji)/g, (m) => ANNOT_ZH[m] || m);
+  out = out.replace(/(mood|energy|sharing|battery|trust|stage|stance|intent|monologue)/g, (m) => ANNOT_ZH[m] || m);
+  out = out.replace(/(short|normal|long)/g, (m) => ANNOT_ZH[m] || m);
+  return out;
 }
 function annotVisibleItems() {
   const a = S.annotate;
@@ -927,15 +943,15 @@ function annotItemHtml(item, index) {
       <label class="field"><span>态度</span>${annotEnumSelect(id, 'stance', ['平和','温和','简短直接','客气','克制','有点累','先照顾人'], t.stance || '平和')}</label>
       <label class="field"><span>意图</span>${annotEnumSelect(id, 'intent', ['自然接话','自然接话，可以多聊一句','先听对方说完','不追问，答完就好','简短回应，不展开','接住对方的话，给一句具体建议','确认收到，追问一句进度','先确认对方安全'], t.intent || '自然接话')}</label>
       <label class="field annot-wide"><span>内心独白（≤40字）</span><input data-annot-field="monologue" data-annot-id="${esc(id)}" value="${esc(t.monologue || '')}" maxlength="40"></label>
-      <label class="field"><span>长度</span>${annotEnumSelect(id, 'behavior.length', ['short','normal','long'], (t.behavior || {}).length || 'normal')}</label>
-      <label class="field"><span>emoji</span>${annotEnumSelect(id, 'behavior.emoji', ['偶尔','不用'], (t.behavior || {}).emoji || '不用')}</label>
+      <label class="field"><span>长度</span>${annotEnumSelect(id, 'behavior.length', ['short','normal','long'], (t.behavior || {}).length || 'normal', {short:'短句', normal:'正常', long:'长句'})}</label>
+      <label class="field"><span>表情</span>${annotEnumSelect(id, 'behavior.emoji', ['偶尔','不用'], (t.behavior || {}).emoji || '不用')}</label>
       <label class="check"><input type="checkbox" data-annot-field="behavior.ask" data-annot-id="${esc(id)}" ${(t.behavior || {}).ask ? 'checked' : ''}> 会反问</label>
       <label class="check"><input type="checkbox" data-annot-field="behavior.advice" data-annot-id="${esc(id)}" ${(t.behavior || {}).advice ? 'checked' : ''}> 给建议</label>
       <label class="field"><span>标签（逗号分隔）</span><input data-annot-field="tags" data-annot-id="${esc(id)}" value="${esc(a.tags[id] || '')}"></label>
       <label class="field annot-wide"><span>备注</span><input data-annot-field="note" data-annot-id="${esc(id)}" value="${esc(a.notes[id] || '')}"></label>
     </div>
-    ${reasons.length ? `<details class="annot-reasons"><summary class="muted small">为什么建议这些值（${reasons.length}）</summary><div>${reasons.map(r => `<div class="muted small">• ${esc(r)}</div>`).join('')}</div></details>` : ''}
-    <div class="muted small">建议值：mood ${esc(sug.mood)} · energy ${esc(sug.energy)} · ${esc((sug.behavior || {}).length || '')}；可任意改。</div>
+    ${reasons.length ? `<details class="annot-reasons"><summary class="muted small">为什么建议这些值（${reasons.length}）</summary><div>${reasons.map(r => `<div class="muted small">• ${esc(annotZh(r))}</div>`).join('')}</div></details>` : ''}
+    <div class="muted small">建议值：心情 ${esc(sug.mood)} · 精力 ${esc(sug.energy)} · 长度 ${esc({short:'短句',normal:'正常',long:'长句'}[(sug.behavior || {}).length] || '')}；可任意改。</div>
   </div>`;
 }
 function renderAnnotatePage() {

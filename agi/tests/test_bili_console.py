@@ -57,6 +57,10 @@ def bili_env(tmp_path, monkeypatch):
     monkeypatch.setenv("BILI_DUTY_HOME", str(home))
     monkeypatch.setattr(console, "BILI_QR_PNG", tmp_path / "bili_login_qr.png")
     monkeypatch.setattr(console, "AUDIT_PATH", tmp_path / "audit.log")
+    # 隔离（P0-24）：扫码登录会写 `DATA_DIR/selflearn/bili_login_debug.log` 与
+    # `bili_profile.json`；console.DATA_DIR 是 import 时绑定的生产路径，必须重定向，
+    # 否则测试会把调试日志/账号资料落进 worktree 的真实 agi/data（会话守卫会报）。
+    monkeypatch.setattr(console, "DATA_DIR", tmp_path / "console_data")
     monkeypatch.setattr(console, "_bili_http_json", _fake_http)
     _fake_http.poll_code = POLL_CODES["waiting"]
     console._BILI_NAV_CACHE.update(ts=0.0, data=None)

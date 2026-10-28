@@ -183,13 +183,21 @@ def _spawn_service(cmd: list[str], log_path: Path,
 
 
 def _popen_browser(argv: list[str]) -> Any:
-    """打开浏览器窗口（app 模式）；窗口进程不需要日志重定向。"""
+    """打开浏览器窗口（app 模式）；窗口进程不需要日志重定向。
+
+    ⚠️ 2026-10-29 实测：PyInstaller 冻结后直接 Popen(msedge) 会打开一个**空白灰窗**
+    （Edge 能起、页面不加载；源码运行时同参数正常）——改用 `cmd /c start` 让 Edge
+    走正常的 shell 启动上下文。窗口 PID 不再直接可见（返回的 Popen 是 cmd），
+    复用/关闭逻辑本来就不依赖这个 PID。
+    """
     kwargs: dict[str, Any] = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
     }
+    if os.name == "nt" and getattr(sys, "frozen", False):
+        return subprocess.Popen(["cmd", "/c", "start", "", *argv], **kwargs)  # noqa: S603
     return subprocess.Popen(argv, **kwargs)  # noqa: S603 - argv 由本文件构造
 
 
@@ -363,8 +371,66 @@ def find_browser() -> tuple[Path | None, str]:
 
 def build_browser_argv(browser: Path | str, url: str, profile_dir: Path | str) -> list[str]:
     """Edge/Chrome app 模式参数（固定契约，测试锁住）。"""
+    # --disable-gpu / --no-first-run：远程桌面/无 GPU 会话里不加会渲染成空白灰窗
+    # （2026-10-29 实测：不加 --disable-gpu 时 Edge app 窗口只显示灰底，页面不渲染）。
     return [str(browser), f"--app={url}", f"--window-size={WINDOW_SIZE}",
-            f"--user-data-dir={Path(profile_dir)}"]
+            "--disable-gpu", "--disable-features=CalculateNativeWinOcclusion",
+            "--no-first-run", f"--user-data-dir={Path(profile_dir)}"]
+
+
+def _edge_app_pids(profile: Path) -> tuple[list[int], list[int]]:
+    """返回 (带 --app 的窗口 PID, 只挂着该 profile 的后台 PID)。仅 Windows 用。"""
+    if os.name != "nt":
+        return [], []
+    marker = profile.name  # desktop_profile；用目录名匹配，避开路径转义
+    script = (
+        "Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
+        "Where-Object { $_.CommandLine -like '*" + marker + "*' } | "
+        "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }"
+    )
+    try:
+        proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
+                               "-Command", script],
+                              capture_output=True, timeout=10)
+        raw = proc.stdout or b""
+        text = raw.decode("utf-8", "replace")
+        if "�" in text:
+            text = raw.decode("gbk", "replace")
+    except Exception:  # noqa: BLE001
+        return [], []
+    apps: list[int] = []
+    bg: list[int] = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if "|" not in line:
+            continue
+        pid_s, cmd = line.split("|", 1)
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            continue
+        if "--app=" in cmd:
+            apps.append(pid)
+        else:
+            bg.append(pid)
+    return apps, bg
+
+
+def _prepare_edge_profile(profile: Path) -> bool:
+    """已有本 launch profile 的 app 窗口 → 复用（True，不再新开）。
+
+    只剩后台进程（上次 Edge 没退干净、会吞掉新 --app 调用导致空白窗口）→ 清掉。
+    """
+    apps, bg = _edge_app_pids(profile)
+    if apps:
+        return True
+    for pid in bg:
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                           capture_output=True, timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
+    return False
 
 
 def launch_window(*, url: str = CONSOLE_URL, profile_dir: Path | str | None = None,
@@ -372,6 +438,10 @@ def launch_window(*, url: str = CONSOLE_URL, profile_dir: Path | str | None = No
     """打开控制台的独立窗口；返回窗口信息（含内部 ``_proc`` 供等待用，落盘时剔除）。"""
     profile = Path(profile_dir or PROFILE_DIR)
     profile.mkdir(parents=True, exist_ok=True)
+    # 已开着 app 窗口就直接复用；只剩后台 Edge 进程会吞掉新调用 → 先清掉
+    if _prepare_edge_profile(profile):
+        print("[desktop] 检测到已打开的控制台窗口，直接复用（不重复开）")
+        return {"pid": 0, "mode": "edge", "reused": True, "url": url}
     if browser is not None:
         path, mode = Path(browser), "custom"
     else:

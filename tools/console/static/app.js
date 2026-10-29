@@ -472,6 +472,19 @@ async function renderOverview() {
   bindEngineActions();
   const refresh = $('#ov-refresh');
   if (refresh) refresh.onclick = () => renderOverview();
+  const switchBot = $('#switch-bot');
+  if (switchBot) switchBot.onclick = () => showBotLoad();
+  const wcBtn = $('#wechat-contacts-btn');
+  if (wcBtn) wcBtn.onclick = () => openWechatContacts();
+  const packageBtn = $('#train-package-now');
+  if (packageBtn) packageBtn.onclick = async () => {
+    packageBtn.disabled = true;
+    try {
+      const result = await api('/api/train/package', {method: 'POST', body: {label: 'manual'}});
+      toast(result.ok ? `已打包 ${result.package.samples} 条` : (result.error || '没有新样本'), result.ok ? 'ok' : 'err');
+      await renderOverview();
+    } catch (err) { toast(err.message, 'err'); }
+  };
   const monitorToggle = $('#monitor-toggle');
   if (monitorToggle) {
     monitorToggle.onclick = () => toggleEngine(active ? 'stop' : 'start');

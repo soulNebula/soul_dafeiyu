@@ -64,7 +64,7 @@ if "%NEED%"=="1" (
 if not exist "%AGENT_HOME%\logs" mkdir "%AGENT_HOME%\logs" >nul 2>&1
 
 echo [启动] 启动 Web 服务（803 + 802）...
-"%MAIN_PY%" "%ROOT%\tools\start_web.py" --root "%ROOT%" --agent-home "%AGENT_HOME%"
+"%MAIN_PY%" "%ROOT%\tools\start_web.py" --root "%ROOT%" --agent-home "%AGENT_HOME%" --no-open
 if errorlevel 1 (
     echo [错误] Web 服务启动失败，看上方日志路径。
     goto :fail

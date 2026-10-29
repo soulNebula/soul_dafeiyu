@@ -422,7 +422,8 @@ def start_model(model_path: str | Path, port: int, ngl: int = 99,
         factory = popen or _popen_factory()
         proc = factory(cmd, cwd=str(base), stdout=log_handle, stderr=log_handle,
                        stdin=subprocess.DEVNULL, close_fds=True,
-                       creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                       creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                                      | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)))
     except Exception as exc:  # noqa: BLE001
         try:
             log_handle.close()

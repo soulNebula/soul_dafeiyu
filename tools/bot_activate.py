@@ -39,7 +39,8 @@ def _port_pids(port: int) -> list[int]:
     pids: set[int] = set()
     try:
         out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, timeout=10,
-                             encoding="utf-8", errors="replace").stdout
+                             encoding="utf-8", errors="replace",
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
     except Exception:  # noqa: BLE001
         return []
     for line in out.splitlines():
@@ -65,7 +66,8 @@ def _kill_port(port: int) -> list[int]:
         try:
             # 不用 /T：切换 helper 可能就是 802 的子进程；/T 会把 helper 一起杀掉
             subprocess.run(["taskkill", "/PID", str(pid), "/F"],
-                           capture_output=True, timeout=15)
+                           capture_output=True, timeout=15,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             killed.append(pid)
         except Exception:  # noqa: BLE001
             pass

@@ -320,6 +320,10 @@ def _spawn_bot_helper(argv: list[str]) -> None:
             bat = ROOT / "agi" / "data" / "bot_activate_task.bat"
             bat.parent.mkdir(parents=True, exist_ok=True)
             log = ROOT / "agi" / "data" / "bot_helper.log"
+            argv = list(argv)
+            pyw = Path(str(argv[0])).with_name("pythonw.exe")
+            if pyw.is_file():
+                argv[0] = str(pyw)
             quoted = " ".join(f'"{str(item)}"' for item in argv)
             crlf = chr(13) + chr(10)
             bat.write_text(
@@ -330,10 +334,12 @@ def _spawn_bot_helper(argv: list[str]) -> None:
             create = subprocess.run(
                 ["schtasks", "/create", "/tn", "SoulAgentBotActivate",
                  "/tr", str(bat), "/sc", "once", "/st", "23:59", "/f"],
-                capture_output=True, text=True, timeout=20)
+                capture_output=True, text=True, timeout=20,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             if create.returncode == 0:
                 subprocess.run(["schtasks", "/run", "/tn", "SoulAgentBotActivate"],
-                               capture_output=True, text=True, timeout=20)
+                               capture_output=True, text=True, timeout=20,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 return
         except Exception:  # noqa: BLE001 - 计划任务不可用就退回普通 Popen
             pass

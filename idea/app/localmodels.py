@@ -347,7 +347,8 @@ def _start_server(model: Path, port: int, mmproj: Path | None = None) -> dict[st
         cmd += ["--mmproj", str(mmproj)]
     kwargs: dict[str, Any] = {}
     if os.name == "nt":
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        kwargs["creationflags"] = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                                   | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     try:
         handle = log.open("ab")
     except PermissionError:

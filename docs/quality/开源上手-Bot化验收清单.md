@@ -139,7 +139,7 @@ curl -X POST http://127.0.0.1:802/api/bot/login ^
 | F1 | B站扫码登录 | 🟡 | 802 B站页依赖仓库外 `~/.dsh/bili-duty` 插件；无插件不可用 |
 | F2 | 关键词默认让 LLM 找兴趣 | 🟡 | 现有 B站/兴趣画像逻辑；未做 Bot 级开关 |
 | F3 | 人设提示词默认用 Bot 人设 | 🟡 | 复用 802 提示词；未做 Bot 表单 |
-| F4 | Bot 级「是否刷 B站/数据入库」 | ❌ | 未接；现有全局配置/插件 |
+| F4 | Bot 级「是否刷 B站/数据入库」 | 🟡 | `surf_enabled` 真实生效；`bili_ingest_enabled` 已接主动视频分享；朋友圈有独立开关；完整入库路径未全部接 |
 
 > 这一块不是 Phase 1 核心；开源用户没有 DSH 插件时，B站页只显示空/不可用。
 
@@ -161,7 +161,7 @@ curl -X POST http://127.0.0.1:802/api/bot/login ^
 | G8 | trace/内驱力/发送探测 | ✅ | 第八组 |
 | G9 | 保存全部设置（43 项，校验+热加载） | ✅ | 底部「保存全部设置」 |
 | G10 | 设置按 Bot 隔离 | ✅ | 配置文件在 `<Bot>/data/wechat/config.json` |
-| G11 | B站/朋友圈/上网的 Bot 级开关 | ❌ | 未做；目前只在旧页面/插件侧 |
+| G11 | B站/朋友圈/上网的 Bot 级开关 | 🟡 | 设置页「外部能力（Bot 级）」：surf/moments/bili_ingest；云端识图独立 provider |
 
 **验收命令**：
 
@@ -304,20 +304,21 @@ python toolsot_profile.py validate --path E:gentots\802-config-20261030
 
 | 项 | 状态 | 说明/怎么验 |
 | --- | --- | --- |
-| 备份 Bot + 原 agi/data | ✅ | `E:gentackupsackup-20261030-020719\{bot,agi_data,root_files}`；live copy（含 wal/shm），约 707MB |
+| 备份 Bot + 原 agi/data | ✅ | `E:\agent\backups\backup-20261030-020719\{bot,agi_data,root_files}`；live copy（含 wal/shm），约 707MB |
 | 云端灵魂路由 | ✅ | Bot 配置 `soul_provider_mode=cloud` + base_url/model；`agi.inner.inject` 用 OpenAI 兼容 Client，key 取 Bot `secrets.providers.soul`（回退 chat key）；802「模型连通测试」soul 显示 mode=cloud / HTTP 200 |
 | 802 设置：灵魂来源 | ✅ | 「模型与内状态」组：local / cloud + 云端 base_url / 模型 |
-| B站/朋友圈 Bot 开关 | 🟡 | `surf_enabled`（B站/上网冲浪，真实生效）、`moments_enabled`（关闭后朋友圈 API 503）、`bili_ingest_enabled`（仅配置项，尚未在所有入库路径生效） |
+| B站/朋友圈 Bot 开关 | 🟡 | `surf_enabled`（B站/上网冲浪，真实生效）、`moments_enabled`（关闭后朋友圈 API 503）、`bili_ingest_enabled`（主动视频分享已生效；其他入库路径未逐一接） |
+| 云端识图独立 provider | ✅ | Bot 写 `vision_provider_mode/base_url/model`；cloud 模式用 `secrets.providers.vision`（回退 chat key），不经过 8125 |
 | 训练闭环（数据→803→802） | 🟡 | 803 数据集发现包含 Bot 的 packages/daily；导出成功后**自动注册**到当前 Bot 的 `local_models.json`（role=soul, source=train_export），802 模型页可启动新模型；**自动启动/自动切换模型仍未做** |
 | 改 Bot 密码 | ✅ | 803 Bot 列表「改密码」；`tools/bot_profile.change_password` 校验旧密码；API `/api/wb/bots/password`；实测错误旧密码拒绝、正确后可登录 |
 | 3B 上下文 | ✅ | 8125 上下文 8192 已重启，缓解 4.10K 溢出 |
 
 ## M. 明确未完成（不要按“已验收”）的项
 
-1. **云端灵魂模型单独路由**：Bot 里有 soul key，但内状态仍用主聊天 client；要做「soul provider → 独立 OpenAI 兼容 client」。
-2. **B站/朋友圈/上网的 Bot 级开关与入库开关**。
+1. ~~云端灵魂模型单独路由~~ ✅（P 节已完成）
+2. **B站/朋友圈/上网的 Bot 级开关**：surf/moments/bili_ingest 已有，但 B站插件分发/完整入库路径未收口。
 3. **CUDA/llama.cpp 一键安装**、GPU 驱动安装、模型自动下载（Phase 2）。
-4. **打包数据 → 803 训练 → 802 加载新模型**的完整闭环（Phase 3）。
+4. **训练闭环**：自动注册已完成；自动启动/自动切换到新模型未做（需人工在 802 模型页点启动）。
 5. **群聊**（按决策置灰，不做）。
 6. **干净机器 setup.ps1 全流程**未实测（只验证了 CheckOnly 与本机各分支）。
 7. **微信版本兼容矩阵**未整理；只在本机微信 4.x 验证。

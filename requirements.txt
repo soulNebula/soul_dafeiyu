@@ -56,3 +56,4 @@ zstandard==0.24.0; python_version < "3.14"
 beautifulsoup4>=4.12,<5
 requests>=2.31,<3
 qrcode[pil]>=7.4,<9
+bilibili-api-python>=17,<18

@@ -564,6 +564,13 @@ def training_plan(dataset: str, *, model_path: str = DEFAULT_MODEL,
             "engine": "smoke_lora" if use_smoke else "sft_train"}
 
 
+def _json_dumps(value) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        return str(value)
+
+
 def _new_job(kind: str, **fields) -> dict:
     job_id = uuid.uuid4().hex[:12]
     job = {"id": job_id, "kind": kind, "status": "running",
@@ -773,13 +780,56 @@ def export_plan(adapter: str, base: str, name: str, *, out_dir: str = DEFAULT_GG
             "cwd": str(root)}
 
 
+def register_export_model(*, name: str, gguf: str, base: str, adapter: str) -> dict:
+    """把导出成功的 GGUF 注册进当前 Bot（或默认）的 local_models.json。"""
+    import json as _json
+    try:
+        bot_root = None
+        import sys as _sys
+        repo = Path(__file__).resolve().parents[2]
+        if str(repo) not in _sys.path:
+            _sys.path.insert(0, str(repo))
+        from agi import bot_runtime
+        active = bot_runtime.read_active()
+        if active and active.get("path"):
+            bot_root = Path(active["path"])
+    except Exception:  # noqa: BLE001
+        bot_root = None
+    if bot_root is not None:
+        path = bot_root / "data" / "local_models.json"
+    else:
+        path = Path(paths.soulagent_home()) / "agi" / "data" / "local_models.json"
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        data = {"llama_bin": str(Path(paths.agent_home()) / "llama" / "cuda"),
+                "torch_lib": str(Path(paths.agent_home()) / "venv312" / "Lib" / "site-packages" / "torch" / "lib"),
+                "models": [], "extra_adapters": []}
+    models = data.get("models")
+    if not isinstance(models, list):
+        models = []
+    used = {int(m.get("port") or 0) for m in models if isinstance(m, dict)}
+    port = next((p for p in range(8126, 8150) if p not in used), 8126)
+    entry = {"name": name, "base": base, "adapter": adapter, "gguf": gguf,
+             "port": port, "role": "soul", "status": "ready",
+             "source": "train_export", "purpose": "训练导出（803 自动注册）"}
+    models = [m for m in models if not (isinstance(m, dict) and m.get("name") == name)]
+    models.append(entry)
+    data["models"] = models
+    data.setdefault("extra_adapters", [])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps(data, ensure_ascii=False, indent=2) + chr(10), encoding="utf-8")
+    return {"ok": True, "path": str(path), "model": entry}
+
+
 def start_export(adapter: str, base: str, name: str, **params) -> dict:
     plan = export_plan(adapter, base, name, **params)
     if not plan.get("ok"):
         return plan
     job = _new_job("export", cmd=[plan["merge_cmd"], plan["convert_cmd"]],
                    cwd=plan["cwd"], merged_dir=plan["merged_dir"],
-                   out_dir=plan["out_dir"], gguf=plan["gguf"])
+                   out_dir=plan["out_dir"], gguf=plan["gguf"],
+                   name=name, base=str(base), adapter=str(adapter))
     log_path = Path(job["log"])
 
     def worker():
@@ -800,6 +850,17 @@ def start_export(adapter: str, base: str, name: str, **params) -> dict:
                 with _LOCK:
                     if job["id"] in _JOBS:
                         _JOBS[job["id"]]["product_missing"] = plan["gguf"]
+            if code == 0:
+                try:
+                    reg = register_export_model(name=name, gguf=plan["gguf"],
+                                                base=str(base), adapter=str(adapter))
+                    with log_path.open("a", encoding="utf-8") as log:
+                        log.write("[注册] " + _json_dumps(reg) + chr(10))
+                    audit.record("train.export_register", plan["gguf"], actor="workbench",
+                                 meta={"job": job["id"], "registry": reg.get("path")})
+                except Exception as exc:  # noqa: BLE001
+                    with log_path.open("a", encoding="utf-8") as log:
+                        log.write("[注册失败] " + str(exc) + chr(10))
             _finish_job(job["id"], code, "done" if code == 0 else "failed")
             audit.record("train.export", plan["gguf"], actor="workbench",
                          meta={"job": job["id"], "returncode": code})

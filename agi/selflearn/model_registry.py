@@ -55,12 +55,12 @@ from pathlib import Path as _Path
 _ROOT = _Path(__file__).resolve().parents[2]
 if str(_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_ROOT))
-from agi.paths import agent_path
+from agi.paths import agent_path, data_dir
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = ROOT / "agi" / "data" / "local_models.json"
-STATE_PATH = ROOT / "agi" / "data" / "local_models_state.json"
+CONFIG_PATH = data_dir() / "local_models.json"
+STATE_PATH = data_dir() / "local_models_state.json"
 DEFAULT_LLAMA_BIN = agent_path(r"llama\cuda")
 DEFAULT_TORCH_LIB = agent_path(r"venv312\Lib\site-packages\torch\lib")
 

@@ -1321,6 +1321,20 @@ def _model_registry():
         return None
 
 
+def _model_editable(name: str) -> bool:
+    text = str(name or "")
+    if text in MODEL_ALLOWLIST:
+        return True
+    registry = _model_registry()
+    try:
+        model = registry.get(text) if registry is not None and hasattr(registry, "get") else None
+    except Exception:  # noqa: BLE001
+        model = None
+    return bool(model and model.get("role") == "soul"
+                and model.get("source") == "train_export"
+                and model.get("status") == "ready")
+
+
 def models_snapshot() -> dict:
     registry = _model_registry()
     if registry is None:
@@ -1346,7 +1360,7 @@ def models_snapshot() -> dict:
         items.append({
             "name": name, "port": model.get("port"), "role": model.get("role"),
             "status": model.get("status"), "purpose": model.get("purpose"),
-            "healthy": healthy, "editable": name in MODEL_ALLOWLIST,
+            "healthy": healthy, "editable": _model_editable(name),
             "reserved": str(model.get("role")) == "reserved"
                         or str(model.get("status")) == "reserved",
             "gguf": model.get("gguf"),
@@ -2089,11 +2103,11 @@ def factory_reset(confirm: str = "", *, backup: bool = True,
 
 def start_model(name: str, *, client: str = "") -> dict:
     name = str(name or "").strip()
-    if name not in MODEL_ALLOWLIST:
+    if not _model_editable(name):
         audit("model_start", {"name": name}, ok=False, note="not_allowlisted",
               client=client)
         return {"ok": False, "error": "model_not_editable",
-                "hint": f"只允许启停 {sorted(MODEL_ALLOWLIST)}；reserved/研究模型不可动"}
+                "hint": "只允许启停 soul-05b 或训练导出注册的 soul 模型；reserved/研究模型不可动"}
     registry = _model_registry()
     if registry is None:
         result = {"ok": False, "error": "model_registry unavailable"}
@@ -2110,11 +2124,11 @@ def start_model(name: str, *, client: str = "") -> dict:
 
 def stop_model(name: str, *, client: str = "", force_external: bool = False) -> dict:
     name = str(name or "").strip()
-    if name not in MODEL_ALLOWLIST:
+    if not _model_editable(name):
         audit("model_stop", {"name": name}, ok=False, note="not_allowlisted",
               client=client)
         return {"ok": False, "error": "model_not_editable",
-                "hint": f"只允许启停 {sorted(MODEL_ALLOWLIST)}"}
+                "hint": "只允许启停 soul-05b 或训练导出注册的 soul 模型；reserved/研究模型不可动"}
     registry = _model_registry()
     if registry is None:
         result = {"ok": False, "error": "model_registry unavailable"}

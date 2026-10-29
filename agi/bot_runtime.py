@@ -86,16 +86,32 @@ def prepare_runtime(bot_path: str | Path, *, bot: dict[str, Any] | None = None) 
     chat = chat if isinstance(chat, dict) else {}
 
     config_path = data / "wechat" / "config.json"
-    _write_json(config_path, {
+    settings = (bot or {}).get("settings") or {}
+    # Bot 创建时选的内状态/识图/主动消息等，第一次激活写进运行时配置；
+    # 已有配置不覆盖（用户后续在 802 设置的优先）。
+    initial = {
         "enabled": False,
         "engine_enabled": False,
         "auto_reply": False,
-        "dry_run": False,
-        "send_mode": "confirm",
+        "dry_run": bool(settings.get("dry_run", False)),
+        "send_mode": str(settings.get("send_mode") or "confirm"),
         "admin_token": str(auth.get("admin_token") or ""),
         "allowed_contacts": [],
         "monitored_contacts": [],
-    })
+        "inner_mode": str(settings.get("inner_mode") or "off"),
+        "inner_shadow_only": bool(settings.get("inner_shadow_only", True)),
+        "inner_schema": str(settings.get("inner_schema") or "slim"),
+        "chat_vision_mode": str(settings.get("chat_vision_mode") or "local_caption"),
+        "proactive_enabled": bool(settings.get("proactive_enabled", False)),
+        "proactive_probability_min": float(settings.get("proactive_probability_min", 0.3)),
+        "proactive_probability_max": float(settings.get("proactive_probability_max", 0.9)),
+        "proactive_interval_min_s": int(settings.get("proactive_interval_min_s", 60)),
+        "proactive_interval_max_s": int(settings.get("proactive_interval_max_s", 7200)),
+        "pacing_enabled": bool(settings.get("pacing_enabled", True)),
+        "pacing_target_ratio": float(settings.get("proactive_ratio", 1.0) if isinstance(settings.get("proactive_ratio"), (int, float)) else 1.0),
+        "media_enabled": bool(settings.get("media_enabled", False)),
+    }
+    _write_json(config_path, initial)
     _write_json(data / "web_config.json", {
         "llm": {
             "api_key": "",

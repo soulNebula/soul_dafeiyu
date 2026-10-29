@@ -415,6 +415,7 @@ async function renderOverview() {
         <span class="wb-pill">会话 ${num(backend.friends_count || 0)}</span>
         <span class="wb-pill">消息 ${num(msgItems.length)}</span>`,
       right: `<button class="btn small" id="monitor-toggle">${active ? '停止监听' : '开始监听'}</button>
+        <button class="btn small" id="switch-bot">切换 Bot</button>
         <button class="btn small" id="wechat-contacts-btn">刷新联系人</button>
         <button class="btn small" id="ov-refresh">刷新</button>`,
     })}
@@ -798,6 +799,8 @@ async function renderFeed(auto) {
       await renderOverview();
     } catch (err) { toast(err.message, 'err'); }
   };
+  const switchBot = $('#switch-bot');
+  if (switchBot) switchBot.onclick = () => showBotLoad();
   const wcBtn = $('#wechat-contacts-btn');
   if (wcBtn) wcBtn.onclick = () => openWechatContacts();
   const refresh = $('#feed-refresh');

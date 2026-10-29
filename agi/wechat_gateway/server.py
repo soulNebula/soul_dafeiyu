@@ -715,11 +715,13 @@ class Gateway:
         """把 engine_enabled 原子写回 config.json，保留磁盘上的其它键。"""
         payload = dict(self.cfg)
         payload["engine_enabled"] = bool(self.engine_enabled)
+        payload["enabled"] = bool(self.cfg.get("enabled"))
         try:
             if self.config_path.exists():
                 raw = json.loads(self.config_path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict):
                     raw["engine_enabled"] = bool(self.engine_enabled)
+                    raw["enabled"] = bool(self.cfg.get("enabled"))
                     payload = raw
         except Exception:  # noqa: BLE001 - 读坏/缺失时用内存配置写一份完整配置
             pass
@@ -759,6 +761,16 @@ class Gateway:
                 self.engine_since = now
                 self.engine_reason = "manual_start" if source == "api" else "startup"
                 self.cfg["engine_enabled"] = True
+                # 总开关 enabled=false 时网关进程启动不会建 receiver；
+                # 用户点「开始监听」应把总开关一起打开并真正拉起监听。
+                if not self.cfg.get("enabled"):
+                    self.cfg["enabled"] = True
+                    if self.receiver is None and self.backend is None:
+                        self.start_error = ""
+                        try:
+                            self.start()
+                        except Exception as exc:  # noqa: BLE001
+                            self.start_error = f"{type(exc).__name__}: {exc}"
             try:
                 self._persist_engine()
             except Exception as exc:  # noqa: BLE001 - 写盘失败回滚内存状态

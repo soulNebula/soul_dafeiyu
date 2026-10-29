@@ -77,6 +77,12 @@
 
     <section id="view-data" class="view">
       <div class="page-head"><div><h2>数据工作室</h2><p class="muted">存放本机数据，只读浏览：选数据文件 → 选数据表 → 查看/搜索/翻页。高级 SQL 在底部折叠。</p></div><button class="btn" id="db-refresh">刷新数据文件</button></div>
+      <div class="panel" id="db-bot-panel" style="display:none;margin-bottom:10px">
+        <div class="row between">
+          <div id="db-bot-info" class="muted small"></div>
+          <button class="btn" id="db-bot-add">一键添加数据库</button>
+        </div>
+      </div>
       <div class="panel data-simple">
         <div class="data-toolbar">
           <div class="field db-picker-field"><span>数据文件</span>
@@ -557,10 +563,13 @@ async function loadBots() {
           ${(item.warnings || []).slice(0, 3).map(x => `<div class="muted small">⚠ ${esc(x)}</div>`).join('')}
         </div>
         <button class="btn small" data-bot-validate="${esc(item.path)}">校验</button>
+        <button class="btn small" data-bot-add-db="${esc(item.path)}"
+          ${item.has_database ? 'disabled title="已有数据库"' : ''}>${item.has_database ? '已有数据库' : '添加数据库'}</button>
         <button class="btn small" data-bot-remove="${esc(item.path)}">移除</button>
       </div>`).join('');
     $$('[data-bot-validate]').forEach(btn => btn.onclick = () => validateBot(btn.dataset.botValidate));
     $$('[data-bot-remove]').forEach(btn => btn.onclick = () => removeBot(btn.dataset.botRemove));
+    $$('[data-bot-add-db]').forEach(btn => btn.onclick = () => addBotDatabase(btn.dataset.botAddDb));
   }
   const createBtn = $('#bot-create');
   if (createBtn) createBtn.onclick = createBot;
@@ -664,6 +673,19 @@ async function addExistingBot() {
     const data = await api('/api/wb/bots/add', {method: 'POST', body: {path}});
     if (!data.ok) throw new Error((data.validation && data.validation.errors || []).join('；') || '无效的 Bot');
     toast('已添加已有 Bot', 'ok');
+    await loadBots();
+  } catch (err) { toast(err.message, 'bad'); }
+}
+
+async function addBotDatabase(path) {
+  const alias = window.prompt('给这套数据库起个联系人昵称（可留空用默认）：', '新联系人');
+  if (alias === null) return;
+  try {
+    const result = await api('/api/wb/bots/add-database', {
+      method: 'POST', body: {path, alias: alias || ''},
+    });
+    if (!result.ok) throw new Error(result.hint || result.error || '创建失败');
+    toast(`已创建数据库（${result.alias}）`, 'ok');
     await loadBots();
   } catch (err) { toast(err.message, 'bad'); }
 }
@@ -844,7 +866,37 @@ function renderDbPicker() {
     loadSchema(S.data.db);
   });
 }
+async function loadActiveBotDbPanel() {
+  const panel = $('#db-bot-panel');
+  if (!panel) return;
+  try {
+    const data = await api('/api/wb/bots/active');
+    if (!data.active) { panel.style.display = 'none'; return; }
+    panel.style.display = '';
+    const info = $('#db-bot-info');
+    if (info) info.textContent = `当前 Bot：${data.name} · ${data.path}`;
+    const btn = $('#db-bot-add');
+    if (btn) {
+      btn.disabled = !!data.has_database;
+      btn.textContent = data.has_database ? '已有数据库' : '一键添加数据库';
+      btn.onclick = async () => {
+        const alias = window.prompt('给这套数据库起个联系人昵称（可留空）：', '新联系人');
+        if (alias === null) return;
+        try {
+          const result = await api('/api/wb/bots/add-database', {
+            method: 'POST', body: {path: data.path, alias: alias || ''},
+          });
+          if (!result.ok) throw new Error(result.hint || result.error || '创建失败');
+          toast('已创建数据库', 'ok');
+          await loadDatabases();
+        } catch (err) { toast(err.message, 'err'); }
+      };
+    }
+  } catch (e) { panel.style.display = 'none'; }
+}
+
 async function loadDatabases() {
+  loadActiveBotDbPanel();
   try {
     if (new URLSearchParams(location.search).get('db_all') === '1') S.data.showAll = true;
     const d = await api('/api/wb/db/databases');

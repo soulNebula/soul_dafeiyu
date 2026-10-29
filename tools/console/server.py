@@ -732,6 +732,9 @@ def contacts_overview() -> dict:
                     con.close()
             except sqlite3.Error:
                 pass
+            # 空的无名库（历史残留/测试库）不展示；用户只看到真正聊过的人
+            if count <= 0 and db_path.name != current_name:
+                continue
             items.append({"alias": "未命名库 " + stem, "db": db_path.name,
                           "exists": True, "messages": count, "last_ts": last_ts,
                           "current": db_path.name == current_name,
@@ -5140,10 +5143,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _bytes(self, code: int, body: bytes, content_type: str) -> None:
+    def _bytes(self, code: int, body: bytes, content_type: str,
+               headers: dict | None = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -5217,7 +5223,8 @@ class Handler(BaseHTTPRequestHandler):
         content_type = mimetypes.guess_type(str(safe))[0] or "application/octet-stream"
         if safe.suffix in (".html", ".css", ".js"):
             content_type += "; charset=utf-8"
-        self._bytes(200, safe.read_bytes(), content_type)
+        headers = {"Cache-Control": "no-store"} if safe.suffix in (".html", ".css", ".js") else None
+        self._bytes(200, safe.read_bytes(), content_type, headers=headers)
         return True
 
     # ------------------------------------------------------------ GET

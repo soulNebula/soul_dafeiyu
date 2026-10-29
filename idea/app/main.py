@@ -136,6 +136,13 @@ def bots_export_current(body: dict | None = None):
     return botstudio.export_current(body or {})
 
 
+@app.post("/api/wb/bots/add-database", dependencies=[Depends(require_token)])
+def bots_add_database(body: dict | None = None):
+    payload = body or {}
+    return botstudio.add_database(str(payload.get("path") or ""),
+                                  str(payload.get("alias") or ""))
+
+
 @app.post("/api/wb/bots/add", dependencies=[Depends(require_token)])
 def bots_add(body: dict | None = None):
     return botstudio.add_existing(str((body or {}).get("path") or ""))
@@ -144,6 +151,11 @@ def bots_add(body: dict | None = None):
 @app.get("/api/wb/hardware", dependencies=[Depends(require_token)])
 def wb_hardware():
     return hardware.probe()
+
+
+@app.get("/api/wb/bots/active", dependencies=[Depends(require_token)])
+def bots_active():
+    return botstudio.active_bot_info()
 
 
 @app.get("/api/wb/bots/packages", dependencies=[Depends(require_token)])

@@ -36,6 +36,19 @@ _READ_RE = re.compile(r"^\s*(SELECT|WITH|EXPLAIN|PRAGMA|VALUES)\b", re.I)
 
 def _roots() -> list[Path]:
     roots = [Path(paths.soulagent_home()).resolve(), Path(paths.DATA_DIR).resolve()]
+    # 活跃 Bot 的 data 目录也纳入数据页（Bot 数据库在 <Bot>/data/selflearn）
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        repo = _Path(__file__).resolve().parents[2]
+        if str(repo) not in _sys.path:
+            _sys.path.insert(0, str(repo))
+        from agi import bot_runtime
+        active = bot_runtime.read_active()
+        if active and active.get("path"):
+            roots.append((_Path(active["path"]) / "data").resolve())
+    except Exception:  # noqa: BLE001
+        pass
     out: list[Path] = []
     for root in roots:
         if root not in out:
@@ -209,6 +222,16 @@ def list_databases() -> dict:
     data = Path(paths.DATA_DIR).resolve()
     candidates = _scan(soul, under=soul / "agi" / "data")
     candidates += _scan(data)
+    # 活跃 Bot 的 data 目录：Bot 数据库/记忆都在这里，数据页也要能浏览
+    active_data = None
+    try:
+        from agi import bot_runtime
+        active = bot_runtime.read_active()
+        if active and active.get("path"):
+            active_data = (Path(active["path"]) / "data").resolve()
+            candidates += _scan(active_data)
+    except Exception:  # noqa: BLE001
+        active_data = None
     seen: set[str] = set()
     items = []
     for path in sorted(candidates, key=lambda p: str(p).lower()):
@@ -225,6 +248,8 @@ def list_databases() -> dict:
         except ValueError:
             try:
                 label = path.relative_to(data).as_posix()
+            except ValueError:
+                label = path.relative_to(active_data).as_posix() if active_data else path.name
             except ValueError:
                 label = path.name
         domain = _domain_of(path)

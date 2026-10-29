@@ -68,6 +68,25 @@ def unregister(path: str | Path) -> dict[str, Any]:
     return {"ok": True, "path": root, "removed": True}
 
 
+def _bot_database_files(path: str | Path) -> list[Path]:
+    root = Path(path)
+    return sorted((root / "data" / "selflearn" / "wechat_contacts").glob("*.memory.sqlite3"))
+
+
+def active_bot_info() -> dict[str, Any]:
+    try:
+        from agi import bot_runtime
+        active = bot_runtime.read_active()
+    except Exception:  # noqa: BLE001
+        active = None
+    if not active or not active.get("path"):
+        return {"ok": True, "active": False}
+    path = str(active["path"])
+    return {"ok": True, "active": True, "path": path,
+            "name": active.get("name") or Path(path).name,
+            "has_database": bool(_bot_database_files(path))}
+
+
 def list_bots() -> dict[str, Any]:
     items = []
     for item in _load_registry():
@@ -85,6 +104,7 @@ def list_bots() -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             summary.update({"name": Path(root).name, "mode": "", "schema": None})
         summary["valid"] = bool(result.get("ok"))
+        summary["has_database"] = bool(_bot_database_files(root))
         summary["errors"] = result.get("errors") or []
         summary["warnings"] = result.get("warnings") or []
         items.append(summary)
@@ -119,6 +139,49 @@ def active_packages() -> dict[str, Any]:
     items.sort(key=lambda x: int(x.get("created_at") or 0), reverse=True)
     return {"ok": True, "source": source, "bot": bot_name, "root": str(base),
             "items": items[:50]}
+
+
+def add_database(path: str, alias: str = "") -> dict[str, Any]:
+    """给 Bot 创建一套联系人数据库（已有则拒绝，前端按钮置灰）。"""
+    root = _norm(path)
+    validation = bot_profile.validate_bot(root)
+    if not validation.get("ok"):
+        return {"ok": False, "error": "invalid_bot", "validation": validation}
+    if _bot_database_files(root):
+        return {"ok": False, "error": "database_exists",
+                "hint": "该 Bot 已有数据库，不能重复添加"}
+    name = str(alias or "").strip()
+    if not name:
+        try:
+            bot = bot_profile.load_bot(root)
+            contacts = ((bot.get("wechat") or {}).get("allowed_contacts") or [])
+            name = str(contacts[0]) if contacts else "新联系人"
+        except Exception:  # noqa: BLE001
+            name = "新联系人"
+    import hashlib
+    stem = hashlib.sha1(name.encode("utf-8")).hexdigest()[:14]
+    target = Path(root) / "data" / "selflearn" / "wechat_contacts" / f"{stem}.memory.sqlite3"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        from agi.selflearn import db as selflearn_db
+        con = selflearn_db.connect(target)
+        con.close()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"create_failed: {type(exc).__name__}: {exc}"}
+    # 顺手登记到 Bot 的可选联系人，方便 802 找到
+    try:
+        bot = bot_profile.load_bot(root)
+        bot.pop("_root", None)
+        wechat = bot.setdefault("wechat", {})
+        contacts = wechat.setdefault("contacts", [])
+        if name not in contacts:
+            contacts.append(name)
+        (Path(root) / "bot.json").write_text(
+            json.dumps(bot, ensure_ascii=False, indent=2) + chr(10),
+            encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": True, "path": str(target), "alias": name, "has_database": True}
 
 
 def inspect_bot(path: str) -> dict[str, Any]:

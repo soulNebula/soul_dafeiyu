@@ -45,7 +45,7 @@ PID_FILE = LOG_DIR / "local3b_8125.pid"
 LOG_FILE = LOG_DIR / "local3b_8125.log"
 PORT = 8125
 HOST = "127.0.0.1"
-CTX = 4096
+CTX = int(os.environ.get("SOULAGENT_LOCAL3B_CTX", "8192"))
 NGL = 99
 
 

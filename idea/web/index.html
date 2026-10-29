@@ -23,6 +23,7 @@
 <div id="shell">
   <nav id="activitybar">
     <button class="ab-item" data-view="overview" title="概览">◈<span>概览</span></button>
+    <button class="ab-item" data-view="bot" title="Bot 管理">🤖<span>Bot</span></button>
     <button class="ab-item" data-view="services" title="服务">⚙<span>服务</span></button>
     <button class="ab-item" data-view="config" title="配置">🎛<span>配置</span></button>
     <button class="ab-item" data-view="data" title="数据工作室">🗄<span>数据</span></button>
@@ -259,6 +260,40 @@
       <div id="annot-list" class="annot-list"><div class="muted small">加载中…</div></div>
     </section>
 
+    <section id="view-bot" class="view">
+      <div class="page-head"><div><h2>Bot 管理</h2><p class="muted">每个 Bot = 用户自选目录里的独立配置包（数据库/密钥/模型清单/数据）。
+        当前只支持云端方案（任意 OpenAI 兼容 base_url）。</p></div>
+        <a class="btn small" href="http://127.0.0.1:802/" target="_blank" rel="noopener">打开 802</a>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <div class="panel-head"><h3>新建 Bot（云端方案）</h3><span class="muted small">密钥只写 Bot 的 secrets.json，不显示明文</span></div>
+          <div class="form-grid">
+            <label class="field"><span>Bot 目录（用户自选）</span><input id="bot-path" placeholder="E:/bots/xiaoyu"></label>
+            <label class="field"><span>Bot 名称</span><input id="bot-name" placeholder="小鱼"></label>
+            <label class="field"><span>802 登录密码（至少 6 位）</span><input id="bot-password" type="password" placeholder="登录 802 用"></label>
+            <label class="field"><span>聊天 base_url</span><input id="bot-base-url" value="https://api.deepseek.com"></label>
+            <label class="field"><span>聊天模型</span><input id="bot-model" value="deepseek-flash"></label>
+            <label class="field"><span>聊天 API key</span><input id="bot-api-key" type="password" placeholder="sk-..."></label>
+            <label class="field"><span>灵魂 base_url（空=同聊天）</span><input id="bot-soul-base-url" placeholder="（可空）"></label>
+            <label class="field"><span>灵魂模型（空=同聊天）</span><input id="bot-soul-model" placeholder="（可空）"></label>
+            <label class="field"><span>灵魂 API key（空=同聊天）</span><input id="bot-soul-key" type="password" placeholder="（可空）"></label>
+          </div>
+          <div class="actions">
+            <button class="btn primary" id="bot-create">创建 Bot</button>
+            <button class="btn" id="bot-add-existing">添加已有目录</button>
+            <button class="btn" id="bot-refresh">刷新列表</button>
+          </div>
+          <div id="bot-result" class="muted small"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>已登记 Bot</h3><span class="muted small" id="bot-count"></span></div>
+          <div id="bot-list" class="list"></div>
+          <p class="muted small">下一步：打开 802 → 用 Bot 密码登录 → 在总览加载 Bot（Phase 1B 继续接线）。</p>
+        </div>
+      </div>
+    </section>
+
     <section id="view-models" class="view">
       <div class="page-head"><div><h2>模型中心</h2><p class="muted">清单（格式/来源/用途）· 离线导入 · 在线下载 · 回收站删除。</p></div><button class="btn" id="models-refresh">刷新</button></div>
       <div class="cards" id="models-cards"></div>
@@ -408,8 +443,107 @@ function term(text, target='') {
   $('#terminal-target').textContent = target;
   openTerminal(true);
 }
+/* ---------------- Bot 管理（Phase 1B） ---------------- */
+async function loadBots() {
+  const list = $('#bot-list');
+  if (list) list.innerHTML = '<div class="muted small">加载中…</div>';
+  let data = null;
+  try { data = await api('/api/wb/bots'); }
+  catch (err) {
+    if (list) list.innerHTML = `<div class="error small">${esc(err.message)}</div>`;
+    return;
+  }
+  const items = data.items || [];
+  $('#bot-count').textContent = `${items.length} 个`;
+  if (!items.length) {
+    list.innerHTML = '<div class="muted small">还没有 Bot。左侧创建或添加已有目录。</div>';
+  } else {
+    list.innerHTML = items.map((item) => `
+      <div class="list-item" data-bot="${esc(item.path)}">
+        <div class="grow">
+          <div class="title"><b>${esc(item.name || '(未命名)')}</b>
+            <span class="badge ${item.valid ? 'ok' : 'bad'}">${item.valid ? '可用' : '有问题'}</span>
+            <span class="muted small">${esc(item.mode || '')}</span></div>
+          <div class="muted small mono">${esc(item.path)}</div>
+          ${(item.errors || []).map(x => `<div class="error small">${esc(x)}</div>`).join('')}
+          ${(item.warnings || []).slice(0, 3).map(x => `<div class="muted small">⚠ ${esc(x)}</div>`).join('')}
+        </div>
+        <button class="btn small" data-bot-validate="${esc(item.path)}">校验</button>
+        <button class="btn small" data-bot-remove="${esc(item.path)}">移除</button>
+      </div>`).join('');
+    $$('[data-bot-validate]').forEach(btn => btn.onclick = () => validateBot(btn.dataset.botValidate));
+    $$('[data-bot-remove]').forEach(btn => btn.onclick = () => removeBot(btn.dataset.botRemove));
+  }
+  const createBtn = $('#bot-create');
+  if (createBtn) createBtn.onclick = createBot;
+  const addBtn = $('#bot-add-existing');
+  if (addBtn) addBtn.onclick = addExistingBot;
+  const refreshBtn = $('#bot-refresh');
+  if (refreshBtn) refreshBtn.onclick = loadBots;
+}
+
+async function createBot() {
+  const result = $('#bot-result');
+  const payload = {
+    path: ($('#bot-path').value || '').trim(),
+    name: ($('#bot-name').value || '').trim(),
+    password: $('#bot-password').value || '',
+    base_url: ($('#bot-base-url').value || '').trim(),
+    model: ($('#bot-model').value || '').trim(),
+    api_key: $('#bot-api-key').value || '',
+    soul_base_url: ($('#bot-soul-base-url').value || '').trim(),
+    soul_model: ($('#bot-soul-model').value || '').trim(),
+    soul_api_key: $('#bot-soul-key').value || '',
+  };
+  if (!payload.path || !payload.name) { toast('请填 Bot 目录和名称', 'bad'); return; }
+  if (payload.password && payload.password.length < 6) { toast('密码至少 6 位', 'bad'); return; }
+  const btn = $('#bot-create');
+  btn.disabled = true; btn.textContent = '创建中…';
+  try {
+    const data = await api('/api/wb/bots/create', {method: 'POST', body: payload});
+    if (result) result.innerHTML = `<div class="ok small">已创建：${esc(payload.path)}（${esc(data.bot_id || '')}）</div>`;
+    toast('Bot 已创建', 'ok');
+    await loadBots();
+  } catch (err) {
+    toast(err.message, 'bad');
+    if (result) result.innerHTML = `<div class="error small">${esc(err.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '创建 Bot';
+  }
+}
+
+async function addExistingBot() {
+  const path = ($('#bot-path').value || '').trim();
+  if (!path) { toast('先填一个已有 Bot 目录', 'bad'); return; }
+  try {
+    const data = await api('/api/wb/bots/add', {method: 'POST', body: {path}});
+    if (!data.ok) throw new Error((data.validation && data.validation.errors || []).join('；') || '无效的 Bot');
+    toast('已添加已有 Bot', 'ok');
+    await loadBots();
+  } catch (err) { toast(err.message, 'bad'); }
+}
+
+async function validateBot(path) {
+  try {
+    const data = await api('/api/wb/bots/inspect?path=' + encodeURIComponent(path));
+    const v = data.validation || {};
+    if (v.ok) toast('校验通过', 'ok');
+    else toast((v.errors || []).join('；') || '校验失败', 'bad');
+    await loadBots();
+  } catch (err) { toast(err.message, 'bad'); }
+}
+
+async function removeBot(path) {
+  if (!window.confirm('只从 803 列表移除，不删除 Bot 文件。继续？')) return;
+  try {
+    await api('/api/wb/bots?path=' + encodeURIComponent(path), {method: 'DELETE'});
+    toast('已移除（文件未删除）', 'ok');
+    await loadBots();
+  } catch (err) { toast(err.message, 'bad'); }
+}
+
 function showView(name) {
-  const allowed = ['welcome','overview','services','config','data','train','distill','corpus','annotate','models'];
+  const allowed = ['welcome','overview','bot','services','config','data','train','distill','corpus','annotate','models'];
   if (!allowed.includes(name)) name = 'welcome';
   S.view = name;
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
@@ -423,6 +557,7 @@ function showView(name) {
   if (name !== 'distill' && S.distill.timer) { clearInterval(S.distill.timer); S.distill.timer = null; }
   if (name !== 'models' && S.dlTimer) { clearInterval(S.dlTimer); S.dlTimer = null; }
   if (name === 'overview') loadOverview();
+  if (name === 'bot') loadBots();
   if (name === 'services') loadServices();
   if (name === 'config') loadConfig();
   if (name === 'data') loadDatabases();

@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (annotstudio, audit, config_store, corpusstudio, datastudio,
+from . import (annotstudio, audit, botstudio, config_store, corpusstudio, datastudio,
                distillstudio, modelstudio, paths, services, trainstudio)
 
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
@@ -90,6 +90,31 @@ def env_info():
 def workbench_health():
     """桌面启动器/健康检查用：不需要 token，只报活着。"""
     return {"ok": True, "service": "idea-workbench"}
+
+
+@app.get("/api/wb/bots", dependencies=[Depends(require_token)])
+def bots_list():
+    return botstudio.list_bots()
+
+
+@app.post("/api/wb/bots/create", dependencies=[Depends(require_token)])
+def bots_create(body: dict | None = None):
+    return botstudio.create_bot(body or {})
+
+
+@app.post("/api/wb/bots/add", dependencies=[Depends(require_token)])
+def bots_add(body: dict | None = None):
+    return botstudio.add_existing(str((body or {}).get("path") or ""))
+
+
+@app.get("/api/wb/bots/inspect", dependencies=[Depends(require_token)])
+def bots_inspect(path: str = Query(default="")):
+    return botstudio.inspect_bot(path)
+
+
+@app.delete("/api/wb/bots", dependencies=[Depends(require_token)])
+def bots_remove(path: str = Query(default="")):
+    return botstudio.unregister(path)
 
 
 @app.get("/api/wb/overview", dependencies=[Depends(require_token)])

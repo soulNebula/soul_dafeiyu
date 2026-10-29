@@ -69,7 +69,7 @@ def spawn(cmd: list[str], cwd: Path, log: Path,
         return subprocess.Popen(
             cmd, cwd=str(cwd), env=child_env,
             stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
-            creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+            creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
         )
     finally:
         handle.close()
@@ -104,11 +104,9 @@ def main(argv: list[str] | None = None) -> int:
     logs.mkdir(parents=True, exist_ok=True)
     main_py = root / ".venv" / "Scripts" / "python.exe"
     idea_py = root / "idea" / ".venv" / "Scripts" / "python.exe"
-    # 服务用 pythonw 启动，GUI 子系统不会出现黑色控制台窗口
-    main_svc = main_py.with_name("pythonw.exe")
-    idea_svc = idea_py.with_name("pythonw.exe")
-    main_svc = main_svc if main_svc.is_file() else main_py
-    idea_svc = idea_svc if idea_svc.is_file() else idea_py
+    # 用 python.exe + CREATE_NO_WINDOW：pythonw 下 DB/窗口读取曾出现异常
+    main_svc = main_py
+    idea_svc = idea_py
     if not main_py.is_file() or not idea_py.is_file():
         print(f"[web] 缺少 venv：{main_py} / {idea_py}")
         return 1

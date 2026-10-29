@@ -109,9 +109,34 @@ def new_admin_token() -> str:
 # --------------------------------------------------------------------------- #
 # 创建 / 读取 / 校验
 # --------------------------------------------------------------------------- #
+def _mkdir_retry(path: Path) -> None:
+    """目录刚创建时 Windows Defender/索引可能短暂锁父目录，重试几次。"""
+    last: Exception | None = None
+    for _ in range(6):
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            return
+        except PermissionError as exc:
+            last = exc
+            time.sleep(0.4)
+    assert last is not None
+    raise last
+
+
 def _write_private(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _mkdir_retry(path.parent)
+    data = json.dumps(payload, ensure_ascii=False, indent=2) + chr(10)
+    last: Exception | None = None
+    for _ in range(6):
+        try:
+            path.write_text(data, encoding="utf-8")
+            break
+        except PermissionError as exc:
+            last = exc
+            time.sleep(0.4)
+    else:
+        assert last is not None
+        raise last
     try:
         # Windows 上真正的 ACL 需要 harden_acl；这里先尽量收紧位
         os.chmod(path, 0o600)
@@ -135,9 +160,9 @@ def create_bot(path: Path | str, name: str, *, mode: str = "cloud",
         raise ValueError("当前版本只允许 cloud 模式（本地模型见 Phase 2）")
     if not str(name or "").strip():
         raise ValueError("Bot 名称不能为空")
-    root.mkdir(parents=True, exist_ok=True)
+    _mkdir_retry(root)
     for sub in ("db", "data", "datasets", "logs", "models"):
-        (root / sub).mkdir(parents=True, exist_ok=True)
+        _mkdir_retry(root / sub)
 
     providers = json.loads(json.dumps(DEFAULT_PROVIDERS))  # deep copy
     secrets_payload: dict[str, Any] = {"version": 1, "providers": {}}

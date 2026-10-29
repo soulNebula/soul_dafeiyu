@@ -84,3 +84,6 @@ nul
 
 # 803 对话测试/网页导出的临时 soul 微调数据
 agi/soul/data/soul_sft_web_*.jsonl*
+
+# 微信 DB 直读临时目录
+wxdb_*/

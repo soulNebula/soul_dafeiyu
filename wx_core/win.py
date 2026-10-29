@@ -452,6 +452,61 @@ def bring_to_front(win: WinInfo) -> bool:
 
 
 # ---------------- 输入：PostMessage 优先，SendInput 兜底 ----------------
+def ensure_wechat_window_visible() -> Optional[WinInfo]:
+    """发送前自检：找到微信主窗口，并把「最小化 / 收进托盘」的窗口恢复出来。
+
+    微信 4.x 收托盘后主窗口 ``IsWindowVisible=False``，``find_wechat_window()`` 会
+    直接返回 None，发送器就报「未找到微信窗口」。这里额外扫描隐藏顶层窗口，
+    按 exe/类名/标题/面积挑主窗口，ShowWindow(SW_RESTORE) 后重新定位。
+    """
+    win = find_wechat_window()
+    if win is not None:
+        if bool(user32.IsIconic(win.hwnd)):
+            user32.ShowWindow(win.hwnd, 9)  # SW_RESTORE
+            time.sleep(0.25)
+            win = find_wechat_window() or win
+        return win
+
+    # 隐藏/托盘状态：扫所有顶层窗口（含不可见）
+    best: Optional[tuple[int, int]] = None
+    for hwnd in _top_level_windows():
+        try:
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            exe = _exe_of(pid.value)
+            if exe not in WECHAT_EXES:
+                continue
+            title = _window_title(hwnd).strip()
+            cls = _class_name(hwnd)
+            if not (
+                title in _MAIN_TITLES
+                or any(k in title for k in ("微信", "WeChat", "Weixin"))
+                or cls.startswith(("Qt51514QWindowIcon", "Qt6"))
+            ):
+                continue
+            if any(h in title for h in _NOT_MAIN_TITLE_HINTS):
+                continue
+            l, t, r, b = _restored_rect(hwnd)
+            w, h = r - l, b - t
+            if w < 200 or h < 200:
+                continue
+            score = w * h + (100000 if title in _MAIN_TITLES else 0)
+            if best is None or score > best[0]:
+                best = (score, int(hwnd))
+        except Exception:
+            continue
+    if best is None:
+        return None
+    hwnd = best[1]
+    try:
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.ShowWindow(hwnd, 5)  # SW_SHOW（托盘隐藏时 RESTORE 不一定显示）
+        time.sleep(0.35)
+    except Exception:  # noqa: BLE001
+        pass
+    return find_wechat_window()
+
+
 def _make_lparam(x: int, y: int) -> int:
     return (int(y) << 16) | (int(x) & 0xFFFF)
 

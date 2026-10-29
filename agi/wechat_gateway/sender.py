@@ -540,6 +540,18 @@ class WxAutoSender:
     def _failure(error: str) -> dict[str, Any]:
         return {"ok": False, "status": "failed", "error": error}
 
+    def _preflight_window(self) -> None:
+        """真发前的窗口自检：微信最小化/收托盘时先恢复主窗口。
+
+        失败不抛（发送流程自己会给出「未找到微信窗口」的失败结果），
+        只是尽量把窗口找回来，避免因为托盘状态误判。
+        """
+        try:
+            from wx_core.win import ensure_wechat_window_visible
+            ensure_wechat_window_visible()
+        except Exception:  # noqa: BLE001
+            pass
+
     def send(self, contact: str, text: str, *, dry_run: bool = False) -> dict[str, Any]:
         """发送一条文本。
 
@@ -557,6 +569,7 @@ class WxAutoSender:
             return self._failure(f"消息超过 {MAX_CHARS} 字上限（实际 {len(message)} 字）")
         if dry_run:
             return {"ok": True, "status": "planned", "contact": contact_name, "text": message}
+        self._preflight_window()
 
         try:
             retry_max = max(0, int(self.cfg.get("send_retry_max") or 0))
@@ -835,6 +848,7 @@ class WxAutoSender:
                     self._bubble_result(raw_items[i], False, "failed", "invalid_item")
                     for i, result in enumerate(results)]
 
+        self._preflight_window()
         wx, chat_name, switch_error = self._open_chat(contact_name)
         if wx is None:
             for index in pending:

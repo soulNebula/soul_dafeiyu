@@ -94,8 +94,17 @@ _HIDDEN_MARKERS = ("chattrials", "pytest-", "console_test", "_mood_probe", "lega
 
 
 def _known_contacts() -> dict[str, str]:
-    """微信配置里的联系人名 → sha1(name)[:14]（= 每联系人库文件名前缀）。"""
+    """当前 Bot 配置里的联系人名 → sha1(name)[:14]（每联系人库文件名前缀）。"""
     cfg_path = Path(paths.soulagent_home()) / "agi" / "data" / "wechat" / "config.json"
+    try:
+        from agi import bot_runtime
+        active = bot_runtime.read_active()
+        if active and active.get("path"):
+            candidate = Path(active["path"]) / "data" / "wechat" / "config.json"
+            if candidate.is_file():
+                cfg_path = candidate
+    except Exception:  # noqa: BLE001
+        pass
     try:
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -261,6 +270,7 @@ def list_databases() -> dict:
                       **friendly})
     _priority = {"audit": 0, "memory": 1, "persona": 2}
     items.sort(key=lambda it: (bool(it.get("hidden")),
+                               0 if it.get("contact") else 1,
                                _priority.get(it.get("domain") or "", 9),
                                str(it.get("contact") or ""),
                                str(it.get("label_zh") or "")))

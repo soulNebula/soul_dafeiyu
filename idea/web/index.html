@@ -1082,7 +1082,11 @@ async function loadSchema(db) {
     $('#db-title').textContent = (S.data.dbs.find(f => f.id === db) ? dbFileLabel(S.data.dbs.find(f => f.id === db)) : db.split(/[\\/]/).pop());
     $('#db-path').textContent = db;
     $('#db-meta').textContent = '当前：' + $('#db-title').textContent;
-    if (tables.length) { $('#db-table-select').value = tables[0].name; loadRows(tables[0].name, 1); }
+    if (tables.length) {
+      const first = tables.find(t => Number(t.rows || 0) > 0) || tables[0];
+      $('#db-table-select').value = first.name;
+      loadRows(first.name, 1);
+    }
     else {
       $('#db-thead').innerHTML = '<tr><th>提示</th></tr>';
       $('#db-tbody').innerHTML = '<tr><td class="muted">这个数据文件没有可浏览的数据表。</td></tr>';

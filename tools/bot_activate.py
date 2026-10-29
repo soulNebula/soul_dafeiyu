@@ -90,16 +90,23 @@ def _spawn_service(cmd: list[str], log_path: Path, env: dict[str, str]) -> subpr
     log_path.parent.mkdir(parents=True, exist_ok=True)
     last_exc: Exception | None = None
     for flags in (breakaway, detached, base):
-        handle = log_path.open("ab")
+        handle = None
         try:
+            try:
+                handle = log_path.open("ab")
+            except PermissionError:
+                # Bot 日志目录可能被安全软件/低权限锁；宁可无日志也要把服务拉起来
+                handle = None
             return subprocess.Popen(cmd, cwd=str(ROOT), env=env, stdin=subprocess.DEVNULL,
-                                    stdout=handle, stderr=subprocess.STDOUT,
+                                    stdout=handle or subprocess.DEVNULL,
+                                    stderr=subprocess.STDOUT,
                                     creationflags=flags)
         except OSError as exc:
             last_exc = exc
             continue
         finally:
-            handle.close()
+            if handle is not None:
+                handle.close()
     raise last_exc or OSError("spawn failed")
 
 
@@ -186,7 +193,10 @@ def activate(bot_path: str, *, restart: bool = True, python: str | None = None,
         if delay > 0:
             time.sleep(float(delay))
         bot_runtime.write_switch_status({"state": "restarting", "bot": active})
-        switched = restart_services(runtime, python=python, timeout=timeout)
+        try:
+            switched = restart_services(runtime, python=python, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001
+            switched = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         result.update(switched)
         bot_runtime.write_switch_status({
             "state": "ready" if switched.get("ok") else "failed",

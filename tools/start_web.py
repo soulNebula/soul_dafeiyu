@@ -49,8 +49,12 @@ def wait_health(url: str, timeout: float) -> bool:
     return False
 
 
-def spawn(cmd: list[str], cwd: Path, log: Path) -> subprocess.Popen:
+def spawn(cmd: list[str], cwd: Path, log: Path,
+          env_extra: dict[str, str] | None = None) -> subprocess.Popen:
     log.parent.mkdir(parents=True, exist_ok=True)
+    child_env = os.environ.copy()
+    if env_extra:
+        child_env.update(env_extra)
     handle = None
     for attempt in range(5):
         try:
@@ -63,12 +67,25 @@ def spawn(cmd: list[str], cwd: Path, log: Path) -> subprocess.Popen:
         handle = open(os.devnull, "ab")
     try:
         return subprocess.Popen(
-            cmd, cwd=str(cwd), env=os.environ.copy(),
+            cmd, cwd=str(cwd), env=child_env,
             stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
             creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
         )
     finally:
         handle.close()
+
+
+def active_bot_env() -> dict[str, str]:
+    """启动 801/802 时带上当前 Bot 数据根，否则会读默认空库（token/联系人都不对）。"""
+    try:
+        from agi import bot_runtime
+        active = bot_runtime.read_active()
+        if not active:
+            return {}
+        runtime = bot_runtime.prepare_runtime(active["path"])
+        return dict(runtime.get("env") or {})
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -83,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     env["AGENT_HOME"] = str(home)
     os.environ["AGENT_HOME"] = str(home)
     logs = home / "logs"
+    bot_env = active_bot_env()
     logs.mkdir(parents=True, exist_ok=True)
     main_py = root / ".venv" / "Scripts" / "python.exe"
     idea_py = root / "idea" / ".venv" / "Scripts" / "python.exe"
@@ -107,13 +125,13 @@ def main(argv: list[str] | None = None) -> int:
         print("[web] 801 已在运行")
     else:
         print("[web] 启动 801 网关...")
-        spawn([str(main_py), "-m", "agi.wechat_gateway.server"], root, log801)
+        spawn([str(main_py), "-m", "agi.wechat_gateway.server"], root, log801, bot_env)
     if port_open(802):
         print("[web] 802 已在运行")
     else:
         print("[web] 启动 802...")
         spawn([str(main_py), str(root / "tools" / "console" / "server.py"),
-               "--port", "802"], root, log802)
+               "--port", "802"], root, log802, bot_env)
         started.append("802")
 
     ok803 = wait_health("http://127.0.0.1:803/api/wb/health", 45.0)

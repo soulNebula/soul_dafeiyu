@@ -66,7 +66,7 @@ if not exist "%AGENT_HOME%\logs" mkdir "%AGENT_HOME%\logs" >nul 2>&1
 call :port_803
 if errorlevel 1 (
     echo [启动] 启动 803 工作台...
-    start "SoulAgent803" /min cmd /c ""%IDEA_PY%" -m uvicorn app.main:app --host 127.0.0.1 --port 803 >> "%LOG%" 2>&1"
+    start "SoulAgent803" /min cmd /c ""%IDEA_PY%" -m uvicorn app.main:app --app-dir "%ROOT%\idea" --host 127.0.0.1 --port 803 >> "%LOG%" 2>&1"
     call :wait_803
     if errorlevel 1 (
         echo [错误] 803 启动超时，看日志：%LOG%

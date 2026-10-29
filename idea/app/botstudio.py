@@ -235,6 +235,13 @@ def create_bot(body: dict[str, Any]) -> dict[str, Any]:
         if root.exists() and any(root.iterdir()):
             return {"ok": False, "error": "path_not_empty",
                     "hint": "Bot 目录必须为空（或尚不存在）；已有 Bot 请用「添加已有目录」"}
+        if root.exists():
+            # 空目录可能是上一次失败/资源管理器新建的，带残留 ACL/句柄；
+            # 删除空目录后重新 mkdir，避免 WinError 5。
+            try:
+                root.rmdir()
+            except OSError:
+                pass
     except OSError as exc:
         return {"ok": False, "error": f"path_invalid: {exc}"}
     try:

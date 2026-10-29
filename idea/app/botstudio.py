@@ -91,6 +91,36 @@ def list_bots() -> dict[str, Any]:
     return {"ok": True, "items": items, "registry": str(REGISTRY)}
 
 
+def active_packages() -> dict[str, Any]:
+    """当前活跃 Bot 的训练数据包（没激活 Bot 时读仓库默认 data/train/packages）。"""
+    try:
+        from agi import bot_runtime
+        active = bot_runtime.read_active()
+    except Exception:  # noqa: BLE001
+        active = None
+    if active and active.get("path"):
+        base = Path(active["path"]) / "data" / "train" / "packages"
+        source = "active_bot"
+        bot_name = active.get("name")
+    else:
+        base = ROOT / "agi" / "data" / "train" / "packages"
+        source = "default"
+        bot_name = None
+    items = []
+    if base.is_dir():
+        for path in sorted(base.glob("*.json")):
+            try:
+                item = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(item, dict):
+                item["path"] = str(path)
+                items.append(item)
+    items.sort(key=lambda x: int(x.get("created_at") or 0), reverse=True)
+    return {"ok": True, "source": source, "bot": bot_name, "root": str(base),
+            "items": items[:50]}
+
+
 def inspect_bot(path: str) -> dict[str, Any]:
     root = _norm(path)
     validation = bot_profile.validate_bot(root)

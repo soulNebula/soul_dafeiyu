@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (annotstudio, audit, botstudio, config_store, corpusstudio, datastudio,
-               distillstudio, modelstudio, paths, services, trainstudio)
+               distillstudio, hardware, modelstudio, paths, services, trainstudio)
 
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
 app = FastAPI(title="IDEA · SoulAgent Workbench", version="0.2.0")
@@ -134,6 +134,16 @@ def bots_create(body: dict | None = None):
 @app.post("/api/wb/bots/add", dependencies=[Depends(require_token)])
 def bots_add(body: dict | None = None):
     return botstudio.add_existing(str((body or {}).get("path") or ""))
+
+
+@app.get("/api/wb/hardware", dependencies=[Depends(require_token)])
+def wb_hardware():
+    return hardware.probe()
+
+
+@app.get("/api/wb/bots/packages", dependencies=[Depends(require_token)])
+def bots_packages():
+    return botstudio.active_packages()
 
 
 @app.get("/api/wb/bots/inspect", dependencies=[Depends(require_token)])

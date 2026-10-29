@@ -23,6 +23,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import http.cookiejar
@@ -1392,8 +1393,15 @@ def train_status() -> dict:
         gate = {"ready": None, "error": f"{type(exc).__name__}: {exc}"}
     usable = sum(1 for row in today_rows
                  if str(row.get("meta", {}).get("quality") or "") in ("positive", "correction"))
+    package_state: dict = {}
+    try:
+        from tools.train import packages as train_packages
+        package_state = train_packages.summary(TRAIN_ROOT)
+    except Exception as exc:  # noqa: BLE001
+        package_state = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     return {"ok": True, "today": {"date": today, "samples": len(today_rows),
                                   "usable": usable},
+            "package": package_state,
             "cumulative": {"samples": cumulative, "files": len(daily_files)},
             "last_training": last, "gate": gate,
             "next_ready": gate.get("next_ready") if isinstance(gate, dict) else None,
@@ -5337,6 +5345,12 @@ class Handler(BaseHTTPRequestHandler):
                     "growth_backend_unavailable") else (
                     200 if result.get("ok", True) else 500)
                 self._json(code, result); return
+            if path == "/api/train/packages":
+                try:
+                    from tools.train import packages as train_packages
+                    self._json(200, train_packages.summary(TRAIN_ROOT)); return
+                except Exception as exc:  # noqa: BLE001
+                    self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"}); return
             if path == "/api/train/daily":
                 date = str((query.get("date") or [""])[0] or "")
                 result = train_daily(date)
@@ -5598,6 +5612,16 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/api/proactive/stop", "/api/proactive/resume"):
                 result = set_stop(path.endswith("/stop"), client=client)
                 self._json(200 if result.get("ok") else 500, result); return
+            if path == "/api/train/package":
+                try:
+                    from tools.train import packages as train_packages
+                    result = train_packages.create_package(
+                        TRAIN_ROOT, label=str(body.get("label") or "manual"))
+                    audit("train_package", {"package": (result.get("package") or {}).get("id")},
+                          ok=bool(result.get("ok")), client=client)
+                    self._json(200 if result.get("ok") else 400, result); return
+                except Exception as exc:  # noqa: BLE001
+                    self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"}); return
             if path == "/api/config":
                 updates = body.get("updates", body)
                 result = apply_config(updates if isinstance(updates, dict) else {},
@@ -5864,6 +5888,16 @@ def main(argv=None) -> int:
     parser.add_argument("--port", type=int, default=PORT)
     parser.add_argument("--contact-db", default=None, help="联系人 sqlite（默认自动挑最近有新消息的）")
     args = parser.parse_args(argv)
+    def _autopackage_loop() -> None:
+        while True:
+            try:
+                from tools.train import packages as train_packages
+                train_packages.auto_package(TRAIN_ROOT)
+            except Exception:  # noqa: BLE001 - 后台任务失败不影响控制台
+                pass
+            time.sleep(180)
+
+    threading.Thread(target=_autopackage_loop, name="train-autopackage", daemon=True).start()
     server = make_server(args.host, args.port, args.contact_db)
     print(f"Soul Console: http://{args.host}:{args.port}/  (Ctrl+C 停止)", flush=True)
     try:

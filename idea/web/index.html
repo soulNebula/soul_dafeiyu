@@ -304,7 +304,13 @@
         <div class="panel">
           <div class="panel-head"><h3>已登记 Bot</h3><span class="muted small" id="bot-count"></span></div>
           <div id="bot-list" class="list"></div>
-          <p class="muted small">下一步：打开 802 → 用 Bot 密码登录 → 在总览加载 Bot（Phase 1B 继续接线）。</p>
+          <div class="panel-head" style="margin-top:16px"><h3>本机硬件 / 方案推荐</h3>
+            <button class="btn small" id="hw-probe">检测</button></div>
+          <div id="hw-result" class="muted small"></div>
+          <div class="panel-head" style="margin-top:16px"><h3>训练数据包（当前 Bot）</h3>
+            <span class="muted small" id="bot-package-count"></span></div>
+          <div id="bot-package-list" class="list"></div>
+          <p class="muted small">下一步：打开 802 → 用 Bot 密码登录 → 在总览加载 Bot。</p>
         </div>
       </div>
     </section>
@@ -559,8 +565,46 @@ async function loadBots() {
   if (createBtn) createBtn.onclick = createBot;
   const addBtn = $('#bot-add-existing');
   if (addBtn) addBtn.onclick = addExistingBot;
+  const hwBtn = $('#hw-probe');
+  if (hwBtn) hwBtn.onclick = probeHardware;
   const refreshBtn = $('#bot-refresh');
-  if (refreshBtn) refreshBtn.onclick = loadBots;
+  if (refreshBtn) refreshBtn.onclick = () => { loadBots(); loadBotPackages(); };
+  loadBotPackages();
+}
+
+async function probeHardware() {
+  const box = $('#hw-result');
+  if (box) box.textContent = '检测中…';
+  try {
+    const data = await api('/api/wb/hardware');
+    const rec = data.recommendation || {};
+    const gpus = (data.gpus || []).map(g => `${g.name} · ${g.vram_mb} MB`).join('<br>');
+    if (box) box.innerHTML = `
+      <div>CPU ${esc(data.cpu_count)} 核 · Python ${esc(data.python)}</div>
+      <div>${gpus || '未检测到 NVIDIA GPU'}</div>
+      <div style="margin-top:6px"><b>${esc(rec.mode || '')}</b> · ${esc(rec.reason || '')}</div>
+      <div>${esc(rec.hint || '')}</div>
+      ${(rec.models || []).length ? `<div>推荐：${rec.models.map(esc).join(' / ')}</div>` : ''}`;
+  } catch (err) { if (box) box.textContent = err.message; }
+}
+
+async function loadBotPackages() {
+  const list = $('#bot-package-list');
+  const count = $('#bot-package-count');
+  if (!list) return;
+  try {
+    const data = await api('/api/wb/bots/packages');
+    const items = data.items || [];
+    if (count) count.textContent = `${items.length} 个${data.bot ? ' · ' + data.bot : ''}`;
+    list.innerHTML = items.length ? items.map(p => `
+      <div class="list-item"><div class="grow">
+        <div class="title"><b>${esc(p.id || p.file || '')}</b>
+          <span class="badge ok">${esc(String(p.samples || 0))} 条</span></div>
+        <div class="muted small">${esc(new Date((p.created_at || 0) * 1000).toLocaleString())} · ${esc(p.label || '')} · ${esc(p.status || '')}</div>
+      </div></div>`).join('') : '<div class="muted small">还没有打包数据；802 总览进度满 300 会自动打包。</div>';
+  } catch (err) {
+    list.innerHTML = `<div class="error small">${esc(err.message)}</div>`;
+  }
 }
 
 async function createBot() {

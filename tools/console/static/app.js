@@ -434,14 +434,19 @@ async function renderOverview() {
         ${renderEngineCard(engine)}
         ${(() => {
           const gate = (trainStatus && trainStatus.gate) || {};
-          const samples = Number(gate.samples || (trainStatus && trainStatus.cumulative && trainStatus.cumulative.samples) || 0);
-          const threshold = 300;
+          const pkg = (trainStatus && trainStatus.package) || {};
+          const samples = Number(pkg.pending != null ? pkg.pending :
+            (gate.samples || (trainStatus && trainStatus.cumulative && trainStatus.cumulative.samples) || 0));
+          const threshold = Number(pkg.threshold || 300);
           const pct = Math.min(100, Math.round(samples / threshold * 100));
-          const ready = !!gate.ready;
+          const ready = pkg.ready != null ? !!pkg.ready : !!gate.ready;
+          const packed = Number(pkg.packages ? pkg.packages.length : 0);
           return `<div class="wb-card wb-data-progress">
             <div class="wb-card-head"><b>训练数据积累</b><span class="muted">${samples}/${threshold}</span></div>
             <div class="wb-progress"><span style="width:${pct}%"></span></div>
-            <div class="muted small" style="margin-top:6px">${ready ? '✅ 已达到训练门槛' : '距离门槛还差 ' + Math.max(0, threshold - samples) + ' 条'}</div>
+            <div class="muted small" style="margin-top:6px">${ready ? '✅ 已满，后台会自动打包' :
+              '距离门槛还差 ' + Math.max(0, threshold - samples) + ' 条'}${packed ? ' · 已打包 ' + packed + ' 个' : ''}</div>
+            <div class="row" style="margin-top:8px"><button class="btn small" id="train-package-now">立即打包</button></div>
           </div>`;
         })()}
         <div class="wb-metric-grid">
@@ -784,6 +789,15 @@ async function renderFeed(auto) {
   $('#app').innerHTML = html;
   state.feedSig = feedSignature((feed && feed.items) || []);
 
+  const packBtn = $('#train-package-now');
+  if (packBtn) packBtn.onclick = async () => {
+    packBtn.disabled = true;
+    try {
+      const result = await api('/api/train/package', {method: 'POST', body: {label: 'manual'}});
+      toast(result.ok ? `已打包 ${result.package.samples} 条` : (result.error || '没有新样本'), result.ok ? 'ok' : 'err');
+      await renderOverview();
+    } catch (err) { toast(err.message, 'err'); }
+  };
   const wcBtn = $('#wechat-contacts-btn');
   if (wcBtn) wcBtn.onclick = () => openWechatContacts();
   const refresh = $('#feed-refresh');

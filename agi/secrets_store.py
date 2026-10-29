@@ -242,6 +242,34 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> bool:
         return False
 
 
+def store_llm_api_key(value: str) -> bool:
+    """把 DeepSeek API key 写入 ``secrets.json`` 的 ``llm.api_key``（空串=清除）。
+
+    这是 802 模型配置页「保存 key」的写入口：key 只落本机密钥库，不进
+    ``web_config.json`` 明文、不进 git、不回传前端。
+    """
+    target = secrets_path()
+    if _under_pytest_without_override():
+        return False
+    data = load(target) if target.is_file() else {}
+    if not isinstance(data, dict):
+        data = {}
+    llm = data.get("llm")
+    llm = dict(llm) if isinstance(llm, dict) else {}
+    text = _text(value).strip()
+    if text:
+        llm["api_key"] = text
+    else:
+        llm.pop("api_key", None)
+    data["llm"] = llm
+    data.setdefault("version", 1)
+    data["updated_at"] = _now()
+    if not _atomic_write(target, data):
+        return False
+    reset_cache()
+    return True
+
+
 def store_config_section(values: dict[str, Any]) -> bool:
     """把敏感字段并入 ``secrets.json`` 的 ``config`` 段（迁移后的写入口）。
 

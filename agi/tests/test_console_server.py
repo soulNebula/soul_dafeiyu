@@ -2189,3 +2189,50 @@ def test_bili_digest_contract(tmp_path, monkeypatch):
     assert parsed["url"].endswith("BV1abc")
     report = console.bili_reports_index()
     assert report["ok"] is True and report["items"][0]["bvid"] == "BV1"
+
+def test_deepseek_status_reads_secrets_store(tmp_path, monkeypatch):
+    import json as _json
+    secrets = tmp_path / "secrets.json"
+    secrets.write_text(_json.dumps({"version": 1, "llm": {"api_key": "sk-secret-xyz"}}),
+                       encoding="utf-8")
+    monkeypatch.setenv("SOULAGENT_SECRETS", str(secrets))
+    from agi import secrets_store
+    secrets_store.reset_cache()
+    web = tmp_path / "web_config.json"
+    web.write_text(_json.dumps({"llm": {"api_key": ""}}), encoding="utf-8")
+    monkeypatch.setattr(console, "WEB_CONFIG_PATH", web)
+    status = console._deepseek_status()
+    assert status["configured"] is True
+    assert "secrets.json" in status["source"]
+    assert "sk-secret-xyz" not in _json.dumps(status)
+    secrets_store.reset_cache()
+
+
+def test_save_deepseek_key_endpoint(tmp_path, write_env, monkeypatch):
+    import json as _json
+    secrets = tmp_path / "secrets.json"
+    monkeypatch.setenv("SOULAGENT_SECRETS", str(secrets))
+    from agi import secrets_store
+    secrets_store.reset_cache()
+    web = tmp_path / "web_config.json"
+    web.write_text(_json.dumps({"llm": {"api_key": "sk-old-plaintext"}}), encoding="utf-8")
+    monkeypatch.setattr(console, "WEB_CONFIG_PATH", web)
+
+    status, data = _call("POST", "/api/model-config/deepseek-key",
+                         {"api_key": "sk-new-key-123456"}, token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["deepseek"]["configured"] is True and "secrets" in data["deepseek"]["source"]
+    assert secrets_store.llm_api_key() == "sk-new-key-123456"
+    saved_web = _json.loads(web.read_text(encoding="utf-8"))
+    assert saved_web["llm"]["api_key"] == ""          # 明文不留在 web_config
+    assert "sk-new-key-123456" not in _json.dumps(data)
+
+    status, data = _call("POST", "/api/model-config/deepseek-key",
+                         {"clear": True}, token="tok")
+    assert status == 200 and data["ok"] is True
+    assert secrets_store.llm_api_key() == ""
+
+    status, _data = _call("POST", "/api/model-config/deepseek-key",
+                          {"api_key": "sk-new-key-123456"})
+    assert status == 401
+    secrets_store.reset_cache()

@@ -2076,15 +2076,70 @@ LOG_SOURCES: dict[str, list[Path]] = {
 
 
 def _deepseek_status() -> dict:
-    """DeepSeek key 只暴露"已配置/未配置"和来源，绝不回传明文。"""
+    """DeepSeek key 只暴露"已配置/未配置"和来源，绝不回传明文。
+
+    取值优先级与 ``agi.selflearn.llm.load_config`` 一致：env → secrets.json → web_config.json。
+    """
     payload = read_json(WEB_CONFIG_PATH, {})
     llm = payload.get("llm") if isinstance(payload, dict) else {}
     llm = llm if isinstance(llm, dict) else {}
     env_key = os.environ.get("DEEPSEEK_API_KEY") or ""
     file_key = str(llm.get("api_key") or "")
-    source = "env:DEEPSEEK_API_KEY" if env_key else ("web_config.json:llm.api_key" if file_key else "")
-    return {"configured": bool(env_key or file_key), "source": source,
-            "env_var": "DEEPSEEK_API_KEY", "config_file": "web_config.json (llm.api_key)"}
+    secrets_key = ""
+    try:
+        from agi import secrets_store
+        secrets_key = secrets_store.llm_api_key()
+    except Exception:  # noqa: BLE001 - 密钥库不可用时退回旧来源
+        secrets_key = ""
+    if env_key:
+        source = "env:DEEPSEEK_API_KEY"
+    elif secrets_key:
+        source = "agi/data/secrets.json:llm.api_key"
+    elif file_key:
+        source = "web_config.json:llm.api_key"
+    else:
+        source = ""
+    return {"configured": bool(env_key or secrets_key or file_key), "source": source,
+            "env_var": "DEEPSEEK_API_KEY",
+            "config_file": "agi/data/secrets.json (llm.api_key，本机密钥库；兼容 web_config.json)",
+            "editable": True}
+
+
+def save_deepseek_key(api_key: str, *, clear: bool = False, client: str = "") -> dict:
+    """802 模型配置页保存 DeepSeek key：只写本机 ``agi/data/secrets.json``。"""
+    text = "" if clear else str(api_key or "").strip()
+    if text and (len(text) < 8 or len(text) > 200):
+        audit("deepseek_key_update", {"configured": False}, ok=False,
+              note="key 长度不合法", client=client)
+        return {"ok": False, "error": "key 长度不合法（8–200 字符）"}
+    if text and any(ch.isspace() or ord(ch) < 32 for ch in text):
+        audit("deepseek_key_update", {"configured": False}, ok=False,
+              note="key 含空白/控制字符", client=client)
+        return {"ok": False, "error": "key 不能包含空白或控制字符"}
+    try:
+        from agi import secrets_store
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"密钥库不可用：{type(exc).__name__}: {exc}"}
+    if not secrets_store.store_llm_api_key(text):
+        audit("deepseek_key_update", {"configured": False}, ok=False,
+              note="写入 secrets.json 失败", client=client)
+        return {"ok": False, "error": "写入本机密钥库失败（检查 agi/data/secrets.json 权限）"}
+    # 迁移兼容：清掉 web_config.json 里可能残留的明文 key（避免两份、避免再次告警）
+    payload = read_json(WEB_CONFIG_PATH, {})
+    if isinstance(payload, dict):
+        llm = payload.get("llm")
+        if isinstance(llm, dict) and llm.get("api_key"):
+            llm = dict(llm)
+            llm["api_key"] = ""
+            payload = dict(payload)
+            payload["llm"] = llm
+            try:
+                write_json_atomic(WEB_CONFIG_PATH, payload)
+            except OSError:
+                pass
+    audit("deepseek_key_update", {"configured": bool(text)}, ok=True, client=client)
+    return {"ok": True, "deepseek": _deepseek_status(),
+            "note": "已保存到本机 agi/data/secrets.json（不上传；网关热加载，下一条消息生效）"}
 
 
 def model_config_state() -> dict:
@@ -5195,6 +5250,11 @@ class Handler(BaseHTTPRequestHandler):
                 updates = body.get("updates", body)
                 result = apply_model_config(updates if isinstance(updates, dict) else {},
                                             client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/model-config/deepseek-key":
+                result = save_deepseek_key(str(body.get("api_key") or ""),
+                                           clear=bool(body.get("clear", False)),
+                                           client=client)
                 self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/chat-test":
                 result = chat_test(str(body.get("text") or ""),

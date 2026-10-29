@@ -1794,7 +1794,12 @@ async function renderProviders() {
         <div class="row">${keyPill}<span class="hint">来源：${esc(deepseek.source || '未配置')}</span></div>
         <span class="hint">当前生效模型：<b>${esc(effective.llm_model || '—')}</b> · base_url ${esc(effective.llm_base_url || '—')}</span>
       </div>
-      <p class="hint" style="margin-top:8px">DeepSeek key 不在这里编辑也不回传明文：在 <code>web_config.json</code> 的 <code>llm.api_key</code>，或环境变量 <code>DEEPSEEK_API_KEY</code> 配置。</p>
+      <div class="row" style="margin-top:10px;gap:8px;align-items:center">
+        <input type="password" id="ds-key" placeholder="粘贴 DeepSeek API key（sk-…）" style="flex:1;max-width:420px" autocomplete="off">
+        <button class="btn primary" id="ds-key-save">保存 key</button>
+        <button class="btn" id="ds-key-clear">清除</button>
+      </div>
+      <p class="hint" style="margin-top:6px">key 只写入本机 <code>agi/data/secrets.json</code>（不上传、不进 git、不回传明文）；环境变量 <code>DEEPSEEK_API_KEY</code> 仍优先于文件。</p>
     </div>
     ${card('网关模型/内状态配置（保存后热加载生效）', `
       <div class="grid cols-2 provider-form">
@@ -1821,6 +1826,25 @@ async function renderProviders() {
     </div>`)}`;
   const save = $('#mc-save');
   if (save) save.onclick = saveModelConfig;
+  const keySave = $('#ds-key-save');
+  if (keySave) keySave.onclick = () => saveDeepseekKey(false);
+  const keyClear = $('#ds-key-clear');
+  if (keyClear) keyClear.onclick = () => saveDeepseekKey(true);
+}
+
+async function saveDeepseekKey(clear) {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const input = $('#ds-key');
+  const key = clear ? '' : (input && input.value || '').trim();
+  if (!clear && !key) { toast('先粘贴 key', 'err'); return; }
+  if (!clear && !confirm('保存到本机密钥库 agi/data/secrets.json？不会上传。')) return;
+  try {
+    const result = await api('/api/model-config/deepseek-key', {
+      method: 'POST', body: { api_key: key, clear },
+    });
+    toast(result.note || (clear ? '已清除 key' : '已保存 key'), 'ok');
+    renderProviders();
+  } catch (err) { toast(err.message, 'err'); }
 }
 
 async function saveModelConfig() {

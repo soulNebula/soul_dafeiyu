@@ -85,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     stamp = int(time.time())
     log803 = logs / f"workbench_boot_{stamp}.log"
     log802 = logs / f"console_boot_{stamp}.log"
+    log801 = logs / f"gateway_boot_{stamp}.log"
     started = []
     if port_open(803):
         print("[web] 803 已在运行")
@@ -94,6 +95,11 @@ def main(argv: list[str] | None = None) -> int:
                "--host", "127.0.0.1", "--port", "803"],
               root / "idea", log803)
         started.append("803")
+    if port_open(801):
+        print("[web] 801 已在运行")
+    else:
+        print("[web] 启动 801 网关...")
+        spawn([str(main_py), "-m", "agi.wechat_gateway.server"], root, log801)
     if port_open(802):
         print("[web] 802 已在运行")
     else:
@@ -103,11 +109,15 @@ def main(argv: list[str] | None = None) -> int:
         started.append("802")
 
     ok803 = wait_health("http://127.0.0.1:803/api/wb/health", 45.0)
+    ok801 = wait_health("http://127.0.0.1:801/health", 30.0)
     ok802 = wait_health("http://127.0.0.1:802/api/health", 30.0)
     print(f"[web] 803 health: {'OK' if ok803 else 'FAIL'}")
+    print(f"[web] 801 health: {'OK' if ok801 else 'FAIL'}")
     print(f"[web] 802 health: {'OK' if ok802 else 'FAIL'}")
     if not ok803:
         _tail(log803)
+    if not ok801:
+        _tail(log801)
     if not ok802:
         _tail(log802)
     if ok803 and not args.no_open:
@@ -115,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
             webbrowser.open("http://127.0.0.1:803/")
         except Exception:  # noqa: BLE001
             pass
-    return 0 if (ok803 and ok802) else 1
+    return 0 if (ok803 and ok801 and ok802) else 1
 
 
 def _tail(path: Path, lines: int = 20) -> None:

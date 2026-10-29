@@ -471,6 +471,63 @@ def _is_self(username: str, self_wxid: str) -> bool:
     return username == self_wxid
 
 
+def list_contacts(config: dict, log=None) -> dict:
+    """从 contact.db 列出当前账号、好友、群（不依赖消息历史）。
+
+    返回：``{self: {wxid,name}, friends: [{wxid,name,alias,remark}], groups: [...]}``。
+    群聊只列出、不启用（产品上暂不支持群聊）。
+    """
+    import sqlite3
+
+    log = log or (lambda *a, **k: None)
+    acc = media_cache.active_account_dir()
+    if acc is None:
+        return {"ok": False, "error": "no_account_dir", "self": None, "friends": [], "groups": []}
+    wxid = str(config.get("image_wxid") or "")
+    if not wxid and acc.name.startswith("wxid_"):
+        wxid = acc.name.rsplit("_", 1)[0] if acc.name.count("_") >= 2 else acc.name
+    keys = wcdb.ensure_keys(acc, config, log=log)
+    if not keys:
+        return {"ok": False, "error": "db_keys_unavailable", "self": None, "friends": [], "groups": []}
+    reader = wcdb.SessionReader(acc, keys, wxid)
+    try:
+        path = reader._materialize("db_storage/contact/contact.db", "_contact_path")
+        if not path:
+            return {"ok": False, "error": "contact_db_unavailable", "self": None,
+                    "friends": [], "groups": []}
+        rows = []
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            for username, local_type, name, alias, remark in con.execute(
+                    "select username, local_type, nick_name, alias, remark from contact"):
+                if not username:
+                    continue
+                display = (str(remark or "").strip() or str(name or "").strip() or str(username))
+                try:
+                    lt = int(local_type or 0)
+                except (TypeError, ValueError):
+                    lt = 0
+                rows.append({"wxid": str(username), "name": display, "local_type": lt,
+                             "alias": str(alias or ""), "remark": str(remark or "")})
+        finally:
+            con.close()
+        self_row = next((r for r in rows if r["wxid"] == wxid), None)
+        self_info = {"wxid": wxid, "name": (self_row or {}).get("name") or wxid}
+        friends = [{"wxid": r["wxid"], "name": r["name"], "alias": r["alias"],
+                    "remark": r["remark"]} for r in rows if r["local_type"] == 1]
+        groups = [{"wxid": r["wxid"], "name": r["name"], "alias": r["alias"],
+                   "remark": r["remark"]} for r in rows if r["local_type"] == 2]
+        friends.sort(key=lambda r: r["name"])
+        groups.sort(key=lambda r: r["name"])
+        return {"ok": True, "self": self_info, "friends": friends, "groups": groups}
+    except Exception as exc:  # noqa: BLE001
+        log(f"读取联系人库失败: {exc}")
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "self": None,
+                "friends": [], "groups": []}
+    finally:
+        reader.close()
+
+
 def enumerate_friends(config: dict, mode: str = "recent", log=None) -> list[str]:
     """从数据库列好友/群（默认只保留有历史聊天记录的，符合"没聊过就不显示"）。
 

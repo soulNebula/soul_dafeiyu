@@ -217,7 +217,10 @@
 - ✅ **实机验证（2026-10-29）**：802 加载临时 Bot → 801/802 重启到 `<Bot>/data`（active=true、
   联系人 0、Bot 密码登录成功）→ `/api/bot/clear` 切回默认数据（active=false、联系人/消息恢复）。
   切换 helper 在 Agent/终端 Job 下会被带走，已改为 **Windows 一次性计划任务**（schtasks）执行。
-- ⏳ 下一步：802 刷新微信联系人/单多选；Bot 设置页统一保存；对话测试/开始运行
+- ✅ 802「刷新联系人」：801 `/api/contacts` 直读 contact.db（当前微信昵称/wxid + 好友/群），
+  802 弹层勾选好友 → 保存 `allowed_contacts`/`monitored_contacts`；服务号过滤、群聊置灰；
+  首次读取需提取 DB 密钥（约 10–20 秒），有 `?contacts=1` 深链
+- ⏳ 下一步：Bot 设置页统一保存；对话测试/开始运行
 
 
 1. **Bot 包放哪**：用户自选目录（推荐，可备份/迁移）还是仓库内 `bots/`（简单但易误提交）？

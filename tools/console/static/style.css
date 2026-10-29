@@ -645,3 +645,22 @@ table td input[type="number"], table td select { padding: 3px 6px; font-size: 12
   border: 1px solid var(--border); background: var(--surface-2);
 }
 .bot-gate-card .row { display: flex; gap: 8px; }
+
+/* ---------------- 微信联系人选择（Phase 1B） ---------------- */
+#wechat-picker {
+  position: fixed; inset: 0; z-index: 9998;
+  background: rgba(10,10,10,.72); display: grid; place-items: center;
+}
+.wb-picker-card {
+  width: min(620px, 94vw); max-height: 82vh; overflow: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; padding: 18px; box-shadow: 0 20px 60px rgba(0,0,0,.45);
+}
+.wb-picker-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.wb-picker-head b { font-size: 16px; }
+.wb-picker-head .btn { margin-left: auto; }
+.wc-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.wc-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: 8px; }
+.wc-item .muted { margin-left: auto; }
+.wc-item.disabled { opacity: .5; }

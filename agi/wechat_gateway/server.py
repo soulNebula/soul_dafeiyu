@@ -2644,6 +2644,23 @@ def make_handler(gateway: Gateway):
                 self._json(200, gateway.status())
                 return
             # P18-A：引擎状态（控制台按钮读这个，比 /status 轻）
+            if path == "/api/contacts":
+                try:
+                    from wx_core import db_source
+                    data = db_source.list_contacts(gateway.cfg)
+                    if data.get("ok"):
+                        me = (data.get("self") or {}).get("wxid")
+                        service = {"weixin", "fmessage", "medianote", "qqsafe", "floatbottle"}
+                        data["friends"] = [
+                            x for x in (data.get("friends") or [])
+                            if x.get("wxid") != me
+                            and x.get("wxid") not in service
+                            and not str(x.get("wxid") or "").startswith("gh_")
+                        ]
+                    self._json(200, data)
+                except Exception as exc:  # noqa: BLE001
+                    self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+                return
             if path == "/api/engine":
                 self._json(200, gateway.engine_state())
                 return

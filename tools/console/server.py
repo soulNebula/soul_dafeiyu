@@ -335,6 +335,22 @@ def bot_load(path: str, password: str, *, client: str = "") -> dict:
             "note": "801/802 正在重启到该 Bot；页面会自动刷新"}
 
 
+def wechat_contacts() -> dict:
+    """从 801 读微信联系人（contact.db 直读；首次可能要提取 DB 密钥，较慢）。"""
+    base = GATEWAY_STATUS_URL.rsplit("/status", 1)[0]
+    request = urllib.request.Request(base + "/api/contacts")
+    token = admin_token()
+    if token:
+        request.add_header("X-Admin-Token", token)
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        return {"ok": False, "error": f"gateway http {exc.code}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def gateway_status() -> dict:
     token = admin_token()
     request = urllib.request.Request(GATEWAY_STATUS_URL)
@@ -5065,6 +5081,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "service": "soul-console",
                                  "ts": now_ts(), "contact_db": str(contact_db_path() or "")})
                 return
+            if path == "/api/wechat/contacts":
+                self._json(200, wechat_contacts()); return
             if path == "/api/bot/info":
                 self._json(200, bot_info()); return
             if path == "/api/bot/switch-status":

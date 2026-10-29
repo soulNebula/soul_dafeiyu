@@ -285,6 +285,76 @@ function renderPills() {
 }
 
 /* ---------------- 总览 ---------------- */
+async function openWechatContacts() {
+  const overlay = document.createElement('div');
+  overlay.id = 'wechat-picker';
+  overlay.innerHTML = `<div class="wb-picker-card">
+    <div class="wb-picker-head"><b>刷新微信联系人</b><span class="muted" id="wc-self">读取中…</span>
+      <button class="btn small" id="wc-close">关闭</button></div>
+    <p class="muted small">先确认微信 PC 客户端已登录且版本受支持；读取 contact.db 首次可能要提取数据库密钥（约 10–20 秒）。</p>
+    <div id="wc-body" class="muted">读取中…</div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" id="wc-apply" disabled>应用选择</button>
+      <button class="btn" id="wc-all">全选</button>
+      <button class="btn" id="wc-none">清空</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#wc-close').onclick = close;
+  overlay.onclick = (ev) => { if (ev.target === overlay) close(); };
+  let data = null;
+  try {
+    data = await api('/api/wechat/contacts');
+  } catch (err) {
+    const body = overlay.querySelector('#wc-body');
+    body.innerHTML = `<div class="error-text">读取失败：${esc(err.message)}</div>`;
+    return;
+  }
+  if (!data || !data.ok) {
+    const body = overlay.querySelector('#wc-body');
+    body.innerHTML = `<div class="error-text">读取失败：${esc((data && data.error) || '未知错误')}</div>`;
+    return;
+  }
+  const self = data.self || {};
+  overlay.querySelector('#wc-self').textContent = `当前微信：${self.name || self.wxid || '—'}`;
+  const friends = data.friends || [];
+  const groups = data.groups || [];
+  if (!state.config) {
+    try { state.config = await api('/api/config'); } catch (e) { /* 只影响预选 */ }
+  }
+  const current = new Set(((state.config && state.config.config) || {}).allowed_contacts || []);
+  const body = overlay.querySelector('#wc-body');
+  body.innerHTML = `
+    <div class="muted small">好友 ${friends.length} 个；群 ${groups.length} 个（群聊暂不支持，置灰）</div>
+    <div class="wc-list">${friends.map((f) => `
+      <label class="wc-item"><input type="checkbox" value="${esc(f.name)}" ${current.has(f.name) ? 'checked' : ''}>
+        <span>${esc(f.name)}</span><span class="muted small">${esc(f.wxid)}</span></label>`).join('') || '<div class="empty">没有读取到好友</div>'}</div>
+    ${groups.length ? `<div class="muted small" style="margin-top:8px">群（暂不支持）</div>
+      <div class="wc-list">${groups.map((g) => `<label class="wc-item disabled"><input type="checkbox" disabled><span>${esc(g.name)}</span></label>`).join('')}</div>` : ''}`;
+  const apply = overlay.querySelector('#wc-apply');
+  apply.disabled = false;
+  apply.onclick = async () => {
+    const names = [...overlay.querySelectorAll('.wc-item input:checked')]
+      .filter((n) => !n.disabled).map((n) => n.value);
+    try {
+      await api('/api/config', { method: 'POST', body: { updates: {
+        allowed_contacts: names, monitored_contacts: names,
+      } } });
+      state.config = null; state.contacts = null;
+      close();
+      await renderOverview();
+      toast(`已应用 ${names.length} 个联系人`, 'ok');
+    } catch (err) { toast('保存失败：' + err.message, 'err'); }
+  };
+  overlay.querySelector('#wc-all').onclick = () => {
+    overlay.querySelectorAll('.wc-item input:not([disabled])').forEach((n) => { n.checked = true; });
+  };
+  overlay.querySelector('#wc-none').onclick = () => {
+    overlay.querySelectorAll('.wc-item input').forEach((n) => { n.checked = false; });
+  };
+}
+
 async function renderOverview() {
   $('#app').innerHTML = '<div class="empty">加载总览…</div>';
   let status = null, feed = null, config = null, models = null, engine = null;
@@ -344,6 +414,7 @@ async function renderOverview() {
         <span class="wb-pill">会话 ${num(backend.friends_count || 0)}</span>
         <span class="wb-pill">消息 ${num(msgItems.length)}</span>`,
       right: `<button class="btn small" id="monitor-toggle">${active ? '停止监听' : '开始监听'}</button>
+        <button class="btn small" id="wechat-contacts-btn">刷新联系人</button>
         <button class="btn small" id="ov-refresh">刷新</button>`,
     })}
     ${errors.length ? `<div class="wb-card wb-span3"><div class="error-text">部分数据获取失败：${esc(errors.join('；'))}</div></div>` : ''}
@@ -700,6 +771,8 @@ async function renderFeed(auto) {
   $('#app').innerHTML = html;
   state.feedSig = feedSignature((feed && feed.items) || []);
 
+  const wcBtn = $('#wechat-contacts-btn');
+  if (wcBtn) wcBtn.onclick = () => openWechatContacts();
   const refresh = $('#feed-refresh');
   if (refresh) refresh.onclick = () => renderFeed(false);
   document.querySelectorAll('[data-tab]').forEach((node) => {
@@ -4202,6 +4275,8 @@ function showBotLoad() {
 }
 
 async function initBotGate() {
+  const urlToken = new URLSearchParams(location.search).get('token');
+  if (urlToken) { state.token = urlToken; return; }
   let info = null;
   try { info = await api('/api/bot/info'); } catch (e) { return; }
   if (!info || !info.active) {
@@ -4269,6 +4344,9 @@ function bindGlobal() {
 }
 
 initBotGate();
+if (new URLSearchParams(location.search).get('contacts') === '1') {
+  setTimeout(() => openWechatContacts(), 1500);
+}
 bindGlobal();
 bindSendMode();
 loadSendMode();

@@ -412,10 +412,10 @@ async function renderOverview() {
     ${wbTopBar({
       title: '消息分析台', subtitle: `Soul Console · 127.0.0.1:802 · 当前库 ${esc((contacts && contacts.current_label) || '—')}`,
       pills: `<span class="wb-pill ok">● 实时</span>
-        <span class="wb-pill ${active ? 'ok' : 'err'}">${active ? '● 微信监听中' : '○ 微信未监听'}</span>
+        <span class="wb-pill ${active ? 'ok' : 'err'}">${active ? '● 微信接收中' : '○ 微信未接收'}</span>
         <span class="wb-pill">会话 ${num(backend.friends_count || 0)}</span>
         <span class="wb-pill">消息 ${num(msgItems.length)}</span>`,
-      right: `<button class="btn small" id="monitor-toggle">${active ? '停止监听' : '开始监听'}</button>
+      right: `<button class="btn small" id="monitor-toggle">${active ? '停止引擎' : '开始引擎'}</button>
         <button class="btn small" id="switch-bot">切换 Bot</button>
         <button class="btn small" id="wechat-contacts-btn">刷新联系人</button>
         <button class="btn small" id="ov-refresh">刷新</button>`,
@@ -573,7 +573,7 @@ function bindEngineActions() {
 
 async function toggleEngine(action) {
   if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
-  if (action === 'stop' && !window.confirm('停止后不再监听和自动回复、主动消息暂停；控制台与对话测试仍可用。 确定停止运行？')) return;
+  if (action === 'stop' && !window.confirm('停止的是“引擎”：不再自动回复、主动消息暂停；网关仍会接收消息，控制台与对话测试仍可用。 确定停止引擎？')) return;
   const button = action === 'stop' ? $('#engine-stop') : $('#engine-start');
   const label = button ? button.textContent : '';
   if (button) { button.disabled = true; button.textContent = '处理中…'; }
@@ -582,7 +582,7 @@ async function toggleEngine(action) {
     if (result.ok === false) {
       throw new Error(result.error === 'gateway_unreachable' ? '网关不可达' : (result.error || '操作失败'));
     }
-    toast(action === 'stop' ? '已停止运行' : '已开始运行', 'ok');
+    toast(action === 'stop' ? '引擎已停止（仍接收消息）' : '引擎已开始运行', 'ok');
     await renderOverview();
   } catch (err) {
     toast(err.message, 'err');

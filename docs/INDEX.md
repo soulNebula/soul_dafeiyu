@@ -39,6 +39,7 @@
 
 | 文档 | 用途 |
 | --- | --- |
+| [`quality/开源上手-Bot化验收清单.md`](quality/开源上手-Bot化验收清单.md) | 开源上手 + Bot 化逐项验收（状态/命令/证据） |
 | [`quality/STATUS.md`](quality/STATUS.md) | **可复现测试数字、端口清单、里程碑、已知问题** |
 | [`quality/status_measured.json`](quality/status_measured.json) | 状态工具落盘的实测数字（唯一来源） |
 | [`quality/agentb_verify_result.json`](quality/agentb_verify_result.json) | Agent B 全量终验结果 |

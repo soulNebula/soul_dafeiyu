@@ -51,3 +51,7 @@ zstandard==0.24.0; python_version < "3.14"
 #   WechatMoments\.venv\Scripts\python.exe（Python 3.12 + xmltodict/dataclasses_json 等）
 # 主进程 Python 3.14 不导入 wx4；若该 venv 缺失，网页端「朋友圈」页签会提示不可用，
 # 聊天监听与 AI 分析不受影响。
+
+# 上网/公众号抓取（agi/integrations/web_lookup.py）
+beautifulsoup4>=4.12,<5
+requests>=2.31,<3

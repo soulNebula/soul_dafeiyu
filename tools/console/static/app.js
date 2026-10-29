@@ -391,9 +391,8 @@ function wbTopBar({ title, subtitle, pills, right }) {
 function wbMsgTag(m) {
   const att = (m && m.attachment) || {};
   const text = String((m && m.text) || '');
-  if (att.kind === 'image') {
-    return att.mime === 'image/gif' ? '<span class="wb-tag">动图</span>' : '<span class="wb-tag">图片</span>';
-  }
+  if (att.mime === 'image/gif') return '<span class="wb-tag">表情包</span>';
+  if (att.kind === 'image') return '<span class="wb-tag">图片</span>';
   if (/\[表情包\]/.test(text)) return '<span class="wb-tag">表情包</span>';
   if (/\[文件\]/.test(text)) return '<span class="wb-tag">文件</span>';
   if (/\[语音\]/.test(text)) return '<span class="wb-tag">语音</span>';
@@ -403,7 +402,10 @@ function wbMsgTag(m) {
 function wbMediaHtml(m) {
   const att = (m && m.attachment) || {};
   if (!att.url) return '';
-  return `<img class="wb-msg-img" src="${esc(att.url)}" loading="lazy" alt="图片">`;
+  const kindLabel = att.mime === 'image/gif' ? 'GIF'
+    : (att.mime === 'image/webp' ? 'WebP' : '图片');
+  return `<img class="wb-msg-img" src="${esc(att.url)}" loading="lazy" alt="${kindLabel}">
+    <span class="wb-media-label">${kindLabel}</span>`;
 }
 
 function wbMessageBubble(m) {
@@ -696,8 +698,10 @@ function wbMessageList(items) {
   const filters = {
     me: (m) => m.role !== 'user',
     you: (m) => m.role === 'user',
-    image: (m) => /\[图片\]/.test(String(m.text || '')),
-    emote: (m) => /\[表情包\]/.test(String(m.text || '')),
+    image: (m) => (m.attachment && m.attachment.kind === 'image'
+      && m.attachment.mime !== 'image/gif') || /\[图片\]/.test(String(m.text || '')),
+    emote: (m) => (m.attachment && m.attachment.mime === 'image/gif')
+      || /\[表情包\]/.test(String(m.text || '')),
     file: (m) => /\[文件\]/.test(String(m.text || '')),
     voice: (m) => /\[语音\]/.test(String(m.text || '')),
   };

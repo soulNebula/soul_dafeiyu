@@ -309,7 +309,7 @@ python toolsot_profile.py validate --path E:gentots\802-config-20261030
 | 802 设置：灵魂来源 | ✅ | 「模型与内状态」组：local / cloud + 云端 base_url / 模型 |
 | B站/朋友圈 Bot 开关 | 🟡 | `surf_enabled`（B站/上网冲浪，真实生效）、`moments_enabled`（关闭后朋友圈 API 503）、`bili_ingest_enabled`（主动视频分享已生效；其他入库路径未逐一接） |
 | 云端识图独立 provider | ✅ | Bot 写 `vision_provider_mode/base_url/model`；cloud 模式用 `secrets.providers.vision`（回退 chat key），不经过 8125 |
-| 训练闭环（数据→803→802） | 🟡 | 803 数据集发现包含 Bot 的 packages/daily；导出成功后**自动注册**到当前 Bot 的 `local_models.json`（role=soul, source=train_export），802 模型页可启动新模型；**自动启动/自动切换模型仍未做** |
+| 训练闭环（数据→803→802） | ✅* | 803 导出成功后注册到 Bot `local_models.json`，并自动调 802 启动新模型、把 Bot 灵魂切到新端口（`soul_provider_mode=local`，inner 原 off 则开 model）；*未用真实训练任务端到端演练，单测 12 passed |
 | 改 Bot 密码 | ✅ | 803 Bot 列表「改密码」；`tools/bot_profile.change_password` 校验旧密码；API `/api/wb/bots/password`；实测错误旧密码拒绝、正确后可登录 |
 | 3B 上下文 | ✅ | 8125 上下文 8192 已重启，缓解 4.10K 溢出 |
 

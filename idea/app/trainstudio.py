@@ -822,6 +822,91 @@ def register_export_model(*, name: str, gguf: str, base: str, adapter: str) -> d
     return {"ok": True, "path": str(path), "model": entry}
 
 
+def _active_bot_root() -> Path | None:
+    try:
+        import sys as _sys
+        repo = Path(__file__).resolve().parents[2]
+        if str(repo) not in _sys.path:
+            _sys.path.insert(0, str(repo))
+        from agi import bot_runtime
+        active = bot_runtime.read_active()
+        if active and active.get("path"):
+            return Path(active["path"])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _bot_console_token(bot_root: Path | None) -> str:
+    if bot_root is None:
+        return ""
+    try:
+        import json as _json
+        cfg = _json.loads((bot_root / "data" / "wechat" / "config.json").read_text(encoding="utf-8"))
+        return str(cfg.get("admin_token") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _post_console(path: str, payload: dict, token: str, timeout: float = 30.0) -> dict:
+    import json as _json
+    import urllib.request as _url
+    import urllib.error as _err
+    request = _url.Request("http://127.0.0.1:802" + path,
+                           data=_json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                           headers={"Content-Type": "application/json",
+                                    "X-Admin-Token": token}, method="POST")
+    try:
+        with _url.urlopen(request, timeout=timeout) as response:
+            return _json.loads(response.read().decode("utf-8", "replace") or "{}")
+    except _err.HTTPError as exc:
+        try:
+            return _json.loads(exc.read().decode("utf-8", "replace") or "{}")
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "error": f"http_{exc.code}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def auto_start_and_switch(entry: dict, *, bot_root: Path | None = None) -> dict:
+    """导出后自动启动新模型，并把 Bot 的灵魂服务切到新端口（可在 803 关闭）。"""
+    import os as _os
+    if _os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"ok": True, "skipped": True, "reason": "pytest"}
+    if _os.environ.get("SOULAGENT_AUTO_START_TRAINED", "1") not in ("1", "true", "True", "yes"):
+        return {"ok": True, "skipped": True, "reason": "disabled"}
+    name = str(entry.get("name") or "")
+    port = int(entry.get("port") or 0)
+    if not name or not port:
+        return {"ok": False, "error": "bad_model_entry"}
+    bot_root = bot_root or _active_bot_root()
+    token = _bot_console_token(bot_root)
+    if not token:
+        return {"ok": False, "error": "console_token_missing"}
+    started = _post_console("/api/models/start", {"name": name}, token, timeout=60)
+    result: dict = {"ok": bool(started.get("ok")), "start": started,
+                    "model": name, "port": port}
+    if not started.get("ok"):
+        return result
+    if bot_root is not None:
+        import json as _json
+        cfg_path = bot_root / "data" / "wechat" / "config.json"
+        try:
+            cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
+            cfg["soul_provider_mode"] = "local"
+            cfg["soul_server_url"] = f"http://127.0.0.1:{port}"
+            if str(cfg.get("inner_mode") or "off") == "off":
+                cfg["inner_mode"] = "model"
+            cfg_path.write_text(_json.dumps(cfg, ensure_ascii=False, indent=2) + chr(10),
+                                encoding="utf-8")
+            result["switched"] = True
+            result["soul_server_url"] = cfg["soul_server_url"]
+        except Exception as exc:  # noqa: BLE001
+            result["switched"] = False
+            result["switch_error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
 def start_export(adapter: str, base: str, name: str, **params) -> dict:
     plan = export_plan(adapter, base, name, **params)
     if not plan.get("ok"):
@@ -858,6 +943,12 @@ def start_export(adapter: str, base: str, name: str, **params) -> dict:
                         log.write("[注册] " + _json_dumps(reg) + chr(10))
                     audit.record("train.export_register", plan["gguf"], actor="workbench",
                                  meta={"job": job["id"], "registry": reg.get("path")})
+                    auto = auto_start_and_switch(reg.get("model") or {}, bot_root=(
+                        Path(reg["bot_root"]) if reg.get("bot_root") else None))
+                    with log_path.open("a", encoding="utf-8") as log:
+                        log.write("[自动启动/切换] " + _json_dumps(auto) + chr(10))
+                    audit.record("train.export_autostart", plan["gguf"], actor="workbench",
+                                 meta={"job": job["id"], "result": auto})
                 except Exception as exc:  # noqa: BLE001
                     with log_path.open("a", encoding="utf-8") as log:
                         log.write("[注册失败] " + str(exc) + chr(10))

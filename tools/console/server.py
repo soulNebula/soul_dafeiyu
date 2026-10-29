@@ -1330,8 +1330,7 @@ def _model_editable(name: str) -> bool:
         model = registry.get(text) if registry is not None and hasattr(registry, "get") else None
     except Exception:  # noqa: BLE001
         model = None
-    return bool(model and model.get("role") == "soul"
-                and model.get("source") == "train_export"
+    return bool(model and str(model.get("role")) in ("soul", "local")
                 and model.get("status") == "ready")
 
 
@@ -2107,7 +2106,7 @@ def start_model(name: str, *, client: str = "") -> dict:
         audit("model_start", {"name": name}, ok=False, note="not_allowlisted",
               client=client)
         return {"ok": False, "error": "model_not_editable",
-                "hint": "只允许启停 soul-05b 或训练导出注册的 soul 模型；reserved/研究模型不可动"}
+                "hint": "只允许启停已登记的 soul/local 模型；reserved/研究模型不可动"}
     registry = _model_registry()
     if registry is None:
         result = {"ok": False, "error": "model_registry unavailable"}

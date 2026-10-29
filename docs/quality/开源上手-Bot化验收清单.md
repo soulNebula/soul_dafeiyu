@@ -193,7 +193,7 @@ curl -H "X-Admin-Token: <token>" http://127.0.0.1:802/api/config
 | --- | --- | --- | --- |
 | I1 | GPU/显存检测 + 方案推荐 | ✅ | 803 Bot 页「本机硬件/方案推荐」→ 检测 |
 | I2 | 无 GPU 只允许云端 | ✅ | 无 GPU 时推荐 mode=cloud、local_training=false |
-| I3 | 一键装 CUDA/llama.cpp | ❌ | 未做（Phase 2） |
+| I3 | 一键装 CUDA/llama.cpp | 🟡 | `tools/setup_llama.ps1`（GitHub release/CUDA+CPU/镜像直链/CheckOnly）；未在无 GPU 干净机实测 |
 | I4 | 模型下载/推荐/校验 | 🟡 | 803「模型中心」已有下载功能，但未接 Bot/GPU 推荐自动下载 |
 | I5 | 语料清洗/蒸馏/训练 | 🟡 | 803 已有页面；尚未从 Bot 包/打包数据自动带入 |
 | I6 | 802 数据积累进度条 | ✅ | 总览右侧「训练数据积累」 |

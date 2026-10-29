@@ -134,6 +134,11 @@ $wechat = Get-Process -Name "Weixin", "WeChat" -ErrorAction SilentlyContinue
 if ($wechat) { Info "微信进程：运行中" }
 else { Warn "没有检测到微信进程；配置收发前请先登录微信 PC 客户端" }
 
+# 可选本地 llama.cpp（缺失仅降级本地模型能力）
+$llamaServer = Join-Path $AgentHome "llama/cuda/llama-server.exe"
+if (Test-Path $llamaServer) { Info "llama.cpp：$llamaServer" }
+else { Warn "未找到 llama.cpp（可选，云端方案不需要）；安装见 tools/setup_llama.ps1" }
+
 # 可选 B站插件（仓库外；缺失仅降级 B站能力）
 $biliHome = if ($env:BILI_DUTY_HOME) { $env:BILI_DUTY_HOME } else { Join-Path $HOME ".dsh/bili-duty" }
 if (Test-Path (Join-Path $biliHome "config.json")) { Info "B站插件：$biliHome" }

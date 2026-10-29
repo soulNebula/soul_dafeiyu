@@ -23,6 +23,7 @@
 
 | 文档 | 用途 |
 | --- | --- |
+| [`guides/本地模型安装.md`](guides/本地模型安装.md) | Phase 2：llama.cpp/CUDA、GGUF 下载、按 Bot 启停 |
 | [`guides/B站插件安装.md`](guides/B站插件安装.md) | 仓库外 bili-duty 插件的安装/路径/检测/排障 |
 | [`guides/新用户上手.md`](guides/新用户上手.md) | **从 clone 到第一条消息**：依赖/发送器 venv/API key/白名单/可选能力/排障 |
 | [`guides/README-usage.md`](guides/README-usage.md) | 早期 legacy wx_box 查看器使用说明（归档；现行入口见 README/桌面版） |

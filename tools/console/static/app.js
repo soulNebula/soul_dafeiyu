@@ -358,7 +358,7 @@ async function openWechatContacts() {
 async function renderOverview() {
   $('#app').innerHTML = '<div class="empty">加载总览…</div>';
   let status = null, feed = null, config = null, models = null, engine = null;
-  let contacts = null, messages = null, trainStatus = null;
+  let contacts = null, messages = null, trainStatus = null, botInfo = null;
   const errors = [];
   try { status = await api('/api/status'); } catch (e) { errors.push('gateway: ' + e.message); }
   try { engine = await api('/api/engine'); } catch (e) { errors.push('引擎: ' + e.message); }
@@ -368,6 +368,7 @@ async function renderOverview() {
   try { contacts = await api('/api/contacts'); } catch (e) { errors.push('联系人: ' + e.message); }
   try { messages = await api('/api/messages?limit=12' + contactQuery('&')); } catch (e) { errors.push('消息: ' + e.message); }
   try { trainStatus = await api('/api/train/status'); } catch (e) { /* 训练数据非关键 */ }
+  try { botInfo = await api('/api/bot/info'); } catch (e) { /* Bot 信息非关键 */ }
   state.status = status; state.config = config; state.models = models; state.engine = engine;
   state.contacts = contacts;
   renderPills();
@@ -426,7 +427,9 @@ async function renderOverview() {
         <div class="wb-contact-list">${contactHtml}</div>
       </aside>
       <section class="wb-card wb-chat">
-        <div class="wb-card-head"><b>最近对话</b><span class="muted">${esc((contacts && contacts.current_label) || '当前库')}</span></div>
+        <div class="wb-card-head"><b>最近对话</b>
+          <span class="muted">当前 Bot：<b class="wb-bot-name">${esc(botInfo && botInfo.active ? (botInfo.name || '—') : '—')}</b>
+            · 当前库 ${esc((contacts && contacts.current_label) || '—')}</span></div>
         <div class="wb-msg-list">${msgItems.length ? msgItems.map(wbMessageBubble).join('') : '<div class="empty">暂无对话</div>'}</div>
         <div class="wb-card-head" style="margin-top:14px"><b>最近事件</b></div>
         ${renderEventList(recent.length ? recent : (feed && feed.items) || [])}

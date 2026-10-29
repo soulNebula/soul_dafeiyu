@@ -35,7 +35,7 @@ cd C:\Users\Administrator\Desktop\idea
 | `distill` | 蒸馏语义数据：模拟/真实生成、成本确认、任务进度/日志/取消、已有数据集 |
 | `corpus` | 语料清洗：上传、OCR/解析进度、你/我勾选、保存为对话/指令数据集 |
 | `annotate` | 用户标注：微信式对话气泡、InnerState 滑杆/下拉/星标、保存 soul 数据集 |
-| `models` | 模型中心：GGUF/HuggingFace/LoRA 适配器、运行状态、导入/下载/删除 |
+| `models` | 模型中心：本地一键准备（llama.cpp/灵魂/识图，带进度）、GGUF/HuggingFace/LoRA、运行状态、导入/下载/删除 |
 
 全局终端面板从右侧滑出（可拖拽调宽、记住宽度），不属于页面内容。
 
@@ -51,6 +51,7 @@ idea/
 │  ├─ distillstudio.py  # 蒸馏语义数据：mock/real 生成任务
 │  ├─ datastudio.py     # 数据工作室：库/表/行/SQL/备份
 │  ├─ modelstudio.py    # 模型中心：清单/运行/导入下载/合并转换
+│  ├─ localmodels.py    # 本地模型一键准备：llama.cpp/GGUF 下载 + 8123/8125 启停
 │  └─ files_api.py 等   # 文件/服务/配置等最小 M0
 ├─ web/                 # 无框架前端（index.html + style.css）
 ├─ tests/               # 离线 pytest（不连真实服务）

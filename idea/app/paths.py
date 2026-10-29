@@ -24,7 +24,7 @@ def agent_home() -> Path:
     raw = os.environ.get("AGENT_HOME", "")
     if raw:
         return Path(raw)
-    return Path("E:") / "agent"
+    return Path("E:/agent")
 
 
 def wechat_config_path() -> Path:

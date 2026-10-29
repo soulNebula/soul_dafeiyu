@@ -273,13 +273,21 @@
       </div>
       <div class="grid2">
         <div class="panel">
-          <div class="panel-head"><h3>新建 Bot（云端方案）</h3><span class="muted small">密钥只写 Bot 的 secrets.json，不显示明文</span></div>
+          <div class="panel-head"><h3>新建 Bot（模型部署）</h3><span class="muted small">密钥只写 Bot 的 secrets.json，不显示明文</span></div>
           <div class="form-grid">
             <label class="field wide"><span>Bot 目录（用户自选）</span>
               <div class="row"><input id="bot-path" placeholder="选独立子目录，如 E:/agent/bots/xiaoyu" style="flex:1">
                 <button class="btn small" id="bot-pick-dir" type="button">选择目录</button></div></label>
             <label class="field"><span>Bot 名称</span><input id="bot-name" placeholder="小鱼"></label>
             <label class="field"><span>802 登录密码（至少 6 位）</span><input id="bot-password" type="password" placeholder="登录 802 用"></label>
+            <label class="field wide"><span>模型部署方案</span>
+              <select id="bot-deploy-mode">
+                <option value="all_cloud">全云端：聊天 + 灵魂 + 识图都用云端</option>
+                <option value="local_soul_cloud_vision">聊天云端 · 灵魂本地 · 识图云端</option>
+                <option value="local_soul_local_vision">聊天云端 · 灵魂本地 · 识图本地</option>
+              </select>
+              <div class="muted small" id="bot-deploy-hint">全云端最省事；选本地会自动下载 llama.cpp + GGUF，并在 803 显示进度。</div>
+            </label>
             <label class="field"><span>聊天服务商</span><select id="bot-provider"></select></label>
             <label class="field wide"><span>聊天 base_url（可改）</span><input id="bot-base-url" value="https://api.deepseek.com"></label>
             <label class="field"><span>聊天模型</span>
@@ -307,6 +315,7 @@
             <button class="btn" id="bot-refresh">刷新列表</button>
           </div>
           <div id="bot-result" class="muted small"></div>
+          <div id="bot-local-job" class="list"></div>
         </div>
         <div class="panel">
           <div class="panel-head"><h3>已登记 Bot</h3><span class="muted small" id="bot-count"></span></div>
@@ -325,6 +334,12 @@
     <section id="view-models" class="view">
       <div class="page-head"><div><h2>模型中心</h2><p class="muted">清单（格式/来源/用途）· 离线导入 · 在线下载 · 回收站删除。</p></div><button class="btn" id="models-refresh">刷新</button></div>
       <div class="cards" id="models-cards"></div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>本地模型一键准备</h3><span class="muted small">llama.cpp + GGUF；没 GPU 也能用 CPU 跑，下载进度实时显示</span></div>
+        <div class="grid2" id="local-presets"></div>
+        <div id="local-jobs" class="list"></div>
+      </div>
 
       <div class="grid2">
         <div class="panel"><div class="panel-head"><h3>运行中</h3></div><div id="models-running" class="list"></div></div>
@@ -384,7 +399,8 @@ const S = {
               scores: {}, tags: {}, notes: {}, annotated: new Set(), selected: '',
               filter: 'all', search: '', path: '', result: null, busy: '', error: '',
               convWarning: '' },
-  timer: null, dlTimer: null, dlTab: 'direct', dlJob: '', modelFilter: 'all'
+  timer: null, dlTimer: null, dlTab: 'direct', dlJob: '', modelFilter: 'all',
+  localTimer: null, localPanelTimer: null
 };
 const $ = (sel, root=document) => root.querySelector(sel);
 const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
@@ -634,6 +650,110 @@ async function loadBotPackages() {
   }
 }
 
+$('#bot-deploy-mode').onchange = () => {
+  const local = $('#bot-deploy-mode').value !== 'all_cloud';
+  $('#bot-deploy-hint').textContent = local
+    ? '本地方案会自动下载 llama.cpp + GGUF（灵魂 ~400MB / 识图 ~2GB），耗时取决于网速；进度会显示在下方。'
+    : '全云端最省事；选本地会自动下载 llama.cpp + GGUF，并在 803 显示进度。';
+};
+
+function localJobPct(job) {
+  const steps = (job && job.steps) || [];
+  const active = steps.filter(s => s.status !== 'queued');
+  if (!active.length) return 0;
+  return Math.round(active.reduce((a, s) => a + Number(s.pct || 0), 0) / steps.length);
+}
+function renderLocalJob(job, el) {
+  if (!el) return;
+  if (!job) { el.innerHTML = ''; return; }
+  const status = job.status || 'queued';
+  const label = {queued:'排队', running:'进行中', downloading:'下载中', extracting:'解压中',
+    starting:'启动中', done:'完成', failed:'失败'}[status] || status;
+  const steps = job.steps || [];
+  const pct = localJobPct(job);
+  const rows = steps.map(st => {
+    const sp = Number(st.pct || 0);
+    const sl = {queued:'排队', downloading:'下载中', extracting:'解压中', starting:'启动中',
+      done:'完成', failed:'失败'}[st.status] || st.status || '';
+    return `<div class="download-row">
+      <div class="download-head"><span>${esc(st.label || st.key)}</span><span class="muted small">${esc(sl)} ${sp}%</span></div>
+      <div class="progress"><span style="width:${sp}%"></span></div>
+      <div class="download-foot"><span class="muted small">${st.bytes_done ? fmtSize(st.bytes_done) : ''}${st.total ? ' / ' + fmtSize(st.total) : ''}${st.detail ? ' · ' + esc(st.detail) : ''}${st.error ? ' · ' + esc(st.error) : ''}</span></div>
+    </div>`;
+  }).join('');
+  el.innerHTML = `<div class="download-row">
+    <div class="download-head"><span><b>本地模型准备</b> <span class="muted small">${esc(job.job_id || '')}</span></span>
+      <span class="badge ${status === 'done' ? 'on' : (status === 'failed' ? 'danger' : '')}">${esc(label)}</span></div>
+    <div class="progress"><span style="width:${pct}%"></span></div>
+    <div class="download-foot"><span class="muted small">总进度 ${pct}%${job.error ? ' · ' + esc(job.error) : ''}</span></div>
+    ${rows}
+  </div>`;
+}
+async function pollLocalJob(jobId, el) {
+  if (!jobId) return;
+  if (S.localTimer) { clearInterval(S.localTimer); S.localTimer = null; }
+  const tick = async () => {
+    try {
+      const d = await api('/api/wb/local/jobs?job_id=' + encodeURIComponent(jobId));
+      if (!d.ok || !d.job) return;
+      renderLocalJob(d.job, el);
+      if (['done', 'failed'].includes(d.job.status)) {
+        clearInterval(S.localTimer); S.localTimer = null;
+        if (d.job.status === 'done') toast('本地模型准备完成');
+        else toast('本地模型准备失败：' + (d.job.error || ''), 'err');
+      }
+    } catch (e) { /* 继续轮询 */ }
+  };
+  await tick();
+  S.localTimer = setInterval(tick, 2000);
+}
+async function loadLocalPanel() {
+  try {
+    const [presets, jobs] = await Promise.all([
+      api('/api/wb/local/presets'), api('/api/wb/local/jobs')
+    ]);
+    $('#local-presets').innerHTML = (presets.items || []).map(x => `
+      <div class="panel" style="margin:0">
+        <div class="panel-head"><h3>${esc(x.label)}</h3><span class="badge ${x.installed ? 'on' : ''}">${x.installed ? '已安装' : '未安装'}</span></div>
+        <div class="muted small">${esc(x.size_hint || '')} · ${esc(x.path || '')}</div>
+        <div class="actions"><button class="btn ${x.installed ? '' : 'primary'}" data-local-install="${esc(x.key)}" ${x.installed ? 'disabled' : ''}>${x.installed ? '已安装' : '一键下载'}</button></div>
+      </div>`).join('');
+    $$('#local-presets [data-local-install]').forEach(b => b.onclick = () => withBusy(b, async () => {
+      const d = await api('/api/wb/local/install', {method:'POST', body:{kind:b.dataset.localInstall}});
+      if (!d.ok) { toast(d.error || '启动失败', 'err'); return; }
+      toast('已开始：' + d.kind);
+      await loadLocalJobs();
+    }));
+    renderLocalJobs(jobs.items || []);
+  } catch (e) { toast(e.message, 'err'); }
+}
+function renderLocalJobs(items) {
+  const el = $('#local-jobs');
+  if (!el) return;
+  const active = items.filter(j => ['queued','running','downloading','extracting','starting'].includes(j.status));
+  el.innerHTML = items.length ? '' : '<div class="muted small">暂无本地模型任务</div>';
+  for (const j of items.slice(0, 5)) {
+    const row = document.createElement('div');
+    renderLocalJob(j, row);
+    el.appendChild(row);
+  }
+  if (active.length && !S.localPanelTimer) {
+    S.localPanelTimer = setInterval(async () => {
+      try {
+        const d = await api('/api/wb/local/jobs');
+        renderLocalJobs(d.items || []);
+        if (!(d.items || []).some(j => ['queued','running','downloading','extracting','starting'].includes(j.status))) {
+          clearInterval(S.localPanelTimer); S.localPanelTimer = null;
+        }
+      } catch (e) { clearInterval(S.localPanelTimer); S.localPanelTimer = null; }
+    }, 2000);
+  }
+}
+async function loadLocalJobs() {
+  const d = await api('/api/wb/local/jobs');
+  renderLocalJobs(d.items || []);
+}
+
 async function createBot() {
   const result = $('#bot-result');
   let soulBase = $('#bot-soul-base-url').value || '';
@@ -647,6 +767,7 @@ async function createBot() {
     base_url: ($('#bot-base-url').value || '').trim(),
     model: ($('#bot-model').value || '').trim(),
     api_key: $('#bot-api-key').value || '',
+    deploy_mode: $('#bot-deploy-mode').value,
     soul_base_url: soulBase,
     soul_model: soulModel,
     soul_api_key: $('#bot-soul-key').value || '',
@@ -660,6 +781,10 @@ async function createBot() {
     if (!data.ok) throw new Error(data.hint || data.error || '创建失败');
     if (result) result.innerHTML = `<div class="ok small">已创建：${esc(payload.path)}（${esc(data.bot_id || '')}）</div>`;
     toast('Bot 已创建', 'ok');
+    if (data.setup_job) {
+      toast('已开始准备本地模型，进度见下方');
+      pollLocalJob(data.setup_job, $('#bot-local-job'));
+    }
     await loadBots();
   } catch (err) {
     toast(err.message, 'bad');
@@ -749,7 +874,7 @@ function showView(name) {
   if (name === 'distill') loadDistill();
   if (name === 'corpus') loadCorpus();
   if (name === 'annotate') loadAnnotate();
-  if (name === 'models') loadModels();
+  if (name === 'models') { loadModels(); loadLocalPanel(); }
 }
 function connect() {
   S.token = ($('#token').value || '').trim() || '8888';
@@ -2165,7 +2290,7 @@ $$('[data-train-source]').forEach(b => b.onclick = () => {
 $('#train-create').onclick = createTrain;
 $('#train-start').onclick = startTrain;
 $('#train-stop').onclick = stopTrain;
-$('#models-refresh').onclick = () => withBusy($('#models-refresh'), loadModels);
+$('#models-refresh').onclick = () => withBusy($('#models-refresh'), async () => { await loadModels(); await loadLocalPanel(); });
 $('#models-filter').onchange = e => { S.modelFilter = e.target.value; loadModels(); };
 $('#import-validate').onclick = () => withBusy($('#import-validate'), validateImport);
 $('#import-run').onclick = () => withBusy($('#import-run'), runImport);

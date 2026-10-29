@@ -204,6 +204,10 @@ def create_bot(body: dict[str, Any]) -> dict[str, Any]:
     if not name:
         return {"ok": False, "error": "name_required"}
     mode = str(body.get("mode") or "cloud").strip().lower()
+    deploy_mode = str(body.get("deploy_mode") or "all_cloud").strip().lower()
+    if deploy_mode not in ("all_cloud", "local_soul_local_vision",
+                           "local_soul_cloud_vision"):
+        deploy_mode = "all_cloud"
     password = str(body.get("password") or "")
     if len(password) < 6:
         return {"ok": False, "error": "password_required",
@@ -218,8 +222,13 @@ def create_bot(body: dict[str, Any]) -> dict[str, Any]:
         "model": str(body.get("soul_model") or chat["model"]).strip(),
         "api_key": str(body.get("soul_api_key") or chat["api_key"]).strip(),
     }
+    # 部署模式：只有选中“灵魂本地”才把 soul 置 local；vision 同理
+    if deploy_mode in ("local_soul_local_vision", "local_soul_cloud_vision"):
+        soul = {"mode": "local", "base_url": "", "model": "local-soul"}
     vision = None
-    if body.get("vision_model"):
+    if deploy_mode == "local_soul_local_vision":
+        vision = {"mode": "local", "base_url": "", "model": "local-vision"}
+    elif body.get("vision_model"):
         vision = {
             "base_url": str(body.get("vision_base_url") or chat["base_url"]).strip(),
             "model": str(body["vision_model"]).strip(),
@@ -245,13 +254,26 @@ def create_bot(body: dict[str, Any]) -> dict[str, Any]:
     except OSError as exc:
         return {"ok": False, "error": f"path_invalid: {exc}"}
     try:
-        bot = bot_profile.create_bot(path, name, mode=mode, password=password,
-                                     chat=chat, soul=soul, vision=vision)
+        bot = bot_profile.create_bot(
+            path, name, mode=mode, password=password,
+            chat=chat, soul=soul, vision=vision,
+            settings={"model_deploy": deploy_mode})
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     register(path)
+    setup_job = ""
+    if deploy_mode != "all_cloud":
+        try:
+            from . import localmodels
+            setup_job = localmodels.provision_bot(Path(path), deploy_mode)
+        except Exception as exc:  # noqa: BLE001
+            # Bot 已创建；本地准备失败不应回滚，前端展示错误
+            setup_job = ""
+            print(f"[botstudio] local provision failed: {exc}", flush=True)
     return {"ok": True, "bot": bot_profile.describe_bot(path),
-            "validation": bot_profile.validate_bot(path), "bot_id": bot.get("bot_id")}
+            "validation": bot_profile.validate_bot(path),
+            "bot_id": bot.get("bot_id"), "deploy_mode": deploy_mode,
+            "setup_job": setup_job}
 
 
 def change_password(body: dict[str, Any]) -> dict[str, Any]:

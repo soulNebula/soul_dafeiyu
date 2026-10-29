@@ -81,3 +81,6 @@ tools/desktop/build/
 
 # Windows 设备名残留
 nul
+
+# 803 对话测试/网页导出的临时 soul 微调数据
+agi/soul/data/soul_sft_web_*.jsonl*

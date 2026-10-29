@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """803 本机硬件探测：GPU/显存/驱动 → 本地模型方案推荐。
 
-原则（已拍板）：没有 GPU 就不下载本地模型，走云端方案；这里只给结论，
-不自动安装 CUDA/llama.cpp（Phase 2 再补一键安装）。
+原则：没有 GPU 也能跑本地（llama.cpp CPU 版）；模型中心/新建 Bot 的本地模式
+提供一键下载与进度，不再只给结论。
 """
 from __future__ import annotations
 

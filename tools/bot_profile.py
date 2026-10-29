@@ -171,9 +171,18 @@ def create_bot(path: Path | str, name: str, *, mode: str = "cloud",
         if not override:
             continue
         target = providers[key]
-        for field in ("base_url", "model", "mode"):
-            if override.get(field):
-                target[field] = str(override[field]).strip()
+        if str(override.get("mode") or "").strip().lower() == "local":
+            # 本地 provider：base_url 必须清空，Bot 激活时才会走 local 分支
+            target["mode"] = "local"
+            target["base_url"] = ""
+            if override.get("model"):
+                target["model"] = str(override["model"]).strip()
+            if override.get("mmproj"):
+                target["mmproj"] = str(override["mmproj"]).strip()
+        else:
+            for field in ("base_url", "model", "mode"):
+                if override.get(field):
+                    target[field] = str(override[field]).strip()
         if override.get("api_key") is not None:
             secrets_payload["providers"][key] = {"api_key": str(override["api_key"] or "")}
 

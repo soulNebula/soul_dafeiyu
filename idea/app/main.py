@@ -17,7 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (annotstudio, audit, botstudio, config_store, corpusstudio, datastudio,
-               distillstudio, hardware, modelstudio, paths, services, trainstudio)
+               distillstudio, hardware, localmodels, modelstudio, paths, services,
+               trainstudio)
 
 TOKEN = os.environ.get("IDEA_TOKEN", "8888")
 app = FastAPI(title="IDEA · SoulAgent Workbench", version="0.2.0")
@@ -559,6 +560,25 @@ def annot_save(body: dict):
 
 
 # ------------------------------------------------------------------ 模型中心
+@app.get("/api/wb/local/presets", dependencies=[Depends(require_token)])
+def local_presets():
+    return localmodels.presets()
+
+
+@app.get("/api/wb/local/jobs", dependencies=[Depends(require_token)])
+def local_jobs(job_id: str | None = None):
+    return localmodels.list_jobs(job_id)
+
+
+@app.post("/api/wb/local/install", dependencies=[Depends(require_token)])
+def local_install(body: dict | None = None):
+    out = localmodels.install(str((body or {}).get("kind") or ""))
+    if out.get("ok"):
+        audit.record("local.install", str(out.get("kind") or ""), actor="workbench",
+                     meta={"job_id": out.get("job_id")})
+    return out
+
+
 @app.get("/api/wb/models", dependencies=[Depends(require_token)])
 def models_list():
     return modelstudio.list_models()

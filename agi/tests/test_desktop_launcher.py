@@ -91,6 +91,8 @@ def test_state_roundtrip_drops_internal_proc(tmp_path):
 
 
 def test_launch_window_default_browser_fallback(tmp_path, monkeypatch):
+    # 测试进程可能带管理员令牌：钉住非提权路径，才走浏览器兜底（提权会走 explorer）
+    monkeypatch.setattr(launcher, "is_elevated", lambda: False)
     monkeypatch.setattr(launcher, "_candidate_browsers", lambda: [])
     monkeypatch.setattr(launcher.shutil, "which", lambda _name: None)
     opened: list[str] = []

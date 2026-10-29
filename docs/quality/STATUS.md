@@ -14,18 +14,18 @@
 
 <!-- STATUS:AUTO:BEGIN（由 tools/status_report.py 生成，勿手改）-->
 
-最后生成：2026-10-29T05:27:46（Python 3.14.7）
+最后生成：2026-10-29T19:00:20（Python 3.14.7）
 
 | 套件 | 通过 | 失败 | 跳过 | 耗时 | 结果 |
 | --- | --- | --- | --- | --- | --- |
-| `tests/` | 301 | 0 | 0 | 72.80s | PASS |
-| `agi/tests/` | 2220 | 0 | 4 | 621.70s | PASS |
+| `tests/` | 301 | 0 | 0 | 56.00s | PASS |
+| `agi/tests/` | 2226 | 0 | 4 | 559.24s | PASS |
 
-collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不代表通过数）：`tests/`=301、`agi/tests/`=2224。
+collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不代表通过数）：`tests/`=301、`agi/tests/`=2230。
 
 数据来源：`python scripts/agentb_verify.py`（全量终验，两套 + 静态检查 + 生产文件未被污染）或 `python tools/status_report.py --run`（单套件实测）；`--from-agentb` 可直接导入前者的 JSON，不手抄。
 
-代码规模（同一命令可复算）：Python 模块 3065 个（agi 2745 / selflearn 94 / agi/tests 183）；计划文档 43 份；legacy 归档 37 个文件 / 9151 行。
+代码规模（同一命令可复算）：Python 模块 4538 个（agi 2745 / selflearn 94 / agi/tests 184）；计划文档 44 份；legacy 归档 37 个文件 / 9151 行。
 
 <!-- STATUS:AUTO:END -->
 
@@ -34,14 +34,20 @@ collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不
 | 端口 | 进程 | 定位 | 代码依据 |
 | --- | --- | --- | --- |
 | **801** | `python -m agi.wechat_gateway.server` | **主链**：微信网关（收/发/状态/调试 API） | `agi/wechat_gateway/config.py` DEFAULTS `"port": 801` |
-| **802** | `python tools/console/server.py --port 802` | **主链**：控制台单页应用（日常唯一操作入口） | `tools/console/server.py` `--port` 默认 802 |
+| **802** | `python tools/console/server.py --port 802` | **主链**：控制台单页应用（日常操作入口） | `tools/console/server.py` `--port` 默认 802 |
+| **803** | `cd idea && .venv\Scripts\python.exe -m uvicorn app.main:app --port 803` | **工作台**：训练/数据/语料清洗/标注/蒸馏 | `idea/app/main.py`（独立 git 历史，subtree 合入） |
 | 8123 | `llama-server ... --port 8123` | 可选：本地 0.5B 内状态（shadow） | `agi/selflearn/mood_judge.py` 默认地址 |
 | 8125 | `python tools/soul_serve/serve_local3b.py` | 可选：本地 3B（摘要/关键词/提取） | `tools/soul_serve/serve_local3b.py` |
 | 8081 | `python web_app.py` | **legacy/非主链**：旧 wx_box 网页端 | `web_app.py` DEFAULT_PORT=8081 |
 | 8082 | `python -m agi.selflearn.cli serve --port 8082` | **legacy/非主链**：selflearn 调试网页 | `agi/selflearn/cli.py` serve → `web.py` |
 
-- 主链只有 801（真实收发）+ 802（操作台）；8081/8082 仅历史对照/调试，不要写入操作步骤。
-- 桌面 GUI：`python app.py`（`--fake` 假后端演示）；一键启动：`启动桌面版.bat`。
+- 主链只有 801（真实收发）+ 802（操作台）+ 803（训练/数据工作台）；8081/8082 仅历史对照/调试。
+- 桌面版（M5，Windows）：`python tools/desktop/launcher.py --tray`（桌面快捷方式「小鱼桌面版」= pythonw）
+  一键托管 801/802/803 + 托盘 + Edge app 窗口；`--status/--stop/--autostart` 可用。
+  不要用管理员身份启动（会触发 Edge 提权弹窗；启动器会自动回落普通权限浏览器）。详见 `docs/guides/桌面版.md`。
+- Tk 桌面 GUI：`python app.py`（`--fake` 假后端演示）。
+- 密钥：DeepSeek key 优先级 env → `agi/data/secrets.json` → `web_config.json`；802 模型配置页可
+  直接保存/清除 key，只写本机 `secrets.json`（原子写、ACL、不入 git、不回传明文），热加载生效。
 
 ## 2. 当前架构一句话
 
@@ -57,12 +63,15 @@ collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不
 | W1–W4 | 已完成 | 内状态实验、灵魂线、LoRA smoke（20 步）、评测脚本 |
 | P 系列（P0–P38） | 大部分完成 | 网关护栏、媒体/贴纸、B站摄取、主动节奏、引擎/模型启停、每日语料、日记/自我叙事、记忆衰减 |
 | M0 工作台 802 | 完成 | 服务/配置/日志/素材/推理过程等 API + 单页控制台 |
+| M1 工作台 803（IDEA） | 完成 | 模型中心/训练工厂/数据工作室/语料清洗/用户标注/蒸馏；已作为 `idea/` 合入主仓 |
+| M5 桌面化（Windows） | 完成（仅 Windows） | `tools/desktop/` launcher+tray、三服务托管、Edge app 窗口、自启、状态/停止 |
+| 技术文章 PDF | 完成 | `docs/architecture/小鱼-AI伴侣-技术与实践.pdf`（14 页 / 7 张配图） |
 | 架构收口（本次） | 完成 | 死代码归档（legacy/）、架构守卫 `tools/check_architecture.py`、主动链登记表、文档按代码重写 |
 | 训练闭环 | **未开始（只到语料+门禁）** | 96/300 可训练样本、`last_training=null`；无自动训练/自动上线 |
 
 ## 4. 文档现状
 
-- **唯一入口**：[`INDEX.md`](../INDEX.md)；计划看 [`plans/README.md`](../plans/README.md)（**43 份**，15–60，缺 17/27/55）。
+- **唯一入口**：[`INDEX.md`](../INDEX.md)；计划看 [`plans/README.md`](../plans/README.md)（**44 份**，15–61，缺 17/27/55）。
 - 根 `plans/` 已并入 `docs/plans/`；旧文档在 `docs/archive/`（含 2026-10-28 全量快照）。
 - 死代码归档区：[`../legacy/README.md`](../../legacy/README.md)（36 个归档文件 / 9078 行，只 mv 不删、可搬回；
   该 README 不计入；`tools/status_report.py` 统计整个目录会比它多 1 个文件）。
@@ -79,6 +88,10 @@ collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不
    发送依赖独立 Python 3.12 venv。缺失时分别降级，不代表功能已完成。
 5. 大文件待拆：`tools/console/server.py`、`agi/selflearn/proactive.py`、`agi/wechat_gateway/server.py`
    已列入架构守卫的行数预算（基线不再增长，鼓励拆分）。
+6. **桌面版仅 Windows**：依赖 UIA/微信窗口与 Edge app 参数；PyInstaller exe 在本机被安全软件拦截
+   （0xc0000142），推荐 pythonw 快捷方式；首次打开 Edge 窗口约 20–30s（独立 profile 冷启动）。
+7. **发送窗口自检**：微信最小化/收托盘会自动恢复（`wx_core/win.py::ensure_wechat_window_visible`）；
+   微信未登录/退出仍会如实报「未找到微信窗口」。
 
 ## 6. 怎么更新本页
 

@@ -19,7 +19,7 @@
 - **路由层**按用途把高吞吐任务放本地 3B-VL、把需要判断力的任务放云端 API，并带预算与降级；
 - **质量层**用发送锁、送达真值、密钥外部化、草稿 TTL、无回应冷却、发送前文本质检等工程手段保证可交付性。
 
-在实测中：本地 0.5B 灵魂模型 51 tok/s；3B 多模态模型文本提取 0.3 s/次、识图 1.1–2.1 s/张（此前 CPU 推理为 62 s/张，补齐 CUDA 运行库后 GPU 提速约 30–55 倍）；蒸馏数据集 1891 行、2112 次教师调用；聊天截图 OCR 18 张整批 126 s、清洗出 1160 条对话并生成 444 条训练样本；B 站值勤轮稳定读字幕/看关键帧并同步 44 条视频要点进记忆；质量整改后 9 个维度评分全部 ≥7（综合 5.4 → 7.7），终验测试 301 + 2220 条全部通过。
+在实测中：本地 0.5B 灵魂模型 51 tok/s；3B 多模态模型文本提取 0.3 s/次、识图 1.1–2.1 s/张（此前 CPU 推理为 62 s/张，补齐 CUDA 运行库后 GPU 提速约 30–55 倍）；蒸馏数据集 1891 行、2112 次教师调用；聊天截图 OCR 18 张整批 126 s、清洗出 1160 条对话并生成 444 条训练样本；B 站值勤轮稳定读字幕/看关键帧并同步 44 条视频要点进记忆；质量整改后 9 个维度评分全部 ≥7（综合 5.4 → 7.7），终验测试 301 + 2226 条全部通过。
 
 **关键词**：AI 伴侣；微信自动化；长期记忆；知识蒸馏；本地大模型；多模态；智能体工程
 
@@ -227,6 +227,23 @@ stage(strength): full ≥0.5 > compressed ≥0.2 > keyword ≥0.05 > dormant
 - **测试隔离**：23 个路径常量 env 化 + 生产文件 mtime/size 自证守卫（测试改了生产文件即失败）；
 - **架构守卫**：死代码归档 `legacy/`、行数预算、主动链唯一入口、文档链接与可移植性检查。
 
+### 3.10 桌面化：Windows 一键启动（M5）
+
+- **形态**：`tools/desktop/launcher.py`（零 pip 依赖）+ PowerShell 托盘（`tray.ps1`）。
+  双击桌面快捷方式「小鱼桌面版」（`pythonw`，无控制台）→ 启动 801/802/803 → 托盘常驻 →
+  Edge/Chrome `--app` 模式打开控制台独立窗口；
+- **三服务托管**：801 网关、802 控制台、803 工作台（用 `idea/.venv`、cwd=`idea/`）；
+  已在跑则复用；健康检查通过才开窗；`--status/--stop/--autostart` 可脚本化运维；
+- **托盘菜单**：打开控制台 / 打开工作台 / 主动消息开关 / 紧急 STOP / 状态 / 日志 / 退出；
+- **稳健性**：只复用"已加载完成"的窗口（标题含 `Soul Console`），空白/残留窗先关再开，
+  仍失败回落默认浏览器；所有 PowerShell 查询隐藏执行（不闪窗），窗口标题用 Win32 API 读取；
+- **提权处理**：检测到管理员身份时改用普通权限 `explorer` 打开浏览器，避免 Edge
+  「现有实例正在以提升的权限运行」弹窗；
+- **发送窗口自检**：`wx_core/win.py::ensure_wechat_window_visible` 在真发前把最小化/托盘的
+  微信主窗口恢复出来（`SW_RESTORE/SW_SHOW`），解决"未找到微信窗口"误报。
+
+> 说明：桌面壳是"Edge app 窗口 + 托盘"，不是 Tauri/WebView2 自绘窗口；后者列为可选演进。
+
 ---
 
 ## 4. 实测与评估
@@ -281,7 +298,7 @@ stage(strength): full ≥0.5 > compressed ≥0.2 > keyword ≥0.05 > dormant
 | 项 | 结果 |
 | --- | --- |
 | `tests/`（SoulAgent） | 301 passed / 0 failed |
-| `agi/tests/`（SoulAgent） | 2220 passed / 4 skipped / 0 failed |
+| `agi/tests/`（SoulAgent） | 2226 passed / 4 skipped / 0 failed |
 | IDEA 工作台测试 | 101 passed |
 | 全服务冒烟 | 13/13 PASS |
 | 静态闸门 | 链接 143/0 断链、架构、可移植性、密钥扫描全 PASS |
@@ -293,7 +310,7 @@ stage(strength): full ≥0.5 > compressed ≥0.2 > keyword ≥0.05 > dormant
 
 ![图 7　数据规模与测试规模](../figures/fig_data.png)
 
-*图 7　左：单个联系人库的数据规模；右：自动化测试通过数（301 + 2220 + 101 + 冒烟 13）。*
+*图 7　左：单个联系人库的数据规模；右：自动化测试通过数（301 + 2226 + 101 + 冒烟 13）。*
 
 ### 4.5 代码规模
 
@@ -310,10 +327,11 @@ stage(strength): full ≥0.5 > compressed ≥0.2 > keyword ≥0.05 > dormant
 2. **上下文预算 vs 记忆召回**：裁剪策略保证可用，但低优先级记忆可能被丢掉；需要更细的相关性rerank。
 3. **本地 3B-VL 的能力边界**：识图可用（1–2 s），但复杂推理与 OCR 混合场景仍不如云端；当前策略是"本地出草稿、云端兜底"。
 4. **样本量不足**：灵魂模型当前训练数据 1891 行，距离稳定人格仍有差距；需要真实聊天 + 用户标注持续积累（目标 ≥1 万行）。
-5. **Windows-only**：微信驱动、路径与 UIA 都绑定 Windows；跨平台需要重写接入层。
+5. **Windows-only**：微信驱动、路径、UIA 与桌面版（Edge app + 托盘）都绑定 Windows；跨平台需要重写接入层。
 6. **外部依赖**：B 站值勤依赖仓库外的 DSH 插件；朋友圈只能读"浏览过/缓存过"的内容。
 7. **伦理风险**：长期陪伴可能造成情感依赖；系统明确不冒充真人、只服务本人账号、所有外发可关闭可审计，但仍需使用者自律。
-8. **数据安全**：密钥已外部化并收紧 ACL，但本机仍保存聊天库与日记；建议全盘加密 + 定期备份。
+8. **数据安全**：密钥已外部化并收紧 ACL（802 模型配置页可直接保存到 `agi/data/secrets.json`），
+   但本机仍保存聊天库与日记；建议全盘加密 + 定期备份。
 
 ---
 
@@ -323,7 +341,7 @@ stage(strength): full ≥0.5 > compressed ≥0.2 > keyword ≥0.05 > dormant
 
 后续计划：
 
-1. **M5 桌面化**：Tauri 套壳，把 802/803 与本地模型打包成桌面应用（一键启动/托盘/开机自启）；
+1. **原生桌面壳（可选）**：当前桌面版是 Edge app + 托盘；如需自绘窗口/更深集成，再评估 Tauri/WebView2；
 2. **多卡扩展**：8×V100 16G（128 GB 显存）上以 vLLM 张量并行部署更大 VL/文本模型，识图与聊天并发；
 3. **数据规模化**：真实聊天 + 用户标注 + 合成数据三路并进，目标 1 万行以上灵魂数据，加入 DPO/偏好优化；
 4. **本地转写**：无字幕 B 站视频的 ASR 兜底；
@@ -354,9 +372,10 @@ stage(strength): full ≥0.5 > compressed ≥0.2 > keyword ≥0.05 > dormant
 
 - DeepSeek 开放平台（教师/聊天/判断）：https://platform.deepseek.com
 
-**桌面化（计划）**
+**桌面化（当前实现 + 可选演进）**
 
-- Tauri：https://tauri.app
+- 当前：Edge/Chrome `--app` 窗口 + PowerShell WinForms 托盘（仓库内 `tools/desktop/`）
+- Tauri（可选演进）：https://tauri.app
 
 > 备注：项目内部还依赖 DeepSeek Harness（DSH）运行时与 B 站值勤插件；它们属于运行环境/外部插件，不在本项目仓库内。
 
@@ -365,6 +384,10 @@ stage(strength): full ≥0.5 > compressed ≥0.2 > keyword ≥0.05 > dormant
 ## 附录 A：复现命令（本机）
 
 ```bash
+# 桌面版（Windows，推荐）
+python tools/desktop/launcher.py --tray          # 三服务 + 托盘 + Edge app 窗口
+# 或双击桌面快捷方式「小鱼桌面版」（pythonw，无控制台）
+
 # 服务
 python -m agi.wechat_gateway.server              # 801
 python tools/console/server.py --port 802        # 802

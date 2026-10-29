@@ -29,6 +29,9 @@
 - **可观测**：802 控制台能看每条回复的 prompt/记忆/内状态/心情/生成/润色/护栏/耗时（`turn_traces`）。
 - **803 工作台（`idea/`）**：模型中心 / 训练工厂（LoRA/全参/蒸馏数据）/ 数据工作室 /
   语料清洗（截图 OCR + 你·我分离）/ 用户标注（InnerState 打分）/ 蒸馏语义生成；中文化界面，独立测试。
+- **桌面版（M5，Windows）**：`tools/desktop/launcher.py` 一键起 801/802/803 + 系统托盘 +
+  Edge app 独立窗口；桌面快捷方式「小鱼桌面版」（pythonw，无控制台），支持开机自启、`--status/--stop`。
+  详见 [`docs/guides/桌面版.md`](docs/guides/桌面版.md)。
 - **测试**：根 `tests/` + `agi/tests/` 两套离线测试；CI 跑密钥扫描与两套测试
   （`.github/workflows/ci.yml`）。
 
@@ -64,8 +67,9 @@
 ## 4. 快速开始
 
 ```bat
-:: 1) 一键桌面版（确保 801/802 在跑并打开控制台窗口）
-启动桌面版.bat
+:: 1) 桌面版（推荐：直接双击桌面快捷方式「小鱼桌面版」；命令行等价：）
+python tools\desktop\launcher.py --tray
+:: 或：启动桌面版.bat（会确保 801/802/803 在跑并打开控制台窗口）
 
 :: 2) 或者手动分开起
 C:\Python314\python.exe -m agi.wechat_gateway.server          :: 网关 801
@@ -86,12 +90,15 @@ C:\Python314\python.exe app.py --fake
 `X-Admin-Token` 请求头认证。
 注意：**白名单为空时网关拒绝发送**（fail-closed），先在控制台「设置」里配置 `allowed_contacts`。
 
-## 5. 配置与密钥（明文 key 请尽快迁到 env）
+## 5. 配置与密钥（本机保存，不上传）
 
 - 配置：`agi/data/wechat/config.json`（白名单、主动、静默、限流、send_mode 等，默认值见
   `agi/wechat_gateway/config.py` DEFAULTS）；运行数据都在 `agi/data/**`，**不入库、不打包**。
 - 密钥取值顺序（`agi/selflearn/llm.py`）：`DEEPSEEK_API_KEY` 环境变量 → `agi/data/secrets.json`
   （`SOULAGENT_SECRETS` 可换路径）→ `web_config.json`（兼容旧部署，命中会告警一次）。
+- **802 模型配置页可直接填/保存 DeepSeek key**：保存到本机 `agi/data/secrets.json`
+  （原子写、ACL 收紧、gitignore；不上传、不回传明文），保存后热加载下一条消息生效；
+  也支持环境变量 `DEEPSEEK_API_KEY`（优先级最高）与旧 `web_config.json`（兼容，命中告警）。
 - 迁移建议：先 `python tools/rotate_secrets.py --dry-run` 看计划，再设环境变量并轮换旧 key；
   不要把 key 写进任何会被提交/外发的文件。
 - 人格设定书：`agi/persona/<名字>/`（安装/卸载：`python -m tools.persona.install_xiaoyu`）。
@@ -131,7 +138,7 @@ C:\Python314\python.exe tools/check_docs_links.py
 ```
 SoulAgent/
 ├── agi/                   核心包：selflearn/ inner/ llm/ integrations/ wechat_gateway/ soul/ persona/
-├── tools/                 控制台(802)/ 桌面版/ soul_serve(8125)/ train/ persona/ 校验工具
+├── tools/                 控制台(802)/ desktop/ 桌面版(launcher+tray)/ soul_serve(8125)/ train/ 校验工具
 ├── wx_core/               wxauto4 封装、WCDB 直读、OCR、发送底座
 ├── webui/ ui/             legacy 网页端 / Tk 桌面 GUI
 ├── Demo/                  独立工具实现（tools_impl 被 tools/ 动态 import）
@@ -150,6 +157,7 @@ SoulAgent/
 - [文档总入口](docs/INDEX.md)
 - [当前状态与可复现测试数字](docs/quality/STATUS.md)
 - [803 工作台说明](idea/README.md)（语料清洗/标注/蒸馏/训练/模型中心）
+- [桌面版说明](docs/guides/桌面版.md)（Windows 快捷方式/托盘/自启/排障）
 - [迭代计划索引](docs/plans/README.md)
 - [使用与运维说明](docs/guides/README-usage.md)
 - [死代码归档清单](legacy/README.md)

@@ -23,10 +23,11 @@
 
 | 文档 | 用途 |
 | --- | --- |
-| [`guides/README-usage.md`](guides/README-usage.md) | 使用与运维说明（安装、启动、测试、常见问题） |
+| [`guides/README-usage.md`](guides/README-usage.md) | 早期 legacy wx_box 查看器使用说明（归档；现行入口见 README/桌面版） |
+| [`guides/桌面版.md`](guides/桌面版.md) | Windows 桌面版：快捷方式/托盘/自启/排障（M5） |
 | [`guides/PATHS.md`](guides/PATHS.md) | 数据根/模型/日志路径解析与迁移 |
 | [`guides/常见问题.md`](guides/常见问题.md) | FAQ |
-| [`guides/网页端使用说明.md`](guides/网页端使用说明.md) | 控制台/网页端操作 |
+| [`guides/网页端使用说明.md`](guides/网页端使用说明.md) | 旧版 8081 网页端使用说明（现行 802 控制台见 `桌面版.md`/README） |
 | [`../idea/README.md`](../idea/README.md) | 803 工作台：语料清洗/用户标注/蒸馏/训练/模型中心 |
 | [`guides/风控与合规说明.md`](guides/风控与合规说明.md) | 风险边界与合规 |
 | [`guides/微信接入与自主能力_路线图.md`](guides/微信接入与自主能力_路线图.md) | 微信接入与自主能力路线（历史路线，现役参考） |

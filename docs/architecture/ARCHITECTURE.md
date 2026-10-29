@@ -35,13 +35,16 @@ flowchart LR
 | --- | --- | --- | --- |
 | **801** | `python -m agi.wechat_gateway.server` | 主链：微信网关（收/发/状态/调试 API） | `agi/wechat_gateway/config.py` DEFAULTS `"port": 801` |
 | **802** | `python tools/console/server.py --port 802` | 主链：控制台单页应用 | `tools/console/server.py` `--port` 默认 `PORT`（802） |
+| **803** | `cd idea && .venv\Scripts\python.exe -m uvicorn app.main:app --port 803` | 工作台：训练/数据/语料/标注/蒸馏 | `idea/app/main.py`（独立 git 历史，subtree 合入） |
 | 8123 | `llama-server -m <0.5B gguf> --port 8123` | 可选：内状态小模型（shadow，只记录） | `agi/selflearn/mood_judge.py` 内状态地址默认 `http://127.0.0.1:8123` |
 | 8125 | `python tools/soul_serve/serve_local3b.py` | 可选：本地 3B（摘要/关键词/提取） | `tools/soul_serve/serve_local3b.py` |
 | 8081 | `python web_app.py` | **legacy/非主链**：旧 wx_box 网页端 | `web_app.py` `DEFAULT_PORT = 8081` |
 | 8082 | `python -m agi.selflearn.cli serve --port 8082` | **legacy/非主链**：selflearn 自带调试网页 | `agi/selflearn/cli.py` `serve` → `agi/selflearn/web.py` `main()` |
 
 桌面 GUI：`python app.py`（Tk；`--fake` 用 `ui/dev_backend.DevBackend` 演示，真实后端不可用时自动回退假后端）。
-`802` 控制台是日常唯一操作入口；`801` 网关是唯一真实收发入口。
+桌面版（Windows）：`python tools/desktop/launcher.py --tray` 一键托管 801/802/803 + 托盘 +
+Edge app 窗口；桌面快捷方式「小鱼桌面版」用 `pythonw`（无控制台）。详见 `docs/guides/桌面版.md`。
+`802` 控制台是日常操作入口；`803` 工作台负责训练/数据闭环；`801` 网关是唯一真实收发入口。
 
 ## 三、接入层：双后端 + 发送链路
 
@@ -162,6 +165,12 @@ Gateway._proactive_loop          常驻线程（proactive_enabled；engine 停�
   `~/.dsh/bili-duty/bili_credential.json`；插件不存在时相关能力降级，不影响主链。
 - **模型**：主对话 = DeepSeek API（`agi/llm/deepseek.py`）；内状态 = 本地 0.5B（8123，shadow）；
   本地 3B（8125）做摘要/关键词/提取；模型资产在仓库外（`E:\agent`，由 `agi/paths.py` 的 `agent_home` 解析）。
+- **密钥**：DeepSeek key 优先级 `DEEPSEEK_API_KEY` env → `agi/data/secrets.json` → `web_config.json`（兼容）；
+  802 模型配置页可直接保存/清除 key，只写本机 `secrets.json`（原子写、ACL 收紧、不入 git、不回传明文）。
+  密钥写入入口：`agi/secrets_store.py::store_llm_api_key`；读取入口：`agi/selflearn/llm.py::load_config`。
+- **桌面版（M5，Windows）**：`tools/desktop/launcher.py`（零 pip 依赖）+ `tray.ps1`（PowerShell 托盘）；
+  负责起三服务、打开 Edge app 窗口、`--status/--stop`、开机自启；发送前自检窗口见
+  `wx_core/win.py::ensure_wechat_window_visible`（最小化/托盘自动恢复）。
 - **训练**：`tools/train/`（`daily_corpus.py` 收集 → `daily_summary.py` → `train_gate.py` 门禁 →
   `sft_train.py`/`smoke_lora.py` 训练）。门禁 `MIN_SAMPLES=300`、`MIN_DAYS=3`；默认只做计划，
   必须人工 `--execute`，且只产出候选版本，**不自动切换线上**。截至 2026-10-27 的语料门禁：
@@ -174,7 +183,7 @@ SoulAgent/
 ├── agi/                   核心包：selflearn(94 个模块)/ inner/ llm/ integrations/
 │   │                      wechat_gateway/ soul/ persona/ data(运行数据, git 忽略)
 │   └── proactive_registry.py   主动链登记表 + 唯一主动入口
-├── tools/                 控制台(802)/ 桌面版/ soul_serve(8125)/ train/ persona/
+├── tools/                 控制台(802)/ desktop(桌面版 launcher+tray)/ soul_serve(8125)/ train/
 │   ├── check_architecture.py   架构守卫（死代码/环/行数/分层）
 │   └── status_report.py        可复现状态报告（测试数字/代码规模/归档量）
 ├── wx_core/               wxauto4 封装、WCDB 直读、OCR、发送底座
@@ -184,7 +193,8 @@ SoulAgent/
 ├── legacy/                死代码归档区（只 mv 不删，见 legacy/README.md）
 ├── tests/                 根测试套件
 ├── scripts/               发布/验证脚本
-├── docs/                  文档（plans/ specs/ archive/ sources/）
+├── idea/                  803 工作台（独立 git 历史，subtree 合入；app/web/tests/docs）
+├── docs/                  文档（plans/ specs/ archive/ sources/；技术文章 PDF 在 architecture/）
 ├── media/                 本地素材（运行数据）
 ├── app.py / web_app.py    桌面 GUI / legacy 网页端入口
 └── README.md

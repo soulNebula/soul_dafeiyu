@@ -254,10 +254,16 @@ def resolve_settings(*, production: bool = True) -> dict:
     schema_mode = str(raw_schema or DEFAULT_SCHEMA_MODE).strip().lower()
     if schema_mode not in SCHEMA_MODES:
         schema_mode = DEFAULT_SCHEMA_MODE
+    provider = str(cfg.get("soul_provider_mode") or "local").strip().lower()
+    provider_base = str(cfg.get("soul_provider_base_url") or "").strip().rstrip("/")
+    provider_model = str(cfg.get("soul_provider_model") or "").strip()
     return {"mode": mode, "shadow_only": bool(shadow_only),
             "server_url": str(url or DEFAULT_SOUL_SERVER_URL).rstrip("/"),
             "timeout_s": round(timeout, 3), "scope": scope,
-            "schema": schema_mode}
+            "schema": schema_mode,
+            "provider": "cloud" if provider == "cloud" and provider_base else "local",
+            "provider_base_url": provider_base,
+            "provider_model": provider_model}
 
 
 def scope_allows_model(scope: Any, *, proactive: bool) -> bool:
@@ -295,6 +301,23 @@ def make_local_client(settings: dict | None = None, *, force_new: bool = False) 
     P3-b：默认用 slim schema（4 字段）；``settings["schema"] == "full"`` 时用完整 schema。
     """
     current = settings or resolve_settings()
+    provider = str(current.get("provider") or "local").lower()
+    if provider == "cloud" and current.get("provider_base_url"):
+        # 云端灵魂：独立 OpenAI 兼容 provider（key 来自 Bot secrets.providers.soul）
+        from .. import secrets_store
+        api_key = secrets_store.provider_api_key("soul") or secrets_store.llm_api_key()
+        base = str(current.get("provider_base_url") or "").rstrip("/")
+        model = str(current.get("provider_model") or "soul-cloud")
+        key = ("cloud", base, model, api_key, float(current.get("timeout_s") or 30.0))
+        if not force_new:
+            cached = _LOCAL_CLIENTS.get(key)
+            if cached is not None:
+                return cached
+        from ..selflearn.llm import Client
+        client = Client({"base_url": base, "api_key": api_key, "model": model},
+                        timeout=float(current.get("timeout_s") or 30.0))
+        _LOCAL_CLIENTS[key] = client
+        return client
     key = (str(current.get("server_url") or DEFAULT_SOUL_SERVER_URL),
            float(current.get("timeout_s") or DEFAULT_SOUL_TIMEOUT_S),
            str(current.get("schema") or DEFAULT_SCHEMA_MODE))

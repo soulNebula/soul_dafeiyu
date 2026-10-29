@@ -164,6 +164,13 @@ def llm_api_key(path: Path | str | None = None) -> str:
     return _text((chat or {}).get("api_key") if isinstance(chat, dict) else "")
 
 
+def provider_api_key(name: str, path: Path | str | None = None) -> str:
+    """Bot 包格式 ``providers.<name>.api_key``（chat/soul/vision）。"""
+    providers = section("providers", path)
+    item = providers.get(str(name)) if isinstance(providers, dict) else None
+    return _text((item or {}).get("api_key") if isinstance(item, dict) else "")
+
+
 def llm_base_url(path: Path | str | None = None) -> str:
     return _text(section("llm", path).get("base_url"))
 

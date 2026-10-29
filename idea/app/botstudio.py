@@ -234,6 +234,18 @@ def create_bot(body: dict[str, Any]) -> dict[str, Any]:
             "validation": bot_profile.validate_bot(path), "bot_id": bot.get("bot_id")}
 
 
+def change_password(body: dict[str, Any]) -> dict[str, Any]:
+    path = str(body.get("path") or "").strip()
+    old = str(body.get("old_password") or "")
+    new = str(body.get("new_password") or "")
+    if not path:
+        return {"ok": False, "error": "path_required"}
+    try:
+        return bot_profile.change_password(path, old, new)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def export_current(body: dict[str, Any]) -> dict[str, Any]:
     """把当前 802 数据根导出成 Bot 包（含配置/联系人/人格/日记；不含明文 secrets）。"""
     path = str(body.get("path") or "").strip()

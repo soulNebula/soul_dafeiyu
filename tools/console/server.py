@@ -99,6 +99,9 @@ EDITABLE_DEFAULTS: dict = {
     "llm_max_tokens": 2048,
     "chat_vision_mode": "local_caption",
     "soul_server_url": "http://127.0.0.1:8123",
+    "soul_provider_mode": "local",
+    "soul_provider_base_url": "",
+    "soul_provider_model": "",
     "inner_mode": "off",
     "inner_shadow_only": False,
     "inner_mode_scope": "proactive_only",
@@ -130,6 +133,10 @@ EDITABLE_DEFAULTS: dict = {
     "trace_enabled": True,
     "urges_enabled": True,
     "send_probe_enabled": True,
+    # 外部能力（Bot 级）
+    "surf_enabled": True,
+    "moments_enabled": True,
+    "bili_ingest_enabled": True,
 }
 #: 其余不可编辑但页面要看的键
 READONLY_CONFIG_KEYS = ("allowed_contacts", "proactive_contacts", "stop", "send_mode",
@@ -1476,7 +1483,8 @@ def _validate_config(updates: dict) -> tuple[dict, list[str]]:
                  "pacing_enabled", "memory_decay_enabled", "memory_purge_enabled",
                  "narrative_enabled", "inject_time_context", "media_enabled",
                  "media_sticker_in_reply", "trace_enabled", "urges_enabled",
-                 "send_probe_enabled"}
+                 "send_probe_enabled", "surf_enabled", "moments_enabled",
+                 "bili_ingest_enabled"}
     int_ranges = {
         "proactive_interval_min_s": (10, 86400),
         "proactive_interval_max_s": (10, 86400),
@@ -1544,6 +1552,21 @@ def _validate_config(updates: dict) -> tuple[dict, list[str]]:
                 text = str(value or "").strip().rstrip("/")
                 if text and (not text.startswith(("http://", "https://")) or len(text) > 200):
                     raise ValueError("soul_server_url 需要 http(s) URL 或留空")
+                cleaned[key] = text
+            elif key == "soul_provider_mode":
+                text = str(value or "").strip().lower()
+                if text not in ("local", "cloud"):
+                    raise ValueError("soul_provider_mode 只能是 local/cloud")
+                cleaned[key] = text
+            elif key in ("soul_provider_base_url",):
+                text = str(value or "").strip().rstrip("/")
+                if text and (not text.startswith(("http://", "https://")) or len(text) > 200):
+                    raise ValueError("soul_provider_base_url 需要 http(s) URL 或留空")
+                cleaned[key] = text
+            elif key == "soul_provider_model":
+                text = str(value or "").strip()
+                if len(text) > 80:
+                    raise ValueError("soul_provider_model ≤80 字符")
                 cleaned[key] = text
             elif key == "inner_mode":
                 text = str(value or "").strip().lower()
@@ -5670,6 +5693,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/control/send_mode":
                 result = set_send_mode(str(body.get("mode") or ""), client=client)
                 self._json(200 if result.get("ok") else 400, result); return
+            if path in ("/api/moments/refresh", "/api/moments/analyze") and not bool(
+                    gateway_config().get("moments_enabled", True)):
+                self._json(503, {"ok": False, "error": "moments_disabled"}); return
             if path == "/api/moments/refresh":
                 module = moments_module()
                 if module is None:

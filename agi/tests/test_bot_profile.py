@@ -59,3 +59,13 @@ def test_validate_warns_missing_key(tmp_path):
 def test_password_min_length(tmp_path):
     with pytest.raises(ValueError):
         bot_profile.hash_password("123")
+
+
+def test_change_password(tmp_path):
+    bot_profile.create_bot(tmp_path / "b", "x", password="secret123")
+    bad = bot_profile.change_password(tmp_path / "b", "wrong", "newsecret")
+    assert bad["ok"] is False
+    good = bot_profile.change_password(tmp_path / "b", "secret123", "newsecret")
+    assert good["ok"] is True
+    bot = bot_profile.load_bot(tmp_path / "b")
+    assert bot_profile.verify_password("newsecret", bot["auth"]["password_hash"])

@@ -1606,7 +1606,11 @@ function configCardHtml(cfg) {
       ${bool('cfg-innershadow', '内状态只记录不注入', cfg.inner_shadow_only)}
       ${select('cfg-innerschema', '内状态结构', cfg.inner_schema,
         [['slim','精简'],['full','完整']])}
-      ${text('cfg-soulurl', '灵魂服务地址', cfg.soul_server_url, '本地 8123；云端方案可留空')}`)}
+      ${text('cfg-soulurl', '灵魂服务地址（本地）', cfg.soul_server_url, '本地 8123；云端方案可留空')}
+      ${select('cfg-soulprovider', '灵魂来源', cfg.soul_provider_mode || 'local',
+        [['local','本地 llama-server'],['cloud','云端 OpenAI 兼容']])}
+      ${text('cfg-soulbase', '云端灵魂 base_url', cfg.soul_provider_base_url, '同聊天可留空')}
+      ${text('cfg-soulmodel', '云端灵魂模型', cfg.soul_provider_model, '同聊天可留空')}`)}
     ${group('主动消息', `
       ${bool('cfg-proactive', '主动消息开关', cfg.proactive_enabled)}
       ${num('cfg-pmin', '概率下限（每轮随机 p）', cfg.proactive_probability_min, 0.05, 0)}
@@ -1632,6 +1636,10 @@ function configCardHtml(cfg) {
       ${bool('cfg-media', '媒体发送 media_enabled', cfg.media_enabled)}
       ${num('cfg-mediamax', '媒体大小上限（MB）', cfg.media_max_mb, 1, 1)}
       ${bool('cfg-sticker', '允许表情包回复', cfg.media_sticker_in_reply)}`)}
+    ${group('外部能力（Bot 级）', `
+      ${bool('cfg-surf', '刷 B站 / 上网冲浪', cfg.surf_enabled, '关闭后网关的 surf 循环暂停')}
+      ${bool('cfg-bili-ingest', 'B站数据入库', cfg.bili_ingest_enabled)}
+      ${bool('cfg-moments', '朋友圈读取/分析', cfg.moments_enabled, '关闭后朋友圈页返回 503')}`)}
     ${group('其他', `
       ${bool('cfg-trace', 'trace_enabled', cfg.trace_enabled)}
       ${bool('cfg-urges', '内驱力 urges_enabled', cfg.urges_enabled)}
@@ -1695,6 +1703,9 @@ async function renderSettings() {
       inner_shadow_only: $('#cfg-innershadow').checked,
       inner_schema: $('#cfg-innerschema').value,
       soul_server_url: $('#cfg-soulurl').value,
+      soul_provider_mode: $('#cfg-soulprovider').value,
+      soul_provider_base_url: $('#cfg-soulbase').value,
+      soul_provider_model: $('#cfg-soulmodel').value,
       proactive_enabled: $('#cfg-proactive').checked,
       proactive_probability_min: Number($('#cfg-pmin').value),
       proactive_probability_max: Number($('#cfg-pmax').value),
@@ -1717,6 +1728,9 @@ async function renderSettings() {
       trace_enabled: $('#cfg-trace').checked,
       urges_enabled: $('#cfg-urges').checked,
       send_probe_enabled: $('#cfg-probe').checked,
+      surf_enabled: $('#cfg-surf').checked,
+      bili_ingest_enabled: $('#cfg-bili-ingest').checked,
+      moments_enabled: $('#cfg-moments').checked,
     };
     await saveConfig(updates);
     renderSettings();

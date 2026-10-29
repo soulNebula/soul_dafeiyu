@@ -70,8 +70,26 @@ def _read_job(job_id: str) -> dict | None:
         return None
 
 
+def _active_bot_root() -> Path | None:
+    try:
+        import sys as _sys
+        repo = Path(__file__).resolve().parents[2]
+        if str(repo) not in _sys.path:
+            _sys.path.insert(0, str(repo))
+        from agi import bot_runtime
+        active = bot_runtime.read_active()
+        if active and active.get("path"):
+            return Path(active["path"]).resolve()
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _allowed_roots() -> list[Path]:
     roots = [Path(paths.soulagent_home()).resolve(), Path(paths.agent_home()).resolve()]
+    bot = _active_bot_root()
+    if bot is not None:
+        roots.append(bot)
     result = []
     for root in roots:
         if root not in result:
@@ -278,6 +296,10 @@ def list_datasets() -> dict:
     items += _scan_datasets(soul / "agi" / "eval_data", "soulagent/eval")
     for extra in (agent / "datasets", agent / "output" / "datasets"):
         items += _scan_datasets(extra, "agent")
+    bot = _active_bot_root()
+    if bot is not None:
+        items += _scan_datasets(bot / "data" / "train" / "packages", "active_bot/packages")
+        items += _scan_datasets(bot / "data" / "train" / "daily", "active_bot/daily")
     # 模型根目录下临时/训练语料（限制浅层，不全盘扫 models）
     for base in (agent,):
         try:

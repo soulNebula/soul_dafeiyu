@@ -131,6 +131,11 @@ def bots_create(body: dict | None = None):
     return botstudio.create_bot(body or {})
 
 
+@app.post("/api/wb/bots/password", dependencies=[Depends(require_token)])
+def bots_change_password(body: dict | None = None):
+    return botstudio.change_password(body or {})
+
+
 @app.post("/api/wb/bots/export-current", dependencies=[Depends(require_token)])
 def bots_export_current(body: dict | None = None):
     return botstudio.export_current(body or {})

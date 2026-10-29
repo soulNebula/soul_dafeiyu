@@ -239,6 +239,25 @@ def validate_bot(path: Path | str) -> dict[str, Any]:
     return result
 
 
+def change_password(path: Path | str, old_password: str, new_password: str) -> dict[str, Any]:
+    """校验旧密码后修改 Bot 登录密码（只改 auth.password_hash）。"""
+    root = Path(path).expanduser().resolve()
+    bot = load_bot(root)
+    auth = bot.get("auth") or {}
+    stored = str(auth.get("password_hash") or "")
+    if stored and not verify_password(str(old_password or ""), stored):
+        return {"ok": False, "error": "bad_password"}
+    if not stored:
+        return {"ok": False, "error": "password_not_set"}
+    if len(str(new_password or "")) < 6:
+        return {"ok": False, "error": "password_too_short"}
+    auth["password_hash"] = hash_password(str(new_password))
+    bot["auth"] = auth
+    bot.pop("_root", None)
+    _write_private(root / BOT_FILE, bot)
+    return {"ok": True, "path": str(root)}
+
+
 def describe_bot(path: Path | str) -> dict[str, Any]:
     bot = load_bot(path)
     secrets_payload = load_secrets(path)

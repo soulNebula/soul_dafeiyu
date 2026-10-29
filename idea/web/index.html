@@ -563,12 +563,14 @@ async function loadBots() {
           ${(item.warnings || []).slice(0, 3).map(x => `<div class="muted small">⚠ ${esc(x)}</div>`).join('')}
         </div>
         <button class="btn small" data-bot-validate="${esc(item.path)}">校验</button>
+        <button class="btn small" data-bot-password="${esc(item.path)}">改密码</button>
         <button class="btn small" data-bot-add-db="${esc(item.path)}"
           ${item.has_database ? 'disabled title="已有数据库"' : ''}>${item.has_database ? '已有数据库' : '添加数据库'}</button>
         <button class="btn small" data-bot-remove="${esc(item.path)}">移除</button>
       </div>`).join('');
     $$('[data-bot-validate]').forEach(btn => btn.onclick = () => validateBot(btn.dataset.botValidate));
     $$('[data-bot-remove]').forEach(btn => btn.onclick = () => removeBot(btn.dataset.botRemove));
+    $$('[data-bot-password]').forEach(btn => btn.onclick = () => changeBotPassword(btn.dataset.botPassword));
     $$('[data-bot-add-db]').forEach(btn => btn.onclick = () => addBotDatabase(btn.dataset.botAddDb));
   }
   const createBtn = $('#bot-create');
@@ -674,6 +676,20 @@ async function addExistingBot() {
     if (!data.ok) throw new Error((data.validation && data.validation.errors || []).join('；') || '无效的 Bot');
     toast('已添加已有 Bot', 'ok');
     await loadBots();
+  } catch (err) { toast(err.message, 'bad'); }
+}
+
+async function changeBotPassword(path) {
+  const oldPassword = window.prompt('当前 802 登录密码：');
+  if (oldPassword === null) return;
+  const newPassword = window.prompt('新密码（至少 6 位）：');
+  if (newPassword === null) return;
+  try {
+    const result = await api('/api/wb/bots/password', {
+      method: 'POST', body: {path, old_password: oldPassword, new_password: newPassword},
+    });
+    if (!result.ok) throw new Error(result.error || '修改失败');
+    toast('Bot 密码已修改', 'ok');
   } catch (err) { toast(err.message, 'bad'); }
 }
 

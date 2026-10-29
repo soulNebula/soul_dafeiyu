@@ -84,6 +84,8 @@ def prepare_runtime(bot_path: str | Path, *, bot: dict[str, Any] | None = None) 
     providers = (bot or {}).get("providers") or {}
     chat = providers.get("chat") if isinstance(providers, dict) else None
     chat = chat if isinstance(chat, dict) else {}
+    soul = providers.get("soul") if isinstance(providers, dict) else None
+    soul = soul if isinstance(soul, dict) else {}
 
     config_path = data / "wechat" / "config.json"
     settings = (bot or {}).get("settings") or {}
@@ -110,8 +112,29 @@ def prepare_runtime(bot_path: str | Path, *, bot: dict[str, Any] | None = None) 
         "pacing_enabled": bool(settings.get("pacing_enabled", True)),
         "pacing_target_ratio": float(settings.get("proactive_ratio", 1.0) if isinstance(settings.get("proactive_ratio"), (int, float)) else 1.0),
         "media_enabled": bool(settings.get("media_enabled", False)),
+        # 云端灵魂：内状态用独立 OpenAI 兼容 provider（key 在 Bot secrets.providers.soul）
+        "soul_provider_mode": "cloud" if (soul or {}).get("base_url") else "local",
+        "soul_provider_base_url": str((soul or {}).get("base_url") or ""),
+        "soul_provider_model": str((soul or {}).get("model") or ""),
     }
     _write_json(config_path, initial)
+    # 老 Bot（导出时还没有 provider 键）补齐；不覆盖用户已设置的值
+    try:
+        if config_path.is_file():
+            current = json.loads(config_path.read_text(encoding="utf-8"))
+            changed = False
+            for key, value in (("soul_provider_mode", initial["soul_provider_mode"]),
+                               ("soul_provider_base_url", initial["soul_provider_base_url"]),
+                               ("soul_provider_model", initial["soul_provider_model"])):
+                if key not in current:
+                    current[key] = value
+                    changed = True
+            if changed:
+                config_path.write_text(
+                    json.dumps(current, ensure_ascii=False, indent=2) + chr(10),
+                    encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
     _write_json(data / "web_config.json", {
         "llm": {
             "api_key": "",

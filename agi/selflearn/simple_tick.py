@@ -331,6 +331,13 @@ def video_quota(now: float) -> tuple[bool, str]:
 
 def recent_video_candidates(now: float, *, limit: int = 50) -> list[dict]:
     """value≥0.6、未分享、近 7 天的印象，按 ``value × 新近度`` 降序。"""
+    # Bot 级「B站数据入库」开关关闭时不参与主动分享
+    try:
+        from agi.wechat_gateway import config as _gw_cfg
+        if not bool(_gw_cfg.load().get("bili_ingest_enabled", True)):
+            return []
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from agi.integrations import bili_ingest
         rows = bili_ingest.recent_impressions(max(1, int(limit)))

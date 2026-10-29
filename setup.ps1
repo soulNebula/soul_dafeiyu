@@ -134,6 +134,11 @@ $wechat = Get-Process -Name "Weixin", "WeChat" -ErrorAction SilentlyContinue
 if ($wechat) { Info "微信进程：运行中" }
 else { Warn "没有检测到微信进程；配置收发前请先登录微信 PC 客户端" }
 
+# 可选 B站插件（仓库外；缺失仅降级 B站能力）
+$biliHome = if ($env:BILI_DUTY_HOME) { $env:BILI_DUTY_HOME } else { Join-Path $HOME ".dsh/bili-duty" }
+if (Test-Path (Join-Path $biliHome "config.json")) { Info "B站插件：$biliHome" }
+else { Warn "未找到 B站插件（可选）：$biliHome；安装见 docs/guides/B站插件安装.md" }
+
 $senderVenv = Join-Path $AgentHome "venv_wx312"
 $workbench = Join-Path $Root "idea"
 $mainVenv = Join-Path $Root ".venv"

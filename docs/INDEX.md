@@ -23,6 +23,7 @@
 
 | 文档 | 用途 |
 | --- | --- |
+| [`guides/B站插件安装.md`](guides/B站插件安装.md) | 仓库外 bili-duty 插件的安装/路径/检测/排障 |
 | [`guides/新用户上手.md`](guides/新用户上手.md) | **从 clone 到第一条消息**：依赖/发送器 venv/API key/白名单/可选能力/排障 |
 | [`guides/README-usage.md`](guides/README-usage.md) | 早期 legacy wx_box 查看器使用说明（归档；现行入口见 README/桌面版） |
 | [`guides/桌面版.md`](guides/桌面版.md) | Windows 桌面版：快捷方式/托盘/自启/排障（M5） |

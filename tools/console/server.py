@@ -4468,6 +4468,33 @@ def bili_home() -> Path:
     return Path(raw)
 
 
+def bili_plugin_status() -> dict:
+    """检查仓库外 B站插件（~/.dsh/bili-duty）是否可用。"""
+    candidates = []
+    env = str(os.environ.get("BILI_DUTY_HOME") or "").strip()
+    if env:
+        candidates.append(Path(env).expanduser())
+    candidates.append(Path.home() / ".dsh" / "bili-duty")
+    candidates.append(ROOT / "integrations" / "bili-duty")
+    for home in candidates:
+        try:
+            if not home.is_dir():
+                continue
+            files = {name: (home / name).is_file() for name in
+                     ("config.json", "duty.md", "bili_credential.json")}
+            return {"ok": True, "installed": files["config.json"] and files["duty.md"],
+                    "path": str(home), "files": files,
+                    "credential": bool(files["bili_credential.json"]),
+                    "hint": ("" if files["config.json"] and files["duty.md"]
+                             else "目录存在但缺少 config.json/duty.md；按安装文档补齐")}
+        except OSError:
+            continue
+    return {"ok": True, "installed": False, "path": "",
+            "files": {}, "credential": False,
+            "hint": "未找到 B站插件；请把 bili-duty 放到 ~/.dsh/bili-duty，或设置 BILI_DUTY_HOME",
+            "docs": "docs/guides/B站插件安装.md"}
+
+
 def bili_config_path() -> Path:
     return bili_home() / "config.json"
 
@@ -5562,6 +5589,8 @@ class Handler(BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     tail = 200
                 self._json(200, bili_duty_log(tail)); return
+            if path == "/api/bili/plugin":
+                self._json(200, bili_plugin_status()); return
             if path == "/api/bili/status":
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return

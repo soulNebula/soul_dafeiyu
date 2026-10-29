@@ -3213,9 +3213,10 @@ async function renderBili() {
     return;
   }
   if (state.bili && state.bili.timer) { clearInterval(state.bili.timer); }
-  let status = null, configState = null;
+  let status = null, configState = null, plugin = null;
   const errors = [];
   try { status = await api('/api/bili/status'); } catch (err) { errors.push('状态: ' + err.message); }
+  try { plugin = await api('/api/bili/plugin'); } catch (err) { /* 插件检查非关键 */ }
   try { configState = await api('/api/bili/config'); } catch (err) { errors.push('配置: ' + err.message); }
   const prev = state.bili || {};
   // 注意：重建对象时必须保留轮询相关的瞬时状态，否则 polledAt 丢失
@@ -3250,6 +3251,12 @@ async function renderBili() {
 
   $('#app').innerHTML = `
     ${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
+    ${plugin && !plugin.installed ? `<div class="card"><div class="error-text">
+      B站插件未安装：${esc(plugin.hint || '')}</div>
+      <p class="hint">把插件目录放到 <code>~/.dsh/bili-duty</code>，或设置环境变量
+        <code>BILI_DUTY_HOME</code>。安装步骤见 <code>docs/guides/B站插件安装.md</code>。</p></div>` : ''}
+    ${plugin && plugin.installed ? `<div class="card hint">B站插件：<code>${esc(plugin.path)}</code>
+      · 登录凭证 ${plugin.credential ? '已存在' : '未登录'}</div>` : ''}
     ${biliLoginCard(biliStatus, login)}
     ${biliTabsHtml()}
     <div id="bili-data-panel" class="bili-data-panel"><div class="empty">加载中…</div></div>

@@ -11,6 +11,9 @@ const state = {
   timer: null,
   feedKind: '',
   feedAuto: true,
+  contact: '',          // 当前选中的联系人 alias（数据库隔离）
+  feedLimit: 200,
+  feedScroll: true,
   feedSig: '',
   refreshing: false,
   prompts: null,
@@ -289,7 +292,7 @@ async function renderOverview() {
   try { config = await api('/api/config'); } catch (e) { errors.push('配置: ' + e.message); }
   try { models = await api('/api/models'); } catch (e) { errors.push('模型: ' + e.message); }
   try { contacts = await api('/api/contacts'); } catch (e) { errors.push('联系人: ' + e.message); }
-  try { messages = await api('/api/messages?limit=12'); } catch (e) { errors.push('消息: ' + e.message); }
+  try { messages = await api('/api/messages?limit=12' + contactQuery('&')); } catch (e) { errors.push('消息: ' + e.message); }
   state.status = status; state.config = config; state.models = models; state.engine = engine;
   state.contacts = contacts;
   renderPills();
@@ -372,7 +375,7 @@ async function renderOverview() {
   const refresh = $('#ov-refresh');
   if (refresh) refresh.onclick = () => renderOverview();
   document.querySelectorAll('[data-contact]').forEach((node) => {
-    node.onclick = () => { state.feedContact = node.dataset.contact || ''; go('feed'); };
+    node.onclick = () => { state.contact = node.dataset.contact || ''; go('feed'); };
   });
   document.querySelectorAll('[data-goto]').forEach((node) => {
     node.onclick = () => go(node.dataset.goto);
@@ -556,7 +559,7 @@ function feedSignature(items) {
 
 async function renderFeed(auto) {
   if (!state.feedTab) state.feedTab = 'messages';
-  if (state.feedContact === undefined) state.feedContact = '';
+  if (state.contact === undefined) state.contact = '';
   if (!state.feedFilter) state.feedFilter = 'all';
   if (state.feedQuery === undefined) state.feedQuery = '';
   if (!auto) $('#app').innerHTML = '<div class="empty">加载对话流…</div>';
@@ -567,20 +570,27 @@ async function renderFeed(auto) {
   try { if (!contacts) contacts = await api('/api/contacts'); } catch (e) { errors.push('联系人: ' + e.message); }
   try { if (!state.engine) state.engine = await api('/api/engine'); } catch (e) { /* 引擎状态非必需 */ }
   state.contacts = contacts;
-  const contact = state.feedContact || '';
+  const contact = state.contact || '';
   if (state.feedTab === 'messages') {
-    try { messages = await api('/api/messages?limit=200&contact=' + encodeURIComponent(contact)); }
+    try { messages = await api('/api/messages?limit=' + (state.feedLimit || 200) + '&contact=' + encodeURIComponent(contact)); }
     catch (e) { errors.push('消息: ' + e.message); }
   } else {
     try { feed = await api('/api/feed?limit=200&kind=' + encodeURIComponent(state.feedKind)); }
     catch (e) { errors.push('事件: ' + e.message); }
   }
 
-  const listHtml = () => state.feedTab === 'messages'
-    ? wbMessageList((messages && messages.items) || [])
-    : feedList((feed && feed.items) || []);
+  let missingDb = Boolean(contact && messages && messages.ok === false
+    && /contact_db/.test(String(messages.error || '')));
+  const listHtml = () => {
+    if (state.feedTab === 'messages') {
+      if (missingDb) return wbMissingDb(contact);
+      if (state.hideMessages) return '<div class="empty">当前显示已清空（仅本页；数据库未改动，点「刷新」恢复）</div>';
+      return wbMessageList((messages && messages.items) || []);
+    }
+    return feedList((feed && feed.items) || []);
+  };
   const countLabel = () => state.feedTab === 'messages'
-    ? (((messages && messages.items) || []).length + ' 条消息 · 库 ' + esc((messages && messages.db) || ''))
+    ? (missingDb ? '该联系人暂无数据库' : (((messages && messages.items) || []).length + ' 条消息 · 库 ' + esc((messages && messages.db) || '')))
     : (((feed && feed.items) || []).length + ' 条事件 · 文件 ' + esc((feed && feed.source) || ''));
 
   if (auto) {
@@ -600,6 +610,7 @@ async function renderFeed(auto) {
       <div class="wb-contact-main"><b>${esc(item.alias || item.db || '—')}</b>
         <span class="muted">${num(item.messages)} 条 · ${item.last_ts ? fmtAgo(item.last_ts) : '暂无'}</span></div>
       ${item.current ? '<span class="wb-tag">当前</span>' : ''}
+      ${!item.exists ? '<span class="wb-tag err-tag">缺库</span>' : ''}
     </div>`).join('');
 
   const tabButtons = `<div class="wb-tabs">
@@ -612,7 +623,9 @@ async function renderFeed(auto) {
   const chips = `<div class="wb-chips">${filterChips.map((key) =>
     `<button class="wb-chip ${state.feedFilter === key ? 'active' : ''}" data-filter="${key}">${chipLabel[key]}</button>`).join('')}
     <input id="feed-query" class="wb-search" placeholder="搜索消息…" value="${esc(state.feedQuery)}">
-    <label class="switch"><input type="checkbox" id="feed-auto" ${state.feedAuto ? 'checked' : ''}> 自动刷新 3s</label></div>`;
+    <label class="switch"><input type="checkbox" id="feed-auto" ${state.feedAuto ? 'checked' : ''}> 自动刷新 3s</label>
+    <label class="switch"><input type="checkbox" id="feed-scroll" ${state.feedScroll ? 'checked' : ''}> 自动滚动</label>
+    <label class="switch" title="暂未实现：需要视频缓存后端"><input type="checkbox" disabled> 实验性：自动缓存聊天视频</label></div>`;
 
   const eventTools = `<div class="wb-chips">
       <select id="feed-kind">${FEED_KINDS.map(([value, label]) =>
@@ -620,8 +633,10 @@ async function renderFeed(auto) {
       <label class="switch"><input type="checkbox" id="feed-auto" ${state.feedAuto ? 'checked' : ''}> 自动刷新 3s</label>
     </div>`;
 
-  const activeContact = contactItems.find((item) => item.alias === contact)
-    || contactItems.find((item) => item.current);
+  const selectedItem = contactItems.find((item) => item.alias === contact);
+  // 没有库，或库存在但 0 条消息（还没聊过）→ 都提示去 803 建库/训练
+  if (contact && (!selectedItem || selectedItem.messages === 0)) missingDb = true;
+  const activeContact = selectedItem || contactItems.find((item) => item.current);
   const rightHtml = `<aside class="wb-card wb-side">
     <div class="wb-card-head"><b>会话概览</b></div>
     <div class="kv wb-kv">
@@ -642,7 +657,11 @@ async function renderFeed(auto) {
     ${wbTopBar({
       title: '对话流', subtitle: `Soul Console · ${state.feedTab === 'messages' ? '聊天消息' : '网关事件'}`,
       pills: `<span class="wb-pill ok">● 实时</span><span class="wb-pill">${esc(contact || (contacts && contacts.current_label) || '全部')}</span>`,
-      right: `<button class="btn small" id="feed-refresh">刷新</button>`,
+      right: `<button class="btn small" id="feed-refresh">刷新</button>
+        <button class="btn small" data-action="refresh-list">刷新列表</button>
+        <button class="btn small" data-action="clear-list">清空全部列表</button>
+        <button class="btn small" data-action="sync-history">同步历史</button>
+        <button class="btn small danger" data-action="clear-chat">清空聊天</button>`,
     })}
     ${errors.length ? `<div class="wb-card wb-span3"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
     <div class="wb-grid">
@@ -674,7 +693,7 @@ async function renderFeed(auto) {
     node.onclick = () => { state.feedFilter = node.dataset.filter; renderFeed(false); };
   });
   document.querySelectorAll('[data-contact]').forEach((node) => {
-    node.onclick = () => { state.feedContact = node.dataset.contact || ''; renderFeed(false); };
+    node.onclick = () => { state.contact = node.dataset.contact || ''; renderFeed(false); };
   });
   document.querySelectorAll('[data-goto]').forEach((node) => {
     node.onclick = () => go(node.dataset.goto);
@@ -691,6 +710,52 @@ async function renderFeed(auto) {
   if (kind) kind.onchange = () => { state.feedKind = kind.value; renderFeed(false); };
   const autoBox = $('#feed-auto');
   if (autoBox) autoBox.onchange = () => { state.feedAuto = autoBox.checked; };
+  const scrollBox = $('#feed-scroll');
+  if (scrollBox) scrollBox.onchange = () => { state.feedScroll = scrollBox.checked; };
+  document.querySelectorAll('[data-action]').forEach((node) => {
+    node.onclick = () => {
+      const action = node.dataset.action;
+      if (action === 'refresh-list') {
+        state.contacts = null;
+        renderFeed(false);
+        toast('联系人列表已刷新', 'ok');
+      } else if (action === 'clear-list') {
+        if (!window.confirm('清空列表筛选/选中状态？不会删除任何数据库。')) return;
+        state.contact = '';
+        state.feedFilter = 'all';
+        state.feedQuery = '';
+        renderFeed(false);
+      } else if (action === 'sync-history') {
+        state.feedLimit = 500;
+        state.hideMessages = false;
+        renderFeed(false);
+        toast('已重新读取最近 500 条（本地库）', 'ok');
+      } else if (action === 'clear-chat') {
+        if (!window.confirm('仅清空当前页面显示，不删除数据库。继续？')) return;
+        state.hideMessages = true;
+        renderFeed(false);
+      }
+    };
+  });
+  if (state.feedScroll && state.feedTab === 'messages') {
+    const list = $('#feed-list');
+    if (list) list.scrollTop = list.scrollHeight;
+  }
+}
+
+function contactQuery(sep) {
+  const contact = state.contact || '';
+  return contact ? (sep || '?') + 'contact=' + encodeURIComponent(contact) : '';
+}
+
+function wbMissingDb(alias) {
+  return `<div class="wb-empty">
+    <div class="wb-empty-icon">🗂️</div>
+    <b>联系人「${esc(alias)}」还没有数据库或聊天记录</b>
+    <p class="muted">不同联系人使用各自的数据库（记忆、人格、对话隔离）。先到 <b>803 工作台</b>
+      创建该联系人的数据并训练模型，再回到这里切换。</p>
+    <a class="btn primary small" href="http://127.0.0.1:803" target="_blank" rel="noopener">打开 803 工作台</a>
+  </div>`;
 }
 
 function wbMessageList(items) {
@@ -829,7 +894,7 @@ async function toggleMood(kind, value) {
 async function renderInner() {
   $('#app').innerHTML = '<div class="empty">加载内状态…</div>';
   let data = null, mood = null;
-  try { data = await api('/api/inner?limit=100'); }
+  try { data = await api('/api/inner?limit=100' + contactQuery('&')); }
   catch (e) {
     $('#app').innerHTML = card('内状态', `<div class="error-text">${esc(e.message)}</div>`);
     return;
@@ -905,7 +970,7 @@ async function renderMemory() {
   $('#app').innerHTML = '<div class="empty">加载记忆指标…</div>';
   let data = null, tone = null;
   const errors = [];
-  try { data = await api('/api/memory'); } catch (e) { errors.push('记忆: ' + e.message); }
+  try { data = await api('/api/memory' + contactQuery()); } catch (e) { errors.push('记忆: ' + e.message); }
   try { tone = await api('/api/tone?limit=100'); } catch (e) { errors.push('语气: ' + e.message); }
   state.memory = data; state.tone = tone;
   const m = (data && data.metrics) || {};
@@ -2363,9 +2428,9 @@ async function loadMemoryEdit() {
     + `&status=${encodeURIComponent(edit.status)}&limit=${edit.limit}&offset=${edit.offset}`;
   let data = null, claims = null, metrics = null;
   const errors = [];
-  try { data = await api('/api/memory/list?' + params); } catch (err) { errors.push('记忆: ' + err.message); }
-  try { claims = await api('/api/memory/claims?limit=100'); } catch (err) { errors.push('claims: ' + err.message); }
-  try { metrics = await api('/api/memory'); } catch (err) { metrics = null; }
+  try { data = await api('/api/memory/list?' + params + contactQuery('&')); } catch (err) { errors.push('记忆: ' + err.message); }
+  try { claims = await api('/api/memory/claims?limit=100' + contactQuery('&')); } catch (err) { errors.push('claims: ' + err.message); }
+  try { metrics = await api('/api/memory' + contactQuery()); } catch (err) { metrics = null; }
   const items = (data && data.items) || [];
   const total = (data && data.total) || 0;
   const memMetrics = (metrics && metrics.metrics && metrics.metrics.memories) || {};

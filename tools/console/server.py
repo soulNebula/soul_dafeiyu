@@ -341,10 +341,11 @@ def _columns(con: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
-def read_inner(limit: int = 100) -> dict:
-    path = contact_db_path()
+def read_inner(limit: int = 100, contact: str = "") -> dict:
+    path = _db_for_contact(contact)
     if not path:
-        return {"ok": False, "error": "contact_db_not_found", "items": []}
+        return {"ok": False, "error": "contact_db_missing", "items": [],
+                "hint": "该联系人还没有独立数据库；请先在 803 工作台创建并训练"}
     try:
         limit = max(1, min(MAX_LIMIT, int(limit)))
     except (TypeError, ValueError):
@@ -377,6 +378,14 @@ def read_inner(limit: int = 100) -> dict:
         item["injected"] = bool(item.get("injected"))
         items.append(item)
     return {"ok": True, "items": items, "db": str(path)}
+
+
+def _db_for_contact(contact: str) -> Path | None:
+    """按联系人 alias 解析数据库；空 alias = 当前默认库。"""
+    raw = str(contact or "").strip()
+    if not raw:
+        return contact_db_path()
+    return _contact_db_by_alias(raw)
 
 
 def read_messages(limit: int = 100, contact: str = "") -> dict:
@@ -482,6 +491,34 @@ def contacts_overview() -> dict:
         items.append({"alias": _contact_label(current_name), "db": current_name,
                       "exists": True, "messages": 0, "last_ts": 0.0,
                       "current": True})
+    # 配置里没登记、但本机存在库的联系人也要能切（显示为「未命名库 <stem>」）
+    known_dbs = {str(item.get("db") or "") for item in items}
+    try:
+        for db_path in sorted(Path(CONTACTS_DIR).glob("*.memory.sqlite3")):
+            if db_path.name in known_dbs:
+                continue
+            stem = db_path.name.split(".memory.sqlite3")[0]
+            count, last_ts = 0, 0.0
+            try:
+                con = _ro_connect(db_path)
+                try:
+                    cols = _columns(con, "messages")
+                    if cols:
+                        row_count = con.execute("SELECT COUNT(*) FROM messages").fetchone()
+                        count = int(row_count[0] or 0) if row_count else 0
+                        if "ts" in cols:
+                            last = con.execute("SELECT MAX(ts) FROM messages").fetchone()
+                            last_ts = float(last[0] or 0) if last else 0.0
+                finally:
+                    con.close()
+            except sqlite3.Error:
+                pass
+            items.append({"alias": "未命名库 " + stem, "db": db_path.name,
+                          "exists": True, "messages": count, "last_ts": last_ts,
+                          "current": db_path.name == current_name,
+                          "unnamed": True})
+    except OSError:
+        pass
     deduped: dict[str, dict] = {}
     for item in items:
         key = str(item.get("alias") or item.get("db") or "")
@@ -493,11 +530,11 @@ def contacts_overview() -> dict:
             "current": current_name, "current_label": _contact_label(current_name) if current_name else ""}
 
 
-def memory_snapshot() -> dict:
-    path = contact_db_path()
+def memory_snapshot(contact: str = "") -> dict:
+    path = _db_for_contact(contact)
     if not path:
-        return {"ok": False, "error": "contact_db_not_found", "metrics": {},
-                "recent": []}
+        return {"ok": False, "error": "contact_db_missing", "metrics": {},
+                "recent": [], "hint": "该联系人还没有独立数据库；请先在 803 工作台创建并训练"}
     metrics: dict = {}
     recent: list[dict] = []
     # 先读最近记忆：metrics 可能触发 db 拆库迁移（旧单库改名 + 新 memory/persona 库）
@@ -529,12 +566,13 @@ def memory_snapshot() -> dict:
     return {"ok": True, "db": str(path), "metrics": metrics, "recent": recent}
 
 
-def memory_strength() -> dict:
+def memory_strength(contact: str = "") -> dict:
     """P38：GET /api/memory/strength 只读（按遗忘阶段/强度）。"""
-    path = contact_db_path()
+    path = _db_for_contact(contact)
     if not path:
-        return {"ok": False, "error": "contact_db_not_found", "count": 0,
-                "stages": {}, "strongest": [], "weakest": [], "items": []}
+        return {"ok": False, "error": "contact_db_missing", "count": 0,
+                "stages": {}, "strongest": [], "weakest": [], "items": [],
+                "hint": "该联系人还没有独立数据库；请先在 803 工作台创建并训练"}
     try:
         from agi.selflearn import memory_decay
         return memory_decay.strength_report(path)
@@ -4838,17 +4876,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "items": feed_events(
                     self._limit(query, 200), kind), "source": str(GATEWAY_LOG)}); return
             if path == "/api/inner":
-                self._json(200, read_inner(self._limit(query, 100))); return
+                self._json(200, read_inner(self._limit(query, 100),
+                                           str((query.get("contact") or [""])[0] or ""))); return
             if path == "/api/messages":
                 contact = str((query.get("contact") or [""])[0] or "")
                 self._json(200, read_messages(self._limit(query, 100), contact)); return
             if path == "/api/contacts":
                 self._json(200, contacts_overview()); return
             if path == "/api/memory":
-                self._json(200, memory_snapshot()); return
+                self._json(200, memory_snapshot(
+                    str((query.get("contact") or [""])[0] or ""))); return
             # P38：记忆强度/遗忘阶段（只读）
             if path == "/api/memory/strength":
-                self._json(200, memory_strength()); return
+                self._json(200, memory_strength(
+                    str((query.get("contact") or [""])[0] or ""))); return
             if path == "/api/diary/list":
                 self._json(200, diary_list(self._limit(query, 60))); return
             if path.startswith("/api/diary/"):

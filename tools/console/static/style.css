@@ -616,3 +616,9 @@ table td input[type="number"], table td select { padding: 3px 6px; font-size: 12
 .wb-msg-img { display: block; max-width: 220px; max-height: 220px; border-radius: 8px; margin-top: 4px; border: 1px solid var(--border); }
 .wb-msg-head .wb-tag { margin-left: 4px; }
 .wb-media-label { display: block; color: var(--dim); font-size: 11px; margin-top: 2px; }
+
+.wb-top-right { flex-wrap: wrap; justify-content: flex-end; }
+.wb-tag.err-tag { color: var(--warning); border-color: rgba(250, 173, 20, .45); }
+.wb-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 40px 20px; text-align: center; color: var(--text); }
+.wb-empty-icon { font-size: 30px; }
+.wb-empty p { max-width: 460px; margin: 0; }

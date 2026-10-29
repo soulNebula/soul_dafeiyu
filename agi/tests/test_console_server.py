@@ -2283,3 +2283,11 @@ def test_contacts_overview_and_messages_by_contact(tmp_path, monkeypatch):
     assert got["items"][0]["text"] == "你好"
     attachment = got["items"][0]["attachment"]
     assert attachment["kind"] == "image" and attachment["url"].startswith("/api/media/file?path=")
+
+
+def test_memory_contact_missing_returns_hint(monkeypatch):
+    monkeypatch.setattr(console, "_contact_db_by_alias", lambda alias: None)
+    result = console.memory_snapshot("不存在的联系人")
+    assert result["ok"] is False
+    assert result["error"] == "contact_db_missing"
+    assert "803" in result["hint"]

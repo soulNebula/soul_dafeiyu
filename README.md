@@ -70,6 +70,9 @@
 
 ## 4. 快速开始
 
+> 拿到仓库第一次用？先看 [`docs/guides/新用户上手.md`](docs/guides/新用户上手.md)（依赖、发送器 venv、key、白名单、803/本地模型怎么开）。
+
+
 ```bat
 :: 1) 桌面版（推荐：直接双击桌面快捷方式「小鱼桌面版」；命令行等价：）
 python tools\desktop\launcher.py --tray
@@ -164,6 +167,7 @@ SoulAgent/
 - [架构说明](docs/architecture/ARCHITECTURE.md)（双后端、801/802、发送闸门、主动链、数据层）
 - [文档总入口](docs/INDEX.md)
 - [当前状态与可复现测试数字](docs/quality/STATUS.md)
+- [新用户上手](docs/guides/新用户上手.md)（从 clone 到第一条消息）
 - [803 工作台说明](idea/README.md)（语料清洗/标注/蒸馏/训练/模型中心）
 - [桌面版说明](docs/guides/桌面版.md)（Windows 快捷方式/托盘/自启/排障）
 - [迭代计划索引](docs/plans/README.md)

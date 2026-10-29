@@ -338,9 +338,9 @@ async function openWechatContacts() {
     const names = [...overlay.querySelectorAll('.wc-item input:checked')]
       .filter((n) => !n.disabled).map((n) => n.value);
     try {
-      await api('/api/config', { method: 'POST', body: { updates: {
+      await api('/api/contacts/apply', { method: 'POST', body: {
         allowed_contacts: names, monitored_contacts: names,
-      } } });
+      } });
       state.config = null; state.contacts = null;
       close();
       await renderOverview();

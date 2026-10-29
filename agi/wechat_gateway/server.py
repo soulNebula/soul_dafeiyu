@@ -727,6 +727,37 @@ class Gateway:
             pass
         cfg.save_atomic(payload, self.config_path)
 
+    def apply_contacts(self, allowed_contacts, monitored_contacts) -> dict:
+        """保存并即时应用联系人白名单/监听列表（不重启网关）。"""
+        def clean(items):
+            out: list[str] = []
+            for item in items or []:
+                text = str(item or "").strip()
+                if text and text not in out:
+                    out.append(text)
+            return out
+        allowed = clean(allowed_contacts)
+        monitored = clean(monitored_contacts) or list(allowed)
+        monitored = [name for name in monitored if name in allowed] or list(allowed)
+        self.cfg["allowed_contacts"] = allowed
+        self.cfg["monitored_contacts"] = monitored
+        try:
+            cfg.save_atomic(self.cfg, self.config_path)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"persist_failed: {type(exc).__name__}: {exc}"}
+        if self.receiver is not None:
+            self.receiver.allowed = set(allowed)
+        if self.backend is not None:
+            try:
+                self.backend.set_monitored(monitored)
+            except Exception as exc:  # noqa: BLE001
+                self._record("contacts_monitored_failed",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
+        self._record("contacts_updated", {"allowed": allowed, "monitored": monitored})
+        return {"ok": True, "allowed_contacts": allowed,
+                "monitored_contacts": monitored,
+                "receiver_updated": self.receiver is not None}
+
     def engine_state(self) -> dict:
         return {"ok": True, "enabled": bool(self.engine_enabled),
                 "since": float(self.engine_since), "reason": str(self.engine_reason),
@@ -2531,6 +2562,11 @@ def make_handler(gateway: Gateway):
                 self._json(200, {"ok": True, **gateway.reload_config_now()})
                 return
 
+            if path == "/api/contacts/apply":
+                result = gateway.apply_contacts(body.get("allowed_contacts"),
+                                                body.get("monitored_contacts"))
+                self._json(200 if result.get("ok") else 500, result)
+                return
             if path in ("/api/engine/start", "/api/engine/stop"):
                 wanted = path.endswith("/start")
                 result = gateway.set_engine(wanted, source="api")

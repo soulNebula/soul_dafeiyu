@@ -290,7 +290,7 @@ python toolsot_profile.py validate --path E:gentots\802-config-20261030
 | 反馈 | 处理 | 状态 |
 | --- | --- | --- |
 | 点「开始监听」只闪一下 | 网关 `set_engine(start)` 现在会把总开关 `enabled` 一起打开并真正 `start()` receiver；实测 stop→start 后 `ready=true`、backend running | ✅ |
-| 点「刷新联系人」没反应 | 接口本身可用（弹层会先出现“读取中”）；静态 js/css 改为 `Cache-Control: no-store`，避免旧缓存；先强刷 Ctrl+F5，首次读取 DB 密钥 10–20 秒 | ✅ |
+| 点「刷新联系人」没反应 / 应用选择报 `not_allowed:allowed_contacts` | 按钮事件已补绑；新增 `/api/contacts/apply`（801 即时更新 receiver/backend，不走 /api/config 白名单），静态 no-store；首次读 DB 密钥 10–20 秒 | ✅ |
 | D1~D8 没实现 | 已实现并在 Bot 模式实测：当前微信/好友列表/复选/应用；用 `?contacts=1` 可直接打开弹层 | ✅ |
 | 802 提示词页 | 新增「＋ 新增提示词」；内置 11 键不可删除/只能覆盖/恢复默认；自定义 `custom.*` 可添加、编辑、删除 | ✅ |
 | 回复“这么晚还醒着”不像“还不睡？” | 用户自行调整默认提示词；代码不硬编码回复 | ✅ 用户处理 |

@@ -377,6 +377,32 @@ def bot_load(path: str, password: str, *, client: str = "") -> dict:
             "note": "801/802 正在重启到该 Bot；页面会自动刷新"}
 
 
+def apply_wechat_contacts(allowed: list[str], monitored: list[str] | None = None,
+                     *, client: str = "") -> dict:
+    """保存并即时应用微信联系人选择（走 801 /api/contacts/apply）。"""
+    base = GATEWAY_STATUS_URL.rsplit("/status", 1)[0]
+    payload = json.dumps({"allowed_contacts": allowed,
+                          "monitored_contacts": monitored if monitored is not None else allowed},
+                         ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    token = admin_token()
+    if token:
+        headers["X-Admin-Token"] = token
+    request = urllib.request.Request(base + "/api/contacts/apply", data=payload,
+                                     headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            result = json.loads(response.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        return {"ok": False, "error": f"gateway_http_{exc.code}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    audit("contacts_apply", {"allowed": allowed,
+                             "monitored": monitored if monitored is not None else allowed},
+          ok=bool(result.get("ok")), client=client)
+    return result
+
+
 def wechat_contacts() -> dict:
     """从 801 读微信联系人（contact.db 直读；首次可能要提取 DB 密钥，较慢）。"""
     base = GATEWAY_STATUS_URL.rsplit("/status", 1)[0]
@@ -5829,6 +5855,16 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("contact") or ""), body.get("ids") or [],
                     client=client)
                 self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/contacts/apply":
+                allowed = body.get("allowed_contacts") or []
+                monitored = body.get("monitored_contacts")
+                if not isinstance(allowed, list):
+                    self._json(400, {"ok": False, "error": "allowed_contacts 必须是数组"}); return
+                result = apply_wechat_contacts(
+                    [str(x) for x in allowed],
+                    [str(x) for x in monitored] if isinstance(monitored, list) else None,
+                    client=client)
+                self._json(200 if result.get("ok") else 502, result); return
             if path == "/api/test/models":
                 self._json(200, test_model_connectivity()); return
             if path == "/api/model-config":

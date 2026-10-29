@@ -433,6 +433,43 @@ class Gateway:
         self._record("gateway_started", {"allowed": allowed, "monitored": monitored,
                                           "dry_run": bool(self.cfg.get("dry_run", True))})
 
+    def stop_listening(self) -> dict:
+        """停止微信接收（不停进程/引擎）：停 receiver + backend，状态变为未接收。"""
+        if not self.receiver and not self.backend:
+            return {"ok": True, "listening": False, "already_stopped": True}
+        try:
+            if self.receiver:
+                self.receiver.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self.backend:
+                self.backend.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        self.receiver = None
+        self.backend = None
+        self.ready = False
+        self.start_error = "manual_listen_stop"
+        self.stop_event.set()
+        if self.worker and self.worker.is_alive():
+            self.worker.join(timeout=3)
+        self.worker = None
+        self._record("listening_stopped", {"source": "api"})
+        return {"ok": True, "listening": False, "start_error": self.start_error}
+
+    def start_listening(self) -> dict:
+        """重新开始微信接收（不重启进程）。"""
+        if self.receiver or self.backend:
+            return {"ok": True, "listening": True, "already_running": True}
+        self.stop_event.clear()
+        self.start()
+        ok = bool(self.receiver and self.backend)
+        self._record("listening_started" if ok else "listening_start_failed",
+                     {"source": "api", "error": "" if ok else self.start_error})
+        return {"ok": ok, "listening": ok,
+                "error": "" if ok else (self.start_error or "listen_start_failed")}
+
     def stop(self) -> None:
         self.stop_event.set()
         if self.receiver:
@@ -2563,6 +2600,11 @@ def make_handler(gateway: Gateway):
                 result = gateway.apply_contacts(body.get("allowed_contacts"),
                                                 body.get("monitored_contacts"))
                 self._json(200 if result.get("ok") else 500, result)
+                return
+            if path in ("/api/listen/start", "/api/listen/stop"):
+                result = (gateway.start_listening() if path.endswith("/start")
+                          else gateway.stop_listening())
+                self._json(200 if result.get("ok") else 400, result)
                 return
             if path in ("/api/engine/start", "/api/engine/stop"):
                 wanted = path.endswith("/start")

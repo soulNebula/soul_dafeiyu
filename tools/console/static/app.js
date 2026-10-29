@@ -415,7 +415,8 @@ async function renderOverview() {
         <span class="wb-pill ${active ? 'ok' : 'err'}">${active ? '● 微信接收中' : '○ 微信未接收'}</span>
         <span class="wb-pill">会话 ${num(backend.friends_count || 0)}</span>
         <span class="wb-pill">消息 ${num(msgItems.length)}</span>`,
-      right: `<button class="btn small" id="monitor-toggle">${active ? '停止引擎' : '开始引擎'}</button>
+      right: `<button class="btn small" id="listen-toggle">${active ? '停止接收' : '开始接收'}</button>
+        <button class="btn small" id="monitor-toggle">${active ? '停止引擎' : '开始引擎'}</button>
         <button class="btn small" id="switch-bot">切换 Bot</button>
         <button class="btn small" id="wechat-contacts-btn">刷新联系人</button>
         <button class="btn small" id="ov-refresh">刷新</button>`,
@@ -491,6 +492,10 @@ async function renderOverview() {
   const monitorToggle = $('#monitor-toggle');
   if (monitorToggle) {
     monitorToggle.onclick = () => toggleEngine(active ? 'stop' : 'start');
+  }
+  const listenToggle = $('#listen-toggle');
+  if (listenToggle) {
+    listenToggle.onclick = () => toggleListen(active ? 'stop' : 'start');
   }
   document.querySelectorAll('[data-contact]').forEach((node) => {
     node.onclick = () => { state.contact = node.dataset.contact || ''; go('feed'); };
@@ -569,6 +574,23 @@ function bindEngineActions() {
   if (stop) stop.onclick = () => toggleEngine('stop');
   const start = $('#engine-start');
   if (start) start.onclick = () => toggleEngine('start');
+}
+
+async function toggleListen(action) {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  if (action === 'stop' && !window.confirm('停止接收后不再读取微信新消息，引擎/控制台仍可用。确定停止接收？')) return;
+  const button = $('#listen-toggle');
+  const label = button ? button.textContent : '';
+  if (button) { button.disabled = true; button.textContent = '处理中…'; }
+  try {
+    const result = await api('/api/listen/' + action, { method: 'POST', body: {} });
+    if (result.ok === false) throw new Error(result.error || '操作失败');
+    toast(action === 'stop' ? '已停止接收微信消息' : '已开始接收微信消息', 'ok');
+    await renderOverview();
+  } catch (err) {
+    toast(err.message, 'err');
+    if (button) { button.disabled = false; button.textContent = label; }
+  }
 }
 
 async function toggleEngine(action) {

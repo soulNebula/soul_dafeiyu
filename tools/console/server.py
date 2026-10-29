@@ -5118,6 +5118,18 @@ def engine_toggle(action: str, *, client: str = "") -> dict:
     return result
 
 
+def listen_toggle(action: str, *, client: str = "") -> dict:
+    action = str(action or "").strip().lower()
+    if action not in ("start", "stop"):
+        return {"ok": False, "error": "bad_action"}
+    result = _engine_gateway(f"/api/listen/{action}", method="POST")
+    audit("listen_toggle", {"action": action, "ok": bool(result.get("ok")),
+                            "listening": result.get("listening"),
+                            "error": result.get("error") or ""},
+          ok=bool(result.get("ok")), client=client)
+    return result
+
+
 # --------------------------------------------------------------------------- #
 # P17：素材库管理（tools/console/media_store.py 的 HTTP 包装）
 # --------------------------------------------------------------------------- #
@@ -5917,6 +5929,9 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/api/engine/start", "/api/engine/stop"):
                 result = engine_toggle(path.rsplit("/", 1)[-1], client=client)
                 self._json(200, result); return
+            if path in ("/api/listen/start", "/api/listen/stop"):
+                result = listen_toggle(path.rsplit("/", 1)[-1], client=client)
+                self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/bili/login/qr":
                 result = bili_login_qr(client=client)
                 self._json(200 if result.get("ok") else 502, result); return

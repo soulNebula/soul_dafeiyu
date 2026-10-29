@@ -402,8 +402,43 @@ def read_messages(limit: int = 100, contact: str = "") -> dict:
             con.close()
     except sqlite3.Error as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "items": []}
-    return {"ok": True, "db": str(path),
-            "items": [dict(row) for row in reversed(rows)]}
+    items = [dict(row) for row in reversed(rows)]
+    # 图片/表情消息：把 attachments 挂到消息上（前端显示缩略图 + 类型标签）
+    ids = [str(item.get("id") or "") for item in items if item.get("id")]
+    attachments: dict[str, dict] = {}
+    if ids:
+        try:
+            con = _ro_connect(path)
+            try:
+                cols = _columns(con, "attachments")
+                if cols:
+                    qmarks = ",".join("?" for _ in ids)
+                    wanted = [name for name in ("id", "message_id", "kind", "mime", "path")
+                              if name in cols]
+                    for row in con.execute(
+                            f"SELECT {','.join(wanted)} FROM attachments "
+                            f"WHERE message_id IN ({qmarks})", ids):
+                        attachments[str(row["message_id"])] = dict(row)
+            finally:
+                con.close()
+        except sqlite3.Error:
+            attachments = {}
+    chat_dir = Path(SELFLEARN_DIR) / "media_chat"
+    for item in items:
+        att = attachments.get(str(item.get("id") or ""))
+        if not att:
+            continue
+        att = dict(att)
+        target = Path(str(att.get("path") or ""))
+        if not target.is_file():
+            fallback = chat_dir / target.name
+            if fallback.is_file():
+                att["path"] = str(fallback)
+                target = fallback
+        if target.is_file():
+            att["url"] = _media_thumb(str(target))
+        item["attachment"] = att
+    return {"ok": True, "db": str(path), "items": items}
 
 
 def contacts_overview() -> dict:
@@ -1741,6 +1776,7 @@ MEDIA_ASSET_DIRS: tuple[Path, ...] = (
     ROOT / "wx_core" / "emoji_assets",
     ROOT / "media" / "stickers",
     SELFLEARN_DIR / "media",
+    SELFLEARN_DIR / "media_chat",  # 聊天里收到的图片（attachments.path 指向这里）
 )
 MEDIA_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 MEDIA_TEST_CONTACT = "文件传输助手"

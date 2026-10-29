@@ -388,11 +388,30 @@ function wbTopBar({ title, subtitle, pills, right }) {
   </div>`;
 }
 
+function wbMsgTag(m) {
+  const att = (m && m.attachment) || {};
+  const text = String((m && m.text) || '');
+  if (att.kind === 'image') {
+    return att.mime === 'image/gif' ? '<span class="wb-tag">动图</span>' : '<span class="wb-tag">图片</span>';
+  }
+  if (/\[表情包\]/.test(text)) return '<span class="wb-tag">表情包</span>';
+  if (/\[文件\]/.test(text)) return '<span class="wb-tag">文件</span>';
+  if (/\[语音\]/.test(text)) return '<span class="wb-tag">语音</span>';
+  return '';
+}
+
+function wbMediaHtml(m) {
+  const att = (m && m.attachment) || {};
+  if (!att.url) return '';
+  return `<img class="wb-msg-img" src="${esc(att.url)}" loading="lazy" alt="图片">`;
+}
+
 function wbMessageBubble(m) {
   const mine = m.role !== 'user';
   const text = String(m.text || '');
   return `<div class="wb-msg ${mine ? 'mine' : ''}">
-    <div class="wb-msg-head">${mine ? '小鱼' : '对方'} · ${fmtTime(m.ts)}</div>
+    <div class="wb-msg-head">${mine ? '小鱼' : '对方'} ${wbMsgTag(m)} · ${fmtTime(m.ts)}</div>
+    ${wbMediaHtml(m)}
     <div class="wb-msg-text">${esc(text)}</div>
   </div>`;
 }
@@ -693,7 +712,8 @@ function wbMessageList(items) {
   return rows.map((m) => {
     const mine = m.role !== 'user';
     return `<div class="wb-msg ${mine ? 'mine' : ''}">
-      <div class="wb-msg-head">${mine ? '小鱼' : '对方'} · ${fmtTime(m.ts)}</div>
+      <div class="wb-msg-head">${mine ? '小鱼' : '对方'} ${wbMsgTag(m)} · ${fmtTime(m.ts)}</div>
+      ${wbMediaHtml(m)}
       <div class="wb-msg-text">${esc(String(m.text || ''))}</div>
     </div>`;
   }).join('');

@@ -2260,6 +2260,12 @@ def test_contacts_overview_and_messages_by_contact(tmp_path, monkeypatch):
     con = sqlite3.connect(db)
     con.execute("CREATE TABLE messages(id TEXT, role TEXT, text TEXT, ts REAL)")
     con.execute("INSERT INTO messages VALUES('m1','user','你好',100.0)")
+    con.execute("CREATE TABLE attachments(id TEXT, message_id TEXT, kind TEXT,"
+                " mime TEXT, path TEXT)")
+    pic = tmp_path / "pic.png"
+    pic.write_bytes(b"png")
+    con.execute("INSERT INTO attachments VALUES('ATT-1','m1','image','image/png',?)",
+                (str(pic),))
     con.commit(); con.close()
 
     monkeypatch.setattr(console, "_contact_aliases",
@@ -2275,3 +2281,5 @@ def test_contacts_overview_and_messages_by_contact(tmp_path, monkeypatch):
     got = console.read_messages(10, "甲")
     assert got["ok"] and len(got["items"]) == 1
     assert got["items"][0]["text"] == "你好"
+    attachment = got["items"][0]["attachment"]
+    assert attachment["kind"] == "image" and attachment["url"].startswith("/api/media/file?path=")

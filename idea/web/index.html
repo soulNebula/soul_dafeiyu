@@ -269,14 +269,29 @@
         <div class="panel">
           <div class="panel-head"><h3>新建 Bot（云端方案）</h3><span class="muted small">密钥只写 Bot 的 secrets.json，不显示明文</span></div>
           <div class="form-grid">
-            <label class="field"><span>Bot 目录（用户自选）</span><input id="bot-path" placeholder="E:/bots/xiaoyu"></label>
+            <label class="field wide"><span>Bot 目录（用户自选）</span>
+              <div class="row"><input id="bot-path" placeholder="点右侧选择文件夹" style="flex:1">
+                <button class="btn small" id="bot-pick-dir" type="button">选择目录</button></div></label>
             <label class="field"><span>Bot 名称</span><input id="bot-name" placeholder="小鱼"></label>
             <label class="field"><span>802 登录密码（至少 6 位）</span><input id="bot-password" type="password" placeholder="登录 802 用"></label>
-            <label class="field"><span>聊天 base_url</span><input id="bot-base-url" value="https://api.deepseek.com"></label>
-            <label class="field"><span>聊天模型</span><input id="bot-model" value="deepseek-flash"></label>
+            <label class="field"><span>聊天服务商</span><select id="bot-provider"></select></label>
+            <label class="field wide"><span>聊天 base_url（可改）</span><input id="bot-base-url" value="https://api.deepseek.com"></label>
+            <label class="field"><span>聊天模型</span>
+              <input id="bot-model" list="bot-model-list" value="deepseek-flash" placeholder="可选或手填">
+              <datalist id="bot-model-list"></datalist></label>
             <label class="field"><span>聊天 API key</span><input id="bot-api-key" type="password" placeholder="sk-..."></label>
-            <label class="field"><span>灵魂 base_url（空=同聊天）</span><input id="bot-soul-base-url" placeholder="（可空）"></label>
-            <label class="field"><span>灵魂模型（空=同聊天）</span><input id="bot-soul-model" placeholder="（可空）"></label>
+            <label class="field"><span>灵魂服务商 / base_url</span>
+              <select id="bot-soul-base-url">
+                <option value="">同聊天</option>
+              </select>
+              <input id="bot-soul-base-url-custom" placeholder="自定义灵魂 base_url" style="display:none">
+            </label>
+            <label class="field"><span>灵魂模型</span>
+              <select id="bot-soul-model">
+                <option value="">同聊天</option>
+              </select>
+              <input id="bot-soul-model-custom" placeholder="自定义灵魂模型" style="display:none">
+            </label>
             <label class="field"><span>灵魂 API key（空=同聊天）</span><input id="bot-soul-key" type="password" placeholder="（可空）"></label>
           </div>
           <div class="actions">
@@ -444,7 +459,73 @@ function term(text, target='') {
   openTerminal(true);
 }
 /* ---------------- Bot 管理（Phase 1B） ---------------- */
+const BOT_PROVIDERS = [
+  {label: 'DeepSeek', base: 'https://api.deepseek.com',
+   models: ['deepseek-flash', 'deepseek-chat', 'deepseek-reasoner']},
+  {label: 'OpenAI', base: 'https://api.openai.com/v1',
+   models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'o4-mini']},
+  {label: '阿里百炼', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+   models: ['qwen-plus', 'qwen-max', 'qwen-vl-max', 'qwen2.5-72b-instruct']},
+  {label: '硅基流动', base: 'https://api.siliconflow.cn/v1',
+   models: ['Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen2.5-VL-7B-Instruct', 'deepseek-ai/DeepSeek-V3']},
+  {label: 'Ollama（本地）', base: 'http://127.0.0.1:11434/v1',
+   models: ['qwen2.5:7b', 'qwen2.5vl:7b', 'llama3.1:8b']},
+  {label: '自定义', base: '', models: []},
+];
+let _botFormReady = false;
+function allBotModels() {
+  const out = [];
+  BOT_PROVIDERS.forEach(p => (p.models || []).forEach(m => { if (!out.includes(m)) out.push(m); }));
+  return out;
+}
+function initBotForm() {
+  if (_botFormReady) return;
+  _botFormReady = true;
+  const provider = $('#bot-provider');
+  const list = $('#bot-model-list');
+  const soulBase = $('#bot-soul-base-url');
+  const soulModel = $('#bot-soul-model');
+  provider.innerHTML = BOT_PROVIDERS.map((p, i) => `<option value="${i}">${p.label}</option>`).join('');
+  allBotModels().forEach(m => {
+    const opt = document.createElement('option'); opt.value = m; list.appendChild(opt);
+  });
+  soulBase.innerHTML = '<option value="">同聊天</option>' + BOT_PROVIDERS
+    .filter(p => p.base).map(p => `<option value="${esc(p.base)}">${esc(p.label)} · ${esc(p.base)}</option>`).join('')
+    + '<option value="__custom__">自定义 base_url…</option>';
+  soulModel.innerHTML = '<option value="">同聊天</option>' + allBotModels()
+    .map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('')
+    + '<option value="__custom__">自定义模型…</option>';
+  const applyProvider = (idx) => {
+    const p = BOT_PROVIDERS[Number(idx)] || BOT_PROVIDERS[0];
+    if (p.base) $('#bot-base-url').value = p.base;
+    $('#bot-model').value = (p.models || [])[0] || '';
+    list.innerHTML = '';
+    (p.models || []).forEach(m => {
+      const opt = document.createElement('option'); opt.value = m; list.appendChild(opt);
+    });
+  };
+  provider.onchange = () => applyProvider(provider.value);
+  soulBase.onchange = () => {
+    $('#bot-soul-base-url-custom').style.display = soulBase.value === '__custom__' ? '' : 'none';
+  };
+  soulModel.onchange = () => {
+    $('#bot-soul-model-custom').style.display = soulModel.value === '__custom__' ? '' : 'none';
+  };
+  const pick = $('#bot-pick-dir');
+  if (pick) pick.onclick = async () => {
+    try {
+      const result = await api('/api/wb/pick-directory', {
+        method: 'POST', body: {initial: ($('#bot-path').value || '').trim()},
+      });
+      if (result.ok && result.path) $('#bot-path').value = result.path;
+      else if (result.error && result.error !== 'cancelled') toast(result.error, 'bad');
+    } catch (err) { toast(err.message, 'bad'); }
+  };
+  applyProvider('0');
+}
+
 async function loadBots() {
+  initBotForm();
   const list = $('#bot-list');
   if (list) list.innerHTML = '<div class="muted small">加载中…</div>';
   let data = null;
@@ -484,6 +565,10 @@ async function loadBots() {
 
 async function createBot() {
   const result = $('#bot-result');
+  let soulBase = $('#bot-soul-base-url').value || '';
+  if (soulBase === '__custom__') soulBase = ($('#bot-soul-base-url-custom').value || '').trim();
+  let soulModel = $('#bot-soul-model').value || '';
+  if (soulModel === '__custom__') soulModel = ($('#bot-soul-model-custom').value || '').trim();
   const payload = {
     path: ($('#bot-path').value || '').trim(),
     name: ($('#bot-name').value || '').trim(),
@@ -491,8 +576,8 @@ async function createBot() {
     base_url: ($('#bot-base-url').value || '').trim(),
     model: ($('#bot-model').value || '').trim(),
     api_key: $('#bot-api-key').value || '',
-    soul_base_url: ($('#bot-soul-base-url').value || '').trim(),
-    soul_model: ($('#bot-soul-model').value || '').trim(),
+    soul_base_url: soulBase,
+    soul_model: soulModel,
     soul_api_key: $('#bot-soul-key').value || '',
   };
   if (!payload.path || !payload.name) { toast('请填 Bot 目录和名称', 'bad'); return; }

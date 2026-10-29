@@ -397,3 +397,7 @@ body.term-resizing #shell { transition: none; }
   display: flex; justify-content: space-between; gap: 10px; align-items: center; }
 .distill-dataset-row .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .distill-dataset-row .mono { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Bot 表单：路径/URL 占两列 */
+.form-grid .field.wide { grid-column: span 2; }
+@media (max-width: 1200px) { .form-grid .field.wide { grid-column: span 1; } }

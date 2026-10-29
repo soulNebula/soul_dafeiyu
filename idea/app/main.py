@@ -97,6 +97,34 @@ def bots_list():
     return botstudio.list_bots()
 
 
+def pick_directory(initial: str = "") -> dict:
+    """在本机弹出系统文件夹选择框（803 与用户同机；无桌面会话时返回错误）。"""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"tkinter_unavailable: {exc}"}
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        path = filedialog.askdirectory(
+            title="选择 Bot 目录（会自动创建）",
+            initialdir=initial if initial and Path(initial).is_dir() else str(Path.home()),
+        )
+        root.destroy()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"dialog_failed: {exc}"}
+    if not path:
+        return {"ok": False, "error": "cancelled"}
+    return {"ok": True, "path": path}
+
+
+@app.post("/api/wb/pick-directory", dependencies=[Depends(require_token)])
+def wb_pick_directory(body: dict | None = None):
+    return pick_directory(str((body or {}).get("initial") or ""))
+
+
 @app.post("/api/wb/bots/create", dependencies=[Depends(require_token)])
 def bots_create(body: dict | None = None):
     return botstudio.create_bot(body or {})

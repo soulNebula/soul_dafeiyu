@@ -76,3 +76,5 @@ tools/desktop/build/
 
 # 临时目录（acceptance/Edge 等）
 tmp*/
+tools/desktop/dist/
+tools/desktop/build/

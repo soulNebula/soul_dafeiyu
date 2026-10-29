@@ -25,7 +25,6 @@ Write-Host "[build] PyInstaller 打包 ..."
     --workpath $Build `
     --specpath $Build `
     --hidden-import agi.paths `
-    --collect-submodules agi `
     (Join-Path $RepoRoot "tools\desktop\desktop_entry.py")
 
 $Exe = Join-Path $Dist "SoulAgentDesktop\SoulAgentDesktop.exe"

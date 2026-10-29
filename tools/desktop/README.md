@@ -12,6 +12,15 @@
 纯 Python 标准库 + 系统自带 PowerShell/.NET，**不需要 pip 安装任何东西**；
 Tauri 打包留到后续（见文末迁移说明）。
 
+## 推荐启动方式（2026-10-29 更新）
+
+- **桌面快捷方式「小鱼桌面版」**：目标 `C:\Python314\pythonw.exe`，参数 `tools\desktop\launcher.py --tray`。
+  没有控制台窗口，直接起 801/802/803 + 托盘 + Edge app 窗口。
+- **不要用「以管理员身份运行」**：管理员启动会让 Edge 继承提权，弹出
+  「现有实例正在以提升的权限运行」；launcher 检测到管理员会改用普通权限的默认浏览器打开。
+- exe（PyInstaller）目录已移除：本机实测被安全软件/加载器拦成 0xc0000142，
+  源启动方式稳定；`build_exe.ps1` 仍保留，需要时再构建（换机器/关拦截后可用）。
+
 ## 快速开始
 
 双击仓库根目录的 **`启动桌面版.bat`**（或命令行 `python tools/desktop/launcher.py`）。

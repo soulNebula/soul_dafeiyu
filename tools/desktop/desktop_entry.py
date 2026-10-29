@@ -18,5 +18,26 @@ if str(HERE) not in sys.path:
 
 import launcher  # noqa: E402  （同目录模块，PyInstaller 会一起打包）
 
+
+def _log_crash(exc: BaseException) -> None:
+    """把未捕获异常写到仓库 .data/desktop_crash.log（打包后无控制台，便于排查）。"""
+    import datetime
+    import traceback
+    try:
+        log_dir = launcher.ROOT / ".data"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with (log_dir / "desktop_crash.log").open("a", encoding="utf-8") as fh:
+            fh.write("\n===== " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " =====\n")
+            fh.write("".join(traceback.format_exception(exc)))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 if __name__ == "__main__":
-    raise SystemExit(launcher.main())
+    try:
+        raise SystemExit(launcher.main())
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001
+        _log_crash(exc)
+        raise

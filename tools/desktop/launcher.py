@@ -378,6 +378,49 @@ def build_browser_argv(browser: Path | str, url: str, profile_dir: Path | str) -
             "--no-first-run", f"--user-data-dir={Path(profile_dir)}"]
 
 
+def is_elevated() -> bool:
+    """当前进程是否以管理员（提升）权限运行。"""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _open_url_via_explorer(url: str) -> bool:
+    """用 explorer.exe（普通权限）打开 URL，避免 Edge「现有实例以提升权限运行」弹窗。"""
+    try:
+        subprocess.Popen(["explorer.exe", url], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _hidden_powershell(script: str, *, timeout: float = 8.0) -> str:
+    """执行 PowerShell 并**完全隐藏窗口**（否则 exe 每次查询都会闪一个黑色/管理员窗口）。"""
+    kwargs: dict = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.DEVNULL,
+        "timeout": max(2.0, float(timeout)),
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    try:
+        proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
+                               "-WindowStyle", "Hidden", "-Command", script], **kwargs)
+        raw = proc.stdout or b""
+    except Exception:  # noqa: BLE001
+        return ""
+    text = raw.decode("utf-8", "replace")
+    if "�" in text:
+        text = raw.decode("gbk", "replace")
+    return text
+
+
 def _edge_app_pids(profile: Path) -> tuple[list[int], list[int]]:
     """返回 (带 --app 的窗口 PID, 只挂着该 profile 的后台 PID)。仅 Windows 用。"""
     if os.name != "nt":
@@ -388,16 +431,7 @@ def _edge_app_pids(profile: Path) -> tuple[list[int], list[int]]:
         "Where-Object { $_.CommandLine -like '*" + marker + "*' } | "
         "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }"
     )
-    try:
-        proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
-                               "-Command", script],
-                              capture_output=True, timeout=10)
-        raw = proc.stdout or b""
-        text = raw.decode("utf-8", "replace")
-        if "�" in text:
-            text = raw.decode("gbk", "replace")
-    except Exception:  # noqa: BLE001
-        return [], []
+    text = _hidden_powershell(script, timeout=10)
     apps: list[int] = []
     bg: list[int] = []
     for line in (text or "").splitlines():
@@ -416,29 +450,100 @@ def _edge_app_pids(profile: Path) -> tuple[list[int], list[int]]:
     return apps, bg
 
 
-def _prepare_edge_profile(profile: Path) -> bool:
-    """已有本 launch profile 的 app 窗口 → 复用（True，不再新开）。
+def _window_titles_for_pids(pids: set[int]) -> dict[int, str]:
+    """用 Win32 EnumWindows 取这些 PID 的可见顶层窗口标题（无外部进程、无弹窗）。"""
+    if os.name != "nt" or not pids:
+        return {}
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    titles: dict[int, str] = {}
 
-    只剩后台进程（上次 Edge 没退干净、会吞掉新 --app 调用导致空白窗口）→ 清掉。
-    """
-    apps, bg = _edge_app_pids(profile)
-    if apps:
-        return True
-    for pid in bg:
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _enum(hwnd, _lparam):  # noqa: ANN001
         try:
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if int(pid.value) not in pids:
+                return True
+            length = int(user32.GetWindowTextLengthW(hwnd))
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            titles[int(pid.value)] = str(buf.value or "")
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+
+    try:
+        user32.EnumWindows(_enum, 0)
+    except Exception:  # noqa: BLE001
+        return {}
+    return titles
+
+
+def _edge_window_title(pid: int) -> str:
+    return _window_titles_for_pids({int(pid)}).get(int(pid), "")
+
+
+def _kill_pids(pids: list[int]) -> None:
+    for pid in pids:
+        try:
+            subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"],
                            capture_output=True, timeout=10)
         except Exception:  # noqa: BLE001
             pass
+
+
+def _prepare_edge_profile(profile: Path, *, expect_title: str = "Soul Console") -> bool:
+    """已有加载完成的 app 窗口 → 复用（True）。
+
+    标题里没有 expect_title（典型是空白窗，标题只有 127.0.0.1）→ 关掉重开，
+    否则会一直复用那个空白窗（2026-10-29 用户截图反馈）。
+    """
+    apps, bg = _edge_app_pids(profile)
+    loaded: list[int] = []
+    stale: list[int] = []
+    for pid in apps:
+        title = _edge_window_title(pid)
+        if expect_title and expect_title in title:
+            loaded.append(pid)
+        else:
+            stale.append(pid)
+    if loaded:
+        return True
+    _kill_pids(stale + bg)
+    return False
+
+
+def _wait_edge_loaded(profile: Path, timeout: float = 25.0,
+                      *, expect_title: str = "Soul Console") -> bool:
+    """开窗后等标题出现；返回是否加载成功。"""
+    deadline = time.time() + max(3.0, float(timeout))
+    while time.time() < deadline:
+        apps, _bg = _edge_app_pids(profile)
+        for pid in apps:
+            if expect_title in _edge_window_title(pid):
+                return True
+        time.sleep(0.8)
     return False
 
 
 def launch_window(*, url: str = CONSOLE_URL, profile_dir: Path | str | None = None,
                   browser: Path | str | None = None) -> dict[str, Any]:
     """打开控制台的独立窗口；返回窗口信息（含内部 ``_proc`` 供等待用，落盘时剔除）。"""
+    if is_elevated() and not os.environ.get("SOULAGENT_DESKTOP_ALLOW_ELEVATED_BROWSER"):
+        # 管理员启动会带出「Edge 未响应：现有实例正在以提升的权限运行」的弹窗，
+        # 这里直接用普通权限的 explorer 打开默认浏览器（用户请用桌面快捷方式正常启动）。
+        if _open_url_via_explorer(url):
+            print("[desktop] 当前以管理员运行：已用普通权限浏览器打开（桌面窗口模式请正常双击，不要用『以管理员身份运行』）",
+                  file=sys.stderr)
+            return {"mode": "default", "pid": None, "url": url, "argv": [],
+                    "profile_dir": "", "_proc": None}
     profile = Path(profile_dir or PROFILE_DIR)
     profile.mkdir(parents=True, exist_ok=True)
-    # 已开着 app 窗口就直接复用；只剩后台 Edge 进程会吞掉新调用 → 先清掉
+    # 已开着且加载完成的 app 窗口 → 复用；空白/残留窗口先关掉
     if _prepare_edge_profile(profile):
         print("[desktop] 检测到已打开的控制台窗口，直接复用（不重复开）")
         return {"pid": 0, "mode": "edge", "reused": True, "url": url}
@@ -449,6 +554,18 @@ def launch_window(*, url: str = CONSOLE_URL, profile_dir: Path | str | None = No
     if path is not None:
         argv = build_browser_argv(path, url, profile)
         proc = _popen_browser(argv)
+        # 等页面真正加载（标题出现）；空白窗/首次冷启动过长 → 重开一次
+        if not _wait_edge_loaded(profile):
+            print("[desktop] 窗口未在 25s 内加载，重开一次", file=sys.stderr)
+            apps, bg = _edge_app_pids(profile)
+            _kill_pids(apps + bg)
+            time.sleep(1.0)
+            proc = _popen_browser(argv)
+            if not _wait_edge_loaded(profile, timeout=30.0):
+                print("[desktop] 重开后仍未加载：已回退系统默认浏览器打开", file=sys.stderr)
+                _open_default_browser(url)
+                return {"mode": "default", "pid": None, "url": url,
+                        "argv": [], "profile_dir": str(profile), "_proc": None}
         return {"mode": mode, "pid": int(getattr(proc, "pid", 0) or 0), "url": url,
                 "argv": argv, "profile_dir": str(profile), "_proc": proc}
     opened = _open_default_browser(url)

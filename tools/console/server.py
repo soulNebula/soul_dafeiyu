@@ -2153,6 +2153,10 @@ def manual_send(contact: str, text: str, *, client: str = "") -> dict:
             detail = {}
         return {"ok": False, "error": detail.get("error") or f"gateway http {exc.code}",
                 "detail": detail}
+    except urllib.error.URLError as exc:
+        return {"ok": False,
+                "error": "801 网关未就绪（连接被拒绝）：请确认网关已启动后重试",
+                "detail": str(getattr(exc, "reason", exc))}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     result = result if isinstance(result, dict) else {}

@@ -408,6 +408,7 @@ async function renderOverview() {
       ${item.current ? '<span class="wb-tag">当前</span>' : ''}
     </div>`).join('') : '<div class="empty">暂无联系人库</div>';
 
+  const engineOn = Boolean(engine && engine.ok !== false && engine.enabled);
   const html = `
     ${wbTopBar({
       title: '消息分析台', subtitle: `Soul Console · 127.0.0.1:802 · 当前库 ${esc((contacts && contacts.current_label) || '—')}`,
@@ -416,7 +417,7 @@ async function renderOverview() {
         <span class="wb-pill">会话 ${num(backend.friends_count || 0)}</span>
         <span class="wb-pill">消息 ${num(msgItems.length)}</span>`,
       right: `<button class="btn small" id="listen-toggle">${active ? '停止接收' : '开始接收'}</button>
-        <button class="btn small" id="monitor-toggle">${active ? '停止引擎' : '开始引擎'}</button>
+        <button class="btn small" id="monitor-toggle">${engineOn ? '停止引擎' : '开始引擎'}</button>
         <button class="btn small" id="switch-bot">切换 Bot</button>
         <button class="btn small" id="wechat-contacts-btn">刷新联系人</button>
         <button class="btn small" id="ov-refresh">刷新</button>`,
@@ -491,7 +492,7 @@ async function renderOverview() {
   };
   const monitorToggle = $('#monitor-toggle');
   if (monitorToggle) {
-    monitorToggle.onclick = () => toggleEngine(active ? 'stop' : 'start');
+    monitorToggle.onclick = () => toggleEngine(engineOn ? 'stop' : 'start');
   }
   const listenToggle = $('#listen-toggle');
   if (listenToggle) {

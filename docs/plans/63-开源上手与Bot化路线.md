@@ -205,12 +205,16 @@
 7. **训练数据删除前二次确认** ✅
 8. **群聊入口灰度保留（置灰/说明暂不支持）** ✅
 
-## 7. 当前进度（Phase 1A）
+## 7. 当前进度（Phase 1A / 1B）
 
 - ✅ `setup.ps1`：环境检查 / 自动装 Python / 国内源 venv / 803 启动（含 `-CheckOnly`）
 - ✅ `tools/bot_profile.py`：Bot 包 v1 schema、创建/校验/读取、密码 PBKDF2、secrets 与 bot.json 分离
-- ✅ 单测 `agi/tests/test_bot_profile.py` 5 条
-- ⏳ 下一步：803 Bot 管理 API/页面；802 登录 + 加载 Bot + 刷新微信联系人；设置页统一保存
+- ✅ 803「Bot 管理」页 + `/api/wb/bots/*`（创建/添加/校验/移除登记）
+- ✅ `agi/bot_runtime.py`：`<Bot>/data` 运行时根、活跃指针、`SOULAGENT_*` 环境变量
+- ✅ `tools/bot_activate.py`：校验密码 → 准备数据根 → 结束旧 801/802 → 按 Bot 环境重启
+- ✅ 802：Bot 登录/加载弹层、`/api/bot/info|login|load|switch-status`；无 Bot 时可「跳过」用当前数据
+- ✅ 测试：bot_profile 5、bot_activate 2、botstudio 3；803 104 passed
+- ⏳ 下一步：802 刷新微信联系人/单多选；Bot 设置页统一保存；对话测试/开始运行
 
 
 1. **Bot 包放哪**：用户自选目录（推荐，可备份/迁移）还是仓库内 `bots/`（简单但易误提交）？

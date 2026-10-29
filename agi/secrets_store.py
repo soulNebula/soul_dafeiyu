@@ -155,8 +155,13 @@ def _text(value: Any) -> str:
 
 
 def llm_api_key(path: Path | str | None = None) -> str:
-    """``secrets.llm.api_key``（没有则空串）。调用方仍应让 env 优先。"""
-    return _text(section("llm", path).get("api_key"))
+    """``secrets.llm.api_key``；兼容 Bot 包格式 ``providers.chat.api_key``。"""
+    text = _text(section("llm", path).get("api_key"))
+    if text:
+        return text
+    providers = section("providers", path)
+    chat = providers.get("chat") if isinstance(providers, dict) else None
+    return _text((chat or {}).get("api_key") if isinstance(chat, dict) else "")
 
 
 def llm_base_url(path: Path | str | None = None) -> str:

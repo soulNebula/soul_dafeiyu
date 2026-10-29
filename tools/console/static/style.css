@@ -626,3 +626,22 @@ table td input[type="number"], table td select { padding: 3px 6px; font-size: 12
 .wb-composer { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
 .wb-composer textarea { flex: 1; resize: vertical; min-height: 40px; max-height: 120px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
 .wb-composer .btn { height: 40px; }
+
+/* ---------------- Bot 登录/加载（Phase 1B） ---------------- */
+#bot-gate {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(10, 10, 10, .72);
+  display: grid; place-items: center;
+}
+.bot-gate-card {
+  width: min(460px, 92vw); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 14px;
+  padding: 22px; box-shadow: 0 20px 60px rgba(0,0,0,.45);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.bot-gate-title { font-size: 18px; font-weight: 700; margin-bottom: 2px; }
+.bot-gate-card input {
+  width: 100%; padding: 9px 11px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-2);
+}
+.bot-gate-card .row { display: flex; gap: 8px; }

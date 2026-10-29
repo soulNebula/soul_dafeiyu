@@ -111,6 +111,9 @@ def create_bot(body: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "name_required"}
     mode = str(body.get("mode") or "cloud").strip().lower()
     password = str(body.get("password") or "")
+    if len(password) < 6:
+        return {"ok": False, "error": "password_required",
+                "hint": "802 登录需要 Bot 密码（至少 6 位）"}
     chat = {
         "base_url": str(body.get("base_url") or "https://api.deepseek.com").strip(),
         "model": str(body.get("model") or "deepseek-flash").strip(),

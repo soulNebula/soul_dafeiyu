@@ -4095,6 +4095,110 @@ async function go(page, auto) {
   }
 }
 
+/* ---------------- Bot 登录/加载（Phase 1B） ---------------- */
+function botGateShell(title, bodyHtml) {
+  const old = document.getElementById('bot-gate');
+  if (old) old.remove();
+  const wrap = document.createElement('div');
+  wrap.id = 'bot-gate';
+  wrap.innerHTML = `<div class="bot-gate-card">
+    <div class="bot-gate-title">${title}</div>
+    ${bodyHtml}
+  </div>`;
+  document.body.appendChild(wrap);
+  return wrap;
+}
+
+function closeBotGate() {
+  const el = document.getElementById('bot-gate');
+  if (el) el.remove();
+}
+
+function showBotLogin(info) {
+  botGateShell('登录 Bot', `
+    <div class="muted">${esc(info.name || '')} · ${esc(info.path || '')}</div>
+    <input id="bot-gate-password" type="password" placeholder="Bot 登录密码" autocomplete="off">
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" id="bot-gate-login">登录</button>
+      <button class="btn" id="bot-gate-switch">切换 Bot</button>
+    </div>
+    <div id="bot-gate-msg" class="hint"></div>`);
+  const submit = async () => {
+    const pw = ($('#bot-gate-password') || {}).value || '';
+    const msg = $('#bot-gate-msg');
+    try {
+      const result = await api('/api/bot/login', { method: 'POST', body: { password: pw } });
+      state.token = result.token || '';
+      sessionStorage.setItem('console_token', state.token);
+      closeBotGate();
+      if (state.token) location.reload();
+    } catch (err) {
+      if (msg) msg.textContent = err.message;
+    }
+  };
+  $('#bot-gate-login').onclick = submit;
+  $('#bot-gate-password').onkeydown = (ev) => { if (ev.key === 'Enter') submit(); };
+  $('#bot-gate-switch').onclick = () => showBotLoad();
+}
+
+function showBotLoad() {
+  botGateShell('加载 Bot（首次使用）', `
+    <div class="muted">选择在 803「Bot 管理」里创建的 Bot 目录；加载会重启 801/802（约 5–10 秒）。</div>
+    <input id="bot-gate-path" placeholder="Bot 目录，例如 E:/bots/xiaoyu">
+    <input id="bot-gate-password" type="password" placeholder="Bot 登录密码">
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" id="bot-gate-load">加载并登录</button>
+      <button class="btn" id="bot-gate-skip">跳过（继续用当前数据）</button>
+    </div>
+    <div id="bot-gate-msg" class="hint"></div>`);
+  const skip = $('#bot-gate-skip');
+  if (skip) skip.onclick = closeBotGate;
+  $('#bot-gate-load').onclick = async () => {
+    const path = ($('#bot-gate-path') || {}).value || '';
+    const password = ($('#bot-gate-password') || {}).value || '';
+    const msg = $('#bot-gate-msg');
+    if (!path) { if (msg) msg.textContent = '请填 Bot 目录'; return; }
+    if (msg) msg.textContent = '正在校验并重启服务…';
+    try {
+      const result = await api('/api/bot/load', { method: 'POST', body: { path, password } });
+      if (result.token) {
+        state.token = result.token;
+        sessionStorage.setItem('console_token', state.token);
+      }
+      const started = Date.now();
+      const timer = setInterval(async () => {
+        try {
+          const res = await fetch('/api/health', { cache: 'no-store' });
+          if (res.ok) {
+            const status = await fetch('/api/bot/switch-status', { cache: 'no-store' })
+              .then(r => r.json()).catch(() => ({}));
+            const ready = !status.status || status.status.state === 'ready';
+            if (ready) { clearInterval(timer); location.reload(); return; }
+          }
+        } catch (e) { /* 服务重启中 */ }
+        if (Date.now() - started > 90000) {
+          clearInterval(timer);
+          if (msg) msg.textContent = '重启超时：看 Bot 目录下 logs/bot_*.log';
+        }
+      }, 1500);
+    } catch (err) {
+      if (msg) msg.textContent = err.message;
+    }
+  };
+}
+
+async function initBotGate() {
+  let info = null;
+  try { info = await api('/api/bot/info'); } catch (e) { return; }
+  if (!info || !info.active) {
+    // 老用户已有 token：不强制拦；新用户/无 token 才引导加载 Bot
+    if (!state.token) showBotLoad();
+    return;
+  }
+  if (!state.token) showBotLogin(info);
+}
+
+
 function bindGlobal() {
   $$('.nav-item').forEach((item) => item.addEventListener('click', () => go(item.dataset.page)));
   window.addEventListener('hashchange', () => go(location.hash.replace('#', '') || 'overview'));
@@ -4150,6 +4254,7 @@ function bindGlobal() {
   }, 3000);
 }
 
+initBotGate();
 bindGlobal();
 bindSendMode();
 loadSendMode();

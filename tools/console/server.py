@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -39,8 +40,8 @@ from pathlib import Path as _Path
 _ROOT = _Path(__file__).resolve().parents[2]
 if str(_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_ROOT))
-from agi.paths import agent_path
-DATA_DIR = ROOT / "agi" / "data"
+from agi.paths import agent_path, config_path, data_dir, log_dir, web_config_path
+DATA_DIR = data_dir()
 GATEWAY_DIR = DATA_DIR / "wechat"
 GATEWAY_LOG = GATEWAY_DIR / "gateway.log"
 GATEWAY_CONFIG = GATEWAY_DIR / "config.json"
@@ -50,7 +51,7 @@ GATEWAY_STATUS_URL = "http://127.0.0.1:801/status"
 SELFLEARN_DIR = DATA_DIR / "selflearn"
 CONTACTS_DIR = SELFLEARN_DIR / "wechat_contacts"
 PROMPTS_PATH = DATA_DIR / "prompts.json"
-LOG_DIR = ROOT / "log"
+LOG_DIR = log_dir()
 LOG_MESSAGES = LOG_DIR / "messages.jsonl"
 LOG_CHAT = LOG_DIR / "聊天记录.txt"
 BACKUP_DIR = agent_path(r"backups")
@@ -172,6 +173,95 @@ def set_stop(enabled: bool, *, client: str = "") -> dict:
     audit("proactive_stop" if enabled else "proactive_resume",
           {"enabled": enabled}, ok=True, client=client)
     return {"ok": True, "stopped": bool(enabled), "path": str(target)}
+
+
+def _bot_profile():
+    from tools import bot_profile  # 延迟导入：普通控制台启动不依赖 Bot 功能
+    return bot_profile
+
+
+def bot_info() -> dict:
+    """当前活跃 Bot（未激活时 active=false）；无需 token，只给名称/路径/是否要密码。"""
+    from agi import bot_runtime
+    active = bot_runtime.read_active()
+    status = bot_runtime.read_switch_status()
+    if not active:
+        return {"ok": True, "active": False, "switch": status}
+    path = str(active.get("path") or "")
+    info: dict = {"ok": True, "active": True, "path": path,
+                  "name": active.get("name") or Path(path).name,
+                  "mode": active.get("mode") or "", "switch": status,
+                  "password_required": False}
+    try:
+        bot = _bot_profile().load_bot(path)
+        info["name"] = bot.get("name") or info["name"]
+        info["password_required"] = bool((bot.get("auth") or {}).get("password_hash"))
+    except Exception as exc:  # noqa: BLE001
+        info["error"] = f"{type(exc).__name__}: {exc}"
+    return info
+
+
+def bot_login(password: str, *, client: str = "") -> dict:
+    """用 Bot 密码登录 802，返回该 Bot 的 admin token（供 X-Admin-Token）。"""
+    from agi import bot_runtime
+    active = bot_runtime.read_active()
+    if not active:
+        return {"ok": False, "error": "no_active_bot"}
+    path = str(active.get("path") or "")
+    try:
+        profile = _bot_profile()
+        bot = profile.load_bot(path)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"bot_unreadable: {exc}"}
+    auth = bot.get("auth") or {}
+    stored = str(auth.get("password_hash") or "")
+    if stored and not _bot_profile().verify_password(str(password or ""), stored):
+        return {"ok": False, "error": "bad_password"}
+    token = str(auth.get("admin_token") or "")
+    if not token:
+        return {"ok": False, "error": "bot_missing_admin_token"}
+    audit("bot_login", {"bot": bot.get("name"), "path": path}, ok=True, client=client)
+    return {"ok": True, "token": token, "bot": {"name": bot.get("name"), "path": path}}
+
+
+def bot_load(path: str, password: str, *, client: str = "") -> dict:
+    """校验 Bot 密码后，后台重启 801/802 到该 Bot 的数据根。"""
+    from agi import bot_runtime
+    raw = str(path or "").strip()
+    if not raw:
+        return {"ok": False, "error": "path_required"}
+    try:
+        profile = _bot_profile()
+        validation = profile.validate_bot(raw)
+        if not validation.get("ok"):
+            return {"ok": False, "error": "invalid_bot", "validation": validation}
+        bot = profile.load_bot(raw)
+        stored = str((bot.get("auth") or {}).get("password_hash") or "")
+        if not stored:
+            return {"ok": False, "error": "bot_password_required",
+                    "hint": "请在 803 重新创建该 Bot 并设置登录密码"}
+        if not profile.verify_password(str(password or ""), stored):
+            return {"ok": False, "error": "bad_password"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    python = sys.executable
+    helper = ROOT / "tools" / "bot_activate.py"
+    flags = 0
+    if os.name == "nt":
+        flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    try:
+        subprocess.Popen([python, str(helper), "--bot", raw, "--restart", "--delay", "2"],
+                         cwd=str(ROOT), stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=flags)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"spawn_failed: {exc}"}
+    audit("bot_load", {"path": raw, "bot": bot.get("name")}, ok=True, client=client)
+    return {"ok": True, "restarting": True,
+            "token": str((bot.get("auth") or {}).get("admin_token") or ""),
+            "bot": {"name": bot.get("name"), "path": raw},
+            "note": "801/802 正在重启到该 Bot；页面会自动刷新"}
 
 
 def gateway_status() -> dict:
@@ -2223,7 +2313,7 @@ def media_send(body: dict, *, client: str = "") -> dict:
 # --------------------------------------------------------------------------- #
 # P7-b：对话测试（ChatUI）/ 模型配置（Providers）/ 日志（Trace）
 # --------------------------------------------------------------------------- #
-WEB_CONFIG_PATH = ROOT / "web_config.json"
+WEB_CONFIG_PATH = web_config_path()
 CHAT_TEST_DB = SELFLEARN_DIR / "console_test.sqlite3"
 CHAT_TEST_TIMEOUT_S = 60.0
 
@@ -4904,6 +4994,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "service": "soul-console",
                                  "ts": now_ts(), "contact_db": str(contact_db_path() or "")})
                 return
+            if path == "/api/bot/info":
+                self._json(200, bot_info()); return
+            if path == "/api/bot/switch-status":
+                from agi import bot_runtime
+                self._json(200, {"ok": True, "status": bot_runtime.read_switch_status()}); return
             if path == "/api/token":
                 # 本机调试便利：仅回环地址可读本机 admin token（免手动抄 config.json）
                 client = self._client()
@@ -5222,6 +5317,21 @@ class Handler(BaseHTTPRequestHandler):
             # 只读统计：不需要 token（But 仍需回环 Host；不删除任何东西）
             try:
                 self._json(200, factory_preview())
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path in ("/api/bot/login", "/api/bot/load"):
+            try:
+                body = self._read_body()
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)}); return
+            try:
+                if path == "/api/bot/login":
+                    result = bot_login(str(body.get("password") or ""), client=client)
+                else:
+                    result = bot_load(str(body.get("path") or ""),
+                                      str(body.get("password") or ""), client=client)
+                self._json(200 if result.get("ok") else 400, result)
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
             return

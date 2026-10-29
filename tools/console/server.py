@@ -342,7 +342,9 @@ def _spawn_bot_helper(argv: list[str]) -> None:
                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     base = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-    for flags in (base | getattr(subprocess, "DETACHED_PROCESS", 0), base):
+    breakaway = (base | getattr(subprocess, "DETACHED_PROCESS", 0)
+                 | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0))
+    for flags in (breakaway, base | getattr(subprocess, "DETACHED_PROCESS", 0), base):
         try:
             subprocess.Popen(argv, creationflags=flags, **kwargs)
             return

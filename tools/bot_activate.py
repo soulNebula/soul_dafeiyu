@@ -63,7 +63,8 @@ def _kill_port(port: int) -> list[int]:
         if pid == os.getpid():
             continue
         try:
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+            # 不用 /T：切换 helper 可能就是 802 的子进程；/T 会把 helper 一起杀掉
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"],
                            capture_output=True, timeout=15)
             killed.append(pid)
         except Exception:  # noqa: BLE001

@@ -432,7 +432,11 @@ class DbBridge:
             else:
                 quote = content
             label = (display + "：" if display else "") + quote
-            return KIND_SYSTEM, ("[引用消息] " + label).strip(), ""
+            # 引用消息的实际正文在 <title>（旧实现只取了 refermsg，导致用户回复的那句话丢失）
+            reply = _plain_from_xml(_xml_tag("title", attrs_text)).strip()[:500]
+            prefix = "[引用] 对方引用了这条消息：" + label.strip()
+            msg_text = prefix + (("\n" + reply) if reply else "")
+            return KIND_TEXT, msg_text, ""
         if app_type == 5:
             return KIND_SYSTEM, f"[链接] {title}" if title else "[链接]", ""
         if app_type in (33, 36):

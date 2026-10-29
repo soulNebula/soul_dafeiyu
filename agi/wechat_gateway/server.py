@@ -2729,7 +2729,27 @@ def make_handler(gateway: Gateway):
     return Handler
 
 
+def _reexec_with_active_bot() -> None:
+    """手工启动 801 时，如果存在活跃 Bot，就自动带 Bot 环境重开（与 802 对齐）。"""
+    if os.environ.get("SOULAGENT_DATA_DIR"):
+        return
+    try:
+        from agi import bot_runtime
+        from tools import bot_profile
+        active = bot_runtime.read_active()
+        if not active or not active.get("path"):
+            return
+        bot = bot_profile.load_bot(active["path"])
+        runtime = bot_runtime.prepare_runtime(active["path"], bot=bot)
+        os.environ.update({str(k): str(v) for k, v in runtime["env"].items()})
+        os.execv(sys.executable, [sys.executable, "-m", "agi.wechat_gateway.server",
+                                  *sys.argv[1:]])
+    except Exception:  # noqa: BLE001
+        return
+
+
 def main(argv=None) -> int:
+    _reexec_with_active_bot()
     parser = argparse.ArgumentParser(prog="python -m agi.wechat_gateway.server")
     parser.add_argument("--config", default=str(cfg.CONFIG_PATH))
     parser.add_argument("--port", type=int)

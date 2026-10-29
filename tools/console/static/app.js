@@ -4489,11 +4489,25 @@ function bindGlobal() {
   }, 3000);
 }
 
-initBotGate();
-if (new URLSearchParams(location.search).get('contacts') === '1') {
-  setTimeout(() => openWechatContacts(), 1500);
+async function bootConsole() {
+  // 先同步本机 admin token，再首屏渲染：避免换 Bot 后旧 token 导致
+  // /api/engine、/api/status 401，页面出现“引擎需要 admin token”。
+  try {
+    const data = await api('/api/token');
+    if (data && data.ok && data.token) {
+      state.token = data.token;
+      const input = $('#token');
+      if (input) input.value = data.token;
+      sessionStorage.setItem('console_token', data.token);
+    }
+  } catch (e) { /* 读不到 token 时按旧逻辑走 */ }
+  initBotGate();
+  if (new URLSearchParams(location.search).get('contacts') === '1') {
+    setTimeout(() => openWechatContacts(), 1500);
+  }
+  bindGlobal();
+  bindSendMode();
+  loadSendMode();
+  go(location.hash.replace('#', '') || 'overview');
 }
-bindGlobal();
-bindSendMode();
-loadSendMode();
-go(location.hash.replace('#', '') || 'overview');
+bootConsole();

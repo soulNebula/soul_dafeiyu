@@ -80,7 +80,7 @@ python tools\bot_profile.py show --path E:\bots\accept-demo
 | C3 | 选 Bot 目录（不用手填） | ✅ | 弹层「选择目录」 |
 | C4 | 输入 Bot 密码 → 自动重启 801/802 | ✅ | 约 5–10 秒，页面自动刷新 |
 | C5 | 老用户可「跳过」用当前数据 | ✅ | 弹层「跳过」 |
-| C6 | 登录后数据根 = `<Bot>/data` | ✅ | `/api/bot/info` active=true；`/api/health` contact_db 在 Bot 目录 |
+| C6 | 登录后数据根 = `<Bot>/data`；手工重启 801/802 也会自动对齐活跃 Bot | ✅ | `/api/bot/info` active=true；`/api/health` contact_db 在 Bot 目录 |
 
 **验收命令**（也可用页面）：
 

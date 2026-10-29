@@ -9,6 +9,7 @@ Bot 包定义在仓库 `tools/bot_profile.py`；这里只做 803 的注册表与
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -224,6 +225,18 @@ def create_bot(body: dict[str, Any]) -> dict[str, Any]:
             "model": str(body["vision_model"]).strip(),
             "api_key": str(body.get("vision_api_key") or chat["api_key"]).strip(),
         }
+    # 防呆：Bot 必须是独立目录；不能直接选 AGENT_HOME 根，也不覆盖已有内容
+    try:
+        root = Path(path).expanduser().resolve()
+        home = Path(os.environ.get("AGENT_HOME") or str(ROOT / "agi" / "data")).resolve()
+        if root == home:
+            return {"ok": False, "error": "path_is_agent_home",
+                    "hint": "不要选 AGENT_HOME 根目录；请选它的子目录，例如 E:/agent/bots/xiaoyu"}
+        if root.exists() and any(root.iterdir()):
+            return {"ok": False, "error": "path_not_empty",
+                    "hint": "Bot 目录必须为空（或尚不存在）；已有 Bot 请用「添加已有目录」"}
+    except OSError as exc:
+        return {"ok": False, "error": f"path_invalid: {exc}"}
     try:
         bot = bot_profile.create_bot(path, name, mode=mode, password=password,
                                      chat=chat, soul=soul, vision=vision)

@@ -276,7 +276,7 @@
           <div class="panel-head"><h3>新建 Bot（云端方案）</h3><span class="muted small">密钥只写 Bot 的 secrets.json，不显示明文</span></div>
           <div class="form-grid">
             <label class="field wide"><span>Bot 目录（用户自选）</span>
-              <div class="row"><input id="bot-path" placeholder="点右侧选择文件夹" style="flex:1">
+              <div class="row"><input id="bot-path" placeholder="选独立子目录，如 E:/agent/bots/xiaoyu" style="flex:1">
                 <button class="btn small" id="bot-pick-dir" type="button">选择目录</button></div></label>
             <label class="field"><span>Bot 名称</span><input id="bot-name" placeholder="小鱼"></label>
             <label class="field"><span>802 登录密码（至少 6 位）</span><input id="bot-password" type="password" placeholder="登录 802 用"></label>
@@ -657,6 +657,7 @@ async function createBot() {
   btn.disabled = true; btn.textContent = '创建中…';
   try {
     const data = await api('/api/wb/bots/create', {method: 'POST', body: payload});
+    if (!data.ok) throw new Error(data.hint || data.error || '创建失败');
     if (result) result.innerHTML = `<div class="ok small">已创建：${esc(payload.path)}（${esc(data.bot_id || '')}）</div>`;
     toast('Bot 已创建', 'ok');
     await loadBots();

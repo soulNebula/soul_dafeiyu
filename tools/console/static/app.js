@@ -315,10 +315,13 @@ async function renderOverview() {
 
   const st = status.status || {};
   const proactive = st.proactive || {};
+  const backend = st.backend || {};
   const innerMode = (config && config.config && config.config.inner_mode) || 'off';
   const innerShadow = config && config.config ? !!config.config.inner_shadow_only : false;
   const sent = (st.send || {}).sent_today;
-  const active = (st.backend || {}).active;
+  // gateway /status 的 backend 里没有 active 字段：running/monitoring 才是真实监听状态
+  const monitoring = Array.isArray(backend.monitoring) ? backend.monitoring : [];
+  const active = Boolean(backend.running || backend.active || monitoring.length);
   const recent = (st.recent || []).slice(-5).reverse();
   const modelItems = (models && models.models) || [];
   const soul = modelItems.find((m) => m.name === 'soul-05b');
@@ -338,9 +341,10 @@ async function renderOverview() {
       title: '消息分析台', subtitle: `Soul Console · 127.0.0.1:802 · 当前库 ${esc((contacts && contacts.current_label) || '—')}`,
       pills: `<span class="wb-pill ok">● 实时</span>
         <span class="wb-pill ${active ? 'ok' : 'err'}">${active ? '● 微信监听中' : '○ 微信未监听'}</span>
-        <span class="wb-pill">会话 ${num((st.backend || {}).friends_count || 0)}</span>
+        <span class="wb-pill">会话 ${num(backend.friends_count || 0)}</span>
         <span class="wb-pill">消息 ${num(msgItems.length)}</span>`,
-      right: `<button class="btn small" id="ov-refresh">刷新</button>`,
+      right: `<button class="btn small" id="monitor-toggle">${active ? '停止监听' : '开始监听'}</button>
+        <button class="btn small" id="ov-refresh">刷新</button>`,
     })}
     ${errors.length ? `<div class="wb-card wb-span3"><div class="error-text">部分数据获取失败：${esc(errors.join('；'))}</div></div>` : ''}
     <div class="wb-grid">
@@ -378,6 +382,10 @@ async function renderOverview() {
   bindEngineActions();
   const refresh = $('#ov-refresh');
   if (refresh) refresh.onclick = () => renderOverview();
+  const monitorToggle = $('#monitor-toggle');
+  if (monitorToggle) {
+    monitorToggle.onclick = () => toggleEngine(active ? 'stop' : 'start');
+  }
   document.querySelectorAll('[data-contact]').forEach((node) => {
     node.onclick = () => { state.contact = node.dataset.contact || ''; go('feed'); };
   });

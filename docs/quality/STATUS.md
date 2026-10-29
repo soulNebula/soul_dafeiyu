@@ -14,18 +14,18 @@
 
 <!-- STATUS:AUTO:BEGIN（由 tools/status_report.py 生成，勿手改）-->
 
-最后生成：2026-10-29T19:00:20（Python 3.14.7）
+最后生成：2026-10-29T21:59:01（Python 3.14.7）
 
 | 套件 | 通过 | 失败 | 跳过 | 耗时 | 结果 |
 | --- | --- | --- | --- | --- | --- |
 | `tests/` | 301 | 0 | 0 | 56.00s | PASS |
-| `agi/tests/` | 2226 | 0 | 4 | 559.24s | PASS |
+| `agi/tests/` | 2235 | 0 | 4 | 527.17s | PASS |
 
-collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不代表通过数）：`tests/`=301、`agi/tests/`=2230。
+collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不代表通过数）：`tests/`=301、`agi/tests/`=2239。
 
 数据来源：`python scripts/agentb_verify.py`（全量终验，两套 + 静态检查 + 生产文件未被污染）或 `python tools/status_report.py --run`（单套件实测）；`--from-agentb` 可直接导入前者的 JSON，不手抄。
 
-代码规模（同一命令可复算）：Python 模块 4538 个（agi 2745 / selflearn 94 / agi/tests 184）；计划文档 44 份；legacy 归档 37 个文件 / 9151 行。
+代码规模（同一命令可复算）：Python 模块 4541 个（agi 2746 / selflearn 95 / agi/tests 185）；计划文档 45 份；legacy 归档 37 个文件 / 9151 行。
 
 <!-- STATUS:AUTO:END -->
 
@@ -65,13 +65,14 @@ collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不
 | M0 工作台 802 | 完成 | 服务/配置/日志/素材/推理过程等 API + 单页控制台 |
 | M1 工作台 803（IDEA） | 完成 | 模型中心/训练工厂/数据工作室/语料清洗/用户标注/蒸馏；已作为 `idea/` 合入主仓 |
 | M5 桌面化（Windows） | 完成（仅 Windows） | `tools/desktop/` launcher+tray、三服务托管、Edge app 窗口、自启、状态/停止 |
+| 802 消息分析台 | 完成 | 三栏总览/对话流、联系人库隔离、图片/表情/GIF、手工发送、监听开关 |
 | 技术文章 PDF | 完成 | `docs/architecture/小鱼-AI伴侣-技术与实践.pdf`（14 页 / 7 张配图） |
 | 架构收口（本次） | 完成 | 死代码归档（legacy/）、架构守卫 `tools/check_architecture.py`、主动链登记表、文档按代码重写 |
 | 训练闭环 | **未开始（只到语料+门禁）** | 96/300 可训练样本、`last_training=null`；无自动训练/自动上线 |
 
 ## 4. 文档现状
 
-- **唯一入口**：[`INDEX.md`](../INDEX.md)；计划看 [`plans/README.md`](../plans/README.md)（**44 份**，15–61，缺 17/27/55）。
+- **唯一入口**：[`INDEX.md`](../INDEX.md)；计划看 [`plans/README.md`](../plans/README.md)（**45 份**，15–62，缺 17/27/55）。
 - 根 `plans/` 已并入 `docs/plans/`；旧文档在 `docs/archive/`（含 2026-10-28 全量快照）。
 - 死代码归档区：[`../legacy/README.md`](../../legacy/README.md)（36 个归档文件 / 9078 行，只 mv 不删、可搬回；
   该 README 不计入；`tools/status_report.py` 统计整个目录会比它多 1 个文件）。

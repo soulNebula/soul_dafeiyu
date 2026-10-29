@@ -233,7 +233,7 @@ def fig_data():
     ax1.grid(axis="y", alpha=0.25)
 
     labels = ["SoulAgent\ntests", "SoulAgent\nagi/tests", "IDEA\npytest", "全服务\n冒烟"]
-    counts = [301, 2226, 101, 13]
+    counts = [301, 2235, 101, 13]
     colors = [C_BLUE, C_BLUE, C_GREEN, C_ORANGE]
     bars = ax2.bar(labels, counts, color=colors)
     ax2.set_yscale("log")

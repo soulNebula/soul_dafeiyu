@@ -160,6 +160,12 @@ Gateway._proactive_loop          常驻线程（proactive_enabled；engine 停�
 
 - **控制台**：`tools/console/server.py`（默认 802）+ `trace_api.py`/`media_store.py`/`growth_api.py`/
   `model_admin.py`/`moments_api.py`；单页原生 JS，覆盖总览/对话/推理过程/内状态/素材/记忆/内驱力/B站/模型/训练/设置。
+- **802 消息分析台（2026-10-29）**：总览/对话流改为「左联系人 / 中聊天 / 右概览」三栏；
+  联系人列表来自 `/api/contacts`（配置别名 + 本机未登记库），点击切换 `/api/messages?contact=`，
+  memory/inner 也接受 `contact`，**不同联系人库/记忆/人格隔离**；缺库或 0 消息提示去 803 建库训练；
+  消息显示图片/表情包/GIF 缩略图与类型标签（`attachments` 关联 `/api/media/file`）；
+  支持手工发送（`POST /api/manual/send` → 801 `/api/approve`，白名单/闸门仍由网关兜底）、
+  开始/停止监听（`/api/engine/start|stop`）、刷新列表/同步历史/自动刷新/自动滚动。
 - **B站**：仓库**不包含**插件本体，依赖外部 `~/.dsh/bili-duty`（DSH 侧插件）产出日报与凭证；
   `agi/integrations/bili_digest.py` 读 `~/.dsh/bili-duty/out`，`bili_ingest.py` 读
   `~/.dsh/bili-duty/bili_credential.json`；插件不存在时相关能力降级，不影响主链。

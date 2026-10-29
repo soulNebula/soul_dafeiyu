@@ -117,7 +117,7 @@ def test_stage_text_and_console_strength(tmp_path, monkeypatch):
 
 def test_console_memory_strength_route(tmp_path, monkeypatch):
     monkeypatch.setattr(console, "memory_strength",
-                        lambda: {"ok": True, "count": 2, "stages": {"full": 2}})
+                        lambda contact="": {"ok": True, "count": 2, "stages": {"full": 2}})
     handler = console.Handler.__new__(console.Handler)
     handler.path = "/api/memory/strength"
     handler.command = "GET"

@@ -9,4 +9,4 @@ for %%P in (801 802 803) do (
 )
 timeout /t 2 /nobreak >nul
 echo [重启] 以当前用户权限重新启动 Web 端...
-call "%~dp0启动.bat"
+call "%~dp0..\..\启动.bat"

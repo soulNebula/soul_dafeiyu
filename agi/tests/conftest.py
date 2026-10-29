@@ -106,6 +106,8 @@ def _bootstrap_test_root() -> Path:
         value.parent.mkdir(parents=True, exist_ok=True)
     (root / "agi" / "data").mkdir(parents=True, exist_ok=True)
     (root / "log").mkdir(parents=True, exist_ok=True)
+    # 测试不访问真实本地/云端视觉：聊天识图分支钉回 api（本地 caption 另有单测）
+    os.environ.setdefault("CHAT_VISION_MODE", "api")
     return root
 
 

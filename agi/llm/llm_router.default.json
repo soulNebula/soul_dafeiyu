@@ -76,6 +76,15 @@
       "max_tokens": 500,
       "temperature": 0.2,
       "note": "识图：本地 Qwen2.5-VL-3B 优先，失败回落 API"
+    },
+    "selflearn_chat_caption": {
+      "backend": "local",
+      "fallback": [
+        "api"
+      ],
+      "max_tokens": 200,
+      "temperature": 0.2,
+      "note": "聊天图片：本地 VL 生成描述（失败回落 API 视觉）"
     }
   },
   "budget": {

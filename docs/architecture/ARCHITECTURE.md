@@ -165,6 +165,9 @@ Gateway._proactive_loop          常驻线程（proactive_enabled；engine 停�
   `~/.dsh/bili-duty/bili_credential.json`；插件不存在时相关能力降级，不影响主链。
 - **模型**：主对话 = DeepSeek API（`agi/llm/deepseek.py`）；内状态 = 本地 0.5B（8123，shadow）；
   本地 3B（8125）做摘要/关键词/提取；模型资产在仓库外（`E:\agent`，由 `agi/paths.py` 的 `agent_home` 解析）。
+- **聊天图片**：默认 `chat_vision_mode=local_caption` —— 本地 8125 VL 生成图片描述，
+  描述注入文本提示词后由 DeepSeek 生成回复（不发送图片 token）；失败自动回落云端视觉。
+  实现：`agi/selflearn/vision_chat.py` + `agi/llm/vision.py`，路由用途 `selflearn_chat_caption`。
 - **密钥**：DeepSeek key 优先级 `DEEPSEEK_API_KEY` env → `agi/data/secrets.json` → `web_config.json`（兼容）；
   802 模型配置页可直接保存/清除 key，只写本机 `secrets.json`（原子写、ACL 收紧、不入 git、不回传明文）。
   密钥写入入口：`agi/secrets_store.py::store_llm_api_key`；读取入口：`agi/selflearn/llm.py::load_config`。

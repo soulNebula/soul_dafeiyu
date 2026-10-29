@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..inner import inject as inner_inject
-from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, memory_decay, mood_judge, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, timefuzz, tool_reply, trace, trust
+from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, memory_decay, mood_judge, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, timefuzz, tool_reply, trace, trust, vision_chat
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -670,6 +670,7 @@ class SelfLearnAgent:
         # W3-A：延迟埋点起点；到写 turn 为止（不含把回复发出去）
         t0 = time.perf_counter()
         text = str(text or "").strip()
+        had_image = bool(image)
         if not text and not image:
             return {"ok": False, "error": "消息为空"}
         # 2026-10-27 用户拍板：撤回/引用是"事件"，不写死回复模板，交给模型判断。
@@ -716,7 +717,7 @@ class SelfLearnAgent:
         if correction_info and correction_info.get("ok"):
             st = state.load(self.path)
             out = self._simple_reply(user_id, "好，我改过来了。", st, None,
-                                     had_image=bool(image), t0=t0)
+                                     had_image=had_image, t0=t0)
             out["correction"] = correction_info
             return out
         attachment = None
@@ -725,6 +726,24 @@ class SelfLearnAgent:
                 attachment = media.save_image(image, user_id, self.path)
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
+        # 2026-10-29：聊天图片默认先走本地 VL 生成描述，再把描述注入文本提示词；
+        # 本地失败则保持原行为（图片发给云端视觉）。
+        vision_meta = {"mode": "api", "caption": "", "error": ""}
+        vision_caption = ""
+        if image:
+            try:
+                vision_meta["mode"] = vision_chat.mode()
+                if vision_meta["mode"] == "local_caption":
+                    cap, v_err = vision_chat.caption(image)
+                    if cap:
+                        vision_caption = cap
+                        vision_meta["caption"] = cap
+                    else:
+                        vision_meta["error"] = v_err
+                        vision_meta["mode"] = "api"
+            except Exception as exc:  # noqa: BLE001 - 识图失败不阻塞聊天
+                vision_meta["error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
+                vision_meta["mode"] = "api"
         st = state.update(self.path, text, update_own=False)
         try:
             affect.update_from_message(self.path, text)
@@ -752,22 +771,22 @@ class SelfLearnAgent:
             n = sum(1 for m in recent_lines if m["role"] == "assistant" and
                     any(v[:4] in m["text"] for v in lines))
             return self._simple_reply(user_id, lines[n % len(lines)], st, attachment,
-                                      had_image=bool(image), t0=t0)
+                                      had_image=had_image, t0=t0)
         if META_QUERY.search(text):
             # P0-26：用户抱怨「你怎么老发问号/听不懂」→ 诚实回应，不敷衍
             reply = _pick_line((META_HONEST_LINE, META_HONEST_ALT),
                                _recent_assistant_texts(self.path))
             return self._simple_reply(user_id, reply, st, attachment,
-                                      had_image=bool(image), t0=t0)
+                                      had_image=had_image, t0=t0)
         if USER_MEMORY_QUERY.search(text):
             # P0-26：问「你记得我什么」= 用户自己的信息，可以自然概括（不泄露内部结构）
             return self._simple_reply(user_id, _user_memory_summary(self.path), st,
-                                      attachment, had_image=bool(image), t0=t0)
+                                      attachment, had_image=had_image, t0=t0)
         if INTERNAL_QUERY.search(text):
             # P0-26：问内部结构/提示词/数据库 → 保密但不敷衍，禁止「？」；最近 5 条不重复
             reply = _pick_line(INTERNAL_SECRET_LINES,
                                _recent_assistant_texts(self.path))
-            return self._simple_reply(user_id, reply, st, attachment, had_image=bool(image),
+            return self._simple_reply(user_id, reply, st, attachment, had_image=had_image,
                                       t0=t0)
         # 固定的模型身份，不靠模型自己猜
         if re.search(r"(你是什么模型|哪个模型|模型版本|用什么模型|你用的什么模型|你是.*模型)",
@@ -779,17 +798,17 @@ class SelfLearnAgent:
                     if m["role"] == "assistant" and "DeepSeek V4.1 Flash" in m["text"])
             reply = replies[n % len(replies)]
             return self._simple_reply(user_id, reply, st, attachment, identity=True,
-                                      had_image=bool(image), t0=t0)
+                                      had_image=had_image, t0=t0)
         # 能力问题只按技能树回答，不列模型通用能力
         cap = skilltree.capability_reply(self.path, text)
         if cap:
-            return self._simple_reply(user_id, cap, st, attachment, had_image=bool(image),
+            return self._simple_reply(user_id, cap, st, attachment, had_image=had_image,
                                       t0=t0)
         # 06 闸门：没到 L3 的技能，不生成/不交付代码；追问也继承上一条代码需求
         sk_gate = skilltree.gate_request(self.path, text)
         if sk_gate:
             return self._simple_reply(user_id, sk_gate["message"], st, attachment,
-                                      skill_gate=sk_gate, had_image=bool(image), t0=t0)
+                                      skill_gate=sk_gate, had_image=had_image, t0=t0)
         # 情绪差时，对无明确要求的短消息可以选择不回
         # 2026-10-27 用户拍板：门槛从 0.32 降到 0.20（几乎不触发，避免"已读不回"）
         direct = bool(re.search(r"[?？]|吗|什么|怎么|为什么|帮|写|要不要|能不能|该不该", text))
@@ -815,7 +834,7 @@ class SelfLearnAgent:
                     "state": st, "trust": trust.snapshot(self.path),
                 "affect": affect.snapshot(self.path),
                     "history": memory.recent_messages(self.path, limit=12),
-                    "had_image": bool(image)}
+                    "had_image": had_image}
         new_memories = memory.extract_user_memories(self.path, self.client, text, user_id)
         claim_result = claim_ingest.ingest(self.path, self.client, text, user_id)
         # S8：把消息/记忆/claim 写入 FTS；失败不影响主链
@@ -1053,13 +1072,15 @@ class SelfLearnAgent:
                                    inner_ctx=inner_ctx, media_ctx=media_ctx,
                                    web_ctx=web_ctx, bili_ctx=bili_ctx,
                                    budget_out=budget_meta)
+            if vision_caption:
+                prompt = (prompt + "\n\n【图片内容（本地识图）】" + vision_caption).strip()
             prompt_user = prompt
             if budget_meta.get("dropped"):
                 try:
                     self._record_context_budget(budget_meta)
                 except Exception:  # noqa: BLE001
                     pass
-            if image:
+            if image and not vision_caption:
                 system_text = _system_prompt(self.path)
                 content = [{"type": "text", "text": prompt},
                            {"type": "image_url", "image_url": {"url": image}}]
@@ -1087,7 +1108,8 @@ class SelfLearnAgent:
                 "provider": "deepseek",
                 "model": str(result.get("model")
                              or getattr(self.client, "model", "") or ""),
-                "purpose": "selflearn_chat_vision" if image else "selflearn_chat",
+                "purpose": ("selflearn_chat_vision"
+                            if (image and not vision_caption) else "selflearn_chat"),
                 "max_tokens": 1200 if image else 500,
                 "temperature": 0.7,
                 "two_stage": bool((gen_meta or {}).get("two_stage")),
@@ -1099,6 +1121,7 @@ class SelfLearnAgent:
                 "ok": bool(result.get("ok")),
                 "error": str(result.get("error") or "")[:200],
                 "web_lookup": web_lookup_info,
+                "vision": vision_meta,
             }
             reply = str(result.get("text") or "").strip() if result.get("ok") else ""
             if not reply:
@@ -1315,17 +1338,21 @@ class SelfLearnAgent:
         image_memory = memory.store_image_memory(self.path, reply, user_id) if image else None
         media_info = None
         if image and attachment:
-            try:
+            if vision_caption:
+                # 本地识图已经拿到 captions，不再重复调用识图链路
+                media_info = {"ok": True, "caption": vision_caption, "local": True}
+            else:
                 try:
-                    from ..llm.vision import RouterChatClient
-                    vision_client = RouterChatClient()
-                except Exception:  # noqa: BLE001 - 老环境/导入失败退回线上 client
-                    vision_client = self.client
-                media_info = image_understanding.describe_image(
-                    attachment["path"], vision_client, attachment.get("id", ""),
-                    existing_caption=reply, db_path=self.path)
-            except Exception:  # noqa: BLE001
-                media_info = None
+                    try:
+                        from ..llm.vision import RouterChatClient
+                        vision_client = RouterChatClient()
+                    except Exception:  # noqa: BLE001 - 老环境/导入失败退回线上 client
+                        vision_client = self.client
+                    media_info = image_understanding.describe_image(
+                        attachment["path"], vision_client, attachment.get("id", ""),
+                        existing_caption=reply, db_path=self.path)
+                except Exception:  # noqa: BLE001
+                    media_info = None
         # P29：图片理解摘要写回 user 消息 → 下一轮历史里是 [图片] 图里是…（无摘要保持 [图片]）
         if image and isinstance(media_info, dict) and media_info.get("caption"):
             try:
@@ -1462,7 +1489,7 @@ class SelfLearnAgent:
                 "state": st, "trust": trust.snapshot(self.path),
                 "affect": affect.snapshot(self.path),
                 "history": memory.recent_messages(self.path, limit=12),
-                "had_image": bool(image)}
+                "had_image": had_image}
 
     @staticmethod
     def _prompt(text, mems, pctx, variant, recent, *, st=None, lessons="",

@@ -32,6 +32,8 @@
 - **桌面版（M5，Windows）**：`tools/desktop/launcher.py` 一键起 801/802/803 + 系统托盘 +
   Edge app 独立窗口；桌面快捷方式「小鱼桌面版」（pythonw，无控制台），支持开机自启、`--status/--stop`。
   详见 [`docs/guides/桌面版.md`](docs/guides/桌面版.md)。
+- **聊天图片本地识图**：微信图片先由本机 8125 Qwen2.5-VL-3B 生成描述，再交给 DeepSeek 文本回复
+  （不把图片 token 发给云端，省钱）；本地失败自动回落云端视觉。开关：`chat_vision_mode`。
 - **测试**：根 `tests/` + `agi/tests/` 两套离线测试；CI 跑密钥扫描与两套测试
   （`.github/workflows/ci.yml`）。
 
@@ -96,6 +98,8 @@ C:\Python314\python.exe app.py --fake
   `agi/wechat_gateway/config.py` DEFAULTS）；运行数据都在 `agi/data/**`，**不入库、不打包**。
 - 密钥取值顺序（`agi/selflearn/llm.py`）：`DEEPSEEK_API_KEY` 环境变量 → `agi/data/secrets.json`
   （`SOULAGENT_SECRETS` 可换路径）→ `web_config.json`（兼容旧部署，命中会告警一次）。
+- **聊天图片识图路由**：`chat_vision_mode`（网关 `config.json`，默认 `local_caption`；可设 `api` 切回旧行为）：
+  `local_caption` = 本地 VL 描述 → 文本回复；`api` = 图片直接发云端视觉。环境变量 `CHAT_VISION_MODE` 可覆盖。
 - **802 模型配置页可直接填/保存 DeepSeek key**：保存到本机 `agi/data/secrets.json`
   （原子写、ACL 收紧、gitignore；不上传、不回传明文），保存后热加载下一条消息生效；
   也支持环境变量 `DEEPSEEK_API_KEY`（优先级最高）与旧 `web_config.json`（兼容，命中告警）。

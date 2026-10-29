@@ -325,3 +325,31 @@ def test_chat_pat_real_simple_reply_returns_ganma(tmp_path):
     agent = _agent(tmp_path)
     out = agent.send('"好友A" 拍了拍我')
     assert out["reply"] == "干嘛？"
+
+def test_local_caption_replaces_cloud_image(tmp_path, monkeypatch):
+    import json as _json
+
+    captured: dict = {}
+
+    def fake_generate(client, system, prompt, memories, **kwargs):
+        captured["prompt"] = prompt
+        return {"ok": True, "text": "看着挺香"}, {"two_stage": False, "claims": []}
+
+    monkeypatch.setattr(generation, "generate", fake_generate)
+    monkeypatch.setattr(chat.vision_chat, "mode", lambda: "local_caption")
+    monkeypatch.setattr(chat.vision_chat, "caption",
+                        lambda image, **kw: ("一盘寿司和仙人掌", ""))
+
+    class _Recorder(_FakeClient):
+        def chat(self, messages, **kwargs):
+            captured.setdefault("messages", []).append(messages)
+            return {"ok": True, "text": "好啊", "usage": {}}
+
+    agent = chat.SelfLearnAgent(tmp_path / "selflearn.sqlite3", client=_Recorder())
+    out = agent.send("", image="data:image/png;base64," + PNG_1PX)
+    assert out["had_image"] is True
+    assert "一盘寿司和仙人掌" in captured["prompt"]          # 本地 caption 注入提示词
+    blob = _json.dumps(captured.get("messages") or [], ensure_ascii=False)
+    assert "image_url" not in blob                            # 云端不再收图片
+    rows = memory.recent_messages(agent.path, limit=5)
+    assert any("图里是一盘寿司和仙人掌" in r["text"] for r in rows)

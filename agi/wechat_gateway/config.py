@@ -35,6 +35,9 @@ DEFAULTS = {
     "port": 801,
     "auto_reply": False,
     "dry_run": True,
+    # 2026-10-29：聊天图片的视觉路由。local_caption=本地 VL 描述后走文本回复（省钱，默认）；
+    # api=图片直接发给云端视觉模型（旧行为）。可用环境变量 CHAT_VISION_MODE 覆盖。
+    "chat_vision_mode": "local_caption",
     "monitored_contacts": [],
     "allowed_contacts": [],
     # P22：机器人微信昵称；私聊文本含「@昵称」时识别为 @提及，server 加 [对方@了你] 前缀。

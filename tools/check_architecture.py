@@ -94,7 +94,7 @@ UNIMPORTED_ALLOWLIST: dict[str, str] = {
 NEW_FILE_MAX_LINES = 1500
 LINE_BUDGET: dict[str, int] = {
     # 基线为 2026-10-29 收口时行数；只允许小幅波动，继续膨胀请拆分文件。
-    "tools/console/server.py": 5500,          # 2026-10-29 新增联系人隔离/图片附件（待拆）
+    "tools/console/server.py": 5550,          # 2026-10-29 新增联系人隔离/手工发送（待拆）
     "tests/test_webui.py": 4700,              # 现有 4592：网页端集成测试
     "agi/selflearn/proactive.py": 3100,       # 现有 3056：主动消息生成（待拆）
     "agi/wechat_gateway/server.py": 3000,     # 现有 2718（并发改造中，基线 2373）

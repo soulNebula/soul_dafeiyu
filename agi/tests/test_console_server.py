@@ -2291,3 +2291,9 @@ def test_memory_contact_missing_returns_hint(monkeypatch):
     assert result["ok"] is False
     assert result["error"] == "contact_db_missing"
     assert "803" in result["hint"]
+
+
+def test_manual_send_requires_contact_and_text():
+    assert console.manual_send("", "hi")["ok"] is False
+    assert console.manual_send("某人", "")["ok"] is False
+    assert console.manual_send("某人", "x" * 2001)["ok"] is False

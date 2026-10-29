@@ -2123,6 +2123,45 @@ def _post_gateway_media(payload: dict) -> dict:
     return json.loads(raw)
 
 
+def manual_send(contact: str, text: str, *, client: str = "") -> dict:
+    """控制台「给某人发消息」：代理 801 的 /api/approve（manual+confirm）。
+
+    安全：必须白名单联系人（801 兜底）；控制台只做转发，不绕过发送闸门。
+    """
+    name = str(contact or "").strip()
+    message = str(text or "").strip()
+    if not name or not message:
+        return {"ok": False, "error": "contact/text 不能为空"}
+    if len(message) > 2000:
+        return {"ok": False, "error": "消息过长（>2000 字）"}
+    base = GATEWAY_STATUS_URL.rsplit("/status", 1)[0]
+    payload = json.dumps({"contact": name, "text": message, "confirm": True},
+                         ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    token = admin_token()
+    if token:
+        headers["X-Admin-Token"] = token
+    request = urllib.request.Request(base + "/api/approve", data=payload,
+                                     headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8", "replace") or "{}")
+        except Exception:  # noqa: BLE001
+            detail = {}
+        return {"ok": False, "error": detail.get("error") or f"gateway http {exc.code}",
+                "detail": detail}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    result = result if isinstance(result, dict) else {}
+    audit("manual_send", {"contact": name, "chars": len(message),
+                          "status": result.get("status")}, ok=bool(result.get("ok")),
+          client=client)
+    return {"ok": bool(result.get("ok")), "gateway": result}
+
+
 def media_send(body: dict, *, client: str = "") -> dict:
     body = body if isinstance(body, dict) else {}
     kind = str(body.get("type") or body.get("kind") or "text").strip().lower()
@@ -5409,6 +5448,10 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     code = 500
                 self._json(code, result); return
+            if path == "/api/manual/send":
+                result = manual_send(str(body.get("contact") or ""),
+                                     str(body.get("text") or ""), client=client)
+                self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/media/import":
                 self._json(200, media_import(body, client=client)); return
             if path == "/api/media/import-path":

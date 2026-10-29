@@ -41,6 +41,10 @@ const state = {
   tone: null,
 };
 
+// 深链：?contact=<别名> 直接选中联系人（便于分享/排查）
+const _urlContact = new URLSearchParams(location.search).get('contact');
+if (_urlContact) state.contact = _urlContact;
+
 const PAGES = {
   overview: '总览',
   feed: '对话流',
@@ -678,6 +682,10 @@ async function renderFeed(auto) {
         <div class="wb-card-head">${tabButtons}<span class="muted" id="feed-count">${countLabel()}</span></div>
         ${state.feedTab === 'messages' ? chips : eventTools}
         <div id="feed-list" class="wb-msg-list ${state.feedTab === 'messages' ? '' : 'wb-event-list'}">${listHtml()}</div>
+        ${(state.feedTab === 'messages' && contact && !missingDb) ? `<div class="wb-composer">
+          <textarea id="feed-input" rows="2" placeholder="给「${esc(contact)}」发消息（走 801 网关，需在该联系人白名单；Ctrl+Enter 发送）"></textarea>
+          <button class="btn primary" id="feed-send">发送</button>
+        </div>` : ''}
       </section>
       ${rightHtml}
     </div>`;
@@ -740,6 +748,34 @@ async function renderFeed(auto) {
   if (state.feedScroll && state.feedTab === 'messages') {
     const list = $('#feed-list');
     if (list) list.scrollTop = list.scrollHeight;
+  }
+  const composer = $('#feed-input');
+  const sendBtn = $('#feed-send');
+  if (composer && sendBtn) {
+    const submit = async () => {
+      const text = String(composer.value || '').trim();
+      if (!text) return;
+      sendBtn.disabled = true;
+      try {
+        const result = await api('/api/manual/send', {
+          method: 'POST', body: { contact: contact, text },
+        });
+        toast(result.ok ? '已交给网关发送' : (result.error || '发送失败'),
+              result.ok ? 'ok' : 'err');
+        if (result.ok) {
+          composer.value = '';
+          renderFeed(false);
+        }
+      } catch (err) {
+        toast(err.message, 'err');
+      } finally {
+        sendBtn.disabled = false;
+      }
+    };
+    sendBtn.onclick = submit;
+    composer.onkeydown = (ev) => {
+      if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); submit(); }
+    };
   }
 }
 

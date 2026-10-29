@@ -299,6 +299,19 @@ python toolsot_profile.py validate --path E:gentots\802-config-20261030
 | 802 没有切换 Bot | 总览右上新增「切换 Bot」，复用加载弹层（选目录/密码→重启加载） | ✅ |
 | 联系人列表出现不在聊天列表里的联系人 | `/api/contacts` 过滤 0 消息的无名残留库；实测只剩 2 个真实会话 | ✅ |
 
+
+## P. 2026-10-30 第二阶段（备份 + 四项功能）
+
+| 项 | 状态 | 说明/怎么验 |
+| --- | --- | --- |
+| 备份 Bot + 原 agi/data | ✅ | `E:gentackupsackup-20261030-020719\{bot,agi_data,root_files}`；live copy（含 wal/shm），约 707MB |
+| 云端灵魂路由 | ✅ | Bot 配置 `soul_provider_mode=cloud` + base_url/model；`agi.inner.inject` 用 OpenAI 兼容 Client，key 取 Bot `secrets.providers.soul`（回退 chat key）；802「模型连通测试」soul 显示 mode=cloud / HTTP 200 |
+| 802 设置：灵魂来源 | ✅ | 「模型与内状态」组：local / cloud + 云端 base_url / 模型 |
+| B站/朋友圈 Bot 开关 | 🟡 | `surf_enabled`（B站/上网冲浪，真实生效）、`moments_enabled`（关闭后朋友圈 API 503）、`bili_ingest_enabled`（仅配置项，尚未在所有入库路径生效） |
+| 训练闭环（数据→803） | 🟡 | 803 数据集发现已包含当前 Bot 的 `data/train/packages` 与 `daily`；803 原有训练/导出任务可跑；**训练产物自动加载回 802 仍未自动化** |
+| 改 Bot 密码 | ✅ | 803 Bot 列表「改密码」；`tools/bot_profile.change_password` 校验旧密码；API `/api/wb/bots/password`；实测错误旧密码拒绝、正确后可登录 |
+| 3B 上下文 | ✅ | 8125 上下文 8192 已重启，缓解 4.10K 溢出 |
+
 ## M. 明确未完成（不要按“已验收”）的项
 
 1. **云端灵魂模型单独路由**：Bot 里有 soul key，但内状态仍用主聊天 client；要做「soul provider → 独立 OpenAI 兼容 client」。

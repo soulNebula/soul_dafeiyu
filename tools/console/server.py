@@ -2682,14 +2682,29 @@ def test_model_connectivity() -> dict:
     else:
         results["chat"] = {"ok": False, "detail": "未配置 API key", "model": model}
 
-    # soul：本地服务 /health；关闭时 skipped
+    # soul：本地 /health 或云端 OpenAI 兼容 /models；关闭时 skipped
     cfg = gateway_config()
     soul_url = str(cfg.get("soul_server_url") or "").rstrip("/")
     if str(cfg.get("inner_mode") or "off") == "off":
         results["soul"] = {"ok": True, "skipped": True, "detail": "内状态关闭"}
+    elif str(cfg.get("soul_provider_mode") or "local") == "cloud":
+        try:
+            from agi import secrets_store as _secrets
+            soul_key = _secrets.provider_api_key("soul") or _secrets.llm_api_key()
+        except Exception:  # noqa: BLE001
+            soul_key = key
+        soul_base = str(cfg.get("soul_provider_base_url") or base).rstrip("/")
+        soul_model = str(cfg.get("soul_provider_model") or model)
+        if soul_key:
+            ok, detail = probe_json(soul_base + "/models",
+                                    {"Authorization": f"Bearer {soul_key}"})
+            results["soul"] = {"ok": ok, "detail": detail, "mode": "cloud",
+                               "model": soul_model, "url": soul_base}
+        else:
+            results["soul"] = {"ok": False, "detail": "云端灵魂未配置 key", "mode": "cloud"}
     elif soul_url.startswith("http"):
         ok, detail = probe_json(soul_url + "/health", timeout=3.0)
-        results["soul"] = {"ok": ok, "detail": detail, "url": soul_url}
+        results["soul"] = {"ok": ok, "detail": detail, "url": soul_url, "mode": "local"}
     else:
         results["soul"] = {"ok": False, "detail": "未配置灵魂服务地址"}
 

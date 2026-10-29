@@ -169,9 +169,18 @@ def read_json(path: Path, default):
 def write_json_atomic(path: Path, payload: dict) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(payload, ensure_ascii=False, indent=2)
     tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, target)
+    try:
+        tmp.write_text(data, encoding="utf-8")
+        os.replace(tmp, target)
+    except PermissionError:
+        # 低权限/杀软临时锁 .tmp 时退回直接写目标；总比设置保存不了强
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        target.write_text(data, encoding="utf-8")
 
 
 def audit(action: str, payload: dict | None = None, *, ok: bool = True,

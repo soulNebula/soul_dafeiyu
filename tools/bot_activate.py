@@ -81,6 +81,28 @@ def _python() -> str:
     return str(default) if default.is_file() else "python"
 
 
+def _spawn_service(cmd: list[str], log_path: Path, env: dict[str, str]) -> subprocess.Popen:
+    """启动服务并尽量脱离父进程 Job；失败时逐级降低 flags。"""
+    base = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    detached = base | getattr(subprocess, "DETACHED_PROCESS", 0)
+    breakaway = detached | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    last_exc: Exception | None = None
+    for flags in (breakaway, detached, base):
+        handle = log_path.open("ab")
+        try:
+            return subprocess.Popen(cmd, cwd=str(ROOT), env=env, stdin=subprocess.DEVNULL,
+                                    stdout=handle, stderr=subprocess.STDOUT,
+                                    creationflags=flags)
+        except OSError as exc:
+            last_exc = exc
+            continue
+        finally:
+            handle.close()
+    raise last_exc or OSError("spawn failed")
+
+
 def _wait_health(url: str, timeout: float = 30.0) -> bool:
     deadline = time.time() + max(3.0, timeout)
     while time.time() < deadline:
@@ -107,24 +129,11 @@ def restart_services(runtime: dict, *, python: str | None = None,
     log_dir.mkdir(parents=True, exist_ok=True)
     killed = {"gateway": _kill_port(GATEWAY_PORT), "console": _kill_port(CONSOLE_PORT)}
     time.sleep(1.0)
-    flags = 0
-    if _is_windows():
-        flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-
-    def spawn(cmd: list[str], name: str) -> subprocess.Popen:
-        log = log_dir / f"bot_{name}.log"
-        handle = log.open("ab")
-        try:
-            return subprocess.Popen(cmd, cwd=str(ROOT), env=env, stdin=subprocess.DEVNULL,
-                                    stdout=handle, stderr=subprocess.STDOUT,
-                                    creationflags=flags)
-        finally:
-            handle.close()
-
-    gateway = spawn([py, "-m", "agi.wechat_gateway.server"], "gateway")
-    console = spawn([py, str(ROOT / "tools" / "console" / "server.py"),
-                     "--port", str(CONSOLE_PORT)], "console")
+    gateway = _spawn_service([py, "-m", "agi.wechat_gateway.server"],
+                             log_dir / "bot_gateway.log", env)
+    console = _spawn_service([py, str(ROOT / "tools" / "console" / "server.py"),
+                              "--port", str(CONSOLE_PORT)],
+                             log_dir / "bot_console.log", env)
     ok_gateway = _wait_health(f"http://127.0.0.1:{GATEWAY_PORT}/health", timeout)
     ok_console = _wait_health(f"http://127.0.0.1:{CONSOLE_PORT}/api/health", timeout)
     return {"ok": ok_gateway and ok_console, "gateway": ok_gateway, "console": ok_console,
@@ -149,23 +158,11 @@ def clear_active(*, restart: bool = True, python: str | None = None,
     log_dir.mkdir(parents=True, exist_ok=True)
     killed = {"gateway": _kill_port(GATEWAY_PORT), "console": _kill_port(CONSOLE_PORT)}
     time.sleep(1.0)
-    flags = 0
-    if _is_windows():
-        flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-
-    def spawn(cmd: list[str], name: str) -> subprocess.Popen:
-        handle = (log_dir / f"default_{name}.log").open("ab")
-        try:
-            return subprocess.Popen(cmd, cwd=str(ROOT), env=env, stdin=subprocess.DEVNULL,
-                                    stdout=handle, stderr=subprocess.STDOUT,
-                                    creationflags=flags)
-        finally:
-            handle.close()
-
-    gateway = spawn([py, "-m", "agi.wechat_gateway.server"], "gateway")
-    console = spawn([py, str(ROOT / "tools" / "console" / "server.py"),
-                     "--port", str(CONSOLE_PORT)], "console")
+    gateway = _spawn_service([py, "-m", "agi.wechat_gateway.server"],
+                             log_dir / "default_gateway.log", env)
+    console = _spawn_service([py, str(ROOT / "tools" / "console" / "server.py"),
+                              "--port", str(CONSOLE_PORT)],
+                             log_dir / "default_console.log", env)
     ok_gateway = _wait_health(f"http://127.0.0.1:{GATEWAY_PORT}/health", timeout)
     ok_console = _wait_health(f"http://127.0.0.1:{CONSOLE_PORT}/api/health", timeout)
     result.update({"gateway": ok_gateway, "console": ok_console, "killed": killed,

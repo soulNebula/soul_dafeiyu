@@ -227,19 +227,56 @@ def bot_login(password: str, *, client: str = "") -> dict:
 def bot_clear(*, client: str = "") -> dict:
     """取消 Bot，回到仓库默认数据根；后台重启 801/802。"""
     helper = ROOT / "tools" / "bot_activate.py"
-    flags = 0
-    if os.name == "nt":
-        flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     try:
-        subprocess.Popen([sys.executable, str(helper), "--clear", "--restart", "--delay", "2"],
-                         cwd=str(ROOT), stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         creationflags=flags)
+        _spawn_bot_helper([sys.executable, str(helper), "--clear",
+                           "--restart", "--delay", "2"])
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"spawn_failed: {exc}"}
     audit("bot_clear", {}, ok=True, client=client)
     return {"ok": True, "restarting": True, "note": "已取消 Bot，801/802 回到默认数据"}
+
+
+def _spawn_bot_helper(argv: list[str]) -> None:
+    """在 Windows 上用「一次性计划任务」跑 Bot 切换 helper。
+
+    为什么不用普通子进程：Agent/终端可能把子进程放进 Job 对象，802 退出时 helper
+    会被一起杀掉，切换就半途而废（实测）。计划任务由 Task Scheduler 托管，能活过 802。
+    非 Windows 或 schtasks 不可用时退回普通 Popen。
+    """
+    if os.name == "nt":
+        try:
+            bat = ROOT / "agi" / "data" / "bot_activate_task.bat"
+            bat.parent.mkdir(parents=True, exist_ok=True)
+            log = ROOT / "agi" / "data" / "bot_helper.log"
+            quoted = " ".join(f'"{str(item)}"' for item in argv)
+            crlf = chr(13) + chr(10)
+            bat.write_text(
+                ("@echo off" + crlf
+                 + 'cd /d "' + str(ROOT) + '"' + crlf
+                 + quoted + ' >> "' + str(log) + '" 2>&1' + crlf),
+                encoding="utf-8", newline="")
+            create = subprocess.run(
+                ["schtasks", "/create", "/tn", "SoulAgentBotActivate",
+                 "/tr", str(bat), "/sc", "once", "/st", "23:59", "/f"],
+                capture_output=True, text=True, timeout=20)
+            if create.returncode == 0:
+                subprocess.run(["schtasks", "/run", "/tn", "SoulAgentBotActivate"],
+                               capture_output=True, text=True, timeout=20)
+                return
+        except Exception:  # noqa: BLE001 - 计划任务不可用就退回普通 Popen
+            pass
+    # 回退：普通后台进程（桌面启动通常可用；被 Job 托管时可能被父进程带走）
+    kwargs = dict(cwd=str(ROOT), stdin=subprocess.DEVNULL,
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    base = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    for flags in (base | getattr(subprocess, "DETACHED_PROCESS", 0), base):
+        try:
+            subprocess.Popen(argv, creationflags=flags, **kwargs)
+            return
+        except OSError:
+            continue
+    raise OSError("spawn failed")
 
 
 def bot_load(path: str, password: str, *, client: str = "") -> dict:
@@ -262,17 +299,10 @@ def bot_load(path: str, password: str, *, client: str = "") -> dict:
             return {"ok": False, "error": "bad_password"}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    python = sys.executable
     helper = ROOT / "tools" / "bot_activate.py"
-    flags = 0
-    if os.name == "nt":
-        flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     try:
-        subprocess.Popen([python, str(helper), "--bot", raw, "--restart", "--delay", "2"],
-                         cwd=str(ROOT), stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         creationflags=flags)
+        _spawn_bot_helper([sys.executable, str(helper), "--bot", raw,
+                           "--restart", "--delay", "2"])
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"spawn_failed: {exc}"}
     audit("bot_load", {"path": raw, "bot": bot.get("name")}, ok=True, client=client)

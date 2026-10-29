@@ -212,8 +212,11 @@
 - ✅ 803「Bot 管理」页 + `/api/wb/bots/*`（创建/添加/校验/移除登记）
 - ✅ `agi/bot_runtime.py`：`<Bot>/data` 运行时根、活跃指针、`SOULAGENT_*` 环境变量
 - ✅ `tools/bot_activate.py`：校验密码 → 准备数据根 → 结束旧 801/802 → 按 Bot 环境重启
-- ✅ 802：Bot 登录/加载弹层、`/api/bot/info|login|load|switch-status`；无 Bot 时可「跳过」用当前数据
-- ✅ 测试：bot_profile 5、bot_activate 2、botstudio 3；803 104 passed
+- ✅ 802：Bot 登录/加载弹层、`/api/bot/info|login|load|clear|switch-status`；无 Bot 时可「跳过」用当前数据
+- ✅ 测试：bot_profile 5、bot_activate 3、botstudio 3；803 104 passed
+- ✅ **实机验证（2026-10-29）**：802 加载临时 Bot → 801/802 重启到 `<Bot>/data`（active=true、
+  联系人 0、Bot 密码登录成功）→ `/api/bot/clear` 切回默认数据（active=false、联系人/消息恢复）。
+  切换 helper 在 Agent/终端 Job 下会被带走，已改为 **Windows 一次性计划任务**（schtasks）执行。
 - ⏳ 下一步：802 刷新微信联系人/单多选；Bot 设置页统一保存；对话测试/开始运行
 
 

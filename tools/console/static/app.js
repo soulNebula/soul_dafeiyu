@@ -1375,10 +1375,15 @@ async function savePromptKey() {
 
 async function addPromptKey() {
   if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
-  const raw = window.prompt('自定义提示词 key（字母/数字/点，例如 tone 或 custom.tone）：', 'custom.');
+  const raw = window.prompt(
+    '给自定义提示词起个 key（字母/数字/点，例如 tone；会自动加 custom. 前缀）：',
+    'custom.my_prompt');
   if (raw === null) return;
   let name = String(raw || '').trim();
-  if (!name || name === 'custom.') { toast('key 不能为空', 'err'); return; }
+  if (!name || name === 'custom.') {
+    // 用户直接点确定/只保留默认前缀时，自动生成一个可改名的 key，不再报“key 不能为空”
+    name = 'custom.prompt_' + Date.now().toString(36);
+  }
   if (!name.startsWith('custom.')) name = 'custom.' + name;
   if (!/^custom\.[A-Za-z0-9_.-]{1,64}$/.test(name)) {
     toast('key 只能是字母/数字/点/_/-（≤64 字符）', 'err'); return;

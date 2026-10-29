@@ -664,3 +664,8 @@ table td input[type="number"], table td select { padding: 3px 6px; font-size: 12
   border: 1px solid var(--border); border-radius: 8px; }
 .wc-item .muted { margin-left: auto; }
 .wc-item.disabled { opacity: .5; }
+
+/* 训练数据积累进度 */
+.wb-data-progress { margin-top: 10px; }
+.wb-progress { height: 8px; border-radius: 99px; background: rgba(255,255,255,.08); overflow: hidden; margin-top: 8px; }
+.wb-progress span { display: block; height: 100%; background: linear-gradient(90deg, #4c9aff, #7bd88f); border-radius: 99px; }

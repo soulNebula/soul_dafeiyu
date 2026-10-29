@@ -358,7 +358,7 @@ async function openWechatContacts() {
 async function renderOverview() {
   $('#app').innerHTML = '<div class="empty">加载总览…</div>';
   let status = null, feed = null, config = null, models = null, engine = null;
-  let contacts = null, messages = null;
+  let contacts = null, messages = null, trainStatus = null;
   const errors = [];
   try { status = await api('/api/status'); } catch (e) { errors.push('gateway: ' + e.message); }
   try { engine = await api('/api/engine'); } catch (e) { errors.push('引擎: ' + e.message); }
@@ -367,6 +367,7 @@ async function renderOverview() {
   try { models = await api('/api/models'); } catch (e) { errors.push('模型: ' + e.message); }
   try { contacts = await api('/api/contacts'); } catch (e) { errors.push('联系人: ' + e.message); }
   try { messages = await api('/api/messages?limit=12' + contactQuery('&')); } catch (e) { errors.push('消息: ' + e.message); }
+  try { trainStatus = await api('/api/train/status'); } catch (e) { /* 训练数据非关键 */ }
   state.status = status; state.config = config; state.models = models; state.engine = engine;
   state.contacts = contacts;
   renderPills();
@@ -431,6 +432,18 @@ async function renderOverview() {
       </section>
       <aside class="wb-right">
         ${renderEngineCard(engine)}
+        ${(() => {
+          const gate = (trainStatus && trainStatus.gate) || {};
+          const samples = Number(gate.samples || (trainStatus && trainStatus.cumulative && trainStatus.cumulative.samples) || 0);
+          const threshold = 300;
+          const pct = Math.min(100, Math.round(samples / threshold * 100));
+          const ready = !!gate.ready;
+          return `<div class="wb-card wb-data-progress">
+            <div class="wb-card-head"><b>训练数据积累</b><span class="muted">${samples}/${threshold}</span></div>
+            <div class="wb-progress"><span style="width:${pct}%"></span></div>
+            <div class="muted small" style="margin-top:6px">${ready ? '✅ 已达到训练门槛' : '距离门槛还差 ' + Math.max(0, threshold - samples) + ' 条'}</div>
+          </div>`;
+        })()}
         <div class="wb-metric-grid">
           <div class="wb-card wb-metric"><span class="muted">主动消息</span><b>${proactive.enabled ? '开' : '关'}</b>
             <span class="muted">${num((proactive.probability || {}).min)}–${num((proactive.probability || {}).max)} · ${proactive.stopped ? '已停发' : '正常'}</span></div>

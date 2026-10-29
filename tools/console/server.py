@@ -1350,7 +1350,7 @@ def _with_model_hint(result: dict) -> dict:
 # --------------------------------------------------------------------------- #
 # P30：每日语料/训练门禁只读接口
 # --------------------------------------------------------------------------- #
-TRAIN_ROOT = ROOT / "agi" / "data" / "train"
+TRAIN_ROOT = DATA_DIR / "train"
 TRAIN_DAILY_DIR = TRAIN_ROOT / "daily"
 TRAIN_HISTORY_PATH = TRAIN_ROOT / "history.jsonl"
 

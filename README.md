@@ -135,18 +135,20 @@ C:\Python314\python.exe tools/check_docs_links.py
 
 ## 7. 目录
 
+完整目录树只维护一份：[`docs/STRUCTURE.md`](docs/STRUCTURE.md)（由 `tools/tree_report.py --write` 自动生成）。
+这里不再重复画局部树，避免多份目录树对不上。
+
+一眼版：
+
 ```
 SoulAgent/
-├── agi/                   核心包：selflearn/ inner/ llm/ integrations/ wechat_gateway/ soul/ persona/
-├── tools/                 控制台(802)/ desktop/ 桌面版(launcher+tray)/ soul_serve(8125)/ train/ 校验工具
-├── wx_core/               wxauto4 封装、WCDB 直读、OCR、发送底座
-├── webui/ ui/             legacy 网页端 / Tk 桌面 GUI
-├── Demo/                  独立工具实现（tools_impl 被 tools/ 动态 import）
-├── legacy/                死代码归档（只 mv 不删；清单见 legacy/README.md）
-├── tests/ docs/ scripts/  测试 / 文档 / 发布脚本
-├── idea/                  803 工作台（独立 git 历史，作为 subtree 合入；app/web/tests/docs）
-├── app.py web_app.py      桌面 GUI / legacy 网页端入口
-└── README.md
+├── agi/        核心包（selflearn/ inner/ llm/ wechat_gateway/ soul/ persona/ integrations/）
+├── tools/      802 控制台 / 桌面版 / 训练 / 本地模型服务 / OCR 与校验工具
+├── wx_core/    微信底座（窗口/DB 直读/OCR/发送/媒体/密钥）
+├── idea/       803 工作台（subtree 合入，独立历史）
+├── docs/       文档（架构/指南/质量/计划/归档）
+├── tests/ scripts/  测试与发布脚本
+└── webui/ ui/ Demo/ legacy/  历史/演示/归档
 ```
 
 模型与运行数据（GGUF/adapter/日志）放在 **`E:\agent`**，与项目目录分离；详见 [`docs/PATHS.md`](docs/guides/PATHS.md)。

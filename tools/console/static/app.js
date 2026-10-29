@@ -1814,6 +1814,12 @@ async function renderProviders() {
             <option value="slim" ${cfg.inner_schema === 'slim' ? 'selected' : ''}>精简（4 个字段，省资源）</option>
             <option value="full" ${cfg.inner_schema === 'full' ? 'selected' : ''}>完整（对照）</option>
           </select></div>
+        <div class="field"><label>聊天图片识图</label>
+          <select id="mc-chat_vision_mode">
+            <option value="local_caption" ${cfg.chat_vision_mode === 'local_caption' ? 'selected' : ''}>本地 VL 描述（默认，省钱）</option>
+            <option value="api" ${cfg.chat_vision_mode === 'api' ? 'selected' : ''}>云端视觉（旧行为）</option>
+          </select>
+          <span class="hint mono">chat_vision_mode</span></div>
       </div>
       <div class="row" style="margin-top:12px">
         <button class="btn primary" id="mc-save">保存配置</button>
@@ -1856,6 +1862,8 @@ async function saveModelConfig() {
     updates[key] = type === 'number' ? Number(node.value) : node.value;
   }
   updates.inner_schema = $('#mc-inner_schema').value;
+  const visionMode = $('#mc-chat_vision_mode');
+  if (visionMode) updates.chat_vision_mode = visionMode.value;
   try {
     const result = await api('/api/model-config', { method: 'POST', body: { updates } });
     toast('已保存：' + (result.note || '热加载生效'), 'ok');

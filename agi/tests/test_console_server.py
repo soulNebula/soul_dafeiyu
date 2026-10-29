@@ -2236,3 +2236,20 @@ def test_save_deepseek_key_endpoint(tmp_path, write_env, monkeypatch):
                           {"api_key": "sk-new-key-123456"})
     assert status == 401
     secrets_store.reset_cache()
+
+def test_chat_vision_mode_config_roundtrip(tmp_path, write_env, monkeypatch):
+    status, data = _call("POST", "/api/model-config",
+                         {"updates": {"chat_vision_mode": "api"}}, token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["config"]["chat_vision_mode"] == "api"
+    status, data = _call("GET", "/api/model-config")
+    assert status == 200 and data["config"]["chat_vision_mode"] == "api"
+
+    status, data = _call("POST", "/api/model-config",
+                         {"updates": {"chat_vision_mode": "bogus"}}, token="tok")
+    assert status == 400 and data["ok"] is False
+    assert any("chat_vision_mode" in item for item in data["errors"])
+
+    status, data = _call("POST", "/api/model-config",
+                         {"updates": {"chat_vision_mode": "local_caption"}}, token="tok")
+    assert status == 200 and data["config"]["chat_vision_mode"] == "local_caption"

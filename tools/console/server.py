@@ -2065,6 +2065,8 @@ MODEL_CONFIG_DEFAULTS = {
     "soul_server_url": "http://127.0.0.1:8123",
     "soul_timeout_s": 2.0,
     "inner_schema": "slim",
+    # 2026-10-29：聊天图片识图路由（本地 VL 描述 / 云端视觉）
+    "chat_vision_mode": "local_caption",
 }
 
 LOG_SOURCES: dict[str, list[Path]] = {
@@ -2199,6 +2201,11 @@ def _validate_model_config(updates: dict) -> tuple[dict, list[str]]:
                 text = str(value or "").strip().lower()
                 if text not in ("slim", "full"):
                     raise ValueError("inner_schema 只能是 slim/full")
+                cleaned[key] = text
+            elif key == "chat_vision_mode":
+                text = str(value or "").strip().lower()
+                if text not in ("local_caption", "api"):
+                    raise ValueError("chat_vision_mode 只能是 local_caption/api")
                 cleaned[key] = text
         except (TypeError, ValueError) as exc:
             errors.append(f"{key}: {exc}")

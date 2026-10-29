@@ -171,6 +171,32 @@ def create_bot(body: dict[str, Any]) -> dict[str, Any]:
             "validation": bot_profile.validate_bot(path), "bot_id": bot.get("bot_id")}
 
 
+def export_current(body: dict[str, Any]) -> dict[str, Any]:
+    """把当前 802 数据根导出成 Bot 包（含配置/联系人/人格/日记；不含明文 secrets）。"""
+    path = str(body.get("path") or "").strip()
+    name = str(body.get("name") or "").strip() or "802 当前配置"
+    password = str(body.get("password") or "")
+    if not path:
+        return {"ok": False, "error": "path_required"}
+    if len(password) < 6:
+        return {"ok": False, "error": "password_required"}
+    try:
+        from agi import bot_runtime
+        from tools import export_bot
+        active = bot_runtime.read_active()
+        source = None
+        if active and active.get("path"):
+            source = Path(active["path"]) / "data"
+        result = export_bot.export(source_data=source, path=path, name=name,
+                                   password=password,
+                                   with_media=bool(body.get("with_media", False)))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    if result.get("ok"):
+        register(path)
+    return result
+
+
 def add_existing(path: str) -> dict[str, Any]:
     root = _norm(path)
     result = bot_profile.validate_bot(root)

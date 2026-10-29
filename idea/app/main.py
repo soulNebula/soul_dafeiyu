@@ -131,6 +131,11 @@ def bots_create(body: dict | None = None):
     return botstudio.create_bot(body or {})
 
 
+@app.post("/api/wb/bots/export-current", dependencies=[Depends(require_token)])
+def bots_export_current(body: dict | None = None):
+    return botstudio.export_current(body or {})
+
+
 @app.post("/api/wb/bots/add", dependencies=[Depends(require_token)])
 def bots_add(body: dict | None = None):
     return botstudio.add_existing(str((body or {}).get("path") or ""))

@@ -296,6 +296,7 @@
           </div>
           <div class="actions">
             <button class="btn primary" id="bot-create">创建 Bot</button>
+            <button class="btn" id="bot-export-current">保存当前 802 配置</button>
             <button class="btn" id="bot-add-existing">添加已有目录</button>
             <button class="btn" id="bot-refresh">刷新列表</button>
           </div>
@@ -565,6 +566,21 @@ async function loadBots() {
   if (createBtn) createBtn.onclick = createBot;
   const addBtn = $('#bot-add-existing');
   if (addBtn) addBtn.onclick = addExistingBot;
+  const exportBtn = $('#bot-export-current');
+  if (exportBtn) exportBtn.onclick = async () => {
+    const path = ($('#bot-path').value || '').trim();
+    const name = ($('#bot-name').value || '').trim() || '802 当前配置';
+    const password = $('#bot-password').value || '';
+    if (!path) { toast('先选 Bot 保存目录', 'bad'); return; }
+    if (password.length < 6) { toast('802 登录密码至少 6 位', 'bad'); return; }
+    try {
+      const result = await api('/api/wb/bots/export-current', {method: 'POST',
+        body: {path, name, password}});
+      if (!result.ok) throw new Error(result.error || '导出失败');
+      toast(`已保存：${result.copied_files || 0} 个文件`, 'ok');
+      await loadBots();
+    } catch (err) { toast(err.message, 'bad'); }
+  };
   const hwBtn = $('#hw-probe');
   if (hwBtn) hwBtn.onclick = probeHardware;
   const refreshBtn = $('#bot-refresh');

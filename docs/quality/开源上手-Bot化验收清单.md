@@ -261,6 +261,29 @@ curl -H "X-Admin-Token: <token>" http://127.0.0.1:803/api/wb/hardware
 
 ---
 
+
+## N. 把当前 802 配置保存为 Bot
+
+| # | 验收项 | 状态 | 怎么验 |
+| --- | --- | --- | --- |
+| N1 | 803「保存当前 802 配置」按钮 | ✅ | 803 Bot 页填目录/名称/密码 → 点按钮 |
+| N2 | CLI 导出 | ✅ | `python tools\export_bot.py --path E:ots\my802 --name 我的802 --password 你的密码` |
+| N3 | 配置/白名单/提示词/联系人/人格/日记一起导出 | ✅ | 导出后 `validate` 通过；日志看 copied_files |
+| N4 | 不导出明文 secrets | ✅ | Bot 里只有 `secrets.json`（LLM key），不复制原 `agi/data/secrets.json` |
+| N5 | 导出后 803 自动登记 | ✅ | 803 已登记 Bot 列表出现 |
+| N6 | 导出时决定是否带 media_chat | 🟡 | CLI 有 `--with-media`；803 按钮默认不带 |
+
+**命令**：
+
+```bat
+python tools\export_bot.py --path E:gentots\802-config-20261030 ^
+  --name "802 当前配置" --password 你的密码
+python toolsot_profile.py validate --path E:gentots\802-config-20261030
+```
+
+> 实测：2026-10-30 已导出当前 802（27 个文件，配置/白名单/联系人/人格/日记/提示词），
+> Bot 目录 `E:gentots\802-config-20261030`，已在 803 登记。
+
 ## M. 明确未完成（不要按“已验收”）的项
 
 1. **云端灵魂模型单独路由**：Bot 里有 soul key，但内状态仍用主聊天 client；要做「soul provider → 独立 OpenAI 兼容 client」。

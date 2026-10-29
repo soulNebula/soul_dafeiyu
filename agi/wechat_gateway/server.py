@@ -802,24 +802,21 @@ class Gateway:
                             self.start()
                         except Exception as exc:  # noqa: BLE001
                             self.start_error = f"{type(exc).__name__}: {exc}"
+            persist_warning = ""
             try:
                 self._persist_engine()
-            except Exception as exc:  # noqa: BLE001 - 写盘失败回滚内存状态
-                self.engine_enabled = not wanted
-                self.engine_since = now
-                self.engine_reason = "persist_failed"
-                self.cfg["engine_enabled"] = self.engine_enabled
+            except Exception as exc:  # noqa: BLE001 - 写盘失败不阻断内存里的开关
+                persist_warning = f"{type(exc).__name__}: {exc}"
                 self._record("engine_persist_failed",
-                             {"error": f"{type(exc).__name__}: {exc}",
+                             {"error": persist_warning,
                               "target": str(self.config_path)})
-                return {"ok": False, "enabled": self.engine_enabled,
-                        "since": float(self.engine_since), "reason": "persist_failed",
-                        "error": f"{type(exc).__name__}: {exc}", "changed": False}
             kind = "engine_started" if wanted else "engine_stopped"
             self._record(kind, {"enabled": wanted, "since": now,
                                 "reason": self.engine_reason, "source": str(source)})
             result = self.engine_state()
             result.update({"changed": True, "source": str(source)})
+            if persist_warning:
+                result["persist_warning"] = persist_warning
             return result
 
     # ------------------------------------------------------------ P25 网上冲浪

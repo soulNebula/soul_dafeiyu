@@ -238,9 +238,18 @@ def save_atomic(cfg: dict, path: Path | str | None = None) -> None:
     """P18-A：原子写回配置（同目录临时文件 + os.replace），保留其它键。"""
     target = Path(path) if path else Path(CONFIG_PATH)
     target.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(cfg, ensure_ascii=False, indent=2)
     tmp = target.with_name(target.name + ".engine.tmp")
-    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, target)
+    try:
+        tmp.write_text(data, encoding="utf-8")
+        os.replace(tmp, target)
+    except PermissionError:
+        # 低权限/杀软锁临时文件时回退直接写；仍失败交给调用方处理
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        target.write_text(data, encoding="utf-8")
 
 
 def contact_db(contact: str) -> Path:

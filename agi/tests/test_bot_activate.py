@@ -34,6 +34,15 @@ def test_activate_only_prepares_data_and_pointer(tmp_path, monkeypatch):
     assert active and active["path"] == str(bot_path.resolve())
 
 
+def test_clear_active_pointer(tmp_path, monkeypatch):
+    bot_path = _prepare(tmp_path, monkeypatch)
+    bot_activate.activate(str(bot_path), restart=False)
+    assert bot_runtime.read_active()
+    result = bot_activate.clear_active(restart=False)
+    assert result["ok"] is True
+    assert bot_runtime.read_active() is None
+
+
 def test_activate_rejects_invalid_bot(tmp_path, monkeypatch):
     _prepare(tmp_path, monkeypatch)
     result = bot_activate.activate(str(tmp_path / "nope"), restart=False)

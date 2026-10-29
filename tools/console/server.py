@@ -224,6 +224,24 @@ def bot_login(password: str, *, client: str = "") -> dict:
     return {"ok": True, "token": token, "bot": {"name": bot.get("name"), "path": path}}
 
 
+def bot_clear(*, client: str = "") -> dict:
+    """取消 Bot，回到仓库默认数据根；后台重启 801/802。"""
+    helper = ROOT / "tools" / "bot_activate.py"
+    flags = 0
+    if os.name == "nt":
+        flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    try:
+        subprocess.Popen([sys.executable, str(helper), "--clear", "--restart", "--delay", "2"],
+                         cwd=str(ROOT), stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=flags)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"spawn_failed: {exc}"}
+    audit("bot_clear", {}, ok=True, client=client)
+    return {"ok": True, "restarting": True, "note": "已取消 Bot，801/802 回到默认数据"}
+
+
 def bot_load(path: str, password: str, *, client: str = "") -> dict:
     """校验 Bot 密码后，后台重启 801/802 到该 Bot 的数据根。"""
     from agi import bot_runtime
@@ -5562,6 +5580,8 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     code = 500
                 self._json(code, result); return
+            if path == "/api/bot/clear":
+                self._json(200, bot_clear(client=client)); return
             if path == "/api/manual/send":
                 result = manual_send(str(body.get("contact") or ""),
                                      str(body.get("text") or ""), client=client)

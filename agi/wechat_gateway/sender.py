@@ -688,20 +688,23 @@ class WxAutoSender:
         ok, detail = self._send_succeeded(response)
         return ok, "" if ok else f"发送结果不明确或失败：{detail}"
 
-    def _send_file_raw(self, wx: Any, path: str) -> tuple[bool, str]:
+    def _send_file_raw(self, wx: Any, path: str, who: str = "") -> tuple[bool, str]:
         """发一个文件（SendFiles，图片/GIF）；返回 (ok, 错误)。"""
         send_files = getattr(wx, "SendFiles", None)
         if not callable(send_files):
             return False, "当前 wxauto4 模块不支持 SendFiles"
         try:
-            response = send_files(path)
+            # 必须显式带 who/exact：不传时 wechatauto 会自己找当前聊天页，
+            # 窗口布局变化时容易卡住并超时（2026-10-30 实测）。
+            response = (send_files(path, who=who, exact=True) if who
+                        else send_files(path))
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:300]}"
         ok, detail = self._send_succeeded(response)
         return ok, "" if ok else f"发送结果不明确或失败：{detail}"
 
-    def _send_file(self, wx: Any, item: dict,
-                   cfg: dict) -> tuple[bool, str, str | None, list[str]]:
+    def _send_file(self, wx: Any, item: dict, cfg: dict,
+                   who: str = "") -> tuple[bool, str, str | None, list[str]]:
         """P0-144：文档（type=file）→ SendFiles；失败不降级图片/贴纸。
 
         返回 ``(ok, error, used, fallback_used)``；成功 used="file"。
@@ -709,7 +712,7 @@ class WxAutoSender:
         found = media_mod.find_file(item.get("path") or item.get("name"), cfg)
         if found is None:
             return False, "not_found", None, []
-        ok, error = self._send_file_raw(wx, str(found))
+        ok, error = self._send_file_raw(wx, str(found), who=who)
         return ok, error, ("file" if ok else None), []
 
     def _log_media(self, cfg: dict, data: dict) -> None:
@@ -738,8 +741,8 @@ class WxAutoSender:
             result["name"] = str(item.get("name"))
         return result
 
-    def _sticker_bubbles(self, wx: Any, item: dict,
-                         cfg: dict) -> tuple[bool, str, str | None, list[str]]:
+    def _sticker_bubbles(self, wx: Any, item: dict, cfg: dict,
+                         who: str = "") -> tuple[bool, str, str | None, list[str]]:
         """贴纸三级降级：贴纸当图片 → emoji_text → 纯文本。
 
         返回 ``(ok, error, used, fallback_used)``；``fallback_used`` 是按顺序尝试过的
@@ -761,7 +764,7 @@ class WxAutoSender:
         errors: list[str] = []
         if sticker_path:
             tries.append("image")
-            ok, error = self._send_file_raw(wx, sticker_path)
+            ok, error = self._send_file_raw(wx, sticker_path, who=who)
             if ok:
                 return True, "", "image", tries
             errors.append(error)
@@ -887,18 +890,18 @@ class WxAutoSender:
                 ok, error = self._send_text_raw(wx, str(item.get("text")))
             elif kind == "sticker":
                 ok, error, used, fallback_used = self._sticker_bubbles(
-                    wx, item, effective)
+                    wx, item, effective, who=contact_name)
             elif kind == "file":
                 # P0-144：文档走 SendFiles；失败就是失败，绝不降级成图片
                 ok, error, used, fallback_used = self._send_file(
-                    wx, item, effective)
+                    wx, item, effective, who=contact_name)
             else:                             # image / gif
                 found = media_mod.find_file(item.get("path") or item.get("name"),
                                             effective)
                 if found is None:
                     ok, error = False, "not_found"
                 else:
-                    ok, error = self._send_file_raw(wx, str(found))
+                    ok, error = self._send_file_raw(wx, str(found), who=contact_name)
             status = "sent" if ok else "failed"
             results[index] = self._bubble_result(
                 item, ok, status, error, fallback_used=fallback_used, used=used)

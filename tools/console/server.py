@@ -2118,7 +2118,8 @@ def _post_gateway_media(payload: dict) -> dict:
     token = admin_token()
     if token:
         request.add_header("X-Admin-Token", token)
-    with urllib.request.urlopen(request, timeout=5.0) as response:
+    # 图片/表情包发送可能走 UIA 窗口兜底，实测要 30–60s；5s 会误报 502
+    with urllib.request.urlopen(request, timeout=90.0) as response:
         raw = response.read().decode("utf-8", "replace") or "{}"
     return json.loads(raw)
 

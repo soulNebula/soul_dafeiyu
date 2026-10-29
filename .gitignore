@@ -78,3 +78,6 @@ tools/desktop/build/
 tmp*/
 tools/desktop/dist/
 tools/desktop/build/
+
+# Windows 设备名残留
+nul

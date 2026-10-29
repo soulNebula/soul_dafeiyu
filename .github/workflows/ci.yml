@@ -54,7 +54,7 @@ jobs:
           # 只装 requirements 里的运行时依赖；wxauto / 微信窗口 / 本机 Hook 属于
           # Windows-only 外部依赖，不在 requirements.txt 里，CI 不安装。
           python -m pip install -r requirements.txt
-          python -m pip install pytest
+          python -m pip install pytest requests
       # 真跑两套离线测试，不再 --ignore 整个文件：
       # - Windows-only 用例（Win32/UIA/Tk/WinDLL）由 conftest 按 SOULAGENT_CI=1 统一 skip，
       #   跳过的条数与原因会出现在报告里，不再被 --ignore 静默吞掉；

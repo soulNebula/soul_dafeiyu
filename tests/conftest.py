@@ -34,6 +34,13 @@ from pathlib import Path
 
 import pytest
 
+#: 非 Windows 下整文件不收集：这些模块顶层 import wx_core.wcdb/UIA，Linux 会直接
+#: AttributeError（ctypes.WinDLL），不能靠 pytest.mark 在 import 后跳过。
+#: CI 仍是“纯逻辑 + 离线测试”；Windows 真机跑完整两套。
+collect_ignore: list[str] = []
+if sys.platform != "win32":
+    collect_ignore += ["test_core.py", "test_webui.py"]
+
 #: 仓库根（本文件在 <repo>/tests/conftest.py）
 REPO_ROOT = Path(__file__).resolve().parents[1]
 #: 会话级临时根：agi/tests/conftest.py 与本文件共用同一个（避免两个 conftest 各建一份）

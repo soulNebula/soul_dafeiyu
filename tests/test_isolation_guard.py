@@ -206,6 +206,7 @@ def test_no_hardcoded_agi_data_literal_in_agi_code():
         "agi/wechat_gateway/server.py": "send-core 已定稿范围，本轮不动（写入路径已由守卫覆盖）",
         "agi/wechat_gateway/sender.py": "send-core 已定稿范围，本轮不动（写入路径已由守卫覆盖）",
         "agi/wechat_gateway/drafts.py": "send-core 已定稿范围，本轮不动（写入路径已由守卫覆盖）",
+        "agi/bot_runtime.py": "全局 Bot 控制面指针（active_bot.json），必须固定在仓库 agi/data，不随 Bot 数据根重定向",
     }
     pattern = re.compile(r"""["']agi["']\s*/\s*["']data["']""")
     offenders: list[str] = []

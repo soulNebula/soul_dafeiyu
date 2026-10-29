@@ -76,7 +76,15 @@ if errorlevel 1 (
     echo [启动] 803 已在运行
 )
 
+call :port_802
+if errorlevel 1 (
+    echo [启动] 启动 802 控制台...
+    start "SoulAgent802" /min cmd /c ""%MAIN_PY%" "%CONSOLE_SCRIPT%" --port 802 >> "%LOG%" 2>&1"
+    call :wait_802
+)
+
 echo [就绪] 803：http://127.0.0.1:803/
+echo [就绪] 802：http://127.0.0.1:802/
 start "" "http://127.0.0.1:803/"
 echo [下一步] 803 -^> Bot 管理 创建 Bot；然后打开 802 加载
 timeout /t 3 /nobreak >nul
@@ -157,6 +165,23 @@ if errorlevel 1 (
     echo [提示] wechatauto 安装失败：802 可以收消息，但发消息会不可用。
 )
 exit /b 0
+
+:port_802
+netstat -ano | findstr /C:"127.0.0.1:802" | findstr "LISTENING" >nul 2>&1
+exit /b %errorlevel%
+
+:wait_802
+where curl.exe >nul 2>&1
+if errorlevel 1 (
+    timeout /t 5 /nobreak >nul
+    exit /b 0
+)
+for /l %%I in (1,1,30) do (
+    curl.exe -s -o nul --max-time 2 http://127.0.0.1:802/api/health
+    if not errorlevel 1 exit /b 0
+    timeout /t 1 /nobreak >nul
+)
+exit /b 1
 
 :port_803
 netstat -ano | findstr /C:"127.0.0.1:803" | findstr "LISTENING" >nul 2>&1

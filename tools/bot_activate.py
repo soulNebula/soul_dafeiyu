@@ -134,6 +134,9 @@ def restart_services(runtime: dict, *, python: str | None = None,
                      timeout: float = 30.0) -> dict:
     """结束旧 801/802 并以 Bot 环境变量重启；返回结果（不抛）。"""
     py = python or _python()
+    pyw = Path(str(py)).with_name("pythonw.exe")
+    if pyw.is_file():
+        py = str(pyw)
     env = bot_runtime.apply_env(runtime["env"])
     log_dir = Path(runtime["logs"])
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -161,6 +164,9 @@ def clear_active(*, restart: bool = True, python: str | None = None,
     if delay > 0:
         time.sleep(float(delay))
     py = python or _python()
+    pyw = Path(str(py)).with_name("pythonw.exe")
+    if pyw.is_file():
+        py = str(pyw)
     env = dict(os.environ)
     for key in BOT_ENV_KEYS:
         env.pop(key, None)

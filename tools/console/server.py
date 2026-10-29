@@ -344,6 +344,10 @@ def _spawn_bot_helper(argv: list[str]) -> None:
         except Exception:  # noqa: BLE001 - 计划任务不可用就退回普通 Popen
             pass
     # 回退：普通后台进程（桌面启动通常可用；被 Job 托管时可能被父进程带走）
+    argv = list(argv)
+    pyw = Path(str(argv[0])).with_name("pythonw.exe")
+    if pyw.is_file():
+        argv[0] = str(pyw)
     kwargs = dict(cwd=str(ROOT), stdin=subprocess.DEVNULL,
                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     base = (getattr(subprocess, "CREATE_NO_WINDOW", 0)

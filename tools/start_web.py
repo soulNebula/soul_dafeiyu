@@ -104,6 +104,11 @@ def main(argv: list[str] | None = None) -> int:
     logs.mkdir(parents=True, exist_ok=True)
     main_py = root / ".venv" / "Scripts" / "python.exe"
     idea_py = root / "idea" / ".venv" / "Scripts" / "python.exe"
+    # 服务用 pythonw 启动，GUI 子系统不会出现黑色控制台窗口
+    main_svc = main_py.with_name("pythonw.exe")
+    idea_svc = idea_py.with_name("pythonw.exe")
+    main_svc = main_svc if main_svc.is_file() else main_py
+    idea_svc = idea_svc if idea_svc.is_file() else idea_py
     if not main_py.is_file() or not idea_py.is_file():
         print(f"[web] 缺少 venv：{main_py} / {idea_py}")
         return 1
@@ -117,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         print("[web] 803 已在运行")
     else:
         print("[web] 启动 803...")
-        spawn([str(idea_py), "-m", "uvicorn", "app.main:app",
+        spawn([str(idea_svc), "-m", "uvicorn", "app.main:app",
                "--host", "127.0.0.1", "--port", "803"],
               root / "idea", log803)
         started.append("803")
@@ -125,12 +130,12 @@ def main(argv: list[str] | None = None) -> int:
         print("[web] 801 已在运行")
     else:
         print("[web] 启动 801 网关...")
-        spawn([str(main_py), "-m", "agi.wechat_gateway.server"], root, log801, bot_env)
+        spawn([str(main_svc), "-m", "agi.wechat_gateway.server"], root, log801, bot_env)
     if port_open(802):
         print("[web] 802 已在运行")
     else:
         print("[web] 启动 802...")
-        spawn([str(main_py), str(root / "tools" / "console" / "server.py"),
+        spawn([str(main_svc), str(root / "tools" / "console" / "server.py"),
                "--port", "802"], root, log802, bot_env)
         started.append("802")
 

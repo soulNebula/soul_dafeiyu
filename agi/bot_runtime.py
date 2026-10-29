@@ -86,6 +86,8 @@ def prepare_runtime(bot_path: str | Path, *, bot: dict[str, Any] | None = None) 
     chat = chat if isinstance(chat, dict) else {}
     soul = providers.get("soul") if isinstance(providers, dict) else None
     soul = soul if isinstance(soul, dict) else {}
+    vision = providers.get("vision") if isinstance(providers, dict) else None
+    vision = vision if isinstance(vision, dict) else {}
 
     config_path = data / "wechat" / "config.json"
     settings = (bot or {}).get("settings") or {}
@@ -116,6 +118,9 @@ def prepare_runtime(bot_path: str | Path, *, bot: dict[str, Any] | None = None) 
         "soul_provider_mode": "cloud" if (soul or {}).get("base_url") else "local",
         "soul_provider_base_url": str((soul or {}).get("base_url") or ""),
         "soul_provider_model": str((soul or {}).get("model") or ""),
+        "vision_provider_mode": "cloud" if (vision or {}).get("base_url") else "local",
+        "vision_provider_base_url": str((vision or {}).get("base_url") or ""),
+        "vision_provider_model": str((vision or {}).get("model") or ""),
     }
     _write_json(config_path, initial)
     # 老 Bot（导出时还没有 provider 键）补齐；不覆盖用户已设置的值
@@ -125,7 +130,10 @@ def prepare_runtime(bot_path: str | Path, *, bot: dict[str, Any] | None = None) 
             changed = False
             for key, value in (("soul_provider_mode", initial["soul_provider_mode"]),
                                ("soul_provider_base_url", initial["soul_provider_base_url"]),
-                               ("soul_provider_model", initial["soul_provider_model"])):
+                               ("soul_provider_model", initial["soul_provider_model"]),
+                               ("vision_provider_mode", initial["vision_provider_mode"]),
+                               ("vision_provider_base_url", initial["vision_provider_base_url"]),
+                               ("vision_provider_model", initial["vision_provider_model"])):
                 if key not in current:
                     current[key] = value
                     changed = True

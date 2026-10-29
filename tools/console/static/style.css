@@ -546,7 +546,7 @@ table td input[type="number"], table td select { padding: 3px 6px; font-size: 12
 .wb-top {
   display: flex; align-items: center; gap: 16px; padding: 10px 14px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  margin-bottom: 14px; position: sticky; top: 0; z-index: 5;
+  margin-bottom: 14px; position: static;
 }
 .wb-brand { display: flex; align-items: center; gap: 10px; min-width: 220px; }
 .wb-brand .logo {
@@ -575,7 +575,7 @@ table td input[type="number"], table td select { padding: 3px 6px; font-size: 12
 .wb-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .wb-card-head b { font-size: 13px; }
 .wb-card-head .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
-.wb-side { position: sticky; top: 70px; max-height: calc(100vh - 90px); overflow: auto; }
+.wb-side { position: static; max-height: calc(100vh - 90px); overflow: auto; }
 .wb-contact-list { display: flex; flex-direction: column; gap: 4px; }
 .wb-contact { display: flex; align-items: center; gap: 9px; padding: 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
 .wb-contact:hover { background: #2c2d2f; }

@@ -3844,6 +3844,13 @@ function momentsImageUrl(md5) {
   const token = state.token ? '&token=' + encodeURIComponent(state.token) : '';
   return '/api/moments/media?md5=' + encodeURIComponent(md5 || '') + token;
 }
+function momentsImageTag(image) {
+  const local = image.md5 ? momentsImageUrl(image.md5) : '';
+  const remote = image.url || '';
+  const fallback = remote ? ` onerror="this.onerror=null;this.src='${esc(remote)}'"` : '';
+  if (local) return `<img src="${local}" loading="lazy" alt="朋友圈图片"${fallback}>`;
+  return remote ? `<img src="${esc(remote)}" loading="lazy" alt="朋友圈图片">` : '';
+}
 function momentsAnalysisHtml(analysis) {
   if (!analysis) return '';
   const list = (value) => !value ? '<span class="hint">—</span>'
@@ -3876,8 +3883,7 @@ async function renderMoments(auto) {
   state.moments = { ...prev, items, analyses: analysisItems, keyword, analysis, errors };
   const cards = items.map((item) => {
     const tid = item.tid || item.id || '';
-    const images = (item.images || []).map((image) => image.md5
-      ? `<img src="${momentsImageUrl(image.md5)}" loading="lazy" onerror="this.style.display='none'">` : '').join('');
+    const images = (item.images || []).map((image) => momentsImageTag(image)).join('');
     return `<div class="moment-card">
       <div class="moment-head"><b>${esc(item.nickname || item.username || '未知')}</b>
         <span class="hint">${esc(momentsRelTime(item.create_time))}</span></div>

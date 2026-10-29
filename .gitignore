@@ -78,3 +78,8 @@ tools/desktop/build/
 tmp*/
 tools/desktop/dist/
 tools/desktop/build/
+
+# 临时/测试产物
+wxdb_*/
+
+agi/soul/data/soul_sft_web_*.jsonl*

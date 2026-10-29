@@ -79,7 +79,8 @@ def port_state(port: int) -> tuple[bool, int | None]:
 def _pid_for_port(port: int) -> int | None:
     try:
         out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True,
-                             encoding="utf-8", errors="replace", timeout=10).stdout
+                             encoding="utf-8", errors="replace", timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
     except Exception:  # noqa: BLE001
         return None
     pat = re.compile(rf"127\.0\.0\.1:{port}\s+\S+\s+LISTENING\s+(\d+)")
@@ -103,7 +104,8 @@ def start(name: str) -> dict:
     try:
         proc = subprocess.Popen(cfg["cmd"], cwd=cfg["cwd"], stdout=fh, stderr=fh,
                                 stdin=subprocess.DEVNULL, close_fds=True,
-                                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                                creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                                               | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)))
     finally:
         fh.close()
     deadline = time.time() + 25
@@ -128,7 +130,8 @@ def stop(name: str, *, force: bool = True) -> dict:
     if force:
         args.append("/F")
     r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
-                       errors="replace")
+                       errors="replace",
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     time.sleep(1.0)
     still, _ = port_state(cfg["port"])
     return {"ok": not still, "pid": pid, "detail": (r.stdout or r.stderr).strip()}

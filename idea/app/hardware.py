@@ -23,6 +23,7 @@ def _nvidia() -> list[dict[str, Any]]:
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=10,
             encoding="utf-8", errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout
     except Exception:  # noqa: BLE001
         return []

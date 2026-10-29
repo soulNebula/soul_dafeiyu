@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -45,6 +46,20 @@ KNOWN_KEYS: tuple[str, ...] = (
     "chat.system",
 )
 KNOWN_KEY_SET = set(KNOWN_KEYS)
+#: 用户自定义提示词统一前缀，内置 11 键不可删除/改名
+CUSTOM_PREFIX = "custom."
+CUSTOM_KEY_RE = re.compile(r"^custom\.[A-Za-z0-9_.-]{1,64}$")
+MAX_CUSTOM_KEYS = 50
+
+
+def is_custom_key(key: object) -> bool:
+    text = str(key or "")
+    return bool(CUSTOM_KEY_RE.match(text)) and text not in KNOWN_KEY_SET
+
+
+def is_valid_key(key: object) -> bool:
+    text = str(key or "")
+    return text in KNOWN_KEY_SET or is_custom_key(text)
 
 _LOGGER = logging.getLogger("agi.prompt_store")
 _LOCK = threading.RLock()
@@ -110,7 +125,7 @@ def _normalize_payload(raw: Any) -> dict:
         raise ValueError("prompts 必须是对象")
     clean: dict[str, str] = {}
     for key, value in prompts.items():
-        if key not in KNOWN_KEY_SET:
+        if not is_valid_key(key):
             _warn(f"unknown key: {key}")
             continue
         if not isinstance(value, str):
@@ -202,7 +217,7 @@ def validate(payload: Any) -> tuple[bool, list[str]]:
     prompts = payload.get("prompts") or {}
     total = 0
     for key, value in prompts.items():
-        if key not in KNOWN_KEY_SET:
+        if not is_valid_key(key):
             errors.append(f"未知键: {key}")
             continue
         if not isinstance(value, str):
@@ -241,8 +256,11 @@ def set_many(items: dict[str, str]) -> dict:
         raise ValueError("items 必须是 dict")
     payload = load()
     prompts = dict(payload.get("prompts") or {})
+    custom_keys = [key for key in items if is_custom_key(key)]
+    if len(set(custom_keys) | set(prompts)) - len(set(KNOWN_KEYS)) > MAX_CUSTOM_KEYS:
+        raise ValueError(f"自定义提示词超过 {MAX_CUSTOM_KEYS} 个")
     for key, value in items.items():
-        if key not in KNOWN_KEY_SET:
+        if not is_valid_key(key):
             raise ValueError(f"未知键: {key}")
         if not isinstance(value, str):
             raise ValueError(f"{key}: value 必须是字符串")
@@ -264,7 +282,7 @@ def set_many(items: dict[str, str]) -> dict:
 
 
 def delete(key: str) -> dict:
-    if key not in KNOWN_KEY_SET:
+    if not is_valid_key(key):
         raise ValueError(f"未知键: {key}")
     return set_many({key: ""})
 
@@ -283,14 +301,20 @@ def delete_all() -> dict:
     return _empty_payload()
 
 
+def _overrides_only_custom(overrides: dict) -> dict:
+    return {key: value for key, value in overrides.items() if is_custom_key(key)}
+
+
 def snapshot() -> dict:
     """前端读取：默认值 + 覆盖值 + 当前生效值。"""
     payload = load()
     defaults_map = defaults()
     overrides_map = payload.get("prompts") or {}
+    effective = {**_overrides_only_custom(overrides_map), **defaults_map,
+                 **overrides_map}
     return {"version": payload.get("version") or VERSION,
             "path": str(prompts_path()),
             "defaults": defaults_map,
             "overrides": overrides_map,
-            "effective": {key: overrides_map.get(key, defaults_map.get(key, ""))
-                          for key in defaults_map}}
+            "effective": effective,
+            "custom_keys": sorted(key for key in overrides_map if is_custom_key(key))}

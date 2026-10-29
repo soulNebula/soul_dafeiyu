@@ -168,3 +168,25 @@ def test_snapshot_and_file_shape():
     assert snap["overrides"]["proactive.kind.light"] == "light-override"
     assert snap["effective"]["proactive.kind.light"] == "light-override"
     assert snap["effective"]["chat.system"] == chat.SYSTEM
+
+
+def test_custom_prompt_add_and_delete_does_not_touch_builtin():
+    payload = prompt_store.set_many({"custom.tone": "自定义语气"})
+    assert payload["prompts"]["custom.tone"] == "自定义语气"
+    snap = prompt_store.snapshot()
+    assert snap["effective"]["custom.tone"] == "自定义语气"
+    assert "custom.tone" in snap["custom_keys"]
+    # 内置键仍在，自定义可删除
+    assert "chat.system" in snap["effective"]
+    prompt_store.set_many({"custom.tone": ""})
+    assert "custom.tone" not in prompt_store.overrides()
+
+
+def test_custom_prompt_key_validation():
+    assert prompt_store.is_custom_key("custom.a_b-c.1")
+    assert not prompt_store.is_custom_key("custom.")
+    assert not prompt_store.is_custom_key("chat.system")
+    with pytest.raises(ValueError):
+        prompt_store.set_many({"unknown.key": "x"})
+    with pytest.raises(ValueError):
+        prompt_store.set_many({"custom.bad key": "x"})

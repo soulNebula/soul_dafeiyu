@@ -1642,7 +1642,13 @@ def prompts_state() -> dict:
     if store is not None:
         try:
             snapshot = store.snapshot()
-            keys = list(getattr(store, "KNOWN_KEYS", ()) or snapshot.get("defaults", {}))
+            builtin = list(getattr(store, "KNOWN_KEYS", ()) or snapshot.get("defaults", {}))
+            custom_keys = sorted(key for key in (snapshot.get("overrides") or {})
+                                 if str(key).startswith("custom."))
+            keys = builtin + custom_keys
+            labels = _prompt_labels(builtin)
+            for key in custom_keys:
+                labels[key] = {"label": "自定义：" + str(key)[7:], "desc": "用户自定义提示词；可编辑/删除"}
             raw = read_json(Path(store.prompts_path()), {})
             updated_at = raw.get("updated_at") if isinstance(raw, dict) else None
             return {
@@ -1653,7 +1659,8 @@ def prompts_state() -> dict:
                 "defaults": snapshot.get("defaults") or {},
                 "overrides": snapshot.get("overrides") or {},
                 "effective": snapshot.get("effective") or {},
-                "labels": _prompt_labels(keys),
+                "labels": labels,
+                "custom_keys": custom_keys,
                 "config": {"max_chars": getattr(store, "MAX_CHARS_PER_ENTRY", 4000),
                            "max_file_bytes": getattr(store, "MAX_FILE_BYTES", 65536),
                            "keys": keys},
@@ -1753,7 +1760,7 @@ def reset_prompts(keys: list[str] | None = None, *, all: bool = False,
             if all:
                 store.delete_all()
             else:
-                unknown = [key for key in requested if key not in store.KNOWN_KEY_SET]
+                unknown = [key for key in requested if not store.is_valid_key(key)]
                 if unknown:
                     return {"ok": False, "error": f"未知键: {','.join(unknown)}"}
                 store.set_many({key: "" for key in requested})

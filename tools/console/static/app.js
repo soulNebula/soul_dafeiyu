@@ -1279,7 +1279,7 @@ function renderPromptsPage() {
     const over = isPromptOverridden(key);
     return `<div class="prompt-item ${key === selected ? 'active' : ''}" data-prompt-select="${esc(key)}">
       <div class="row between"><span class="prompt-label">${esc(label.label || key)}</span>
-        ${over ? badge('已覆盖', 'orange') : badge('默认', '')}</div>
+        ${key.startsWith('custom.') ? badge('自定义', 'orange') : (over ? badge('已覆盖', 'orange') : badge('默认', ''))}</div>
       <div class="prompt-key mono">${esc(key)}</div>
     </div>`;
   }).join('') : '<div class="empty">没有可编辑的内置提示词</div>';
@@ -1295,6 +1295,7 @@ function renderPromptsPage() {
         <div><b>${esc(label.label || selected)}</b> <span class="mono hint">${esc(selected)}</span>
           ${over ? badge('已覆盖', 'orange') : badge('默认', '')}</div>
         <div class="row">
+          ${selected.startsWith('custom.') ? '<button class="btn danger" id="btn-prompt-delete">删除自定义</button>' : ''}
           <button class="btn" id="btn-prompt-reset" ${over ? '' : 'disabled'}>恢复默认</button>
           <button class="btn primary" id="btn-prompt-save">保存</button>
         </div>
@@ -1311,8 +1312,11 @@ function renderPromptsPage() {
 
   $('#app').innerHTML = `${banner}<div class="prompt-layout">
       <div class="card prompt-list">
-        <div class="row between" style="margin-bottom:8px"><span class="hint">内置提示词（11 键）</span>
-          <button class="btn small danger" id="btn-prompt-reset-all" ${overrideCount ? '' : 'disabled'}>全部恢复默认</button></div>
+        <div class="row between" style="margin-bottom:8px"><span class="hint">内置提示词（11 键）· 自定义不限</span>
+          <span class="row" style="gap:6px">
+            <button class="btn small" id="btn-prompt-add">＋ 新增提示词</button>
+            <button class="btn small danger" id="btn-prompt-reset-all" ${overrideCount ? '' : 'disabled'}>全部恢复默认</button>
+          </span></div>
         ${left}
       </div>
       ${right}
@@ -1327,6 +1331,10 @@ function renderPromptsPage() {
   if (reset) reset.onclick = () => resetPrompt(false);
   const resetAll = $('#btn-prompt-reset-all');
   if (resetAll) resetAll.onclick = () => resetPrompt(true);
+  const addBtn = $('#btn-prompt-add');
+  if (addBtn) addBtn.onclick = addPromptKey;
+  const delBtn = $('#btn-prompt-delete');
+  if (delBtn) delBtn.onclick = deletePromptKey;
   const editor = $('#prompt-editor');
   if (editor) {
     editor.oninput = () => {
@@ -1365,9 +1373,41 @@ async function savePromptKey() {
   } catch (e) { toast(e.message, 'err'); }
 }
 
+async function addPromptKey() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const raw = window.prompt('自定义提示词 key（字母/数字/点，例如 tone 或 custom.tone）：', 'custom.');
+  if (raw === null) return;
+  let name = String(raw || '').trim();
+  if (!name || name === 'custom.') { toast('key 不能为空', 'err'); return; }
+  if (!name.startsWith('custom.')) name = 'custom.' + name;
+  if (!/^custom\.[A-Za-z0-9_.-]{1,64}$/.test(name)) {
+    toast('key 只能是字母/数字/点/_/-（≤64 字符）', 'err'); return;
+  }
+  try {
+    await api('/api/prompts', { method: 'POST', body: { prompts: { [name]: '（在这里写提示词内容）' } } });
+    state.promptKey = name;
+    await refreshPromptsData();
+    toast('已新增，右侧编辑后保存', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function deletePromptKey() {
+  if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+  const key = state.promptKey;
+  if (!key || !key.startsWith('custom.')) return;
+  if (!confirm('删除自定义提示词「' + key + '」？内置 11 键不能删除。')) return;
+  try {
+    await api('/api/prompts', { method: 'POST', body: { prompts: { [key]: '' } } });
+    state.promptKey = null;
+    await refreshPromptsData();
+    toast('已删除自定义提示词', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
 async function resetPrompt(all) {
   if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
   const key = state.promptKey;
+  if (!all && key && key.startsWith('custom.')) return deletePromptKey();
   if (!all) {
     const label = ((state.prompts.labels || {})[key] || {}).label || key;
     if (!confirm('把「' + label + '」恢复成代码默认？')) return;

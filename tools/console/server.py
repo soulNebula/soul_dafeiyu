@@ -78,16 +78,57 @@ READ_LIMIT_BYTES = 65536
 
 #: 设置页可编辑的白名单键（与网关热加载/内状态读取口径一致）
 EDITABLE_DEFAULTS: dict = {
+    # 监听 / 回复
+    "enabled": False,
+    "engine_enabled": True,
+    "auto_reply": False,
+    "dry_run": False,
+    "send_mode": "auto",
+    "fallback_enabled": False,
+    # 发送限制
+    "max_chars": 500,
+    "daily_limit": 200,
+    "hourly_limit": 40,
+    "min_interval_s": 1.5,
+    "reply_delay": 0.3,
+    "reply_debounce_ms": 2000,
+    # 模型 / 内状态
+    "llm_model": "deepseek-flash",
+    "llm_temperature": 0.7,
+    "llm_max_tokens": 2048,
+    "chat_vision_mode": "local_caption",
+    "soul_server_url": "http://127.0.0.1:8123",
+    "inner_mode": "off",
+    "inner_shadow_only": False,
+    "inner_mode_scope": "proactive_only",
+    "inner_schema": "slim",
+    # 主动消息
     "proactive_enabled": False,
     "quiet_hours": [23, 8],
     "proactive_interval_min_s": 60,
     "proactive_interval_max_s": 7200,
     "proactive_probability_min": 0.3,
     "proactive_probability_max": 0.9,
-    "inner_mode": "off",
-    "inner_shadow_only": False,
-    "inner_mode_scope": "proactive_only",
-    "inner_schema": "slim",
+    # pacing
+    "pacing_enabled": True,
+    "pacing_target_ratio": 1.0,
+    "pacing_min_interval_s": 1200,
+    "pacing_daily_cap": 12,
+    "pacing_tolerance": 0.25,
+    # 记忆 / 叙事
+    "memory_decay_enabled": True,
+    "memory_purge_enabled": False,
+    "memory_sleep_hour": 3,
+    "narrative_enabled": True,
+    "inject_time_context": True,
+    # 媒体
+    "media_enabled": False,
+    "media_max_mb": 10,
+    "media_sticker_in_reply": True,
+    # 其他
+    "trace_enabled": True,
+    "urges_enabled": True,
+    "send_probe_enabled": True,
 }
 #: 其余不可编辑但页面要看的键
 READONLY_CONFIG_KEYS = ("allowed_contacts", "proactive_contacts", "stop", "send_mode",
@@ -1393,13 +1434,53 @@ def _validate_config(updates: dict) -> tuple[dict, list[str]]:
     cleaned: dict = {}
     errors: list[str] = []
     allowed = set(EDITABLE_DEFAULTS)
+    bool_keys = {"enabled", "engine_enabled", "auto_reply", "dry_run",
+                 "fallback_enabled", "proactive_enabled", "inner_shadow_only",
+                 "pacing_enabled", "memory_decay_enabled", "memory_purge_enabled",
+                 "narrative_enabled", "inject_time_context", "media_enabled",
+                 "media_sticker_in_reply", "trace_enabled", "urges_enabled",
+                 "send_probe_enabled"}
+    int_ranges = {
+        "proactive_interval_min_s": (10, 86400),
+        "proactive_interval_max_s": (10, 86400),
+        "max_chars": (1, 4000),
+        "daily_limit": (1, 10000),
+        "hourly_limit": (1, 1000),
+        "reply_debounce_ms": (0, 10000),
+        "llm_max_tokens": (1, 32000),
+        "memory_sleep_hour": (0, 23),
+        "media_max_mb": (1, 200),
+        "pacing_daily_cap": (0, 1000),
+    }
+    float_ranges = {
+        "min_interval_s": (0.0, 600.0),
+        "reply_delay": (0.0, 60.0),
+        "llm_temperature": (0.0, 2.0),
+        "proactive_probability_min": (0.0, 1.0),
+        "proactive_probability_max": (0.0, 1.0),
+        "pacing_target_ratio": (0.0, 10.0),
+        "pacing_min_interval_s": (0.0, 86400.0),
+        "pacing_tolerance": (0.0, 1.0),
+    }
     for key, value in updates.items():
         if key not in allowed:
             errors.append(f"not_allowed:{key}")
             continue
         try:
-            if key == "proactive_enabled":
-                cleaned[key] = bool(value) if isinstance(value, bool) else _as_bool(value)
+            if key in bool_keys:
+                cleaned[key] = value if isinstance(value, bool) else _as_bool(value)
+            elif key in int_ranges:
+                lo, hi = int_ranges[key]
+                number = int(value)
+                if not lo <= number <= hi:
+                    raise ValueError(f"{key} 取值 {lo}–{hi}")
+                cleaned[key] = number
+            elif key in float_ranges:
+                lo, hi = float_ranges[key]
+                number = float(value)
+                if not lo <= number <= hi:
+                    raise ValueError(f"{key} 取值 {lo}–{hi}")
+                cleaned[key] = round(number, 4)
             elif key == "quiet_hours":
                 if not isinstance(value, (list, tuple)) or len(value) != 2:
                     raise ValueError("quiet_hours 需要 [start,end]")
@@ -1407,16 +1488,26 @@ def _validate_config(updates: dict) -> tuple[dict, list[str]]:
                 if not all(0 <= hour <= 24 for hour in hours):
                     raise ValueError("quiet_hours 取值 0–24")
                 cleaned[key] = hours
-            elif key in ("proactive_interval_min_s", "proactive_interval_max_s"):
-                number = int(value)
-                if not 10 <= number <= 86400:
-                    raise ValueError(f"{key} 取值 10–86400")
-                cleaned[key] = number
-            elif key in ("proactive_probability_min", "proactive_probability_max"):
-                number = float(value)
-                if not 0.0 <= number <= 1.0:
-                    raise ValueError(f"{key} 取值 0–1")
-                cleaned[key] = round(number, 4)
+            elif key == "send_mode":
+                text = str(value or "").strip().lower()
+                if text not in ("auto", "confirm", "off"):
+                    raise ValueError("send_mode 只能是 auto/confirm/off")
+                cleaned[key] = text
+            elif key == "chat_vision_mode":
+                text = str(value or "").strip().lower()
+                if text not in ("local_caption", "api", "off"):
+                    raise ValueError("chat_vision_mode 只能是 local_caption/api/off")
+                cleaned[key] = text
+            elif key == "llm_model":
+                text = str(value or "").strip()
+                if not text or len(text) > 80:
+                    raise ValueError("llm_model 需 1–80 字符")
+                cleaned[key] = text
+            elif key == "soul_server_url":
+                text = str(value or "").strip().rstrip("/")
+                if text and (not text.startswith(("http://", "https://")) or len(text) > 200):
+                    raise ValueError("soul_server_url 需要 http(s) URL 或留空")
+                cleaned[key] = text
             elif key == "inner_mode":
                 text = str(value or "").strip().lower()
                 if text not in INNER_MODES:
@@ -2488,6 +2579,65 @@ def save_deepseek_key(api_key: str, *, clear: bool = False, client: str = "") ->
     audit("deepseek_key_update", {"configured": bool(text)}, ok=True, client=client)
     return {"ok": True, "deepseek": _deepseek_status(),
             "note": "已保存到本机 agi/data/secrets.json（不上传；网关热加载，下一条消息生效）"}
+
+
+def test_model_connectivity() -> dict:
+    """轻量连通测试：chat 打 OpenAI 兼容 /models；soul/vision 打本地 /health。"""
+    import urllib.request as _url
+
+    results: dict = {}
+
+    def probe_json(url: str, headers: dict | None = None, timeout: float = 8.0) -> tuple[bool, str]:
+        try:
+            req = _url.Request(url, headers=headers or {})
+            with _url.urlopen(req, timeout=timeout) as resp:
+                return 200 <= int(getattr(resp, "status", 200)) < 300, f"HTTP {getattr(resp, 'status', '?')}"
+        except urllib.error.HTTPError as exc:
+            return False, f"HTTP {exc.code}"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"[:160]
+
+    # chat：OpenAI 兼容 /models（DeepSeek 也支持）
+    try:
+        from agi import secrets_store
+        key = secrets_store.llm_api_key()
+    except Exception:  # noqa: BLE001
+        key = ""
+    web = read_json(WEB_CONFIG_PATH, {})
+    llm = web.get("llm") if isinstance(web, dict) else {}
+    llm = llm if isinstance(llm, dict) else {}
+    base = str(llm.get("base_url") or "https://api.deepseek.com").rstrip("/")
+    model = str(llm.get("model") or "deepseek-flash")
+    if key:
+        ok, detail = probe_json(base + "/models",
+                                {"Authorization": f"Bearer {key}"})
+        results["chat"] = {"ok": ok, "detail": detail, "model": model, "base_url": base}
+    else:
+        results["chat"] = {"ok": False, "detail": "未配置 API key", "model": model}
+
+    # soul：本地服务 /health；关闭时 skipped
+    cfg = gateway_config()
+    soul_url = str(cfg.get("soul_server_url") or "").rstrip("/")
+    if str(cfg.get("inner_mode") or "off") == "off":
+        results["soul"] = {"ok": True, "skipped": True, "detail": "内状态关闭"}
+    elif soul_url.startswith("http"):
+        ok, detail = probe_json(soul_url + "/health", timeout=3.0)
+        results["soul"] = {"ok": ok, "detail": detail, "url": soul_url}
+    else:
+        results["soul"] = {"ok": False, "detail": "未配置灵魂服务地址"}
+
+    # vision：本地 8125 或云端 key
+    vision = str(cfg.get("chat_vision_mode") or "local_caption")
+    if vision == "off":
+        results["vision"] = {"ok": True, "skipped": True, "detail": "识图关闭"}
+    elif vision == "api":
+        results["vision"] = {"ok": bool(key), "detail": "云端视觉（复用聊天 key）" if key else "未配置 key",
+                             "mode": "api"}
+    else:
+        ok, detail = probe_json("http://127.0.0.1:8125/health", timeout=3.0)
+        results["vision"] = {"ok": ok, "detail": detail, "mode": "local"}
+    return {"ok": all(r.get("ok") or r.get("skipped") for r in results.values()),
+            "results": results}
 
 
 def model_config_state() -> dict:
@@ -5379,6 +5529,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, memory_claims(
                     str((query.get("contact") or [""])[0] or ""),
                     self._limit(query, 100))); return
+            if path == "/api/test/models":
+                self._json(200, test_model_connectivity()); return
             if path == "/api/model-config":
                 self._json(200, model_config_state()); return
             if path == "/api/chat-test/history":
@@ -5639,6 +5791,8 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("contact") or ""), body.get("ids") or [],
                     client=client)
                 self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/test/models":
+                self._json(200, test_model_connectivity()); return
             if path == "/api/model-config":
                 updates = body.get("updates", body)
                 result = apply_model_config(updates if isinstance(updates, dict) else {},

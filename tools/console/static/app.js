@@ -1473,26 +1473,84 @@ async function renderModels() {
 
 /* ---------------- 设置 ---------------- */
 function configCardHtml(cfg) {
+  const bool = (id, label, value, hint='') => `
+    <div class="field"><label class="switch"><input type="checkbox" id="${id}" ${value ? 'checked' : ''}> ${label}</label>
+      ${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
+  const num = (id, label, value, step=1, min=0, hint='') => `
+    <div class="field"><label>${label}</label><input type="number" id="${id}" step="${step}" min="${min}"
+      value="${esc(value)}">${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
+  const text = (id, label, value, hint='') => `
+    <div class="field"><label>${label}</label><input type="text" id="${id}" value="${esc(value)}">
+      ${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
+  const select = (id, label, value, options, hint='') => `
+    <div class="field"><label>${label}</label><select id="${id}">
+      ${options.map(([v, t]) => `<option value="${esc(v)}" ${String(value) === String(v) ? 'selected' : ''}>${esc(t)}</option>`).join('')}
+    </select>${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
+  const group = (title, body, note='') => `
+    <div class="card"><h3>${title}</h3>${note ? `<p class="hint">${note}</p>` : ''}
+      <div class="grid cols-2">${body}</div></div>`;
+
   return `
-    <div class="grid cols-2">
-      <div class="field"><label>主动消息开关</label>
-        <label class="switch"><input type="checkbox" id="cfg-proactive" ${cfg.proactive_enabled ? 'checked' : ''}> proactive_enabled</label></div>
-      <div class="field"><label>概率区间（每轮随机 p）</label>
-        <div class="row"><input type="number" id="cfg-pmin" step="0.05" min="0" max="1" value="${esc(cfg.proactive_probability_min)}" style="width:110px">
-          <span class="hint">–</span>
-          <input type="number" id="cfg-pmax" step="0.05" min="0" max="1" value="${esc(cfg.proactive_probability_max)}" style="width:110px"></div></div>
-      <div class="field"><label>间隔区间（秒）</label>
-        <div class="row"><input type="number" id="cfg-imin" step="60" min="10" value="${esc(cfg.proactive_interval_min_s)}" style="width:120px">
-          <span class="hint">–</span>
-          <input type="number" id="cfg-imax" step="60" min="10" value="${esc(cfg.proactive_interval_max_s)}" style="width:120px"></div></div>
-      <div class="field"><label>夜间静默（开始–结束，跨零点）</label>
-        <div class="row"><input type="number" id="cfg-qstart" min="0" max="24" value="${esc((cfg.quiet_hours || [23, 8])[0])}" style="width:90px">
-          <span class="hint">–</span>
-          <input type="number" id="cfg-qend" min="0" max="24" value="${esc((cfg.quiet_hours || [23, 8])[1])}" style="width:90px"></div></div>
-    </div>
-    <div class="row" style="margin-top:12px">
-      <button class="btn primary" id="btn-save-config">保存设置</button>
-      <span class="hint">网关热加载：保存后下一轮 proactive / 下一条消息生效；不需要重启。</span>
+    ${group('监听与回复', `
+      ${bool('cfg-enabled', '总开关 enabled', cfg.enabled)}
+      ${bool('cfg-engine', '引擎 engine_enabled', cfg.engine_enabled)}
+      ${bool('cfg-autoreply', '自动回复 auto_reply', cfg.auto_reply)}
+      ${bool('cfg-dryrun', '演练模式 dry_run（不真发）', cfg.dry_run)}
+      ${select('cfg-sendmode', '发送模式 send_mode', cfg.send_mode,
+        [['auto','自动发送'],['confirm','草稿确认'],['off','关闭发送']])}
+      ${bool('cfg-fallback', '发送失败回退 fallback_enabled', cfg.fallback_enabled)}`,
+      '总开关/引擎/自动回复都是热加载；关掉发送后监听仍在。')}
+    ${group('发送限制', `
+      ${num('cfg-maxchars', '单条最大字数', cfg.max_chars, 10, 1)}
+      ${num('cfg-daily', '每日上限', cfg.daily_limit, 1, 1)}
+      ${num('cfg-hourly', '每小时上限', cfg.hourly_limit, 1, 1)}
+      ${num('cfg-mininterval', '最小发送间隔（秒）', cfg.min_interval_s, 0.1, 0)}
+      ${num('cfg-replydelay', '回复延迟（秒）', cfg.reply_delay, 0.1, 0)}
+      ${num('cfg-debounce', '聚合防抖（毫秒）', cfg.reply_debounce_ms, 100, 0)}`)}
+    ${group('模型与内状态', `
+      ${text('cfg-llmmodel', '对话模型', cfg.llm_model, '如 deepseek-flash；云端 base_url/key 在模型配置页')}
+      ${num('cfg-temperature', 'temperature', cfg.llm_temperature, 0.05, 0)}
+      ${num('cfg-maxtokens', 'max_tokens', cfg.llm_max_tokens, 64, 64)}
+      ${select('cfg-vision', '识图模式 chat_vision_mode', cfg.chat_vision_mode,
+        [['local_caption','本地/云端描述'],['api','云端视觉'],['off','关闭']])}
+      ${select('cfg-innermode', '内状态 inner_mode', cfg.inner_mode,
+        [['off','关闭'],['shadow','影子记录'],['model','模型注入']])}
+      ${bool('cfg-innershadow', '内状态只记录不注入', cfg.inner_shadow_only)}
+      ${select('cfg-innerschema', '内状态结构', cfg.inner_schema,
+        [['slim','精简'],['full','完整']])}
+      ${text('cfg-soulurl', '灵魂服务地址', cfg.soul_server_url, '本地 8123；云端方案可留空')}`)}
+    ${group('主动消息', `
+      ${bool('cfg-proactive', '主动消息开关', cfg.proactive_enabled)}
+      ${num('cfg-pmin', '概率下限（每轮随机 p）', cfg.proactive_probability_min, 0.05, 0)}
+      ${num('cfg-pmax', '概率上限', cfg.proactive_probability_max, 0.05, 0)}
+      ${num('cfg-imin', '间隔下限（秒）', cfg.proactive_interval_min_s, 60, 10)}
+      ${num('cfg-imax', '间隔上限（秒）', cfg.proactive_interval_max_s, 60, 10)}
+      ${num('cfg-qstart', '夜间静默开始（点）', (cfg.quiet_hours || [23, 8])[0], 1, 0)}
+      ${num('cfg-qend', '夜间静默结束（点）', (cfg.quiet_hours || [23, 8])[1], 1, 0)}`,
+      '主动消息还受 pacing、上限、死区保护约束；保存后下一轮生效。')}
+    ${group('主动节奏 pacing', `
+      ${bool('cfg-pacing', 'pacing_enabled', cfg.pacing_enabled)}
+      ${num('cfg-ratio', '目标 用户:LLM 比例', cfg.pacing_target_ratio, 0.1, 0)}
+      ${num('cfg-pacingmin', '最小间隔（秒）', cfg.pacing_min_interval_s, 60, 0)}
+      ${num('cfg-pacingcap', '每日上限', cfg.pacing_daily_cap, 1, 0)}
+      ${num('cfg-pacingtol', '容差', cfg.pacing_tolerance, 0.05, 0)}`)}
+    ${group('记忆与叙事', `
+      ${bool('cfg-memdecay', '记忆衰减', cfg.memory_decay_enabled)}
+      ${bool('cfg-mempurge', '记忆清理', cfg.memory_purge_enabled)}
+      ${num('cfg-sleep', '睡眠整理小时（0-23）', cfg.memory_sleep_hour, 1, 0)}
+      ${bool('cfg-narrative', '叙事记忆 narrative_enabled', cfg.narrative_enabled)}
+      ${bool('cfg-timecontext', '注入时间上下文', cfg.inject_time_context)}`)}
+    ${group('媒体', `
+      ${bool('cfg-media', '媒体发送 media_enabled', cfg.media_enabled)}
+      ${num('cfg-mediamax', '媒体大小上限（MB）', cfg.media_max_mb, 1, 1)}
+      ${bool('cfg-sticker', '允许表情包回复', cfg.media_sticker_in_reply)}`)}
+    ${group('其他', `
+      ${bool('cfg-trace', 'trace_enabled', cfg.trace_enabled)}
+      ${bool('cfg-urges', '内驱力 urges_enabled', cfg.urges_enabled)}
+      ${bool('cfg-probe', '发送探测 send_probe_enabled', cfg.send_probe_enabled)}`)}
+    <div class="row" style="margin:12px 0">
+      <button class="btn primary" id="btn-save-config">保存全部设置</button>
+      <span class="hint">保存后网关热加载；下一个监听轮次 / 下一条消息生效，不需要重启。</span>
     </div>`;
 }
 
@@ -1509,7 +1567,7 @@ async function renderSettings() {
   const readonly = (config && config.readonly) || {};
   $('#app').innerHTML = `
     ${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
-    ${card('主动消息', configCardHtml(cfg))}
+    ${configCardHtml(cfg)}
     ${card('紧急停止（停止文件）', `
       <div class="row between">
         <div>${stopped ? pill('紧急停止已启用：所有外发被拦截', 'err') : pill('未停发', 'ok')}
@@ -1529,12 +1587,48 @@ async function renderSettings() {
   if (save) save.onclick = async () => {
     if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
     const updates = {
+      enabled: $('#cfg-enabled').checked,
+      engine_enabled: $('#cfg-engine').checked,
+      auto_reply: $('#cfg-autoreply').checked,
+      dry_run: $('#cfg-dryrun').checked,
+      send_mode: $('#cfg-sendmode').value,
+      fallback_enabled: $('#cfg-fallback').checked,
+      max_chars: Number($('#cfg-maxchars').value),
+      daily_limit: Number($('#cfg-daily').value),
+      hourly_limit: Number($('#cfg-hourly').value),
+      min_interval_s: Number($('#cfg-mininterval').value),
+      reply_delay: Number($('#cfg-replydelay').value),
+      reply_debounce_ms: Number($('#cfg-debounce').value),
+      llm_model: $('#cfg-llmmodel').value,
+      llm_temperature: Number($('#cfg-temperature').value),
+      llm_max_tokens: Number($('#cfg-maxtokens').value),
+      chat_vision_mode: $('#cfg-vision').value,
+      inner_mode: $('#cfg-innermode').value,
+      inner_shadow_only: $('#cfg-innershadow').checked,
+      inner_schema: $('#cfg-innerschema').value,
+      soul_server_url: $('#cfg-soulurl').value,
       proactive_enabled: $('#cfg-proactive').checked,
       proactive_probability_min: Number($('#cfg-pmin').value),
       proactive_probability_max: Number($('#cfg-pmax').value),
       proactive_interval_min_s: Number($('#cfg-imin').value),
       proactive_interval_max_s: Number($('#cfg-imax').value),
       quiet_hours: [Number($('#cfg-qstart').value), Number($('#cfg-qend').value)],
+      pacing_enabled: $('#cfg-pacing').checked,
+      pacing_target_ratio: Number($('#cfg-ratio').value),
+      pacing_min_interval_s: Number($('#cfg-pacingmin').value),
+      pacing_daily_cap: Number($('#cfg-pacingcap').value),
+      pacing_tolerance: Number($('#cfg-pacingtol').value),
+      memory_decay_enabled: $('#cfg-memdecay').checked,
+      memory_purge_enabled: $('#cfg-mempurge').checked,
+      memory_sleep_hour: Number($('#cfg-sleep').value),
+      narrative_enabled: $('#cfg-narrative').checked,
+      inject_time_context: $('#cfg-timecontext').checked,
+      media_enabled: $('#cfg-media').checked,
+      media_max_mb: Number($('#cfg-mediamax').value),
+      media_sticker_in_reply: $('#cfg-sticker').checked,
+      trace_enabled: $('#cfg-trace').checked,
+      urges_enabled: $('#cfg-urges').checked,
+      send_probe_enabled: $('#cfg-probe').checked,
     };
     await saveConfig(updates);
     renderSettings();
@@ -2093,6 +2187,10 @@ function renderChatPage() {
         </div>
       </div>
     </div>
+    ${card('模型连通测试', `
+      <div class="row between"><span class="hint">聊天模型打 /models；灵魂/识图打本地 /health；不产生聊天费用。</span>
+        <button class="btn" id="model-test">开始测试</button></div>
+      <div id="model-test-result" class="muted small" style="margin-top:8px"></div>`)}
     ${card('对话测试', `
       ${chatBubblesHtml()}
       <div class="chat-input-row">
@@ -2108,6 +2206,27 @@ function renderChatPage() {
   }
   const send = $('#chat-send');
   if (send) send.onclick = sendChatMessage;
+  const modelTest = $('#model-test');
+  if (modelTest) modelTest.onclick = async () => {
+    const box = $('#model-test-result');
+    if (modelTest) modelTest.disabled = true;
+    if (box) box.textContent = '测试中…（最多约 20 秒）';
+    try {
+      const data = await api('/api/test/models', {method: 'POST', body: {}});
+      const results = data.results || {};
+      if (box) {
+        box.innerHTML = Object.entries(results).map(([name, r]) => {
+          const label = {chat: '聊天模型', soul: '灵魂模型', vision: '识图模型'}[name] || name;
+          const ok = r.ok || r.skipped;
+          return `<div>${ok ? '✅' : '❌'} <b>${esc(label)}</b>：${esc(r.detail || '')}
+            ${r.skipped ? '（跳过）' : ''}</div>`;
+        }).join('');
+      }
+      toast(data.ok ? '模型连通测试通过' : '有模型未通过，见结果', data.ok ? 'ok' : 'err');
+    } catch (err) {
+      if (box) box.innerHTML = `<div class="error-text">${esc(err.message)}</div>`;
+    } finally { if (modelTest) modelTest.disabled = false; }
+  };
   const clear = $('#chat-clear');
   if (clear) clear.onclick = clearChatTest;
   const log = $('#chat-log');

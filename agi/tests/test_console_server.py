@@ -2253,3 +2253,25 @@ def test_chat_vision_mode_config_roundtrip(tmp_path, write_env, monkeypatch):
     status, data = _call("POST", "/api/model-config",
                          {"updates": {"chat_vision_mode": "local_caption"}}, token="tok")
     assert status == 200 and data["config"]["chat_vision_mode"] == "local_caption"
+
+def test_contacts_overview_and_messages_by_contact(tmp_path, monkeypatch):
+    import sqlite3
+    db = tmp_path / "abc.memory.sqlite3"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE messages(id TEXT, role TEXT, text TEXT, ts REAL)")
+    con.execute("INSERT INTO messages VALUES('m1','user','你好',100.0)")
+    con.commit(); con.close()
+
+    monkeypatch.setattr(console, "_contact_aliases",
+                        lambda: [{"alias": "甲", "db": db.name, "exists": True}])
+    monkeypatch.setattr(console, "_contact_paths", lambda alias: {"memory": db})
+    monkeypatch.setattr(console, "contact_db_path", lambda: db)
+    ov = console.contacts_overview()
+    assert ov["ok"] and ov["items"][0]["alias"] == "甲"
+    assert ov["items"][0]["messages"] == 1
+    assert ov["items"][0]["current"] is True
+
+    monkeypatch.setattr(console, "_contact_db_by_alias", lambda alias: db)
+    got = console.read_messages(10, "甲")
+    assert got["ok"] and len(got["items"]) == 1
+    assert got["items"][0]["text"] == "你好"

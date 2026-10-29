@@ -379,8 +379,8 @@ def read_inner(limit: int = 100) -> dict:
     return {"ok": True, "items": items, "db": str(path)}
 
 
-def read_messages(limit: int = 100) -> dict:
-    path = contact_db_path()
+def read_messages(limit: int = 100, contact: str = "") -> dict:
+    path = _contact_db_by_alias(contact) if str(contact or "").strip() else contact_db_path()
     if not path:
         return {"ok": False, "error": "contact_db_not_found", "items": []}
     try:
@@ -404,6 +404,58 @@ def read_messages(limit: int = 100) -> dict:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "items": []}
     return {"ok": True, "db": str(path),
             "items": [dict(row) for row in reversed(rows)]}
+
+
+def contacts_overview() -> dict:
+    """联系人列表：alias / 库名 / 消息数 / 最近消息时间（只读）。"""
+    current = contact_db_path()
+    current_name = current.name if current else ""
+    items: list[dict] = []
+    for row in _contact_aliases():
+        db_name = row.get("db")
+        db_path = None
+        for kind in ("memory", "single", "legacy"):
+            files = _contact_paths(row["alias"])
+            if files.get(kind):
+                db_path = files[kind]
+                break
+        count, last_ts = 0, 0.0
+        if db_path is not None:
+            try:
+                con = _ro_connect(db_path)
+                try:
+                    cols = _columns(con, "messages")
+                    if cols:
+                        row_count = con.execute("SELECT COUNT(*) FROM messages").fetchone()
+                        count = int(row_count[0] or 0) if row_count else 0
+                        if "ts" in cols:
+                            last = con.execute("SELECT MAX(ts) FROM messages").fetchone()
+                            last_ts = float(last[0] or 0) if last else 0.0
+                finally:
+                    con.close()
+            except sqlite3.Error:
+                pass
+        items.append({
+            "alias": row["alias"],
+            "db": db_name,
+            "exists": bool(row.get("exists")),
+            "messages": count,
+            "last_ts": last_ts,
+            "current": bool(current_name and db_name == current_name),
+        })
+    if current_name and not any(item["current"] for item in items):
+        items.append({"alias": _contact_label(current_name), "db": current_name,
+                      "exists": True, "messages": 0, "last_ts": 0.0,
+                      "current": True})
+    deduped: dict[str, dict] = {}
+    for item in items:
+        key = str(item.get("alias") or item.get("db") or "")
+        if key and key not in deduped:
+            deduped[key] = item
+    items = list(deduped.values())
+    items.sort(key=lambda item: (not item["current"], -float(item["last_ts"] or 0)))
+    return {"ok": True, "items": items,
+            "current": current_name, "current_label": _contact_label(current_name) if current_name else ""}
 
 
 def memory_snapshot() -> dict:
@@ -2540,8 +2592,8 @@ def _alias_for_stem(stem: str) -> str:
                 names.append(text)
     for name in names:
         for algo in ("sha1", "md5"):
-            digest = hashlib.new(algo, name.encode("utf-8")).hexdigest()[:16]
-            if digest == stem:
+            digest = hashlib.new(algo, name.encode("utf-8")).hexdigest()
+            if digest[:14] == stem or digest[:16] == stem:
                 return name
     return stem
 
@@ -2553,7 +2605,8 @@ def _contact_paths(alias_or_stem: str) -> dict[str, Path]:
     safe = re.sub(r"[^\w\u4e00-\u9fff-]", "", raw)[:60]
     stems = [safe]
     for algo in ("sha1", "md5"):
-        stems.append(hashlib.new(algo, raw.encode("utf-8")).hexdigest()[:16])
+        digest = hashlib.new(algo, raw.encode("utf-8")).hexdigest()
+        stems.extend([digest[:14], digest[:16]])  # 旧库 14 位 / 新命名 16 位都兼容
     helper = _split_helpers()
     for stem in stems:
         found: dict[str, Path] = {}
@@ -4751,7 +4804,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/inner":
                 self._json(200, read_inner(self._limit(query, 100))); return
             if path == "/api/messages":
-                self._json(200, read_messages(self._limit(query, 100))); return
+                contact = str((query.get("contact") or [""])[0] or "")
+                self._json(200, read_messages(self._limit(query, 100), contact)); return
+            if path == "/api/contacts":
+                self._json(200, contacts_overview()); return
             if path == "/api/memory":
                 self._json(200, memory_snapshot()); return
             # P38：记忆强度/遗忘阶段（只读）

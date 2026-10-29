@@ -281,22 +281,28 @@ function renderPills() {
 async function renderOverview() {
   $('#app').innerHTML = '<div class="empty">加载总览…</div>';
   let status = null, feed = null, config = null, models = null, engine = null;
+  let contacts = null, messages = null;
   const errors = [];
   try { status = await api('/api/status'); } catch (e) { errors.push('gateway: ' + e.message); }
   try { engine = await api('/api/engine'); } catch (e) { errors.push('引擎: ' + e.message); }
   try { feed = await api('/api/feed?limit=6'); } catch (e) { errors.push('事件流: ' + e.message); }
   try { config = await api('/api/config'); } catch (e) { errors.push('配置: ' + e.message); }
   try { models = await api('/api/models'); } catch (e) { errors.push('模型: ' + e.message); }
+  try { contacts = await api('/api/contacts'); } catch (e) { errors.push('联系人: ' + e.message); }
+  try { messages = await api('/api/messages?limit=12'); } catch (e) { errors.push('消息: ' + e.message); }
   state.status = status; state.config = config; state.models = models; state.engine = engine;
+  state.contacts = contacts;
   renderPills();
 
   if (!status || !status.ok) {
     const reason = (status && status.error) || (errors[0] || '未知错误');
-    $('#app').innerHTML = renderEngineCard(engine) +
-      card('网关状态', `<div class="error-text">网关未连接：${esc(reason)}</div>
-      <p class="hint">确认 <code>python -m agi.wechat_gateway.server</code> 正在 127.0.0.1:801 运行；本页数据仍会显示本机文件部分。</p>`) +
-      card('最近事件', renderEventList((feed && feed.items) || []));
-    bindEngineActions();
+    $('#app').innerHTML = wbTopBar({
+      title: '消息分析台', subtitle: 'Soul Console · 127.0.0.1:802',
+      pills: `<span class="wb-pill err">● 网关未连接</span>`,
+    }) + `<div class="wb-grid"><div class="wb-card wb-span2">
+      <div class="error-text">网关未连接：${esc(reason)}</div>
+      <p class="hint">确认 <code>python -m agi.wechat_gateway.server</code> 正在 127.0.0.1:801 运行；本页数据仍会显示本机文件部分。</p>
+    </div></div>`;
     return;
   }
 
@@ -309,31 +315,86 @@ async function renderOverview() {
   const recent = (st.recent || []).slice(-5).reverse();
   const modelItems = (models && models.models) || [];
   const soul = modelItems.find((m) => m.name === 'soul-05b');
-  const innerRows = `<div class="kv">
-      <span class="k">模式</span><span class="v">${esc(enumLabel('inner_mode', innerMode))}${innerShadow ? '（只记录不注入）' : ''}</span>
-      <span class="k">作用范围</span><span class="v">${esc(enumLabel('inner_scope', (config && config.config && config.config.inner_mode_scope), '—'))}</span>
-      <span class="k">字段集</span><span class="v">${esc(enumLabel('inner_schema', config && config.config && config.config.inner_schema, '—'))}</span>
-      <span class="k">soul-05b</span><span class="v">${soul ? (soul.healthy ? '健康（端口 ' + esc(soul.port) + '）' : '未运行（端口 ' + esc(soul.port) + '）') : '未登记'}</span>
-    </div>`;
+  const msgItems = (messages && messages.items) || [];
+  const contactItems = (contacts && contacts.items) || [];
+
+  const contactHtml = contactItems.length ? contactItems.map((item) => `
+    <div class="wb-contact ${item.current ? 'active' : ''}" data-contact="${esc(item.alias)}">
+      <span class="wb-avatar">${esc(String(item.alias || '?').slice(0, 1))}</span>
+      <div class="wb-contact-main"><b>${esc(item.alias || item.db || '—')}</b>
+        <span class="muted">${num(item.messages)} 条 · ${item.last_ts ? fmtAgo(item.last_ts) : '暂无消息'}</span></div>
+      ${item.current ? '<span class="wb-tag">当前</span>' : ''}
+    </div>`).join('') : '<div class="empty">暂无联系人库</div>';
 
   const html = `
-    ${errors.length ? `<div class="card"><div class="error-text">部分数据获取失败：${esc(errors.join('；'))}</div></div>` : ''}
-    ${renderEngineCard(engine)}
-    <div class="grid cols-4">
-      ${card('主动消息', `<div class="big">${proactive.enabled ? '开' : '关'}</div>
-        <div class="muted">概率 ${num((proactive.probability || {}).min)}–${num((proactive.probability || {}).max)} · 间隔 ${num((proactive.interval_s || {}).min)}–${num((proactive.interval_s || {}).max)}s</div>
-        <div class="row" style="margin-top:8px">${proactive.stopped ? pill('紧急停止已启用', 'err') : pill('未停发', 'ok')}</div>`)}
-      ${card('今日发送', `<div class="big">${num(sent)}</div><div class="muted">失败 ${num((st.send || {}).failed)} · 演练模式 ${(st.send || {}).dry_run ? '开' : '关'}</div>`)}
-      ${card('后台监听', `<div class="big">${active ? '运行' : '未运行'}</div><div class="muted">最近事件 ${fmtAgo(state.lastRefresh / 1000)}刷新</div>
-        <div class="muted">${proactive.stale ? pill('死区告警', 'warn') : pill('无死区', 'ok')}</div>`)}
-      ${card('内状态 / 模型', innerRows)}
-    </div>
-    <div class="grid cols-2">
-      ${card('最近 5 条事件', renderEventList(recent.length ? recent : (feed && feed.items) || []))}
-      ${card('最近对话片段', renderMiniMessages((st.recent || []).slice(-6).reverse()))}
+    ${wbTopBar({
+      title: '消息分析台', subtitle: `Soul Console · 127.0.0.1:802 · 当前库 ${esc((contacts && contacts.current_label) || '—')}`,
+      pills: `<span class="wb-pill ok">● 实时</span>
+        <span class="wb-pill ${active ? 'ok' : 'err'}">${active ? '● 微信监听中' : '○ 微信未监听'}</span>
+        <span class="wb-pill">会话 ${num((st.backend || {}).friends_count || 0)}</span>
+        <span class="wb-pill">消息 ${num(msgItems.length)}</span>`,
+      right: `<button class="btn small" id="ov-refresh">刷新</button>`,
+    })}
+    ${errors.length ? `<div class="wb-card wb-span3"><div class="error-text">部分数据获取失败：${esc(errors.join('；'))}</div></div>` : ''}
+    <div class="wb-grid">
+      <aside class="wb-card wb-side">
+        <div class="wb-card-head"><b>联系人</b><span class="muted">${num(contactItems.length)} 个</span></div>
+        <div class="wb-contact-list">${contactHtml}</div>
+      </aside>
+      <section class="wb-card wb-chat">
+        <div class="wb-card-head"><b>最近对话</b><span class="muted">${esc((contacts && contacts.current_label) || '当前库')}</span></div>
+        <div class="wb-msg-list">${msgItems.length ? msgItems.map(wbMessageBubble).join('') : '<div class="empty">暂无对话</div>'}</div>
+        <div class="wb-card-head" style="margin-top:14px"><b>最近事件</b></div>
+        ${renderEventList(recent.length ? recent : (feed && feed.items) || [])}
+      </section>
+      <aside class="wb-right">
+        ${renderEngineCard(engine)}
+        <div class="wb-metric-grid">
+          <div class="wb-card wb-metric"><span class="muted">主动消息</span><b>${proactive.enabled ? '开' : '关'}</b>
+            <span class="muted">${num((proactive.probability || {}).min)}–${num((proactive.probability || {}).max)} · ${proactive.stopped ? '已停发' : '正常'}</span></div>
+          <div class="wb-card wb-metric"><span class="muted">今日发送</span><b>${num(sent)}</b>
+            <span class="muted">失败 ${num((st.send || {}).failed)} · 演练 ${(st.send || {}).dry_run ? '开' : '关'}</span></div>
+          <div class="wb-card wb-metric"><span class="muted">后台监听</span><b>${active ? '运行' : '未运行'}</b>
+            <span class="muted">${proactive.stale ? '死区告警' : '无死区'}</span></div>
+          <div class="wb-card wb-metric"><span class="muted">内状态</span><b>${esc(enumLabel('inner_mode', innerMode))}</b>
+            <span class="muted">${innerShadow ? '只记录不注入' : '注入中'} · soul ${soul ? (soul.healthy ? '健康' : '未运行') : '未登记'}</span></div>
+        </div>
+        <div class="wb-links">
+          <button class="btn small" data-goto="feed">对话流</button>
+          <button class="btn small" data-goto="trace">推理过程</button>
+          <button class="btn small" data-goto="inner">内状态</button>
+          <button class="btn small" data-goto="memory">记忆</button>
+        </div>
+      </aside>
     </div>`;
   $('#app').innerHTML = html;
   bindEngineActions();
+  const refresh = $('#ov-refresh');
+  if (refresh) refresh.onclick = () => renderOverview();
+  document.querySelectorAll('[data-contact]').forEach((node) => {
+    node.onclick = () => { state.feedContact = node.dataset.contact || ''; go('feed'); };
+  });
+  document.querySelectorAll('[data-goto]').forEach((node) => {
+    node.onclick = () => go(node.dataset.goto);
+  });
+}
+
+function wbTopBar({ title, subtitle, pills, right }) {
+  return `<div class="wb-top">
+    <div class="wb-brand"><span class="logo">S</span>
+      <div><b>${esc(title)}</b><span class="muted">${esc(subtitle || '')}</span></div></div>
+    <div class="wb-pills">${pills || ''}</div>
+    <div class="wb-top-right">${right || ''}</div>
+  </div>`;
+}
+
+function wbMessageBubble(m) {
+  const mine = m.role !== 'user';
+  const text = String(m.text || '');
+  return `<div class="wb-msg ${mine ? 'mine' : ''}">
+    <div class="wb-msg-head">${mine ? '小鱼' : '对方'} · ${fmtTime(m.ts)}</div>
+    <div class="wb-msg-text">${esc(text)}</div>
+  </div>`;
 }
 
 function renderEngineCard(engine) {
@@ -473,44 +534,169 @@ function feedSignature(items) {
 }
 
 async function renderFeed(auto) {
+  if (!state.feedTab) state.feedTab = 'messages';
+  if (state.feedContact === undefined) state.feedContact = '';
+  if (!state.feedFilter) state.feedFilter = 'all';
+  if (state.feedQuery === undefined) state.feedQuery = '';
   if (!auto) $('#app').innerHTML = '<div class="empty">加载对话流…</div>';
-  let feed = null;
+
   const errors = [];
-  try { feed = await api('/api/feed?limit=200&kind=' + encodeURIComponent(state.feedKind)); }
-  catch (e) { errors.push(e.message); }
-  // 自动刷新：内容没变就直接返回，避免整页重绘闪烁
+  let contacts = state.contacts || null;
+  let messages = null, feed = null;
+  try { if (!contacts) contacts = await api('/api/contacts'); } catch (e) { errors.push('联系人: ' + e.message); }
+  try { if (!state.engine) state.engine = await api('/api/engine'); } catch (e) { /* 引擎状态非必需 */ }
+  state.contacts = contacts;
+  const contact = state.feedContact || '';
+  if (state.feedTab === 'messages') {
+    try { messages = await api('/api/messages?limit=200&contact=' + encodeURIComponent(contact)); }
+    catch (e) { errors.push('消息: ' + e.message); }
+  } else {
+    try { feed = await api('/api/feed?limit=200&kind=' + encodeURIComponent(state.feedKind)); }
+    catch (e) { errors.push('事件: ' + e.message); }
+  }
+
+  const listHtml = () => state.feedTab === 'messages'
+    ? wbMessageList((messages && messages.items) || [])
+    : feedList((feed && feed.items) || []);
+  const countLabel = () => state.feedTab === 'messages'
+    ? (((messages && messages.items) || []).length + ' 条消息 · 库 ' + esc((messages && messages.db) || ''))
+    : (((feed && feed.items) || []).length + ' 条事件 · 文件 ' + esc((feed && feed.source) || ''));
+
   if (auto) {
-    const items = (feed && feed.items) || [];
-    const sig = feedSignature(items);
     const listEl = $('#feed-list');
     const countEl = $('#feed-count');
-    if (listEl && countEl && sig === state.feedSig) return;
     if (listEl && countEl) {
-      state.feedSig = sig;
-      countEl.textContent = items.length + ' 条 · 文件 ' + ((feed && feed.source) || '');
-      listEl.innerHTML = feedList(items);
+      listEl.innerHTML = listHtml();
+      countEl.textContent = countLabel();
       return;
     }
   }
+
+  const contactItems = (contacts && contacts.items) || [];
+  const contactHtml = contactItems.map((item) => `
+    <div class="wb-contact ${item.alias === contact ? 'active' : ''}" data-contact="${esc(item.alias)}">
+      <span class="wb-avatar">${esc(String(item.alias || '?').slice(0, 1))}</span>
+      <div class="wb-contact-main"><b>${esc(item.alias || item.db || '—')}</b>
+        <span class="muted">${num(item.messages)} 条 · ${item.last_ts ? fmtAgo(item.last_ts) : '暂无'}</span></div>
+      ${item.current ? '<span class="wb-tag">当前</span>' : ''}
+    </div>`).join('');
+
+  const tabButtons = `<div class="wb-tabs">
+    <button class="wb-tab ${state.feedTab === 'messages' ? 'active' : ''}" data-tab="messages">消息</button>
+    <button class="wb-tab ${state.feedTab === 'events' ? 'active' : ''}" data-tab="events">事件流</button>
+  </div>`;
+
+  const filterChips = ['all', 'me', 'you', 'image', 'emote', 'file', 'voice'];
+  const chipLabel = { all: '全部', me: '我', you: '对方', image: '图片', emote: '表情包', file: '文件', voice: '语音' };
+  const chips = `<div class="wb-chips">${filterChips.map((key) =>
+    `<button class="wb-chip ${state.feedFilter === key ? 'active' : ''}" data-filter="${key}">${chipLabel[key]}</button>`).join('')}
+    <input id="feed-query" class="wb-search" placeholder="搜索消息…" value="${esc(state.feedQuery)}">
+    <label class="switch"><input type="checkbox" id="feed-auto" ${state.feedAuto ? 'checked' : ''}> 自动刷新 3s</label></div>`;
+
+  const eventTools = `<div class="wb-chips">
+      <select id="feed-kind">${FEED_KINDS.map(([value, label]) =>
+        `<option value="${value}" ${value === state.feedKind ? 'selected' : ''}>${label}</option>`).join('')}</select>
+      <label class="switch"><input type="checkbox" id="feed-auto" ${state.feedAuto ? 'checked' : ''}> 自动刷新 3s</label>
+    </div>`;
+
+  const activeContact = contactItems.find((item) => item.alias === contact)
+    || contactItems.find((item) => item.current);
+  const rightHtml = `<aside class="wb-card wb-side">
+    <div class="wb-card-head"><b>会话概览</b></div>
+    <div class="kv wb-kv">
+      <span class="k">当前联系人</span><span class="v">${esc((activeContact && activeContact.alias) || contact || '全部/当前库')}</span>
+      <span class="k">库内消息</span><span class="v">${num(activeContact && activeContact.messages)}<span class="muted">（本轮载入 ${num((messages && messages.items || []).length)}）</span></span>
+      <span class="k">最近活动</span><span class="v">${esc(activeContact && activeContact.last_ts ? fmtAgo(activeContact.last_ts) : '—')}</span>
+      <span class="k">引擎</span><span class="v">${state.engine ? (state.engine.enabled ? '运行中' : '已停止') : '—'}</span>
+    </div>
+    <div class="wb-links">
+      <button class="btn small" data-goto="trace">推理过程</button>
+      <button class="btn small" data-goto="inner">内状态</button>
+      <button class="btn small" data-goto="memory">记忆</button>
+      <button class="btn small" data-goto="prompts">提示词</button>
+    </div>
+  </aside>`;
+
   const html = `
-    ${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
-    <div class="card">
-      <div class="row between">
-        <div class="row">
-          <select id="feed-kind">${FEED_KINDS.map(([value, label]) =>
-            `<option value="${value}" ${value === state.feedKind ? 'selected' : ''}>${label}</option>`).join('')}</select>
-          <label class="switch"><input type="checkbox" id="feed-auto" ${state.feedAuto ? 'checked' : ''}> 自动刷新 3s</label>
+    ${wbTopBar({
+      title: '对话流', subtitle: `Soul Console · ${state.feedTab === 'messages' ? '聊天消息' : '网关事件'}`,
+      pills: `<span class="wb-pill ok">● 实时</span><span class="wb-pill">${esc(contact || (contacts && contacts.current_label) || '全部')}</span>`,
+      right: `<button class="btn small" id="feed-refresh">刷新</button>`,
+    })}
+    ${errors.length ? `<div class="wb-card wb-span3"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
+    <div class="wb-grid">
+      <aside class="wb-card wb-side">
+        <div class="wb-card-head"><b>联系人</b><span class="muted">${num(contactItems.length)} 个</span></div>
+        <div class="wb-contact-list">
+          <div class="wb-contact ${contact === '' ? 'active' : ''}" data-contact="">
+            <span class="wb-avatar">全</span><div class="wb-contact-main"><b>全部 / 当前库</b>
+            <span class="muted">默认联系人库</span></div></div>
+          ${contactHtml}
         </div>
-        <div class="refresh-bar"><span id="feed-count">${feed ? (feed.items || []).length : 0} 条 · 文件 ${esc((feed && feed.source) || '')}</span></div>
-      </div>
-      <div id="feed-list" style="margin-top:12px">${feedList((feed && feed.items) || [])}</div>
+      </aside>
+      <section class="wb-card wb-chat">
+        <div class="wb-card-head">${tabButtons}<span class="muted" id="feed-count">${countLabel()}</span></div>
+        ${state.feedTab === 'messages' ? chips : eventTools}
+        <div id="feed-list" class="wb-msg-list ${state.feedTab === 'messages' ? '' : 'wb-event-list'}">${listHtml()}</div>
+      </section>
+      ${rightHtml}
     </div>`;
   $('#app').innerHTML = html;
   state.feedSig = feedSignature((feed && feed.items) || []);
-  const select = $('#feed-kind');
-  if (select) select.onchange = () => { state.feedKind = select.value; renderFeed(false); };
+
+  const refresh = $('#feed-refresh');
+  if (refresh) refresh.onclick = () => renderFeed(false);
+  document.querySelectorAll('[data-tab]').forEach((node) => {
+    node.onclick = () => { state.feedTab = node.dataset.tab; renderFeed(false); };
+  });
+  document.querySelectorAll('[data-filter]').forEach((node) => {
+    node.onclick = () => { state.feedFilter = node.dataset.filter; renderFeed(false); };
+  });
+  document.querySelectorAll('[data-contact]').forEach((node) => {
+    node.onclick = () => { state.feedContact = node.dataset.contact || ''; renderFeed(false); };
+  });
+  document.querySelectorAll('[data-goto]').forEach((node) => {
+    node.onclick = () => go(node.dataset.goto);
+  });
+  const query = $('#feed-query');
+  if (query) {
+    query.oninput = () => {
+      state.feedQuery = query.value;
+      const list = $('#feed-list');
+      if (list) list.innerHTML = wbMessageList(state._feedMessages || []);
+    };
+  }
+  const kind = $('#feed-kind');
+  if (kind) kind.onchange = () => { state.feedKind = kind.value; renderFeed(false); };
   const autoBox = $('#feed-auto');
   if (autoBox) autoBox.onchange = () => { state.feedAuto = autoBox.checked; };
+}
+
+function wbMessageList(items) {
+  state._feedMessages = items || [];
+  const filters = {
+    me: (m) => m.role !== 'user',
+    you: (m) => m.role === 'user',
+    image: (m) => /\[图片\]/.test(String(m.text || '')),
+    emote: (m) => /\[表情包\]/.test(String(m.text || '')),
+    file: (m) => /\[文件\]/.test(String(m.text || '')),
+    voice: (m) => /\[语音\]/.test(String(m.text || '')),
+  };
+  const filter = state.feedFilter || 'all';
+  const q = String(state.feedQuery || '').trim().toLowerCase();
+  const rows = (items || []).filter((m) => {
+    if (filter !== 'all' && filters[filter] && !filters[filter](m)) return false;
+    if (q && !String(m.text || '').toLowerCase().includes(q)) return false;
+    return true;
+  });
+  if (!rows.length) return '<div class="empty">没有匹配的消息</div>';
+  return rows.map((m) => {
+    const mine = m.role !== 'user';
+    return `<div class="wb-msg ${mine ? 'mine' : ''}">
+      <div class="wb-msg-head">${mine ? '小鱼' : '对方'} · ${fmtTime(m.ts)}</div>
+      <div class="wb-msg-text">${esc(String(m.text || ''))}</div>
+    </div>`;
+  }).join('');
 }
 
 /* ---------------- 内状态 ---------------- */

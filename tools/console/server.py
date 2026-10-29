@@ -175,6 +175,29 @@ def set_stop(enabled: bool, *, client: str = "") -> dict:
     return {"ok": True, "stopped": bool(enabled), "path": str(target)}
 
 
+def pick_directory(initial: str = "") -> dict:
+    """在 802 所在电脑弹系统文件夹选择框（浏览器拿不到绝对路径，只能后端弹）。"""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"tkinter_unavailable: {exc}"}
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        path = filedialog.askdirectory(
+            title="选择 Bot 目录（会自动创建）",
+            initialdir=initial if initial and Path(initial).is_dir() else str(Path.home()),
+        )
+        root.destroy()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"dialog_failed: {exc}"}
+    if not path:
+        return {"ok": False, "error": "cancelled"}
+    return {"ok": True, "path": path}
+
+
 def _bot_profile():
     from tools import bot_profile  # 延迟导入：普通控制台启动不依赖 Bot 功能
     return bot_profile
@@ -5367,6 +5390,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, factory_preview())
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        if path == "/api/pick-directory":
+            client = self._client()
+            if client not in ("127.0.0.1", "::1", "localhost"):
+                self._json(403, {"ok": False, "error": "loopback only"})
+                return
+            try:
+                body = self._read_body()
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)}); return
+            self._json(200, pick_directory(str(body.get("initial") or "")))
             return
         if path in ("/api/bot/login", "/api/bot/load"):
             try:

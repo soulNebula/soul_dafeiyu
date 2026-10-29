@@ -4144,7 +4144,10 @@ function showBotLogin(info) {
 function showBotLoad() {
   botGateShell('加载 Bot（首次使用）', `
     <div class="muted">选择在 803「Bot 管理」里创建的 Bot 目录；加载会重启 801/802（约 5–10 秒）。</div>
-    <input id="bot-gate-path" placeholder="Bot 目录，例如 E:/bots/xiaoyu">
+    <div class="row">
+      <input id="bot-gate-path" placeholder="Bot 目录，例如 E:/bots/xiaoyu" style="flex:1">
+      <button class="btn" id="bot-gate-pick" type="button">选择目录</button>
+    </div>
     <input id="bot-gate-password" type="password" placeholder="Bot 登录密码">
     <div class="row" style="margin-top:10px">
       <button class="btn primary" id="bot-gate-load">加载并登录</button>
@@ -4153,6 +4156,17 @@ function showBotLoad() {
     <div id="bot-gate-msg" class="hint"></div>`);
   const skip = $('#bot-gate-skip');
   if (skip) skip.onclick = closeBotGate;
+  const pick = $('#bot-gate-pick');
+  if (pick) pick.onclick = async () => {
+    const msg = $('#bot-gate-msg');
+    try {
+      const result = await api('/api/pick-directory', {
+        method: 'POST', body: {initial: ($('#bot-gate-path').value || '').trim()},
+      });
+      if (result.ok && result.path) $('#bot-gate-path').value = result.path;
+      else if (result.error && result.error !== 'cancelled' && msg) msg.textContent = result.error;
+    } catch (err) { if (msg) msg.textContent = err.message; }
+  };
   $('#bot-gate-load').onclick = async () => {
     const path = ($('#bot-gate-path') || {}).value || '';
     const password = ($('#bot-gate-password') || {}).value || '';

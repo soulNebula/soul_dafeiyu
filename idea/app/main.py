@@ -8,6 +8,7 @@ M3：TrainLab（数据/训练/导出）、Model Studio（模型/适配器/GGUF�
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile

@@ -1,179 +1,272 @@
-# 小鱼 · 会聊天的本地伴侣
+<div align="center">
 
-[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-blue.svg)](.github/workflows/ci.yml)
+<img src="docs/architecture/figures/fig_architecture.png" alt="小鱼 SoulAgent 架构" width="820">
+
+# 小鱼 · SoulAgent
+
+**微信里真实收发消息的本地 AI 伴侣**
+
+有长期记忆、自己的心情、会主动找人、会写日记、会上网冲浪，也会被你的反馈一点点改变。
+
+大模型负责「会说」，这个项目负责「是谁」——  
+记忆、情绪、人格、关系、边界都在模型外面，逐层注入、逐层约束。
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D4.svg)]()
+[![Status](https://img.shields.io/badge/Status-Phase%201%20Ready-brightgreen.svg)](docs/quality/开源上手-Bot化验收清单.md)
 
-> 微信里真实收发消息的本地 AI 伴侣：有长期记忆、自己的心情、会主动找人、会写日记、
-> 会上网冲浪，也会被你的反馈一点点改变。**大模型负责「会说」，这个项目负责「是谁」**——
-> 记忆、情绪、人格、关系、欲望都在模型外面，逐层注入、逐层约束。
->
-> 本文的边界声明：下面「已实现 / 还没做到 / 外部依赖」三段按代码现状写（核对日期 2026-10-29），
-> 数字可用第 6 节的命令复算；不要拿宣传口径替代事实。
+[快速开始](#-三分钟上手) · [功能](#-它能做什么) · [架构](#-架构) · [文档](#-文档地图) · [边界](#-它不做什么)
 
-## 1. 已实现（能在代码里核对）
+</div>
 
-- **微信真收发**：装一个 801 网关；收消息有两条后端可选（wxauto4 `WeChatReceiver`，或
-  `wx_core.MonitorBackend` 的 WCDB 数据库直读 + OCR 回退），发消息只有 `Gateway._send` 一个入口，
-  持全局发送锁、串行化 reactive/主动/人工三条路径。
-- **发送闸门**：STOP 文件 → 引擎开关 → 白名单（空白名单 fail-closed）→ 内容检查 → `send_mode`
-  （off/confirm 草稿/auto）→ 节流（最小间隔、每小时 40、每天 200）→ 夜间静默 → 发送器子进程。
-- **长期记忆**：记忆抽取/合并/冲突处理/检索 + 类海马体衰减（分层、半衰期、dormant 200 天后才可能清理，默认 dry-run）。
-- **自己的情绪**：每轮判心情（`moodDelta` + 7 维情绪 + reason + confidence），基线 mood 70，
-  mood 半衰期 3h、7 情绪 90min；心情影响说话方式与主动程度。
-- **人格**：`persona_layers.py` 三层 core（人工批准）/ evolving（证据累积+限速）/ relations。
-- **主动**：主链是网关常驻循环（见 [`docs/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md) 第 6 节），
-  由 pacing（对等）× initiative（熟悉度/心情/信任）× 内驱力队列共同决定，不是定时群发。
-- **日记 / 周复盘**：每天 23:00 写第一人称日记；周日 23:30 后做周复盘并提炼进核心人格层。
-- **上网**：天气/新闻/网页搜索（`agi/integrations/web_lookup.py`）；B站素材摄取（见「外部依赖」）。
-- **可观测**：802 控制台能看每条回复的 prompt/记忆/内状态/心情/生成/润色/护栏/耗时（`turn_traces`）；
-  总览/对话流已改成「消息分析台」三栏：联系人切换（每人独立库/记忆/人格隔离）、
-  微信式消息气泡（图片/表情包/GIF 缩略图+类型标签）、手工发消息、监听开关与自动刷新。
-- **803 工作台（`idea/`）**：模型中心 / 训练工厂（LoRA/全参/蒸馏数据）/ 数据工作室 /
-  语料清洗（截图 OCR + 你·我分离）/ 用户标注（InnerState 打分）/ 蒸馏语义生成；中文化界面，独立测试。
-- **桌面版（M5，Windows）**：`tools/desktop/launcher.py` 一键起 801/802/803 + 系统托盘 +
-  Edge app 独立窗口；桌面快捷方式「小鱼桌面版」（pythonw，无控制台），支持开机自启、`--status/--stop`。
-  详见 [`docs/guides/桌面版.md`](docs/guides/桌面版.md)。
-- **聊天图片本地识图**：微信图片先由本机 8125 Qwen2.5-VL-3B 生成描述，再交给 DeepSeek 文本回复
-  （不把图片 token 发给云端，省钱）；本地失败自动回落云端视觉。开关：`chat_vision_mode`。
-- **测试**：根 `tests/` + `agi/tests/` 两套离线测试；CI 跑密钥扫描与两套测试
-  （`.github/workflows/ci.yml`）。
+---
 
-## 2. 还没做到 / 明确的限制（不要当成已实现）
+## 这是什么
 
-- **增量训练还没真正开始**：语料门禁要求 ≥300 条可训练样本，2026-10-27 的记录是 **96/300**，
-  `agi/data/train/history.jsonl` 的 `last_training=null`（未训练、未合并、未切线上）；
-  目前唯一跑通过的是 W4-B 的 20 步 smoke（见 `docs/plans/24`），没有产出线上 adapter。
-  仓库内**没有自动训练、自动上线路径**：`tools/train/train_gate.py` 默认只做计划，
-  真训练要人工 `--execute`，结果只标 `candidate`。
-- **本地小模型不是主模型**：主对话仍是 DeepSeek API；本地 0.5B 只产内状态（shadow），
-  本地 3B 只做摘要/关键词/提取。「像她」目前主要靠记忆/人格/护栏，不是权重。
-- **兜底发送 `unverified` ≠ 送达**：`sendclass.py` 里 `unverified` 只表示「调用返回 ok 但没有送达证据」
-  （如窗口兜底 `verified=False`），不计 sent、不重置熔断；对外说明不能写成「已送达」。
-- **群聊未支持**；引用/拍一拍/@ 是启发式识别。
-- **公众号全文**受微信 IP 级风控：只能搜标题摘要，或用户自己复制正文。
-- **8081/8082 是 legacy**：`web_app.py`（旧 wx_box 网页）与 `agi.selflearn.web`（8082 调试页）都不在主链，
-  日常入口只有 801 网关 + 802 控制台；`/agi/core*` 旧接口已返回 410（`agi_core_removed`）。
-- **没有实现的「意识」**：这里做的是行为与叙事上的连续自我，不宣称意识。
+小鱼不是一个「套壳聊天框」，而是一套**本地运行的人格与记忆系统**：
 
-## 3. 外部依赖（仓库里没有、必须自备）
+- **微信是真的**：登录你自己的微信 PC 客户端，收发真实消息；
+- **记忆是真的**：长期记忆、人格、关系、情绪、日记都落在本地 SQLite；
+- **边界是真的**：STOP、引擎开关、白名单、发送模式、限流、夜间静默多层闸门；
+- **可换模型**：对话/灵魂/识图都支持云端 OpenAI 兼容 API，也支持本地 llama.cpp；
+- **可迁移**：每个 Bot 是一个独立目录，配置、密钥、数据库、模型清单、训练数据互不串。
 
-| 依赖 | 说明 | 缺失时 |
+> ⚠️ 只支持 **Windows 10/11 + 微信 PC 客户端**；只建议用于**你自己的账号**。  
+> 微信自动化有账号风险，请自行评估。
+
+---
+
+## 🚀 三分钟上手
+
+### 第 1 步：双击启动
+
+仓库根目录双击：
+
+```text
+启动.bat
+```
+
+它会自动：
+
+1. 检查 Python 3.12+（缺了尝试 winget/国内镜像安装）
+2. 检查主 venv、803 venv、`AGENT_HOME`
+3. 缺依赖时用国内源安装
+4. 803 没运行就后台启动
+5. 打开 <http://127.0.0.1:803/>
+
+只想检查、不安装：
+
+```bat
+启动.bat -CheckOnly
+```
+
+> PowerShell 脚本 `setup.ps1` 仍保留给高级用户；普通使用双击 `启动.bat` 即可。
+
+### 第 2 步：803 创建 Bot
+
+1. 打开 <http://127.0.0.1:803/>
+2. 右上 token 填 `8888`（可在 `IDEA_TOKEN` 改）
+3. 左侧 **🤖 Bot** → 选择 Bot 目录（例如 `E:\bots\my-bot`）
+4. 填名称、802 登录密码、服务商、模型、API key
+5. 点「创建 Bot」
+
+密钥只写入 `<Bot>\secrets.json`，不会提交到仓库。
+
+### 第 3 步：802 加载 Bot
+
+1. 打开 <http://127.0.0.1:802/>
+2. 「加载 Bot」→ 选刚才的目录 + 密码
+3. 801/802 自动重启到该 Bot 的数据根（约 5–10 秒）
+
+### 第 4 步：接上微信
+
+1. 登录微信 PC 客户端
+2. 802 总览 → **刷新联系人**
+3. 首次读取 `contact.db` 需要提取密钥，等 10–20 秒
+4. 勾选联系人 → 「应用选择」
+
+### 第 5 步：开始运行
+
+- 802 **设置** 里确认总开关/自动回复/发送模式
+- 先 `dry_run` 或 `confirm`，稳定后再 `auto`
+- 总览 → **开始监听 / 开始运行**
+
+---
+
+## ✨ 它能做什么
+
+| 能力 | 说明 |
+| --- | --- |
+| 微信收发 | 收：DB 直读 + OCR 回退；发：`wechatauto` 子进程，单一发送入口 |
+| 长期记忆 | 抽取/合并/冲突处理/检索；类海马体衰减，默认 dry-run |
+| 情绪 | 每轮判心情；mood + 7 维情绪，影响回复和主动程度 |
+| 人格 | core（人工批准）/ evolving（证据累积+限速）/ relations 三层 |
+| 主动消息 | pacing × initiative × 内驱力；概率/间隔/静默/上限 |
+| 日记/周复盘 | 每天写第一人称日记；周日复盘进核心人格 |
+| 上网 / B站 | 天气/新闻/搜索；B站插件刷视频、字幕、评论、日报 |
+| 内状态 | 0.5B 灵魂模型产出 InnerState；云端/本地可切 |
+| 识图 | 本地 Qwen2.5-VL 描述或云端视觉；支持独立 vision provider |
+| 802 控制台 | 总览/对话流/记忆/提示词/模型/设置/日记/B站/朋友圈 |
+| 803 工作台 | 语料清洗、标注、蒸馏、LoRA/全参训练、模型中心 |
+| 多 Bot | 单活跃 Bot；数据/密钥/模型/训练数据完全隔离；切换自动重启 |
+
+### 界面一览
+
+<div align="center">
+  <img src="docs/architecture/figures/fig_shots.png" alt="802/803 界面截图" width="900">
+  <p><sub>802 消息分析台 / 803 语料清洗、用户标注、B站、日记</sub></p>
+</div>
+
+---
+
+## 🧱 架构
+
+```mermaid
+flowchart LR
+    WX[微信 PC] -->|UIA / WCDB / OCR| GW[801 网关]
+    GW --> MEM[(记忆 / 人格 / 情绪 / 日记)]
+    GW --> LLM[对话模型<br/>DeepSeek / OpenAI 兼容]
+    GW --> SOUL[灵魂模型<br/>本地 8123 / 云端]
+    GW --> VIS[识图<br/>本地 8125 / 云端]
+    CON[802 控制台] --> GW
+    WB[803 工作台] -->|语料/标注/训练/模型| GW
+    BOT[(Bot 目录<br/>配置/密钥/数据库/模型清单/数据)]
+    BOT --> GW
+    BOT --> CON
+    BOT --> WB
+```
+
+### 端口
+
+| 端口 | 服务 |
+| --- | --- |
+| `801` | 微信网关（接收 / 生成 / 发送闸门） |
+| `802` | Soul Console 控制台 |
+| `803` | IDEA 工作台 |
+| `8123` | 本地内状态 llama-server（可选） |
+| `8125` | 本地识图/文本提取 llama-server（可选） |
+| `8126+` | 训练导出自动注册的本地模型 |
+
+### Bot 目录
+
+```text
+<Bot>/
+├── bot.json          # schema、provider、settings、密码 hash
+├── secrets.json      # API key（本机；gitignore 语义；权限收紧）
+├── data/
+│   ├── wechat/config.json
+│   ├── selflearn/    # 联系人库、记忆、人格、情绪
+│   ├── diary/
+│   ├── prompts.json
+│   ├── local_models.json
+│   └── train/        # 每日语料 + 打包数据
+├── models/models.json
+├── datasets/
+└── logs/
+```
+
+切换 Bot 会重启 801/802 并带 `SOULAGENT_*` 环境；**不同 Bot 的数据库不连通**。
+
+---
+
+## 📦 环境与依赖
+
+| 依赖 | 必需 | 说明 |
 | --- | --- | --- |
-| Windows 10/11 + 微信 PC 客户端 | 收发都靠 UIA/窗口操作，Windows-only | 无法收发 |
-| Python **3.12+**（主进程可用 3.14） | 仓库在 3.12 / 3.14 上验证过 | 无法运行 |
-| 独立 **Python 3.12 venv** | 发送器（wechatauto/wxauto4）跑在这个 venv 的子进程里（Python 3.14 主进程不 import wx 系依赖） | 发送失败/降级 |
-| DeepSeek API key | 主对话模型；用环境变量 `DEEPSEEK_API_KEY` 注入（见第 5 节） | 只能走规则兜底 |
-| `~/.dsh/bili-duty` 插件（仓库外） | B站后台刷视频/读字幕评论/写日报与凭证；本仓库只读它的产物 | B站/冲浪素材降级，主链不受影响 |
-| 本地 llama-server（可选） | 0.5B 内状态（8123）/ 3B 提取（8125） | 内状态关闭，聊天照常 |
-| 模型资产（仓库外） | `E:\agent` 下的 GGUF/adapter/日志；路径由 `agi/paths.py` 解析 | 本地模型相关能力不可用 |
+| Windows 10/11 + 微信 PC | ✅ | UIA/窗口操作，Windows-only |
+| Python 3.12+ | ✅ | 3.12/3.14 验证过 |
+| 独立 3.12 venv | ✅ | 发送器 `wechatauto` 子进程 |
+| DeepSeek / OpenAI 兼容 key | ✅ | 主对话模型 |
+| `~/.dsh/bili-duty` | 可选 | B站插件，仓库外；缺了 B站能力降级 |
+| llama.cpp + GGUF | 可选 | 本地灵魂/识图；没有就走云端 |
+| GPU | 可选 | 无 GPU 按决策只走云端 |
 
-## 4. 快速开始
+`AGENT_HOME` 默认 `E:\agent`，可用环境变量改；模型与运行数据不随仓库分发。
 
-> 拿到仓库第一次用？先看 [`docs/guides/新用户上手.md`](docs/guides/新用户上手.md)（依赖、发送器 venv、key、白名单、803/本地模型怎么开）。
+---
 
+## 📊 当前进度（诚实版）
 
-```bat
-:: 0) 第一次用：一键检查/装环境并打开 803（Windows）
-powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
+| 模块 | 状态 |
+| --- | --- |
+| 开源上手 / Bot 化 Phase 1 | ✅ 可验收 |
+| 802/803 双端 + 数据隔离 | ✅ |
+| 云端灵魂/识图 provider | ✅ |
+| 本地模型工具链（llama.cpp / GGUF 下载） | 🟡 工具就绪，未在干净 VM 完整实测 |
+| 训练闭环 | 🟡 自动注册/启动/切换已接，未真实训练端到端 |
+| 干净机器一键安装 | 🟡 启动脚本已完成，待 VM 验证 |
+| 群聊 | ⏸ 按决策置灰 |
 
-:: 1) 桌面版（推荐：直接双击桌面快捷方式「小鱼桌面版」；命令行等价：）
-python tools\desktop\launcher.py --tray
-:: 或：启动桌面版.bat（会确保 801/802/803 在跑并打开控制台窗口）
+详细逐项验收：[`docs/quality/开源上手-Bot化验收清单.md`](docs/quality/开源上手-Bot化验收清单.md)
 
-:: 2) 或者手动分开起
-C:\Python314\python.exe -m agi.wechat_gateway.server          :: 网关 801
-C:\Python314\python.exe tools\console\server.py --port 802    :: 控制台 802
-C:\Python314\python.exe tools\soul_serve\serve_local3b.py     :: 本地 3B 8125（可选）
-E:\agent\llama\cuda\llama-server.exe -m E:\agent\output\gguf\soul_qwen25_05b_v1b-q4_k_m.gguf --port 8123  :: 内状态 8123（可选）
+---
 
-:: 3) 803 工作台（IDEA，先在 idea/ 下建 venv 并 pip install -r requirements.txt）
-cd idea && .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 803
+## 🔒 数据与隐私
 
-:: 4) 桌面 GUI（可选；--fake 不连微信）
-C:\Python314\python.exe app.py --fake
-```
+- 所有运行数据在本机：`AGENT_HOME` 与 Bot 目录；**仓库里不放用户数据/密钥/模型**；
+- API key 只写 `<Bot>/secrets.json`（本机、ACL 收紧、gitignore）；
+- 除了你配置的云端 API，没有自建服务端、没有遥测上传；
+- 微信/聊天/联系人数据属于你，不要提交、不要共享 Bot 目录。
 
-打开 <http://127.0.0.1:802>。管理令牌不是固定默认值：空/弱口令（如 `8888`/`admin`/`123456`）
-启动时会被**自动轮换成 32 位随机 token**（`agi/wechat_gateway/control.py` 的 F3 逻辑），
-去 `agi/data/wechat/config.json` 的 `admin_token` 或控制台设置页读当前值；管理 API 用
-`X-Admin-Token` 请求头认证。
-注意：**白名单为空时网关拒绝发送**（fail-closed），先在控制台「设置」里配置 `allowed_contacts`。
-
-## 5. 配置与密钥（本机保存，不上传）
-
-- 配置：`agi/data/wechat/config.json`（白名单、主动、静默、限流、send_mode 等，默认值见
-  `agi/wechat_gateway/config.py` DEFAULTS）；运行数据都在 `agi/data/**`，**不入库、不打包**。
-- 密钥取值顺序（`agi/selflearn/llm.py`）：`DEEPSEEK_API_KEY` 环境变量 → `agi/data/secrets.json`
-  （`SOULAGENT_SECRETS` 可换路径）→ `web_config.json`（兼容旧部署，命中会告警一次）。
-- **聊天图片识图路由**：`chat_vision_mode`（网关 `config.json`，默认 `local_caption`；可设 `api` 切回旧行为）：
-  `local_caption` = 本地 VL 描述 → 文本回复；`api` = 图片直接发云端视觉。环境变量 `CHAT_VISION_MODE` 可覆盖。
-- **802 模型配置页可直接填/保存 DeepSeek key**：保存到本机 `agi/data/secrets.json`
-  （原子写、ACL 收紧、gitignore；不上传、不回传明文），保存后热加载下一条消息生效；
-  也支持环境变量 `DEEPSEEK_API_KEY`（优先级最高）与旧 `web_config.json`（兼容，命中告警）。
-- 迁移建议：先 `python tools/rotate_secrets.py --dry-run` 看计划，再设环境变量并轮换旧 key；
-  不要把 key 写进任何会被提交/外发的文件。
-- 人格设定书：`agi/persona/<名字>/`（安装/卸载：`python -m tools.persona.install_xiaoyu`）。
-
-## 6. 如何验证本文档里的数字
+发布前检查：
 
 ```bat
-:: 全量终验：两套测试 + 静态检查 + 生产文件未被测试污染，输出证据表
-C:\Python314\python.exe scripts\agentb_verify.py
-
-:: 测试用例数（collect）、代码规模、legacy 归档量——都是现场算的
-C:\Python314\python.exe tools\status_report.py
-
-:: 跑两套测试并把真实 passed/failed/耗时回填 docs/STATUS.md（agi/tests 约 14~20 分钟）
-C:\Python314\python.exe tools/status_report.py --run
-
-:: 导入终验 JSON（不手抄数字）
-C:\Python314\python.exe tools/status_report.py --from-agentb docs/agentb_verify_result.json
-
-:: 文档数字是否过期（过期退出 1）
-C:\Python314\python.exe tools/status_report.py --check
-
-:: 架构守卫（死代码/import 环/行数预算/分层）
-C:\Python314\python.exe tools/check_architecture.py
-
-:: 文档链接检查（docs/ 内断链为 0 才退出 0）
-C:\Python314\python.exe tools/check_docs_links.py
+python tools\check_secrets.py
+python tools\check_architecture.py
+python tools\check_docs_links.py
 ```
 
-真实测试数字以 [`docs/STATUS.md`](docs/quality/STATUS.md) 的 `STATUS:AUTO` 区块为准（由
-`scripts/agentb_verify.py` 全量终验 + `tools/status_report.py --from-agentb` 生成，不手抄）；
-本文只给方法和口径。安全与留存相关工具见 [`docs/INDEX.md`](docs/INDEX.md) 第 2 节
-（`rotate_secrets.py` 密钥迁移、`prune_chat_logs.py` 留存清理，二者默认 dry-run）。
+---
 
-## 7. 目录
+## 🧪 开发与测试
 
-完整目录树只维护一份：[`docs/STRUCTURE.md`](docs/STRUCTURE.md)（由 `tools/tree_report.py --write` 自动生成）。
-这里不再重复画局部树，避免多份目录树对不上。
+```bat
+python -m pip install -r requirements.txt
+python -m pip install -r idea\requirements.txt
 
-一眼版：
-
-```
-SoulAgent/
-├── agi/        核心包（selflearn/ inner/ llm/ wechat_gateway/ soul/ persona/ integrations/）
-├── tools/      802 控制台 / 桌面版 / 训练 / 本地模型服务 / OCR 与校验工具
-├── wx_core/    微信底座（窗口/DB 直读/OCR/发送/媒体/密钥）
-├── idea/       803 工作台（subtree 合入，独立历史）
-├── docs/       文档（架构/指南/质量/计划/归档）
-├── tests/ scripts/  测试与发布脚本
-└── webui/ ui/ Demo/ legacy/  历史/演示/归档
+python -m pytest tests -q
+python -m pytest agi\tests -q
+cd idea && .venv\Scripts\python.exe -m pytest tests -q
 ```
 
-模型与运行数据（GGUF/adapter/日志）放在 **`E:\agent`**，与项目目录分离；详见 [`docs/PATHS.md`](docs/guides/PATHS.md)。
+- 架构守卫：`python tools\check_architecture.py`
+- 链接检查：`python tools\check_docs_links.py`
+- 状态数字：`python tools\status_report.py`
 
-## 8. 文档
+---
 
-- [架构说明](docs/architecture/ARCHITECTURE.md)（双后端、801/802、发送闸门、主动链、数据层）
-- [文档总入口](docs/INDEX.md)
-- [当前状态与可复现测试数字](docs/quality/STATUS.md)
-- [新用户上手](docs/guides/新用户上手.md)（从 clone 到第一条消息）
-- [803 工作台说明](idea/README.md)（语料清洗/标注/蒸馏/训练/模型中心）
-- [桌面版说明](docs/guides/桌面版.md)（Windows 快捷方式/托盘/自启/排障）
-- [迭代计划索引](docs/plans/README.md)
-- [使用与运维说明](docs/guides/README-usage.md)
-- [死代码归档清单](legacy/README.md)
-- [历史/归档](docs/archive/)
+## 🧭 它不做什么
+
+- 不宣称「意识」；做的是行为与叙事上的连续自我；
+- 不保证微信自动化的账号安全；只建议自己的账号；
+- 不内置模型/插件/用户数据；
+- 不支持群聊（当前只置灰保留入口）；
+- 不把「发送调用成功」当成「已送达」。
+
+---
+
+## 📚 文档地图
+
+| 文档 | 内容 |
+| --- | --- |
+| [新用户上手](docs/guides/新用户上手.md) | 从 clone 到第一条消息 |
+| [B站插件安装](docs/guides/B站插件安装.md) | 仓库外 `bili-duty` 的安装/检测/排障 |
+| [本地模型安装](docs/guides/本地模型安装.md) | llama.cpp、GGUF、断点续传、按 Bot 启停 |
+| [架构说明](docs/architecture/ARCHITECTURE.md) | 收/发/记忆/主动/数据层 |
+| [验收清单](docs/quality/开源上手-Bot化验收清单.md) | 逐项状态/命令/缺口 |
+| [路线图](docs/plans/63-开源上手与Bot化路线.md) | Phase 1–4 规划 |
+| [文档总入口](docs/INDEX.md) | 全部文档索引 |
+| [803 工作台](idea/README.md) | 语料/标注/训练/模型中心 |
+
+---
+
+## 🤝 参与
+
+- 提 issue 前先看验收清单的「明确未完成」，避免重复；
+- 不要提交 `agi/data/**`、Bot 目录、`secrets.json`、模型文件、聊天截图；
+- 代码风格/测试/文档约束见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+
+## 📄 License
+
+[MIT](LICENSE) © soulNebula

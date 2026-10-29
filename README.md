@@ -74,6 +74,9 @@
 
 
 ```bat
+:: 0) 第一次用：一键检查/装环境并打开 803（Windows）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
+
 :: 1) 桌面版（推荐：直接双击桌面快捷方式「小鱼桌面版」；命令行等价：）
 python tools\desktop\launcher.py --tray
 :: 或：启动桌面版.bat（会确保 801/802/803 在跑并打开控制台窗口）

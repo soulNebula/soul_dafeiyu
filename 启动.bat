@@ -63,31 +63,13 @@ if "%NEED%"=="1" (
 
 if not exist "%AGENT_HOME%\logs" mkdir "%AGENT_HOME%\logs" >nul 2>&1
 
-call :port_803
+echo [启动] 启动 Web 服务（803 + 802）...
+"%MAIN_PY%" "%ROOT%\tools\start_web.py" --root "%ROOT%" --agent-home "%AGENT_HOME%"
 if errorlevel 1 (
-    echo [启动] 启动 803 工作台...
-    start "SoulAgent803" /min cmd /c ""%IDEA_PY%" -m uvicorn app.main:app --app-dir "%ROOT%\idea" --host 127.0.0.1 --port 803 >> "%LOG%" 2>&1"
-    call :wait_803
-    if errorlevel 1 (
-        echo [错误] 803 启动超时，看日志：%LOG%
-        goto :fail
-    )
-) else (
-    echo [启动] 803 已在运行
+    echo [错误] Web 服务启动失败，看上方日志路径。
+    goto :fail
 )
-
-call :port_802
-if errorlevel 1 (
-    echo [启动] 启动 802 控制台...
-    start "SoulAgent802" /min cmd /c ""%MAIN_PY%" "%CONSOLE_SCRIPT%" --port 802 >> "%LOG%" 2>&1"
-    call :wait_802
-)
-
-echo [就绪] 803：http://127.0.0.1:803/
-echo [就绪] 802：http://127.0.0.1:802/
 start "" "http://127.0.0.1:803/"
-echo [下一步] 803 -^> Bot 管理 创建 Bot；然后打开 802 加载
-timeout /t 3 /nobreak >nul
 exit /b 0
 
 rem ============================================================

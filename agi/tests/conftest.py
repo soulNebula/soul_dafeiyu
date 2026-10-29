@@ -39,6 +39,15 @@ from pathlib import Path
 
 import pytest
 
+#: 非 Windows 下整文件不收集：这些模块顶层 import wx_core.win/wcdb，Linux 会直接
+#: AttributeError（ctypes.WinDLL），无法靠 pytest.mark 在 import 后跳过。
+collect_ignore: list[str] = []
+if sys.platform != "win32":
+    collect_ignore += [
+        "test_db_source_quote.py",
+        "test_wechat_window_restore.py",
+    ]
+
 #: 仓库根（本文件在 <repo>/agi/tests/conftest.py）
 REPO_ROOT = Path(__file__).resolve().parents[2]
 #: 会话级临时根：与根 tests/conftest.py 共用同一个（谁先加载都一致）

@@ -55,3 +55,4 @@ zstandard==0.24.0; python_version < "3.14"
 # 上网/公众号抓取（agi/integrations/web_lookup.py）
 beautifulsoup4>=4.12,<5
 requests>=2.31,<3
+qrcode[pil]>=7.4,<9

@@ -82,6 +82,10 @@ def iter_files():
             yield path
 
 
+#: 安装器允许出现默认 E:gent（用户首次运行前还没有 paths.json/env）
+INSTALLER_ALLOW = {Path("setup.ps1"), Path("tools/setup_llama.ps1")}
+
+
 def scan_hardcodes(strict_docs: bool = False) -> None:
     code_hits: list[str] = []
     doc_hits: list[str] = []
@@ -98,6 +102,8 @@ def scan_hardcodes(strict_docs: bool = False) -> None:
         except ValueError:
             continue
         if len(rel_parts) >= 2 and rel_parts[0] == "docs" and rel_parts[1] == "archive":
+            continue
+        if path.relative_to(ROOT) in INSTALLER_ALLOW:
             continue
         try:
             text = _read_text(path)

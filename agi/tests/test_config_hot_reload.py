@@ -52,7 +52,7 @@ def _bump_mtime(path):
 
 def _gateway(tmp_path, cfg_path, **extra):
     _write_cfg(cfg_path, {
-        "enabled": True, "port": 801, "dry_run": True,
+        "enabled": True, "engine_enabled": True, "port": 801, "dry_run": True,
         "allowed_contacts": ["好友A"], "proactive_contacts": ["好友A"],
         "proactive_enabled": True,
         "proactive_probability_min": 1.0, "proactive_probability_max": 1.0,

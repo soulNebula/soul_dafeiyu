@@ -15,6 +15,14 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+try:
+    from agi.paths import agent_home as _agent_home
+except Exception:  # noqa: BLE001
+    _agent_home = lambda: Path.home() / "agent"
+
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0)
 CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -66,7 +74,7 @@ def spawn(cmd: list[str], cwd: Path, log: Path) -> subprocess.Popen:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
-    parser.add_argument("--agent-home", default=os.environ.get("AGENT_HOME", r"E:\agent"))
+    parser.add_argument("--agent-home", default=os.environ.get("AGENT_HOME") or str(_agent_home()))
     parser.add_argument("--no-open", action="store_true")
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()

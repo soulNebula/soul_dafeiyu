@@ -83,3 +83,7 @@ tools/desktop/build/
 wxdb_*/
 
 agi/soul/data/soul_sft_web_*.jsonl*
+
+# 发送器本地缓存
+wechatauto_db/
+wxdb_*/

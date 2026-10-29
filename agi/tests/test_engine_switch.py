@@ -14,6 +14,7 @@ def _gw(tmp_path, **overrides) -> Gateway:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     cfg = {
         "enabled": True,
+        "engine_enabled": True,
         "port": 801,
         "dry_run": True,
         "allowed_contacts": ["好友A"],

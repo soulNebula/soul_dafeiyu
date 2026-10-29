@@ -238,7 +238,7 @@ class Gateway:
         except OSError:
             self._cfg_mtime = 0
         # P18-A：引擎软开关（监听+自动回复+主动）；默认 true
-        self.engine_enabled = bool(self.cfg.get("engine_enabled", True))
+        self.engine_enabled = bool(self.cfg.get("engine_enabled", False))
         self.engine_since = time.time()
         self.engine_reason = "startup" if self.engine_enabled else "config_disabled"
         self.receiver = None

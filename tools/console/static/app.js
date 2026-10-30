@@ -1090,8 +1090,8 @@ function forgetBar(row) {
     try {
       const result = await api('/api/memory/clear', {
         method: 'POST',
-        body: {contact: (new URLSearchParams(location.search).get('contact') || ''),
-               confirm: '清除所有记忆'},
+        // 与 /api/memory 使用同一个当前联系人，不能只看 URL（否则会清到默认库）
+        body: {contact: state.contact || '', confirm: '清除所有记忆'},
       });
       if (!result.ok) throw new Error(result.error || '清除失败');
       toast(`已清除 ${result.total || 0} 条记录`, 'ok');

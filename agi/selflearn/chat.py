@@ -1370,6 +1370,8 @@ class SelfLearnAgent:
                 media_quota.record(self.path, turn_id, reply_media, turn_reply)
             except Exception:  # noqa: BLE001
                 pass
+        # 媒体（表情包/图片）也写进对话库，否则微信里发了、802 对话流看不到
+        media_message_ids = self._store_reply_media(reply_media)
         # W3-A：延迟 = send 入口 → 写 turn（含模型调用），不含发送本身；毫秒、1 位小数
         latency_ms = round((time.perf_counter() - t0) * 1000, 1)
         con = db.connect(self.path)
@@ -1479,7 +1481,8 @@ class SelfLearnAgent:
                     "dropped": list(budget_meta.get("dropped") or []),
                     "truncated": list(budget_meta.get("truncated") or [])},
                 "media": media_info if media_info is not None else reply_media,
-                "reply_media": reply_media, "profile": profile_info,
+                "reply_media": reply_media, "media_message_ids": media_message_ids,
+                "profile": profile_info,
                 "persona": pctx, "variant": variant, "crisis": crisis,
                 "guard": guard_info, "attachment": attachment, "generation": gen_meta,
                 "research": {"used": bool(research.get("used")),
@@ -1490,6 +1493,47 @@ class SelfLearnAgent:
                 "affect": affect.snapshot(self.path),
                 "history": memory.recent_messages(self.path, limit=12),
                 "had_image": had_image}
+
+    def _store_reply_media(self, reply_media: dict | None) -> list[str]:
+        """把实际要发/已发的贴纸、图片也写进对话库，控制台才能显示预览。
+
+        文本气泡已由 store_message 写过；这里只处理 media 气泡。发送失败时也保留记录，
+        与文本“先落库再发送”的现有语义一致。
+        """
+        ids: list[str] = []
+        if not isinstance(reply_media, dict):
+            return ids
+        for bubble in reply_media.get("bubbles") or []:
+            if not isinstance(bubble, dict):
+                continue
+            kind = str(bubble.get("type") or "").strip().lower()
+            if kind in ("text", "emoji_text"):
+                continue
+            path = str(bubble.get("path") or "").strip()
+            if not path or not Path(path).is_file():
+                continue
+            is_sticker = kind in ("sticker", "gif")
+            text = "[表情包]" if is_sticker else "[图片]"
+            mid = memory.store_message(self.path, "assistant", text)
+            try:
+                suffix = Path(path).suffix.lower()
+                mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                        ".gif": "image/gif", ".webp": "image/webp"}.get(suffix, "application/octet-stream")
+                raw = Path(path).read_bytes()
+                con = db.connect(self.path)
+                try:
+                    con.execute(
+                        "INSERT OR REPLACE INTO attachments(id,message_id,kind,mime,path,bytes,sha256,created_at)"
+                        " VALUES(?,?,?,?,?,?,?,?)",
+                        (_id("ATT-", mid, path), mid, "image", mime, path,
+                         len(raw), hashlib.sha256(raw).hexdigest(), time.time()))
+                    con.commit()
+                finally:
+                    con.close()
+            except Exception:  # noqa: BLE001 - 附件元数据失败不影响对话
+                pass
+            ids.append(mid)
+        return ids
 
     @staticmethod
     def _prompt(text, mems, pctx, variant, recent, *, st=None, lessons="",

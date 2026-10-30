@@ -1153,7 +1153,7 @@ function forgetBar(row) {
     ${metricCards}
     ${card('最近记忆（只读）', memoryTable)}
     ${toneCard}
-    ${card('危险操作', `<p class="hint">清空当前联系人的记忆、事实、摘要和检索记录；聊天记录、人格库、提示词和日记保留。操作前会自动备份数据库。</p>
+    ${card('危险操作', `<p class="hint">清空当前联系人的记忆、事实、摘要和检索记录，并重置内状态/心情；聊天记录、人格库、提示词和日记保留。操作前会自动备份数据库。</p>
       <button class="btn danger" id="memory-clear-all">清除所有记忆</button>`)}`;
   const clearAll = $('#memory-clear-all');
   if (clearAll) clearAll.onclick = async () => {

@@ -3434,12 +3434,46 @@ def memory_clear_all(contact: str = "", confirm: str = "", *, client: str = "") 
         except sqlite3.Error as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
                     "backup": backups}
+    # 内状态/心情在 persona 库；人格本身保留，但状态重置（否则清完记忆心情还在）
+    persona_paths = []
+    try:
+        persona_paths = [x for x in base.parent.glob(stem + ".persona.sqlite3") if x.is_file()]
+    except OSError:
+        persona_paths = []
+    persona_tables = ("state", "mood_state", "mood_timeline")
+    for path in persona_paths:
+        try:
+            backup = backup_dir / f"{path.name}.clear-{time.strftime('%Y%m%d-%H%M%S')}.bak"
+            shutil.copy2(path, backup)
+            backups.append(str(backup))
+        except OSError as exc:
+            return {"ok": False, "error": f"backup_failed: {exc}", "backup": backups}
+        try:
+            con = sqlite3.connect(str(path), timeout=10)
+            try:
+                existing = {row[0] for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                with con:
+                    for table in persona_tables:
+                        if table not in existing:
+                            continue
+                        try:
+                            count = con.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
+                            if count:
+                                con.execute(f'DELETE FROM "{table}"')
+                                deleted[f"{path.name}:{table}"] = int(count)
+                        except sqlite3.Error:
+                            continue
+            finally:
+                con.close()
+        except sqlite3.Error as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "backup": backups}
     audit("memory_clear_all", {"contact": contact or "default",
                                "deleted": sum(deleted.values())},
           ok=True, client=client)
     return {"ok": True, "deleted": deleted, "total": sum(deleted.values()),
             "backup": backups, "db": str(db_path),
-            "note": "已清空当前联系人的记忆/事实/摘要；聊天记录、人格库、提示词、日记保留"}
+            "note": "已清空当前联系人的记忆/事实/摘要，并重置内状态/心情；聊天记录、人格、提示词、日记保留"}
 
 
 def chat_clear_all(contact: str = "", confirm: str = "", *, client: str = "") -> dict:

@@ -1080,7 +1080,27 @@ function forgetBar(row) {
   $('#app').innerHTML = `${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
     ${metricCards}
     ${card('最近记忆（只读）', memoryTable)}
-    ${toneCard}`;
+    ${toneCard}
+    ${card('危险操作', `<p class="hint">清空当前联系人的对话、记忆、事实、摘要和检索记录；人格库、提示词和日记保留。操作前会自动备份数据库。</p>
+      <button class="btn danger" id="memory-clear-all">清除所有记忆</button>`)}`;
+  const clearAll = $('#memory-clear-all');
+  if (clearAll) clearAll.onclick = async () => {
+    if (!window.confirm('确定清空当前联系人的所有记忆？会先自动备份，但清空后不能从页面恢复。')) return;
+    clearAll.disabled = true;
+    try {
+      const result = await api('/api/memory/clear', {
+        method: 'POST',
+        body: {contact: (new URLSearchParams(location.search).get('contact') || ''),
+               confirm: '清除所有记忆'},
+      });
+      if (!result.ok) throw new Error(result.error || '清除失败');
+      toast(`已清除 ${result.total || 0} 条记录`, 'ok');
+      await renderMemory();
+    } catch (err) {
+      toast(err.message, 'err');
+      clearAll.disabled = false;
+    }
+  };
 }
 
 function renderToneCard(tone) {

@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import config as cfg
 from . import control, drafts, media as media_mod, policy, sendclass
+from . import send_async as send_async_mod
 from .receiver import ReceiveCursor, WeChatReceiver, is_mention, looks_like_pat
 from .sender import WxAutoSender
 from .. import textguard
@@ -265,7 +266,7 @@ class Gateway:
         self._send_async_enabled = False
         self._send_worker: threading.Thread | None = None
         self._send_worker_stop = threading.Event()
-        self._send_queue: queue.Queue | None = None
+        self._send_pool = None
         self.send_async_stats: dict = {
             "queued": 0, "completed": 0, "failed": 0, "dropped": 0,
             "timeouts": 0, "last_error": "", "last_wait_ms": 0.0,
@@ -667,16 +668,11 @@ class Gateway:
 
     def stop(self) -> None:
         self.stop_event.set()
-        # A9-P0：停 sender 线程。哨兵 + stop 事件；若正卡在发送，join 有界不阻塞退出。
+        # A9：停 sender 任务池（排队任务取消并回结果；正在发送的 join 有界）
         try:
-            if self._send_queue is not None:
-                try:
-                    self._send_queue.put_nowait(None)
-                except queue.Full:
-                    pass
+            if self._send_pool is not None:
+                self._send_pool.stop(timeout=3)
             self._send_worker_stop.set()
-            if self._send_worker and self._send_worker.is_alive():
-                self._send_worker.join(timeout=3)
             self._send_async_enabled = False
         except Exception:  # noqa: BLE001 - 关闭流程不因 sender 卡住中断
             self._send_async_enabled = False
@@ -1871,80 +1867,78 @@ class Gateway:
                 proactive=proactive, manual=manual, force_quiet=force_quiet,
                 idem_key=idem_key)
 
-    # ---------------- A9-P0：发送异步化（sender 线程 + job future） ----------------
+    # ---------------- A9-P0/P1：发送异步化（任务池：优先级 + per-contact FIFO + TTL） ----------------
+    def _send_priority(self, kwargs: dict) -> int:
+        """manual/approve(0) > reactive(1) > proactive(2)。"""
+        if kwargs.get("manual") or kwargs.get("force"):
+            return send_async_mod.PRIORITY_MANUAL
+        if kwargs.get("proactive"):
+            return send_async_mod.PRIORITY_PROACTIVE
+        return send_async_mod.PRIORITY_REACTIVE
+
+    def _send_ttl(self, priority: int) -> float:
+        key = {send_async_mod.PRIORITY_MANUAL: "send_ttl_manual_s",
+               send_async_mod.PRIORITY_REACTIVE: "send_ttl_reactive_s",
+               send_async_mod.PRIORITY_PROACTIVE: "send_ttl_proactive_s"}.get(
+                   priority, "send_ttl_reactive_s")
+        default = {0: 300.0, 1: 180.0, 2: 900.0}.get(priority, 180.0)
+        try:
+            return max(0.0, float(self.cfg.get(key, default)))
+        except (TypeError, ValueError):
+            return default
+
     def _start_send_worker(self) -> bool:
-        """按配置启动 sender 线程；返回是否启用。默认关 = 完全旧行为。"""
+        """按配置启动 sender 任务池；返回是否启用。默认关 = 完全旧行为。"""
         if not bool(self.cfg.get("send_async", False)):
             return False
-        if self._send_worker and self._send_worker.is_alive():
+        if self._send_pool is not None and self._send_pool.alive():
             self._send_async_enabled = True
             return True
         try:
-            size = max(1, int(self.cfg.get("send_async_queue") or 200))
+            max_pending = max(1, int(self.cfg.get("send_async_queue") or 200))
         except (TypeError, ValueError):
-            size = 200
-        self._send_queue = queue.Queue(maxsize=size)
-        self._send_worker_stop.clear()
-        self._send_worker = threading.Thread(
-            target=self._sender_loop, name="gateway-sender", daemon=True)
-        self._send_worker.start()
+            max_pending = 200
+        try:
+            per_contact = max(1, int(self.cfg.get("send_async_per_contact") or 20))
+        except (TypeError, ValueError):
+            per_contact = 20
+        self._send_pool = send_async_mod.SenderPool(
+            self._send_job_runner, max_pending=max_pending,
+            max_per_contact=per_contact).start()
+        self._send_worker = self._send_pool.thread
         self._send_async_enabled = True
-        self._record("send_async_started", {"queue_size": size})
+        self._record("send_async_started", {"queue_size": max_pending,
+                                            "per_contact": per_contact})
         return True
 
-    def _sender_loop(self) -> None:
-        """单 sender 线程：串行执行 _send_locked（微信窗口/UIA 只能单实例操作）。"""
-        queue_ref = self._send_queue
-        while not self._send_worker_stop.is_set():
-            if queue_ref is None:
-                break
-            try:
-                job = queue_ref.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            if job is None:  # 停止哨兵
-                break
-            try:
-                with self._send_lock:
-                    result = self._send_locked(
-                        job["contact"], job["text"], **job["kwargs"])
-            except Exception as exc:  # noqa: BLE001 - sender 线程不能死
-                result = {"ok": False, "status": "failed",
-                          "error": f"{type(exc).__name__}: {exc}"[:200]}
-                self.send_async_stats["failed"] = int(
-                    self.send_async_stats.get("failed", 0)) + 1
-                self.send_async_stats["last_error"] = result["error"]
-            job["result"] = result
-            job["done"].set()
-            self.send_async_stats["completed"] = int(
-                self.send_async_stats.get("completed", 0)) + 1
-            try:
-                queue_ref.task_done()
-            except ValueError:  # 队列已换/已销毁
-                pass
+    def _send_job_runner(self, job) -> dict:
+        """任务池执行线程回调：全局发送锁只包真实发送这一段。"""
+        with self._send_lock:
+            return self._send_locked(job.contact, job.text, **job.kwargs)
 
     def _send_via_worker(self, contact: str, text: str, **kwargs) -> dict:
-        """把一次发送提交给 sender 线程并等待结果（返回值与旧路径同契约）。"""
-        queue_ref = self._send_queue
-        if queue_ref is None or not (
-                self._send_worker and self._send_worker.is_alive()):
+        """提交给任务池并等待结果（返回值与旧路径同契约）。"""
+        pool = self._send_pool
+        if pool is None or not pool.alive():
             with self._send_lock:
                 return self._send_locked(contact, text, **kwargs)
-        job = {"contact": contact, "text": text, "kwargs": dict(kwargs),
-               "done": threading.Event(), "result": None}
-        try:
-            enqueue_timeout = max(
-                0.1, float(self.cfg.get("send_async_enqueue_timeout_s") or 5))
-        except (TypeError, ValueError):
-            enqueue_timeout = 5.0
-        try:
-            queue_ref.put(job, timeout=enqueue_timeout)
-        except queue.Full:
+        priority = self._send_priority(kwargs)
+        job = send_async_mod.SendJob(
+            contact=contact, text=text, kwargs=dict(kwargs),
+            priority=priority, ttl_s=self._send_ttl(priority))
+        submitted = pool.submit(job)
+        if submitted != "ok":
+            # 高优先级（manual/reactive）不允许因为背压丢内容：回落直发一次。
+            if submitted == "stopped" or priority <= send_async_mod.PRIORITY_REACTIVE:
+                with self._send_lock:
+                    return self._send_locked(contact, text, **kwargs)
             self.send_async_stats["dropped"] = int(
                 self.send_async_stats.get("dropped", 0)) + 1
             self._record("send_async_dropped", {"friend": contact,
-                                                "reason": "queue_full"})
-            return {"ok": False, "status": "blocked", "error": "send_queue_full"}
+                                                "reason": submitted})
+            return {"ok": False, "status": "blocked",
+                    "error": "send_queue_full" if submitted == "queue_full"
+                    else "send_contact_queue_full"}
         self.send_async_stats["queued"] = int(
             self.send_async_stats.get("queued", 0)) + 1
         started = time.time()
@@ -1953,7 +1947,7 @@ class Gateway:
                 1.0, float(self.cfg.get("send_async_wait_timeout_s") or 150))
         except (TypeError, ValueError):
             wait_timeout = 150.0
-        if not job["done"].wait(wait_timeout):
+        if not job.done.wait(wait_timeout):
             # 任务可能正在发：不知道发没发 → unverified，**不重发**
             self.send_async_stats["timeouts"] = int(
                 self.send_async_stats.get("timeouts", 0)) + 1
@@ -1964,22 +1958,43 @@ class Gateway:
                     "warning": "send_async_wait_timeout"}
         self.send_async_stats["last_wait_ms"] = round(
             (time.time() - started) * 1000, 1)
-        result = job.get("result")
-        return result if isinstance(result, dict) else {
-            "ok": False, "status": "failed", "error": "send_worker_no_result"}
+        result = job.result
+        if not isinstance(result, dict):
+            return {"ok": False, "status": "failed",
+                    "error": "send_worker_no_result"}
+        if result.get("expired") and priority <= send_async_mod.PRIORITY_REACTIVE:
+            # 高优先级任务排队超 TTL：内容不能丢，落草稿等人工决定
+            try:
+                draft = self._archive_failed_draft(
+                    contact, text, "send_expired_ttl", reason="send_expired_ttl")
+                if draft is not None:
+                    result = dict(result)
+                    result.update({"draft_id": draft["id"],
+                                   "requires_confirm": True})
+            except Exception:  # noqa: BLE001 - 草稿失败不影响返回语义
+                pass
+            self._record("send_expired_ttl", {"friend": contact,
+                                              "priority": priority})
+        return result
 
     def send_async_status(self) -> dict:
         """发送异步化观测（/status 与 802 用；无副作用）。"""
-        stats = dict(self.send_async_stats)
+        pool = self._send_pool
         try:
-            size = int(self.cfg.get("send_async_queue") or 200)
+            queue_max = max(1, int(self.cfg.get("send_async_queue") or 200))
         except (TypeError, ValueError):
-            size = 200
+            queue_max = 200
+        stats = dict(self.send_async_stats)
+        if pool is not None:
+            snapshot = pool.snapshot()
+            stats.update(snapshot)
+            stats["queue_size"] = int(snapshot.get("pending") or 0)
+        else:
+            stats["queue_size"] = 0
         stats.update({
             "enabled": bool(self._send_async_enabled),
-            "alive": bool(self._send_worker and self._send_worker.is_alive()),
-            "queue_size": self._send_queue.qsize() if self._send_queue else 0,
-            "queue_max": max(1, size),
+            "alive": bool(pool and pool.alive()),
+            "queue_max": queue_max,
         })
         return stats
 

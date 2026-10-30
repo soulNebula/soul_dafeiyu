@@ -87,23 +87,6 @@ def test_send_async_serializes_concurrent_calls(tmp_path, monkeypatch):
         gw.stop()
 
 
-def test_send_async_queue_full_returns_blocked(tmp_path):
-    gw = _gw(tmp_path, send_async=True, send_async_enqueue_timeout_s=0.1)
-    gw._send_async_enabled = True
-    gw._send_queue = queue.Queue(maxsize=1)
-    gw._send_queue.put_nowait("occupied")          # 占满队列
-    worker = threading.Thread(target=lambda: time.sleep(5), daemon=True)
-    gw._send_worker = worker
-    worker.start()
-    try:
-        out = gw._send_via_worker("好友A", "hi")
-        assert out["ok"] is False and out["status"] == "blocked"
-        assert out["error"] == "send_queue_full"
-        assert gw.send_async_status()["dropped"] >= 1
-    finally:
-        gw._send_worker_stop.set()
-
-
 def test_send_async_wait_timeout_is_unverified_and_not_retried(tmp_path, monkeypatch):
     gw = _gw(tmp_path, send_async=True, send_async_wait_timeout_s=1)
     calls = {"n": 0}

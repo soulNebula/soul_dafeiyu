@@ -39,9 +39,14 @@ DEFAULTS = {
     # A9-P0：发送异步化（sender 线程 + job future）。默认关 = 旧行为逐字节不变；
     # 灰度时打开，出问题改回 false 并重启即可回滚。
     "send_async": False,
-    "send_async_queue": 200,              # sender 队列上限（满 → blocked/send_queue_full）
+    "send_async_queue": 200,              # 全局 pending 上限（满 → blocked/send_queue_full）
+    "send_async_per_contact": 20,         # 每联系人 pending 上限（满 → send_contact_queue_full）
     "send_async_enqueue_timeout_s": 5,    # 入队等待上限
     "send_async_wait_timeout_s": 150,     # 调用方等待发送结果上限（超时判 unverified，不重发）
+    # A9-P1 TTL：任务排队超过 TTL 直接判 expired（不再发送；proactive 等同放弃）
+    "send_ttl_manual_s": 300,
+    "send_ttl_reactive_s": 180,
+    "send_ttl_proactive_s": 900,
     "memory_purge_enabled": False,
     "memory_sleep_hour": 3,
     "port": 801,

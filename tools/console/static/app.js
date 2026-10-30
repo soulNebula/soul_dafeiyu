@@ -333,8 +333,7 @@ async function renderOverview() {
       <span class="wb-avatar">${esc(String(item.alias || '?').slice(0, 1))}</span>
       <div class="wb-contact-main"><b>${esc(item.alias || item.db || '—')}</b>
         <span class="muted">${num(item.messages)} 条 · ${item.last_ts ? fmtAgo(item.last_ts) : '暂无消息'}</span></div>
-      ${item.alias === contact ? '<span class="wb-tag">当前</span>' : ''}
-      ${pending !== null && item.alias === pending && pending !== contact ? '<span class="wb-tag warn-tag">待切换</span>' : ''}
+      ${item.current ? '<span class="wb-tag">当前</span>' : ''}
     </div>`).join('') : '<div class="empty">暂无联系人库</div>';
 
   const html = `

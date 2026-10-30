@@ -624,7 +624,8 @@ async function renderFeed(auto) {
       <span class="wb-avatar">${esc(String(item.alias || '?').slice(0, 1))}</span>
       <div class="wb-contact-main"><b>${esc(item.alias || item.db || '—')}</b>
         <span class="muted">${num(item.messages)} 条 · ${item.last_ts ? fmtAgo(item.last_ts) : '暂无'}</span></div>
-      ${item.current ? '<span class="wb-tag">当前</span>' : ''}
+      ${item.alias === contact ? '<span class="wb-tag">当前</span>' : ''}
+      ${pending !== null && item.alias === pending && pending !== contact ? '<span class="wb-tag warn-tag">待切换</span>' : ''}
       ${!item.exists ? '<span class="wb-tag err-tag">缺库</span>' : ''}
     </div>`).join('');
 

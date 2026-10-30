@@ -43,7 +43,22 @@ const state = {
 
 // 深链：?contact=<别名> 直接选中联系人（便于分享/排查）
 const _urlContact = new URLSearchParams(location.search).get('contact');
+const _savedContact = (() => {
+  try { return localStorage.getItem('soul.last_contact') || ''; } catch (err) { return ''; }
+})();
 if (_urlContact) state.contact = _urlContact;
+else if (_savedContact) state.contact = _savedContact;
+
+function persistContact(alias) {
+  const value = alias || '';
+  try { localStorage.setItem('soul.last_contact', value); } catch (err) { /* ignore */ }
+  try {
+    const url = new URL(location.href);
+    if (value) url.searchParams.set('contact', value);
+    else url.searchParams.delete('contact');
+    history.replaceState(null, '', url);
+  } catch (err) { /* ignore */ }
+}
 
 const PAGES = {
   overview: '总览',
@@ -728,6 +743,7 @@ async function renderFeed(auto) {
     state.contact = state.pendingContact;
     state.pendingContact = undefined;
     state.contacts = null;
+    persistContact(state.contact);
     renderFeed(false);
   };
   document.querySelectorAll('[data-goto]').forEach((node) => {

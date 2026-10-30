@@ -63,10 +63,11 @@ cd C:\Users\Administrator\Desktop\idea
   - 802：`/api/health`
   - 8123/8125：`/v1/models`
 - 输出 PASS/FAIL 表；全部通过退出码 0，否则 1。
-- Token 默认 `8888`，可用 `--token` 或 `IDEA_TOKEN` 覆盖：
+- Token 不再有固定默认值：首次启动生成随机 token 写入 `idea/config.json`（已 gitignore），
+  启动日志会打印一次带 token 的 URL；也可用 `--token` 或 `IDEA_TOKEN` 覆盖：
 
 ```bat
-scripts\smoke_all.py --token 8888
+scripts\smoke_all.py --token <idea/config.json 里的 admin_token>
 ```
 
 ## 5. 常用环境变量
@@ -76,7 +77,7 @@ scripts\smoke_all.py --token 8888
 | `SOULAGENT_HOME` | `%USERPROFILE%\Desktop\SoulAgent` | 被管理项目目录 |
 | `AGENT_HOME` | `E:\agent` | 日志/模型根目录 |
 | `IDEA_PYTHON` | `C:\Python314\python.exe` | 启动网关/控制台/3B 的 Python |
-| `IDEA_TOKEN` | `8888` | 工作台 token（smoke 也读取） |
+| `IDEA_TOKEN` | 读 `idea/config.json` 的 `admin_token` | 工作台 token（smoke 也读取；显式设置优先生效） |
 | `LLAMA_SERVER` | `E:\agent\llama\cuda\llama-server.exe` | 灵魂模型可执行文件 |
 | `SOUL_GGUF` | `E:\agent\output\gguf\soul_qwen25_05b_v1b-q4_k_m.gguf` | 灵魂模型权重 |
 
@@ -110,7 +111,8 @@ scripts\smoke_all.py --token 8888
 
 ### smoke 报 401
 
-- 工作台/网关/控制台使用 token；确认 `IDEA_TOKEN` 或 `--token` 与 `agi/data/wechat/config.json` 的 `admin_token` 一致（控制台可在本机 `/api/token` 查看）。
+- 工作台/网关/控制台使用 token；803 的 token 见 `idea/config.json` 的 `admin_token`（启动日志也会打印带 token 的 URL），
+  或 `IDEA_TOKEN` 显式覆盖；网关 token 与 `agi/data/wechat/config.json` 的 `admin_token` 一致（控制台可在本机 `/api/token` 查看）。
 
 ### 微信窗口
 

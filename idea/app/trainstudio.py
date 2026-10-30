@@ -3,7 +3,7 @@
 
 只提供纯函数（路由由 Lead 接 main.py）。安全边界：
 - 数据集只在 SoulAgent 与 AGENT_HOME 下；
-- 训练/合并/转换统一用 E:/agent/venv312/Scripts/python.exe（可 env 覆盖）；
+- 训练/合并/转换统一用 ``AGENT_HOME`` 下的 venv312 解释器（``IDEA_TRAIN_PYTHON`` 可覆盖）；
 - 所有子进程后台起，日志落 ``idea/.data/trainjobs/<id>.log``；
 - 测试不会真训练（Popen/run 可 mock）。
 """
@@ -20,15 +20,22 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import audit, paths
+from . import audit, idea_config, paths
 
-TRAIN_PYTHON = os.environ.get("IDEA_TRAIN_PYTHON", r"E:/agent/venv312/Scripts/python.exe")
-EXPORT_PYTHON = os.environ.get("IDEA_EXPORT_PYTHON", r"C:/Python314/python.exe")
+TRAIN_PYTHON = idea_config.get_setting(
+    "train_python", "IDEA_TRAIN_PYTHON",
+    str(Path(paths.agent_home()) / "venv312" / "Scripts" / "python.exe"))
+EXPORT_PYTHON = idea_config.get_setting(
+    "export_python", "IDEA_EXPORT_PYTHON", r"C:/Python314/python.exe")
 TRAIN_FORMATS = ("auto", "messages", "instruction", "soul")
 TRAIN_MODES = ("lora", "full-ft")
-DEFAULT_MODEL = "E:/agent/models/Qwen2.5-0.5B-Instruct"
-DEFAULT_GGUF_DIR = "E:/agent/output/gguf"
-DEFAULT_OUTPUT_ROOT = "E:/agent/output"
+DEFAULT_MODEL = idea_config.get_setting(
+    "train_model", "IDEA_TRAIN_MODEL",
+    str(Path(paths.agent_home()) / "models" / "Qwen2.5-0.5B-Instruct"))
+DEFAULT_GGUF_DIR = idea_config.get_setting(
+    "gguf_dir", "IDEA_GGUF_DIR", str(Path(paths.agent_home()) / "output" / "gguf"))
+DEFAULT_OUTPUT_ROOT = idea_config.get_setting(
+    "output_root", "IDEA_OUTPUT_ROOT", str(Path(paths.agent_home()) / "output"))
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-.]+$")
 _JOBS: dict[str, dict] = {}
 _PROCS: dict[str, Any] = {}
@@ -725,8 +732,14 @@ def start_training(dataset: str, *, model_path: str = DEFAULT_MODEL,
 
 def export_plan(adapter: str, base: str, name: str, *, out_dir: str = DEFAULT_GGUF_DIR,
                 merged_dir: str = "", quant: str = "Q4_K_M",
-                convert_dir: str = "E:/agent/llama/convert",
-                llama_bin: str = "E:/agent/llama/cuda") -> dict:
+                convert_dir: str = "", llama_bin: str = "") -> dict:
+    # 路径默认值全部派生自 AGENT_HOME（可用 IDEA_LLAMA_* 环境变量或 idea/config.json 覆盖）
+    convert_dir = convert_dir or idea_config.get_setting(
+        "llama_convert_dir", "IDEA_LLAMA_CONVERT_DIR",
+        str(Path(paths.agent_home()) / "llama" / "convert"))
+    llama_bin = llama_bin or idea_config.get_setting(
+        "llama_bin", "IDEA_LLAMA_BIN",
+        str(Path(paths.agent_home()) / "llama" / "cuda"))
     adapter_path = Path(adapter)
     base_path = Path(base)
     if not _NAME_RE.match(str(name or "")):

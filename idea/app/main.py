@@ -7,7 +7,7 @@ M3：TrainLab（数据/训练/导出）、Model Studio（模型/适配器/GGUF�
 """
 from __future__ import annotations
 
-import os
+import hmac
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
@@ -16,19 +16,32 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (annotstudio, audit, config_store, corpusstudio, datastudio,
-               distillstudio, modelstudio, paths, services, trainstudio)
+               distillstudio, idea_config, modelstudio, paths, services, termlog,
+               trainstudio)
 
-TOKEN = os.environ.get("IDEA_TOKEN", "8888")
 app = FastAPI(title="IDEA · SoulAgent Workbench", version="0.2.0")
 
 
 # ------------------------------------------------------------------ 鉴权
+#: 803 管理口令：``IDEA_TOKEN`` 环境变量 → ``idea/config.json`` 的 ``admin_token``。
+#: 弱默认口令（如 8888）不再被自动接受；首次启动生成 32 位随机 token 写回
+#: ``idea/config.json``（已 gitignore），启动日志打印一次带 token 的访问 URL。
 def require_token(x_admin_token: str | None = Header(default=None),
                   token: str | None = Query(default=None)):
-    provided = x_admin_token or token
-    if not provided or provided != TOKEN:
+    provided = str(x_admin_token or token or "").strip()
+    expected = idea_config.admin_token()
+    if not provided or not expected or not hmac.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="admin token required")
     return True
+
+
+@app.on_event("startup")
+def _print_access_url() -> None:
+    """启动时打印一次含 token 的访问 URL（token 落 idea/config.json，不进仓库）。"""
+    token = idea_config.admin_token()
+    print(f"[803] IDEA 工作台：http://127.0.0.1:803/?token={token}", flush=True)
+    print(f"[803] token 保存在 {idea_config.CONFIG_PATH}（已 gitignore）；"
+          "可用环境变量 IDEA_TOKEN 覆盖。", flush=True)
 
 
 # ------------------------------------------------------------------ 请求模型
@@ -136,6 +149,12 @@ def services_logs(name: str, lines: int = Query(default=200, ge=1, le=2000)):
     return services.tail_log(name, lines)
 
 
+@app.get("/api/wb/terminal", dependencies=[Depends(require_token)])
+def terminal(lines: int = Query(default=120, ge=10, le=500)):
+    """终端面板数据源：只读聚合 803 托管服务的日志尾部（不执行任何 shell）。"""
+    return termlog.collect(lines)
+
+
 # ------------------------------------------------------------------ 配置
 @app.get("/api/wb/config", dependencies=[Depends(require_token)])
 def config_get():
@@ -230,15 +249,17 @@ def distill_jobs(limit: int = 20):
 @app.post("/api/wb/distill/create", dependencies=[Depends(require_token)])
 def distill_create(body: dict | None = None):
     body = body or {}
+    # B7：默认真实生成（会调 DeepSeek，必须带确认短语）；模拟模式必须显式 real=false。
+    real = bool(body["real"]) if "real" in body else True
     out = distillstudio.create_job(
-        limit=body.get("limit") or 300, real=bool(body.get("real")),
+        limit=body.get("limit") or 300, real=real,
         out_name=body.get("out_name") or "", budget_cny=body.get("budget_cny") or 3.05,
         split=bool(body.get("split")), max_variants=body.get("max_variants") or 7,
         confirm=body.get("confirm") or "", overwrite=bool(body.get("overwrite")))
     if out.get("ok"):
         audit.record("distill.create", (out.get("job") or {}).get("id") or "",
                      actor="workbench",
-                     meta={"limit": body.get("limit"), "real": bool(body.get("real"))})
+                     meta={"limit": body.get("limit"), "real": real})
     return out
 
 

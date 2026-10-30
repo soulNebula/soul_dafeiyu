@@ -50,15 +50,22 @@ def test_create_mock_job_and_query(root):
         meta["status"] = "done"
         ds._write_meta(meta, root_arg)
 
-    out = ds.create_job(limit=5, root=root, runner=runner)
+    # B7：模拟模式必须显式 real=False（默认是真实生成）
+    out = ds.create_job(limit=5, real=False, root=root, runner=runner)
     assert out["ok"] is True
     job = out["job"]
-    assert job["real"] is False and job["limit"] == 5
+    assert job["real"] is False and job["mode"] == "mock" and job["limit"] == 5
     assert calls == [job["id"]]
     got = ds.get_job(job["id"], root=root)
     assert got["ok"] is True and got["job"]["status"] == "done"
     logs = ds.read_log(job["id"], root=root)
     assert logs["ok"] is True
+
+
+def test_default_is_real_and_requires_confirm(root):
+    """B7：不传 real 时默认真实生成 → 缺确认短语必须拒绝，而不是偷偷跑 mock。"""
+    out = ds.create_job(limit=3, root=root)
+    assert out["ok"] is False and out["error"] == "confirm_required"
 
 
 def test_real_requires_confirm(root):
@@ -71,17 +78,19 @@ def test_real_requires_confirm(root):
 
 
 def test_name_and_overwrite_guard(root):
-    assert ds.create_job(limit=3, out_name="bad name!", root=root)["error"] == "name_invalid"
+    assert ds.create_job(limit=3, real=False, out_name="bad name!",
+                         root=root)["error"] == "name_invalid"
     (root / "agi" / "soul" / "data" / "taken.jsonl").write_text("{}\n", encoding="utf-8")
-    assert ds.create_job(limit=3, out_name="taken", root=root)["error"] == "out_exists"
-    out = ds.create_job(limit=3, out_name="taken", overwrite=True, root=root,
+    assert ds.create_job(limit=3, real=False, out_name="taken",
+                         root=root)["error"] == "out_exists"
+    out = ds.create_job(limit=3, real=False, out_name="taken", overwrite=True, root=root,
                         runner=lambda m, r: ds._write_meta({**m, "status": "done"}, r))
     assert out["ok"] is True
 
 
 def test_cancel_job(tmp_path):
     root = tmp_path
-    out = ds.create_job(limit=3, root=root,
+    out = ds.create_job(limit=3, real=False, root=root,
                         runner=lambda m, r: ds._write_meta(
                             {**m, "pid": 999999, "status": "running"}, r))
     job = out["job"]

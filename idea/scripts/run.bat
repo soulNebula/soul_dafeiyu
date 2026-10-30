@@ -8,6 +8,6 @@ if not exist "%PY%" (
   pause
   exit /b 1
 )
-if "%IDEA_TOKEN%"=="" set "IDEA_TOKEN=8888"
-echo IDEA Workbench: http://127.0.0.1:803   (token=%IDEA_TOKEN%)
+echo IDEA Workbench: http://127.0.0.1:803
+echo 首次启动会生成随机 admin token：见启动日志里的带 token URL，或 idea\config.json 的 admin_token；也可用 IDEA_TOKEN 覆盖
 "%PY%" -m uvicorn app.main:app --host 127.0.0.1 --port 803

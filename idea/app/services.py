@@ -15,7 +15,7 @@ from pathlib import Path
 from . import paths
 
 PY = os.environ.get("IDEA_PYTHON", r"C:\Python314\python.exe")
-_AGENT_ROOT = Path("E:") / "agent"
+_AGENT_ROOT = paths.agent_home()
 LLAMA = os.environ.get("LLAMA_SERVER", str(_AGENT_ROOT / "llama" / "cuda" / "llama-server.exe"))
 SOUL_GGUF = os.environ.get("SOUL_GGUF",
                            str(_AGENT_ROOT / "output" / "gguf" / "soul_qwen25_05b_v1b-q4_k_m.gguf"))

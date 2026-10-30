@@ -12,7 +12,7 @@
   <div class="top-right">
     <div class="conn">
       <span id="conn-dot" class="dot"></span>
-      <input id="token" placeholder="管理令牌" value="8888" autocomplete="off">
+      <input id="token" placeholder="管理令牌（见 idea/config.json 或 803 启动日志）" value="" autocomplete="off">
       <button id="connect" class="btn small">连接</button>
       <span id="conn-text" class="muted small">未连接</span>
     </div>
@@ -130,7 +130,7 @@
             <label class="field"><span>验证集比例（0–0.9）</span><input id="train-export-split" type="number" value="0" min="0" max="0.9" step="0.05"></label>
             <label class="check"><input type="checkbox" id="train-export-exclude" checked> 排除测试联系人</label>
           </div>
-          <div class="actions"><button class="btn primary" id="train-export-btn">导出数据集</button><span class="muted small" id="train-export-hint">导出到 E:/agent/datasets，可直接用于训练</span></div>
+          <div class="actions"><button class="btn primary" id="train-export-btn">导出数据集</button><span class="muted small" id="train-export-hint">导出到 AGENT_HOME/datasets，可直接用于训练</span></div>
           <div id="train-export-result" class="muted small"></div>
         </div>
       </div>
@@ -164,7 +164,7 @@
     <section id="view-distill" class="view">
       <div class="page-head"><div><h2>蒸馏语义数据</h2><p class="muted">让 DeepSeek 看着聊天上下文，按人设与状态档案写出「她这一轮怎么想」的训练数据。</p></div><button class="btn" id="distill-refresh">刷新</button></div>
       <div class="panel distill-intro">
-        <b>模拟模式</b>免费、秒级，用假 teacher 走通流程；<b>真实模式</b>调用 DeepSeek，会花钱（约 <span id="distill-cps">0.001468</span> 元/条）。生成的 jsonl 可直接在训练工厂使用。
+        <b>真实模式</b>（默认）调用 DeepSeek，会花钱（约 <span id="distill-cps">0.001468</span> 元/条），生成的 jsonl 可直接在训练工厂使用；<b>模拟模式</b>必须手动勾选，用假 teacher 走通流程，产物是假数据、不能拿去训练。
       </div>
       <div class="grid2">
         <div class="panel">
@@ -176,8 +176,11 @@
             <label class="check"><input type="checkbox" id="dist-split"> 额外拆 train/val</label>
           </div>
           <div class="dist-mode">
-            <label class="check"><input type="radio" name="dist-mode" value="mock" checked> 模拟生成（免费·假 teacher）</label>
-            <label class="check"><input type="radio" name="dist-mode" value="real"> 真实生成（DeepSeek·花钱）</label>
+            <label class="check"><input type="radio" name="dist-mode" value="mock"> 模拟生成（假 teacher·产物是假数据）</label>
+            <label class="check"><input type="radio" name="dist-mode" value="real" checked> 真实生成（DeepSeek·花钱，默认）</label>
+          </div>
+          <div id="dist-mock-warn" class="hidden" style="margin:8px 0 0;padding:8px 10px;border:1px solid #f0b74a;background:#3a2f14;color:#f0b74a;border-radius:6px;font-size:13px;">
+            ⚠ 模拟数据（mock）：不调用 DeepSeek、不产生可用的真实训练数据，仅用于把管道跑通；产物会写到 agi/soul/data，但内容是假的。
           </div>
           <div id="dist-real-box" class="hidden">
             <div class="form-grid">
@@ -307,7 +310,7 @@
 
 <script>
 const S = {
-  token: localStorage.getItem('idea_token') || new URLSearchParams(location.search).get('token') || '8888',
+  token: localStorage.getItem('idea_token') || new URLSearchParams(location.search).get('token') || '',
   view: new URLSearchParams(location.search).get('view') || 'welcome',
   services: [], overview: null, data: { dbs: [], db: '', table: '', page: 1, pages: 1, search: '',
           showAll: sessionStorage.getItem('idea_db_show_all') === '1' },
@@ -396,12 +399,46 @@ function termWidthInit() {
   try { stored = parseInt(localStorage.getItem(TERM_KEY), 10) || 0; } catch (e) { stored = 0; }
   document.documentElement.style.setProperty('--term-width', termClamp(stored || TERM_DEFAULT) + 'px');
 }
+let termTimer = null;
+let termPinned = false;
+function stopTerminalPolling() {
+  if (termTimer) { clearInterval(termTimer); termTimer = null; }
+}
+function pauseTerminalPolling() {
+  // 手动推送的内容（服务日志/配置备份/数据集预览）优先，暂停自动刷新，避免被覆盖。
+  termPinned = true;
+  stopTerminalPolling();
+}
+async function loadTerminal() {
+  const out = $('#terminal-out');
+  const nl = String.fromCharCode(10);
+  try {
+    const d = await api('/api/wb/terminal?lines=120');
+    const parts = (d.items || []).map(it => {
+      const head = '# ' + it.label + '（:' + it.port + '）' + (it.exists ? it.path : '暂无日志文件');
+      return head + (it.text ? nl + it.text : '');
+    });
+    out.textContent = parts.join(nl + nl) ||
+      '# 暂无服务日志：先在「服务管理」里启动服务，日志会写到这里。';
+    out.scrollTop = out.scrollHeight;
+    $('#terminal-target').textContent = '只读 · 更新于 ' + (d.generated_at || '');
+  } catch (e) {
+    out.textContent = '# 终端数据源读取失败：' + e.message;
+    $('#terminal-target').textContent = '只读';
+  }
+}
 function openTerminal(open) {
   const panel = $('#terminal');
   panel.classList.toggle('open', open);
   document.body.classList.toggle('term-open', open);
+  if (!open) { stopTerminalPolling(); return; }
+  if (termPinned) return;  // 手动查看模式：打开时不覆盖已有内容
+  loadTerminal();
+  stopTerminalPolling();
+  termTimer = setInterval(loadTerminal, 3000);
 }
 function term(text, target='') {
+  pauseTerminalPolling();
   const out = $('#terminal-out');
   out.textContent += (out.textContent ? '\n' : '') + text;
   out.scrollTop = out.scrollHeight;
@@ -433,7 +470,9 @@ function showView(name) {
   if (name === 'models') loadModels();
 }
 function connect() {
-  S.token = ($('#token').value || '').trim() || '8888';
+  const value = ($('#token').value || '').trim();
+  if (!value) { toast('请输入管理令牌（见 idea/config.json 或 803 启动日志）', 'err'); return; }
+  S.token = value;
   localStorage.setItem('idea_token', S.token);
   api('/health').then(() => { toast('连接成功'); showView(S.view); }).catch(e => toast(e.message, 'err'));
 }
@@ -1300,7 +1339,7 @@ function distillJobHtml() {
     <div class="panel-head"><h3>当前任务 <span class="muted small">${esc(job.id || '')}</span></h3>
       <span class="badge ${job.status === 'done' ? 'on' : (job.status === 'failed' ? 'danger' : '')}">${esc(distillStatus(job.status))}</span></div>
     <div class="kv">
-      <span class="k">模式</span><span class="v">${job.real ? '真实生成（DeepSeek）' : '模拟生成（免费）'}</span>
+      <span class="k">模式</span><span class="v">${job.real ? '真实生成（DeepSeek）' : '⚠ 模拟数据（不会写真实产物）'}</span>
       <span class="k">目标数量</span><span class="v">${esc(job.limit ?? '')}</span>
       <span class="k">已生成</span><span class="v">${esc(job.rows ?? '—')} 行</span>
       <span class="k">耗时</span><span class="v">${job.seconds != null ? esc(job.seconds) + ' 秒' : '—'}</span>
@@ -1684,9 +1723,18 @@ $('#token').addEventListener('keydown', e => { if (e.key === 'Enter') connect();
 $$('.ab-item').forEach(b => b.onclick = () => showView(b.dataset.view));
 $$('[data-go]').forEach(b => b.onclick = () => showView(b.dataset.go));
 termWidthInit();
-$('#terminal-toggle').onclick = () => openTerminal(!$('#terminal').classList.contains('open'));
+$('#terminal-toggle').onclick = () => {
+  const willOpen = !$('#terminal').classList.contains('open');
+  if (willOpen) termPinned = false;  // 重新打开回到实时日志（只读）
+  openTerminal(willOpen);
+};
 $('#terminal-close').onclick = () => openTerminal(false);
-$('#terminal-clear').onclick = () => { $('#terminal-out').textContent = ''; };
+$('#terminal-clear').onclick = () => {
+  $('#terminal-out').textContent = '';
+  $('#terminal-target').textContent = '';
+  termPinned = false;
+  if ($('#terminal').classList.contains('open')) openTerminal(true);
+};
 (() => {
   const handle = $('#terminal-resize');
   let dragging = false;
@@ -1717,10 +1765,7 @@ $('#terminal-clear').onclick = () => { $('#terminal-out').textContent = ''; };
   handle.addEventListener('dblclick', () => setWidth(TERM_DEFAULT, true));
 })();
 if (new URLSearchParams(location.search).get('term') === '1') {
-  setTimeout(() => {
-    openTerminal(true);
-    if (!$('#terminal-out').textContent) term('# 终端（右侧停靠；拖动左边缘调宽度）', '截图');
-  }, 300);
+  setTimeout(() => { openTerminal(true); }, 300);
 }
 $('#ov-refresh').onclick = loadOverview;
 $('#svc-refresh').onclick = loadServices;
@@ -1738,11 +1783,15 @@ function updateDistillCreateState() {
 }
 $$('input[name="dist-mode"]').forEach(radio => radio.onchange = () => {
   $('#dist-real-box').classList.toggle('hidden', radio.value !== 'real' || !radio.checked);
+  $('#dist-mock-warn').classList.toggle('hidden', radio.value !== 'mock' || !radio.checked);
   distillCost();
   updateDistillCreateState();
 });
 $('#dist-confirm').oninput = updateDistillCreateState;
 updateDistillCreateState();
+$('#dist-mock-warn').classList.toggle(
+  'hidden',
+  document.querySelector('input[name="dist-mode"]:checked')?.value !== 'mock');
 ['#dist-limit', '#dist-budget'].forEach(sel => { const el = $(sel); if (el) el.oninput = distillCost; });
 $('#distill-cps').textContent = '0.001468';
 $('#db-refresh').onclick = loadDatabases;
@@ -1825,7 +1874,7 @@ $$('[data-dl-tab]').forEach(b => b.onclick = () => setDlTab(b.dataset.dlTab));
 $('#import-path').addEventListener('change', () => { if (!$('#import-name').value.trim()) $('#import-name').value = $('#import-path').value.split(/[\\/]/).pop().replace(/\.gguf$/i, ''); });
 $('#dl-url').addEventListener('input', () => { if (!$('#dl-name').value.trim()) { const v = $('#dl-url').value.split('/').pop() || ''; $('#dl-name').value = v.split('?')[0].replace(/\.gguf$/i, '').replace(/\.safetensors$/i, ''); } });
 $('#token').value = S.token;
-$('#token').addEventListener('change', () => { S.token = $('#token').value.trim() || '8888'; localStorage.setItem('idea_token', S.token); });
+$('#token').addEventListener('change', () => { S.token = $('#token').value.trim(); localStorage.setItem('idea_token', S.token); });
 connect();
 showView(S.view);
 </script>

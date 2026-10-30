@@ -162,12 +162,16 @@ def _run_job(meta: dict, root: Path | str | None) -> None:
     _write_meta(meta, root)
 
 
-def create_job(*, limit: int = 300, real: bool = False, out_name: str = "",
+def create_job(*, limit: int = 300, real: bool = True, out_name: str = "",
                budget_cny: float = 3.05, split: bool = False, max_variants: int = 7,
                confirm: str = "", overwrite: bool = False,
                root: Path | str | None = None,
                runner: Any = None) -> dict:
-    """创建并启动蒸馏数据生成任务（默认 mock 免费；real 需确认短语）。"""
+    """创建并启动蒸馏数据生成任务。
+
+    B7 起默认 **真实生成**（调用 DeepSeek，需要确认短语 ``确认生成``）；
+    模拟模式（假 teacher、免费、产物是假数据）必须**显式**传 ``real=False``。
+    """
     try:
         limit = max(1, min(MAX_LIMIT, int(limit)))
     except (TypeError, ValueError):
@@ -193,7 +197,9 @@ def create_job(*, limit: int = 300, real: bool = False, out_name: str = "",
     jobs = _jobs_dir(root)
     jobs.mkdir(parents=True, exist_ok=True)
     meta = {"id": job_id, "created": time.time(), "status": "running",
-            "limit": limit, "real": bool(real), "out": str(out),
+            "limit": limit, "real": bool(real),
+            "mode": "real" if real else "mock",
+            "mock": not bool(real), "out": str(out),
             "budget_cny": float(budget_cny or 3.05), "split": bool(split),
             "max_variants": max(1, min(7, int(max_variants or 7))),
             "profile_check": True,

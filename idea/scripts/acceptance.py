@@ -16,8 +16,8 @@
     .venv/Scripts/python.exe scripts/acceptance.py --fast   # 跳过全量 pytest
     .venv/Scripts/python.exe scripts/acceptance.py          # 完整版（允许 30min）
 
-可用环境变量覆盖：``IDEA_TOKEN``（默认 8888）、``SOULAGENT_HOME``、``SOUL_PYTHON``、
-``EDGE_PATH``。
+可用环境变量覆盖：``IDEA_TOKEN``（默认读 ``idea/config.json`` 的 admin_token）、``SOULAGENT_HOME``、
+``SOUL_PYTHON``、``EDGE_PATH``。
 """
 from __future__ import annotations
 
@@ -53,7 +53,28 @@ DEFAULT_SOUL_PY = Path(os.environ.get("SOUL_PYTHON") or r"C:\Python314\python.ex
 WB = "http://127.0.0.1:803"          # 工作台
 GW = "http://127.0.0.1:801"          # 微信网关
 CONSOLE = "http://127.0.0.1:802"     # 控制台
-TOKEN = os.environ.get("IDEA_TOKEN", "8888")
+def _workbench_token() -> str:
+    """工作台 token：``IDEA_TOKEN`` → ``idea/config.json`` 的 ``admin_token``（B7 起无弱默认）。"""
+    env = os.environ.get("IDEA_TOKEN")
+    if env is not None and str(env).strip():
+        return str(env).strip()
+    try:
+        raw = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+        return str(raw.get("admin_token") or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+TOKEN = _workbench_token()
+
+
+def _require_workbench_token() -> None:
+    """没有 token 时给出可执行提示，而不是跑到一半全 401。"""
+    if TOKEN:
+        return
+    print("缺少工作台 token：先启动 803（随机 token 会写入 idea/config.json），"
+          "或设置 IDEA_TOKEN。", file=sys.stderr)
+    raise SystemExit(2)
 
 
 def _gateway_token() -> str:
@@ -417,7 +438,7 @@ def environment_rows(args: argparse.Namespace) -> list[tuple[str, str]]:
         ("SoulAgent", str(DEFAULT_SOUL)),
         ("SoulAgent Python", str(DEFAULT_SOUL_PY) if DEFAULT_SOUL_PY.is_file() else "(未找到，回退 PATH python)"),
         ("服务端口", port_text),
-        ("管理令牌", "***（默认 8888）"),
+        ("管理令牌", "***（读 idea/config.json 的 admin_token）"),
         ("工作台/网关/控制台", f"{WB} / {GW} / {CONSOLE}"),
     ]
 
@@ -530,6 +551,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--soul-python", default=str(DEFAULT_SOUL_PY),
                         help="跑 SoulAgent pytest 的 Python（默认 C:\\Python314\\python.exe）")
     args = parser.parse_args(argv)
+    _require_workbench_token()
 
     DEFAULT_SOUL = Path(args.soul_home)
     DEFAULT_SOUL_PY = Path(args.soul_python)

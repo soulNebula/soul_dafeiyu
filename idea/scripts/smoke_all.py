@@ -10,7 +10,7 @@
 
 用法：
     python scripts/smoke_all.py
-    python scripts/smoke_all.py --token 8888
+    python scripts/smoke_all.py --token <idea/config.json 里的 admin_token>
 """
 from __future__ import annotations
 
@@ -24,7 +24,21 @@ from dataclasses import dataclass
 
 import httpx
 
-DEFAULT_TOKEN = os.environ.get("IDEA_TOKEN", "8888")
+
+def _workbench_token() -> str:
+    """工作台 token：``IDEA_TOKEN`` → ``idea/config.json`` 的 ``admin_token``（B7 起无弱默认）。"""
+    env = os.environ.get("IDEA_TOKEN")
+    if env is not None and str(env).strip():
+        return str(env).strip()
+    cfg = Path(__file__).resolve().parents[1] / "config.json"
+    try:
+        raw = json.loads(cfg.read_text(encoding="utf-8"))
+        return str(raw.get("admin_token") or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+DEFAULT_TOKEN = _workbench_token()
 
 
 def _gateway_token() -> str:
@@ -92,7 +106,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gateway-token", default=GATEWAY_TOKEN)
     parser.add_argument("--timeout", type=float, default=8.0)
     args = parser.parse_args(argv)
-    token = str(args.token or "")
+    token = str(args.token or "").strip()
+    if not token:
+        print("缺少工作台 token：先启动 803（随机 token 会写入 idea/config.json），"
+              "或用 IDEA_TOKEN / --token 显式指定。", file=sys.stderr)
+        return 2
     gw_token = str(args.gateway_token or GATEWAY_TOKEN)
     headers = {"X-Admin-Token": token, "Accept": "application/json"}
     gw_headers = {"X-Admin-Token": gw_token, "Accept": "application/json"}

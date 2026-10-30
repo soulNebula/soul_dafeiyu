@@ -6,6 +6,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+# 803 自身配置（含 admin token；首次启动自动生成随机口令）
+config.json
 # 环境/密钥
 .env
 *.local.json
@@ -17,3 +19,4 @@ web/vendor/
 # acceptance 脚本产生的临时目录
 edge_accept_*/
 pytest-of-Administrator/
+pytest-of-*/

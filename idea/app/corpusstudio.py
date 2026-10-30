@@ -8,7 +8,7 @@
    - 文本：``我:`` 前缀 / 微信导出「昵称 + 时间」/ 无标签双人对话（交替）
    - JSON/JSONL：messages、{user,assistant}、[{role,text}]
    - 图片：子进程调 ``tools/ocr_image.py``（RapidOCR/Windows OCR），按气泡左右判角色
-3. ``save_dataset()``：勾选条目 → messages / instruction JSONL → ``E:/agent/datasets``。
+3. ``save_dataset()``：勾选条目 → messages / instruction JSONL → ``<AGENT_HOME>/datasets``。
 
 条目统一结构: ``{id, role: "me"|"you", text, source, ts?}``。
 """

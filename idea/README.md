@@ -16,9 +16,10 @@ cd C:\Users\Administrator\Desktop\idea
 .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 803
 ```
 
-打开 <http://127.0.0.1:803/?token=8888>。
+打开 <http://127.0.0.1:803/?token=<token>>。
 
-- 默认 token `8888`，可用 `IDEA_TOKEN` 覆盖；
+- **没有固定默认口令**：首次启动会生成 32 位随机 token，写进 `idea/config.json`（已 gitignore），
+  并在启动日志打印一次带 token 的 URL；也可用 `IDEA_TOKEN` 显式覆盖（旧默认 `8888` 不再被自动接受）；
 - 需要微信网关（801）在跑时，概览/服务页才有实时数据；802 控制台独立运行；
 - 一键启停/冒烟见 [docs/RUN.md](docs/RUN.md)。
 
@@ -38,6 +39,8 @@ cd C:\Users\Administrator\Desktop\idea
 | `models` | 模型中心：GGUF/HuggingFace/LoRA 适配器、运行状态、导入/下载/删除 |
 
 全局终端面板从右侧滑出（可拖拽调宽、记住宽度），不属于页面内容。
+面板内容来自只读接口 `/api/wb/terminal`（803 托管服务的日志尾部，定时刷新），
+**不执行任何 shell 命令**；点「查看日志/配置备份/数据集预览」时切换为手动内容，自动刷新暂停。
 
 ## 目录结构
 
@@ -96,7 +99,7 @@ distill_form.png        distill_done.png        terminal_open.png
 "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --headless=new ^
   --disable-gpu --window-size=1600,1200 --virtual-time-budget=9000 ^
   --screenshot=.data\screens\overview_default.png ^
-  "http://127.0.0.1:803/?token=8888&view=overview"
+  "http://127.0.0.1:803/?token=<idea/config.json 的 admin_token>&view=overview"
 ```
 
 `.data/` 整体被 gitignore，截图只是本机验收材料，不入库。

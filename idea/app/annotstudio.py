@@ -11,7 +11,7 @@
 - :func:`validate_annotation` 按 ``SoulAgent/agi/soul/inner_state_schema.json`` 的枚举/范围
   收敛：数值 clamp 0-1、枚举非法回默认、文本截断；未知字段/必填缺失算 error。
 - :func:`save_annotations`    过滤 score、组装 soul 行（context + user_msg + target），
-  写到 ``E:/agent/datasets/soul_user_<时间>.jsonl``（+ ``_val.jsonl``），写审计 ``annot.save``。
+  写到 ``<AGENT_HOME>/datasets/soul_user_<时间>.jsonl``（+ ``_val.jsonl``），写审计 ``annot.save``。
 - :func:`source_view`         给 ``GET /api/wb/annot/source/{job_id}`` 用：复用
   corpusstudio 已清洗 items，返回每条 me 回复的上下文 + 上一句 you + 预填建议。
 

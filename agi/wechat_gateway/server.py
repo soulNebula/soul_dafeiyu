@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, urlsplit
 from . import config as cfg
 from . import control, drafts, media as media_mod, policy, sendclass
 from . import send_async as send_async_mod
+from . import send_breaker as send_breaker_mod
 from .receiver import ReceiveCursor, WeChatReceiver, is_mention, looks_like_pat
 from .sender import WxAutoSender
 from .. import textguard
@@ -271,6 +272,14 @@ class Gateway:
             "queued": 0, "completed": 0, "failed": 0, "dropped": 0,
             "timeouts": 0, "last_error": "", "last_wait_ms": 0.0,
         }
+        # 风控：连续环境类发送失败（超时/发送器不可用）自动熔断，需人工 reset。
+        # 状态落盘在 gateway.log 同目录，跨重启保持 open。
+        self._send_breaker = send_breaker_mod.SendBreaker(
+            self.log_path.parent / "send_breaker.json",
+            enabled=bool(self.cfg.get("send_breaker_enabled", True)),
+            threshold=int(self.cfg.get("send_breaker_threshold")
+                          or send_breaker_mod.DEFAULT_THRESHOLD))
+        self.send_breaker = self._send_breaker.data
         # C6：nightly（摘要/画像/反思/冷归档）由生产 main() 打开；单测构造的 Gateway
         # 默认关闭，避免测试里意外触发 LLM 调用与整库整理。
         self.nightly_enabled = False
@@ -1998,6 +2007,23 @@ class Gateway:
         })
         return stats
 
+    # ---------------- 风控：连续环境类发送失败自动熔断（实现见 send_breaker.py） ----
+    def _send_breaker_open(self) -> bool:
+        return self._send_breaker.open
+
+    def _note_send_failure(self, reason: str) -> dict:
+        """只对环境类失败计数（send_timeout / sender_unavailable）。"""
+        return self._send_breaker.note_failure(reason)
+
+    def _note_send_success(self) -> None:
+        self._send_breaker.note_success()
+
+    def reset_send_breaker(self, *, source: str = "manual") -> dict:
+        """人工恢复：清空熔断并删除落盘标记（之后才允许继续外发）。"""
+        result = self._send_breaker.reset(source)
+        self._record("send_breaker_reset", {"source": source})
+        return result
+
     def _send_locked(self, contact: str, text: str, *, force: bool = False,
                      reactive: bool = False, proactive: bool = False,
                      manual: bool = False, force_quiet: bool = False,
@@ -2008,6 +2034,13 @@ class Gateway:
             self._log_stopped()
             self._record("send_blocked", {"friend": contact, "reason": "stop_file"})
             return {"ok": False, "status": "blocked", "error": "stop_file"}
+        # 风控熔断：连续超时/发送器不可用后禁止一切外发，必须人工 reset
+        if self._send_breaker_open():
+            self._record("send_blocked", {"friend": contact,
+                                          "reason": "send_breaker_open"})
+            return {"ok": False, "status": "blocked",
+                    "error": "send_breaker_open",
+                    "send_breaker": dict(self.send_breaker)}
         # P18-A：engine 软停只拦自动回复/主动；人工接口（manual/force）仍允许调试发送
         if not self.engine_enabled and not (manual or force):
             self._log_engine_pause("send")
@@ -2155,6 +2188,7 @@ class Gateway:
                     if cls == sendclass.DELIVERED:
                         self.send_times.append(time.time())
                         self.sent_today += 1
+                        self._note_send_success()
                         if reactive:
                             self._reactive_dedupe[(str(contact or "").strip(),
                                                    dedupe_token)] = now
@@ -2203,6 +2237,7 @@ class Gateway:
             if classification == sendclass.DELIVERED:
                 self.send_times.append(time.time())
                 self.sent_today += 1
+                self._note_send_success()
                 if reactive:
                     self._reactive_dedupe[(str(contact or "").strip(),
                                            dedupe_token)] = now
@@ -2228,6 +2263,7 @@ class Gateway:
             # 随后窗口兜底再发一遍 → 同一条内容可能被发两次。这里改判 unverified，
             # 且**不自动兜底重发**；内容落草稿供人工确认。
             self._record("send_timeout", {"friend": contact, "timeout_s": timeout_s})
+            self._note_send_failure("send_timeout")
             self.unverified += 1
             draft = self._archive_failed_draft(contact, text, "send_timeout",
                                                reason="send_timeout")
@@ -2731,6 +2767,7 @@ class Gateway:
             "friend": contact, "error": message[:200],
             "error_key": "sender_unavailable", "stage": "send",
             "tried": tried_list})
+        self._note_send_failure("sender_unavailable")
         # 发送器不可用（缺 venv/缺模块）时，窗口级/UIA 兜底仍可能可用——先试兜底：
         # 兜底成功按 clipboard/unverified 原样返回；只有兜底也不可用才落草稿并标
         # sender_unavailable（环境配置错，不是"这条内容发送失败"）。
@@ -2889,6 +2926,7 @@ class Gateway:
             "sender": dict(self.sender_status) if self.sender_status else None,
             # A9-P0：发送异步化观测（enabled/queue_size/alive/超时与丢弃计数）
             "send_async": self.send_async_status(),
+            "send_breaker": dict(self.send_breaker),
             "drafts_pending": len(drafts.list_all(path=self.draft_path, limit=200)),
             # P0-AB8：启动时按 TTL 清掉的过期草稿数（配置 draft_ttl_days，默认 7 天）
             "drafts_pruned": int(getattr(self, "drafts_pruned", 0) or 0),
@@ -3076,6 +3114,12 @@ def make_handler(gateway: Gateway):
             if path == "/api/diary/write":
                 result = gateway.diary_write(force=bool(body.get("force")))
                 self._json(200 if result.get("ok") else 500, result)
+                return
+
+            # 风控：人工解除发送熔断（连续超时/发送器不可用后必须显式恢复）
+            if path == "/api/send/breaker/reset":
+                self._json(200, {"ok": True, "send_breaker":
+                                 gateway.reset_send_breaker(source="api")})
                 return
 
             if path == "/api/approve":

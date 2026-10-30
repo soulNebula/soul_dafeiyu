@@ -47,6 +47,9 @@ DEFAULTS = {
     "send_ttl_manual_s": 300,
     "send_ttl_reactive_s": 180,
     "send_ttl_proactive_s": 900,
+    # 风控熔断：连续 N 次环境类发送失败（超时/发送器不可用）→ 禁止外发，需人工 reset
+    "send_breaker_enabled": True,
+    "send_breaker_threshold": 2,
     "memory_purge_enabled": False,
     "memory_sleep_hour": 3,
     "port": 801,
@@ -83,7 +86,7 @@ DEFAULTS = {
     "send_probe_enabled": True,
     "send_retry_max": 1,
     # 发送子进程超时（秒）。超时 = "不知道发没发"，按 unverified 处理且不自动兜底重发。
-    "send_timeout_s": 45,
+    "send_timeout_s": 20,
     # 多媒体多气泡子进程超时（秒）：媒体链路更慢，单独放宽。
     "send_media_timeout_s": 120,
     # P5-a 发送层多媒体（默认关闭：用户/决策层显式开启前，send_bubbles 一律 blocked）

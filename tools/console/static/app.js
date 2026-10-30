@@ -327,18 +327,22 @@ async function renderOverview() {
   const soul = modelItems.find((m) => m.name === 'soul-05b');
   const msgItems = (messages && messages.items) || [];
   const contactItems = (contacts && contacts.items) || [];
-
-  const contactHtml = contactItems.length ? contactItems.map((item) => `
-    <div class="wb-contact ${item.current ? 'active' : ''}" data-contact="${esc(item.alias)}">
+  // 总览只展示当前正在聊的联系人，不把全部库都铺在这里
+  const currentAlias = state.contact || (contacts && contacts.current) || '';
+  const currentItem = contactItems.find((item) => item.alias === currentAlias)
+    || contactItems.find((item) => item.current) || null;
+  const shownContacts = currentItem ? [currentItem] : [];
+  const contactHtml = shownContacts.length ? shownContacts.map((item) => `
+    <div class="wb-contact active" data-contact="${esc(item.alias)}">
       <span class="wb-avatar">${esc(String(item.alias || '?').slice(0, 1))}</span>
       <div class="wb-contact-main"><b>${esc(item.alias || item.db || '—')}</b>
         <span class="muted">${num(item.messages)} 条 · ${item.last_ts ? fmtAgo(item.last_ts) : '暂无消息'}</span></div>
-      ${item.current ? '<span class="wb-tag">当前</span>' : ''}
-    </div>`).join('') : '<div class="empty">暂无联系人库</div>';
+      <span class="wb-tag">当前</span>
+    </div>`).join('') : '<div class="empty">暂无当前联系人</div>';
 
   const html = `
     ${wbTopBar({
-      title: '消息分析台', subtitle: `Soul Console · 127.0.0.1:802 · 当前库 ${esc((contacts && contacts.current_label) || '—')}`,
+      title: '消息分析台', subtitle: `Soul Console · 127.0.0.1:802 · 当前库 ${esc((currentItem && currentItem.alias) || (contacts && contacts.current_label) || '—')}`,
       pills: `<span class="wb-pill ok">● 实时</span>
         <span class="wb-pill ${active ? 'ok' : 'err'}">${active ? '● 微信监听中' : '○ 微信未监听'}</span>
         <span class="wb-pill">会话 ${num(backend.friends_count || 0)}</span>

@@ -248,6 +248,26 @@ def main(argv: list[str] | None = None) -> int:
             window.log("warn", f"忽略非法窗口尺寸参数：{args.geometry}")
     root.deiconify()
 
+    if is_fake and not force_fake:
+        # 真实后端不可用 → 自动降级假后端：启动即弹模态说明 + 顶部持久横幅，
+        # 避免用户误以为正在监听真实微信（B8）。
+        note = fallback_reason or "真实后端不可用"
+        window.set_demo_notice(note)
+        try:
+            from tkinter import messagebox
+
+            root.after(400, lambda: messagebox.showwarning(
+                "当前是演示模式（非真实微信）",
+                "未检测到可用的真实微信后端，本窗口显示的是示例数据。\n\n"
+                "真实微信收听请使用 802 控制台：http://127.0.0.1:802/\n\n"
+                "若只想预览界面，可显式使用：python app.py --fake",
+                parent=root,
+            ))
+        except Exception:  # noqa: BLE001 - 弹窗不可用时顶部横幅仍然生效
+            pass
+    elif is_fake:
+        window.set_demo_notice("已用 --fake 显式演示")
+
     try:
         backend.start()
     except Exception as exc:  # noqa: BLE001 - 后端启动失败也不影响看界面

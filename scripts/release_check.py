@@ -34,7 +34,7 @@ REQUIRED_FILES = (
     "LICENSE",
     "SECURITY.md",
     "CONTRIBUTING.md",
-    "docs/OPENSOURCE.md",
+    "docs/guides/OPENSOURCE.md",
     ".github/workflows/ci.yml",
     "tools/check_secrets.py",
     "scripts/release_check.py",
@@ -43,7 +43,7 @@ REQUIRED_FILES = (
 DEFAULT_MAX_MB = 50.0
 #: 测试超时（秒）；CI 是 30 分钟，这里留同样量级
 DEFAULT_TIMEOUT_S = 1800
-TEST_ARGS = ("agi/tests", "tests", "-q", "--ignore=tests/test_webui.py",
+TEST_ARGS = ("agi/tests", "tests", "-q",
              "-p", "no:cacheprovider")
 
 

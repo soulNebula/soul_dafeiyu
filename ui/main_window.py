@@ -86,6 +86,8 @@ class MainWindow:
         self._refresh_status_ui()
         self._refresh_chat_title()
         self._refresh_message_count()
+        if self.demo_mode:
+            self.set_demo_notice(self._demo_note)
 
     # ==================================================================
     # 窗口与布局
@@ -227,6 +229,22 @@ class MainWindow:
             justify="left",
             wraplength=600,
         )
+        # 演示模式持久横幅（默认隐藏）：真实后端不可用时提醒改用 802 控制台。
+        self.demo_banner = tk.Frame(bar, bg=W.ACCENT_DARK)
+        self.demo_banner_label = tk.Label(
+            self.demo_banner,
+            text="",
+            bg=W.ACCENT_DARK,
+            fg=W.WARN,
+            font=W.FONT_UI_BOLD,
+            anchor="w",
+            justify="left",
+            wraplength=900,
+            padx=12,
+            pady=6,
+        )
+        self.demo_banner_label.pack(side="left", fill="x", expand=True)
+
         bar.bind("<Configure>", self._on_status_bar_configure, add="+")
 
     def _status_sep(self, parent: tk.Widget) -> None:
@@ -1105,15 +1123,38 @@ class MainWindow:
             self.error_label.grid_remove()
 
     def set_demo_mode(self, enabled: bool, note: str = "") -> None:
-        """切换演示模式徽标，并可追加一条提示日志。"""
+        """切换演示模式徽标/横幅，并可追加一条提示日志。"""
         self.demo_mode = bool(enabled)
         if hasattr(self, "demo_badge"):
             if self.demo_mode:
                 self.demo_badge.pack(side="left", padx=(10, 0), pady=7)
             else:
                 self.demo_badge.pack_forget()
+        if hasattr(self, "demo_banner"):
+            if self.demo_mode:
+                self.set_demo_notice(note)
+            else:
+                self.demo_banner.grid_remove()
         if note:
             self.log("warn", note)
+
+    def set_demo_notice(self, note: str = "") -> None:
+        """显示顶部持久黄色横幅：当前是演示数据，真实微信收听改用 802 控制台。"""
+        if not hasattr(self, "demo_banner"):
+            return
+        text = (
+            "⚠ 演示模式：当前界面显示的是示例数据，并非真实微信消息。"
+            "真实微信收听请改用 802 控制台 http://127.0.0.1:802/"
+        )
+        note = str(note or "").strip()
+        if note:
+            text += f"（原因：{note}）"
+        self.demo_banner_label.configure(text=text)
+        self.demo_banner.grid(row=2, column=0, sticky="ew")
+        if hasattr(self, "error_label"):
+            # 横幅已承载这条提示，避免状态栏红字重复占位。
+            self.error_label.configure(text="")
+            self.error_label.grid_remove()
 
     def _refresh_status_ui(self) -> None:
         """按缓存的 status 数据刷新顶部状态栏（初始化/手动刷新用）。"""

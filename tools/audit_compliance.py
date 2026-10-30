@@ -80,6 +80,9 @@ EXCLUDE_DIRS = {
     "reference_weflow", "_refs", "Demo", "demo",
     # tests 里会故意写 sqlite 临时库做夹具，不属于运行代码
     "tests", "docs",
+    # 803 工作台（idea/）是独立子项目：自有 venv/git 历史、自有 SQLite 训练数据，
+    # 不接触微信本地库；它的 INSERT/连接不是"回写微信数据库"，不进主仓合规判定。
+    "idea",
 }
 # 扫描脚本自身：pattern 表中必然出现禁用字样，必须排除
 SELF_PATH = Path(__file__).resolve()

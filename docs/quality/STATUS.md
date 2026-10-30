@@ -14,18 +14,18 @@
 
 <!-- STATUS:AUTO:BEGIN（由 tools/status_report.py 生成，勿手改）-->
 
-最后生成：2026-10-29T21:59:01（Python 3.14.7）
+最后生成：2026-10-30T23:58:41（Python 3.14.7）
 
 | 套件 | 通过 | 失败 | 跳过 | 耗时 | 结果 |
 | --- | --- | --- | --- | --- | --- |
-| `tests/` | 301 | 0 | 0 | 56.00s | PASS |
-| `agi/tests/` | 2235 | 0 | 4 | 527.17s | PASS |
+| `tests/` | 301 | 0 | 0 | 51.83s | PASS |
+| `agi/tests/` | 2254 | 0 | 4 | 429.98s | PASS |
 
-collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不代表通过数）：`tests/`=301、`agi/tests/`=2239。
+collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不代表通过数）：`tests/`=301、`agi/tests/`=2258。
 
 数据来源：`python scripts/agentb_verify.py`（全量终验，两套 + 静态检查 + 生产文件未被污染）或 `python tools/status_report.py --run`（单套件实测）；`--from-agentb` 可直接导入前者的 JSON，不手抄。
 
-代码规模（同一命令可复算）：Python 模块 4541 个（agi 2746 / selflearn 95 / agi/tests 185）；计划文档 45 份；legacy 归档 37 个文件 / 9151 行。
+代码规模（同一命令可复算）：Python 模块 3608 个（agi 148 / selflearn 95 / agi/tests 186）；计划文档 45 份；legacy 归档 37 个文件 / 9151 行。
 
 <!-- STATUS:AUTO:END -->
 

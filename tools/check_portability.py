@@ -10,7 +10,7 @@
 退出码：0 = PASS（允许 WARN），1 = FAIL。
 
 扫描规则：
-- 代码（.py/.bat/.cmd/.ps1）：出现 ``E:\\agent`` → FAIL；``agi/paths.py`` 里
+- 代码（.py/.bat/.cmd/.ps1）：出现 ``E:\\agent`` 或 ``E:/agent`` → FAIL；``agi/paths.py`` 里
   ``DEFAULT_AGENT_HOME`` 是唯一的合法默认值，跳过；
 - 文档（.md/.txt/.json）：旧路径只 WARN（文档由另一任务收口；不阻断可移植性）；
 - 归档（docs/archive、scratch）、依赖目录（.venv/venv312/node_modules）、
@@ -30,11 +30,20 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-HARDCODE = "E:" + chr(92) + "agent"
+#: 旧 home 的两种写法都要拦：反斜杠（Windows 默认）与正斜杠。只匹配反斜杠会漏掉
+#: ``r"E:/agent/venv_wx312/Scripts/python.exe"`` 这类 Python 源码里的常见写法
+#: （2026-10-30 审计发现 802 朋友圈抓取曾因此长期绕过可移植性门禁）。
+HARDCODE_PATTERNS = ("E:" + chr(92) + "agent", "E:/agent")
+#: 主链目录：命中硬编码 → FAIL；其余（tools/idea/Demo/tests 等一次性工具或独立工作台）
+#: → WARN。idea/ 是独立 venv + subtree 合入的 803 工作台，不应反向 import 主仓 agi.paths。
+MAIN_CHAIN_DIRS = {"agi", "wx_core", "webui", "ui", "scripts"}
 SKIP_DIRS = {
     ".git", "__pycache__", ".pytest_cache", ".mypy_cache", "scratch",
     ".venv", "venv", "venv312", "node_modules", ".idea", "models",
     "output", "logs", "tmp",
+    # 归档/第三方参考区：不参与运行（legacy/README 明确「不参与运行、不参与扫描」），
+    # 它们即使带旧 home 路径也不影响可移植性，扫进来只会淹没真问题。
+    "legacy", "_refs",
 }
 CODE_SUFFIXES = {".py", ".ps1"}          # 真正会执行的代码
 LAUNCHER_SUFFIXES = {".bat", ".cmd"}     # bat 里多是注释/提示，WARN 不阻断
@@ -84,6 +93,7 @@ def iter_files():
 
 def scan_hardcodes(strict_docs: bool = False) -> None:
     code_hits: list[str] = []
+    tool_hits: list[str] = []
     doc_hits: list[str] = []
     for path in iter_files():
         suffix = path.suffix.lower()
@@ -103,26 +113,36 @@ def scan_hardcodes(strict_docs: bool = False) -> None:
             text = _read_text(path)
         except OSError:
             continue
-        if HARDCODE not in text:
+        if not any(pattern in text for pattern in HARDCODE_PATTERNS):
             continue
         rel = path.relative_to(ROOT)
         lines = [index + 1 for index, line in enumerate(text.splitlines())
-                 if HARDCODE in line]
+                 if any(pattern in line for pattern in HARDCODE_PATTERNS)]
         marker = f"{rel}: {', '.join(str(line) for line in lines[:5])}"
         if suffix in CODE_SUFFIXES:
-            code_hits.append(marker)
+            # 主链目录/根目录代码命中即 FAIL；一次性工具与独立工作台只 WARN，
+            # 避免"工具脚本的机器路径"把主链可移植性门禁一直压红。
+            if len(rel_parts) == 1 or rel_parts[0] in MAIN_CHAIN_DIRS:
+                code_hits.append(marker)
+            else:
+                tool_hits.append(marker)
         elif suffix in LAUNCHER_SUFFIXES:
             doc_hits.append(marker + "（快捷启动脚本，仅注释/提示）")
         else:
             doc_hits.append(marker)
     if code_hits:
-        fail(f"代码里仍有 {len(code_hits)} 个 E:\\agent 硬编码（应走 agi.paths）")
+        fail(f"代码里仍有 {len(code_hits)} 个 E:\\agent / E:/agent 硬编码（应走 agi.paths）")
         for hit in code_hits[:20]:
             print("      " + hit)
     else:
-        ok("代码无 E:\\agent 硬编码（agi/paths.py 默认值除外）")
+        ok("代码无 E:\\agent / E:/agent 硬编码（agi/paths.py 默认值除外）")
+    if tool_hits:
+        warn(f"工具/独立工作台里仍有 {len(tool_hits)} 处 " + "E:" + chr(92) + "agent"
+             " / E:/agent 硬编码（不阻断可移植性；建议迁移到 agi.paths 或做成可配置）")
+        for hit in tool_hits[:20]:
+            print("      " + hit)
     if doc_hits:
-        message = f"文档里仍有 {len(doc_hits)} 处旧路径 E:\\agent（不阻断可移植性）"
+        message = f"文档里仍有 {len(doc_hits)} 处旧路径 E:\\agent / E:/agent（不阻断可移植性）"
         if strict_docs:
             fail(message)
         else:

@@ -77,6 +77,53 @@ GUARD_PATTERNS: tuple[str, ...] = (
     "agi/data/selflearn/*.json",
 )
 
+#: 运行中的 801/802/803 会持续写这些 append-only 产物（gateway.log、surf_state.json…）。
+#: 它们被写 = 服务在干活，不是"测试写生产"；服务在线时守卫忽略这些路径的差异，
+#: 服务全停时仍然严格（CI / 本地纯离线回归）。
+LIVE_RUNTIME_PATTERNS: tuple[str, ...] = (
+    "agi/data/wechat/gateway.log",
+    "agi/data/wechat/drafts.jsonl",
+    "agi/data/wechat/pending_lost.jsonl",
+    "agi/data/console_audit.log",
+    "agi/data/llm_usage.jsonl",
+    "agi/data/local_models_state.json",
+    "agi/data/media_tags.json",
+    "agi/data/media_wishes.jsonl",
+    "agi/data/media_sources.json",
+    "agi/data/media_wishes_status.json",
+    "agi/data/web_cache.json",
+    "agi/data/diary/*",
+    "agi/data/selflearn/*.log",
+    "agi/data/selflearn/*.jsonl",
+    "agi/data/selflearn/*.json",
+)
+
+LIVE_SERVICE_PORTS: tuple[int, ...] = (801, 802, 803)
+
+
+def live_services_running() -> bool:
+    """801/802/803 是否有任一在监听（真机在线时守卫要放宽 append-only 产物）。"""
+    import socket
+
+    for port in LIVE_SERVICE_PORTS:
+        try:
+            with socket.create_connection(("127.0.0.1", int(port)), timeout=0.15):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def is_live_runtime_path(path: "Path | str") -> bool:
+    """该生产路径是否属于"服务自己也会写"的运行时产物。"""
+    from fnmatch import fnmatch
+
+    try:
+        rel = str(Path(path).resolve().relative_to(REPO_ROOT)).replace(chr(92), "/")
+    except (ValueError, OSError):
+        rel = str(path).replace(chr(92), "/")
+    return any(fnmatch(rel, pattern) for pattern in LIVE_RUNTIME_PATTERNS)
+
 
 def _truthy(value: object) -> bool:
     return str(value or "").strip().lower() not in ("", "0", "false", "no", "off")
@@ -164,10 +211,20 @@ def diff_snapshots(before: dict, after: dict) -> list[str]:
 
 @pytest.fixture(scope="session", autouse=True)
 def _production_write_guard():
-    """会话开始/结束比对生产敏感文件；有变化就 fail —— 测试不写生产的动态自证。"""
+    """会话开始/结束比对生产敏感文件；有变化就 fail —— 测试不写生产的动态自证。
+
+    若 801/802/803 正在运行，它们的 append-only 运行时产物（日志/状态/草稿）会先被
+    过滤掉：那是服务行为，不是测试污染；此时仍严格检查配置/密钥/数据库/原始消息。
+    """
     before = fingerprint(guard_targets(REPO_ROOT))
     yield
-    changes = diff_snapshots(before, fingerprint(guard_targets(REPO_ROOT)))
+    after = fingerprint(guard_targets(REPO_ROOT))
+    if live_services_running():
+        before = {key: value for key, value in before.items()
+                  if not is_live_runtime_path(key)}
+        after = {key: value for key, value in after.items()
+                 if not is_live_runtime_path(key)}
+    changes = diff_snapshots(before, after)
     if changes:
         pytest.fail(
             "测试写到了生产默认路径——说明隔离失效，请修隔离，不要关守卫：\n  "

@@ -480,12 +480,13 @@ class MomentsService:
             if not self.moments_dir.is_dir():
                 return (
                     False,
-                    f"未找到 WechatMoments 目录：{self.moments_dir}；"
-                    "请把 WechatMoments（微信 4.x 朋友圈导出工具）放在项目根目录。",
+                    "未安装（该功能不再维护）：未找到 WechatMoments 目录 "
+                    f"{self.moments_dir}。网页端朋友圈模块已停止维护，"
+                    "不影响消息监听与 AI 分析。",
                     python,
                 )
         except OSError:
-            return False, f"无法访问 WechatMoments 目录：{self.moments_dir}", python
+            return False, "未安装（该功能不再维护）：无法访问 WechatMoments 目录", python
         return True, "", python
 
     # ------------------------------------------------------------------

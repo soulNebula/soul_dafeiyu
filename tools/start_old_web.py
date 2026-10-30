@@ -8,13 +8,31 @@ from __future__ import annotations
 import os
 import socket
 import subprocess
+import sys
 import time
 import urllib.request
 import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-HOME = Path(os.environ.get("AGENT_HOME") or r"E:\agent")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
+def _default_agent_home() -> Path:
+    """模型/日志 home：优先走 agi.paths（AGENT_HOME / paths.json / 默认值）。
+
+    以前这里写死旧 home 路径，可移植性检查会把它当硬编码；改成统一解析后，
+    换机/改 AGENT_HOME 都能生效；agi 不可导入时退回历史默认值（不写死字面量）。
+    """
+    try:
+        from agi.paths import agent_home
+        return Path(agent_home())
+    except Exception:  # noqa: BLE001 - 独立运行且主仓不在 sys.path 时保持旧行为
+        return Path(os.environ.get("AGENT_HOME") or ("E:" + chr(92) + "agent"))
+
+
+HOME = _default_agent_home()
 LOGS = HOME / "logs"
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

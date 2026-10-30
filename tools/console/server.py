@@ -388,6 +388,65 @@ def _db_for_contact(contact: str) -> Path | None:
     return _contact_db_by_alias(raw)
 
 
+#: 802 对话流气泡的送达状态（与 801 ``turns.delivery_status`` 对齐的 6 个值）
+DELIVERY_STATUSES = ("sent", "unverified", "sender_unavailable", "failed", "draft", "unknown")
+_DELIVERY_ALIASES = {
+    "sent": "sent", "delivered": "sent", "ok": "sent",
+    "unverified": "unverified", "partial": "unverified", "warning": "unverified",
+    "send_timeout": "unverified",
+    "sender_unavailable": "sender_unavailable",
+    "failed": "failed", "blocked": "failed", "error": "failed",
+    "draft": "draft", "planned": "draft", "pending": "draft",
+}
+
+
+def _normalize_delivery(value) -> str:
+    """把 801 的 delivery_status 归一成前端认识的 6 个值；未知返回空串。"""
+    return _DELIVERY_ALIASES.get(str(value or "").strip().lower(), "")
+
+
+def _message_delivery(item: dict, turn_status: str = "") -> str:
+    """单条消息的送达状态：turns 优先，其次 messages.delivered，缺失给 unknown。
+
+    用户消息不属于「她发出去的东西」，返回空串（前端不显示状态标记）。
+    """
+    if str(item.get("role") or "") == "user":
+        return ""
+    normalized = _normalize_delivery(turn_status)
+    if normalized:
+        return normalized
+    delivered = item.get("delivered")
+    if delivered is not None and str(delivered).strip() in ("0", "0.0", "False", "false"):
+        return "failed"
+    return "unknown"
+
+
+def _message_turn_statuses(path: Path, ids: list[str]) -> dict[str, str]:
+    """批量取 ``turns.delivery_status``（assistant_message_id → status）。"""
+    if not ids:
+        return {}
+    statuses: dict[str, str] = {}
+    try:
+        con = _ro_connect(path)
+        try:
+            tcols = _columns(con, "turns")
+            if not tcols or "delivery_status" not in tcols \
+                    or "assistant_message_id" not in tcols:
+                return {}
+            qmarks = ",".join("?" for _ in ids)
+            for row in con.execute(
+                    "SELECT assistant_message_id, delivery_status FROM turns "
+                    f"WHERE assistant_message_id IN ({qmarks})", ids):
+                value = str(row["delivery_status"] or "").strip()
+                if value:
+                    statuses[str(row["assistant_message_id"])] = value
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return {}
+    return statuses
+
+
 def read_messages(limit: int = 100, contact: str = "") -> dict:
     path = _contact_db_by_alias(contact) if str(contact or "").strip() else contact_db_path()
     if not path:
@@ -403,7 +462,7 @@ def read_messages(limit: int = 100, contact: str = "") -> dict:
             if not cols:
                 return {"ok": True, "items": [], "db": str(path)}
             wanted = [name for name in ("id", "role", "text", "ts", "proactive",
-                                        "archived_at") if name in cols]
+                                        "archived_at", "delivered") if name in cols]
             rows = con.execute(
                 f"SELECT {','.join(wanted)} FROM messages "
                 "ORDER BY ts DESC, id DESC LIMIT ?", (limit,)).fetchall()
@@ -447,6 +506,14 @@ def read_messages(limit: int = 100, contact: str = "") -> dict:
         if target.is_file():
             att["url"] = _media_thumb(str(target))
         item["attachment"] = att
+    # A5：给每条「她发出去的消息」挂送达状态（turns.delivery_status → 归一化）
+    turn_statuses = _message_turn_statuses(path, ids)
+    for item in items:
+        delivery = _message_delivery(
+            item, turn_statuses.get(str(item.get("id") or ""), ""))
+        item["delivery"] = delivery
+        # unverified = 发送超时"可能已发出、不会自动重发"；前端据此显示而不是当失败
+        item["possible_sent"] = delivery == "unverified"
     return {"ok": True, "db": str(path), "items": items}
 
 
@@ -1161,6 +1228,7 @@ def train_status() -> dict:
     history = _read_jsonl(TRAIN_HISTORY_PATH)
     last = history[-1] if history else None
     gate: dict = {}
+    min_samples = 300
     try:
         try:
             from tools.train import train_gate
@@ -1169,14 +1237,18 @@ def train_status() -> dict:
             if str(ROOT) not in _sys.path:
                 _sys.path.insert(0, str(ROOT))
             from tools.train import train_gate
+        min_samples = int(getattr(train_gate, "MIN_SAMPLES", min_samples))
         gate = train_gate.check_ready()
     except Exception as exc:  # noqa: BLE001 - 页面只读观测，失败降级
         gate = {"ready": None, "error": f"{type(exc).__name__}: {exc}"}
     usable = sum(1 for row in today_rows
                  if str(row.get("meta", {}).get("quality") or "") in ("positive", "correction"))
+    dates = [path.stem for path in sorted(daily_files, reverse=True)[:14]]
     return {"ok": True, "today": {"date": today, "samples": len(today_rows),
                                   "usable": usable},
             "cumulative": {"samples": cumulative, "files": len(daily_files)},
+            "daily": {"dates": dates, "files": len(daily_files)},
+            "min_samples": min_samples,
             "last_training": last, "gate": gate,
             "next_ready": gate.get("next_ready") if isinstance(gate, dict) else None,
             "hint": "只读展示；训练默认只计划，不自动执行"}
@@ -1818,6 +1890,8 @@ MEDIA_ASSET_DIRS: tuple[Path, ...] = (
 )
 MEDIA_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 MEDIA_TEST_CONTACT = "文件传输助手"
+#: 人工确认后的素材入库目录（agi/media_acquisition.add_to_library 的目标）
+MEDIA_STICKERS_DIR = ROOT / "media" / "stickers"
 
 
 def _gateway_media():
@@ -2073,11 +2147,61 @@ def media_stats() -> dict:
                     else "emoji_archive 为空，统计来自目录扫描（无使用次数）"}
 
 
+def _media_acquisition_module():
+    """加载 agi.media_acquisition；不可用时返回 None（页面降级为只读文件）。"""
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from agi import media_acquisition as module
+        return module
+    except Exception:  # noqa: BLE001 - 只读观测页，失败降级
+        return None
+
+
 def media_acquisition() -> dict:
-    """P5-e 预留：素材获取/下载管线未实现。"""
+    """P5-e：素材获取现状（只读；没有搜索/下载管线就如实说没有）。
+
+    真实能力边界（agi/media_acquisition.py）：
+    - ``search_wishes`` / ``list_wishes``：只读愿望清单，可用；
+    - ``try_acquire``：永远返回 reserved，**不发网络请求/不下载**；
+    - ``add_to_library`` / ``import_local*``：人工导入，走素材页已有按钮。
+    """
+    module = _media_acquisition_module()
     wishes = media_wishes()
-    return {"ok": True, "enabled": False, "wishes": int(wishes.get("count") or 0),
-            "note": "预留接口，未实现下载（P5-e task-63）"}
+    rows = wishes.get("items") or []
+    items: list[dict] = []
+    for row in rows[:50]:
+        if not isinstance(row, dict):
+            continue
+        items.append({
+            "wish_id": str(row.get("wish_id") or ""),
+            "wish": str(row.get("wish") or "")[:200],
+            "status": str(row.get("status") or "pending"),
+            "ts": row.get("ts") or row.get("created_at"),
+            "source": str(row.get("source") or ""),
+        })
+    acquire_probe: dict | None = None
+    if module is not None and hasattr(module, "try_acquire"):
+        try:
+            acquire_probe = module.try_acquire("__probe__")
+        except Exception as exc:  # noqa: BLE001 - 探测失败不影响页面
+            acquire_probe = {"ok": False, "status": "error",
+                             "reason": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "enabled": False, "mode": "read_only",
+            "wishes": int(wishes.get("count") or len(items)),
+            "items": items,
+            "capabilities": {
+                "list_wishes": module is not None and hasattr(module, "list_wishes"),
+                "search_online": False,
+                "download": False,
+                "manual_import": True,
+                "add_to_library": module is not None and hasattr(module, "add_to_library"),
+            },
+            "acquire_probe": acquire_probe,
+            "library": {"path": str(MEDIA_STICKERS_DIR),
+                        "exists": MEDIA_STICKERS_DIR.is_dir()},
+            "note": ("预留接口：只读列出愿望清单；没有搜索/下载管线（P5-e task-63 未实现），"
+                     "素材入库请用本页导入/愿望满足")}
 
 
 def media_wishes() -> dict:
@@ -2164,7 +2288,143 @@ def manual_send(contact: str, text: str, *, client: str = "") -> dict:
     audit("manual_send", {"contact": name, "chars": len(message),
                           "status": result.get("status")}, ok=bool(result.get("ok")),
           client=client)
-    return {"ok": bool(result.get("ok")), "gateway": result}
+    # 把 801 的发送语义原样带出来（sender_unavailable / unverified + possible_sent），
+    # 前端才能显示"发送器不可用"和"可能已发出，不会自动重发"，而不是笼统的失败。
+    status = str(result.get("status") or "")
+    return {"ok": bool(result.get("ok")), "status": status,
+            "error": str(result.get("error") or ""),
+            "error_kind": str(result.get("error_kind") or ""),
+            "draft_id": result.get("draft_id"),
+            "possible_sent": bool(result.get("possible_sent")),
+            "gateway": result}
+
+
+# --------------------------------------------------------------------------- #
+# P40：待审草稿（802 → 801 /api/drafts、/api/draft/approve、/api/draft/reject）
+# --------------------------------------------------------------------------- #
+DRAFT_APPROVE_TIMEOUT_S = 120.0
+
+
+def _gateway_proxy(path: str, payload: dict | None = None, *, method: str = "GET",
+                   timeout: float = 30.0) -> dict:
+    """通用 801 代理：透传 X-Admin-Token，失败返回结构化 error（不抛异常）。
+
+    与 ``manual_send`` 的差别：不拼业务参数、不改写结果，返回网关原始 JSON；
+    失败时至少带 ``error``（+ ``hint``）给前端展示，避免「点了没反应」。
+    """
+    base = GATEWAY_STATUS_URL.rsplit("/status", 1)[0]
+    data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Accept": "application/json"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    token = admin_token()
+    if token:
+        headers["X-Admin-Token"] = token
+    request = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", "replace") or "{}"
+    except urllib.error.HTTPError as exc:
+        detail: dict = {}
+        try:
+            parsed = json.loads(exc.read().decode("utf-8", "replace") or "{}")
+            detail = parsed if isinstance(parsed, dict) else {}
+        except Exception:  # noqa: BLE001
+            detail = {}
+        return {"ok": False, "http": exc.code,
+                "error": str(detail.get("error") or f"gateway_http_{exc.code}"),
+                "hint": str(detail.get("detail") or detail.get("hint") or ""),
+                "detail": detail}
+    except urllib.error.URLError as exc:
+        return {"ok": False, "error": "gateway_unreachable",
+                "hint": "801 网关未就绪：请确认 python -m agi.wechat_gateway.server 正在运行",
+                "detail": str(getattr(exc, "reason", exc))}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        result = json.loads(raw)
+    except ValueError:
+        return {"ok": False, "error": "gateway_bad_json", "hint": raw[:200]}
+    return result if isinstance(result, dict) else {"ok": False, "error": "gateway_bad_payload"}
+
+
+def drafts_pending() -> dict:
+    """待审草稿列表：来源 801 ``/api/drafts``（802 不再自己读一份 drafts.jsonl）。"""
+    result = _gateway_proxy("/api/drafts")
+    if not result.get("ok"):
+        result.setdefault("items", [])
+        return result
+    drafts = result.get("drafts")
+    return {"ok": True, "items": drafts if isinstance(drafts, list) else [],
+            "source": "gateway:801"}
+
+
+def draft_decide(draft_id: str, approve: bool, *, client: str = "") -> dict:
+    """批准（真实发送）或驳回一条草稿；失败必须带具体 error 给前端显示。"""
+    target = str(draft_id or "").strip()
+    if not target:
+        return {"ok": False, "error": "id 不能为空"}
+    path = "/api/draft/approve" if approve else "/api/draft/reject"
+    payload = {"id": target, "confirm": True} if approve else {"id": target}
+    result = _gateway_proxy(path, payload, method="POST",
+                            timeout=DRAFT_APPROVE_TIMEOUT_S if approve else 30.0)
+    audit("draft_approve" if approve else "draft_reject",
+          {"id": target, "ok": bool(result.get("ok")),
+           "status": result.get("status"),
+           "error": result.get("error") or ""},
+          ok=bool(result.get("ok")), client=client)
+    return result
+
+
+def sender_status(force: bool = False) -> dict:
+    """802 顶部「发送器」指示：代理 801 ``/api/sender/status``（force=1 现场重探）。
+
+    网关不可达时也回一个 ``sender`` 结构，前端统一按 ``available=false`` 显示，
+    不会因为 801 没起就整块状态区消失。
+    """
+    result = _gateway_proxy("/api/sender/status" + ("?force=1" if force else ""),
+                            timeout=20.0)
+    if not result.get("ok"):
+        result.setdefault("sender", {
+            "available": False,
+            "module": "",
+            "python": "",
+            "error": result.get("hint") or result.get("error") or "gateway_unreachable",
+            "tried": [],
+            "checked_at": now_ts(),
+        })
+    sender = result.get("sender") if isinstance(result.get("sender"), dict) else None
+    if sender is not None:
+        result["available"] = bool(sender.get("available"))
+    return result
+
+
+def initiative_status(contact: str = "") -> dict:
+    """代理 801 ``/api/initiative/status``（主动度/内驱力只读，需 token）。
+
+    801 缺该路由/未就绪时返回 ok:false + hint，前端显示空态而不是整页报错。
+    """
+    query = "?contact=" + quote(str(contact or ""))
+    result = _gateway_proxy("/api/initiative/status" + query, timeout=15.0)
+    if not result.get("ok"):
+        result.setdefault("hint", "801 未就绪或该联系人没有内驱力数据")
+        result.setdefault("contact", contact)
+    return result
+
+
+#: 「自动缓存聊天视频」目前只有解析能力（webui/videos.py），没有抓取/落盘管线
+VIDEO_CACHE_DOC = "docs/plans/31-媒体能力-实现记录.md"
+
+
+def video_cache_status() -> dict:
+    """对话流「实验性：自动缓存聊天视频」的配置入口（如实返回未启用）。"""
+    return {
+        "ok": True,
+        "enabled": False,
+        "docs": VIDEO_CACHE_DOC,
+        "hint": ("自动缓存聊天视频尚未实现：webui/videos.py 只负责把已存在的本机缓存"
+                 "解析成可播放地址，没有抓取/落盘管线。开关保持关闭，需要时先按文档补后端。"),
+    }
 
 
 def media_send(body: dict, *, client: str = "") -> dict:
@@ -4882,6 +5142,8 @@ def _library_store():
 # P39：发送模式 / 朋友圈 / 模型管理（802 控制台新增）
 # --------------------------------------------------------------------------- #
 SEND_MODES = ("auto", "confirm", "off")
+#: 未显式配置时的默认发送模式：2026-10-30 起与 801 ``config.DEFAULTS["send_mode"]`` 对齐为 confirm。
+DEFAULT_SEND_MODE = "confirm"
 SEND_MODE_LABELS = {"auto": "自动", "confirm": "草稿", "off": "关闭"}
 
 
@@ -4911,15 +5173,21 @@ def model_admin_module():
 
 def send_mode_state() -> dict:
     raw = gateway_config()
-    mode = str(raw.get("send_mode") or "auto").strip().lower()
+    configured = str(raw.get("send_mode") or "").strip().lower()
+    mode = configured or DEFAULT_SEND_MODE
     if mode not in SEND_MODES:
-        mode = "auto"
+        mode = DEFAULT_SEND_MODE
     contact_modes = raw.get("contact_modes") if isinstance(raw.get("contact_modes"), dict) else {}
     summary = {"auto": 0, "confirm": 0, "off": 0, "other": 0}
     for value in contact_modes.values():
         text = str(value or "").strip().lower()
         summary[text if text in ("auto", "confirm", "off") else "other"] += 1
     return {"ok": True, "mode": mode, "label": SEND_MODE_LABELS[mode],
+            "default_mode": DEFAULT_SEND_MODE,
+            "default_label": SEND_MODE_LABELS[DEFAULT_SEND_MODE],
+            "configured": configured,
+            "note": "" if configured else
+                    "配置文件未显式设置 send_mode，按默认 confirm（草稿：先落草稿等人工批准）",
             "contact_modes": contact_modes, "contact_summary": summary,
             "path": str(GATEWAY_CONFIG),
             "labels": SEND_MODE_LABELS}
@@ -5270,6 +5538,21 @@ class Handler(BaseHTTPRequestHandler):
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
                 self._json(200, engine_state()); return
+            # P40：待审草稿列表（801 有 token 校验，代理时已透传）
+            if path == "/api/drafts":
+                self._json(200, drafts_pending()); return
+            # B6：对话流「自动缓存聊天视频」入口（当前只有解析能力，如实返回未启用）
+            if path == "/api/media/video-cache":
+                self._json(200, video_cache_status()); return
+            # 发送器状态（顶部「发送器」指示 / 重新检测）：透传 801 /api/sender/status
+            if path == "/api/sender/status":
+                force = str((query.get("force") or [""])[0] or "").strip().lower() \
+                    in ("1", "true", "yes", "on")
+                self._json(200, sender_status(force=force)); return
+            # 801 内驱力/主动度（只读代理；contact 可选，缺省时 801 取白名单第一个）
+            if path == "/api/initiative/status":
+                contact = str((query.get("contact") or [""])[0] or "")
+                self._json(200, initiative_status(contact)); return
             if path.startswith("/api/trace"):
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
@@ -5448,6 +5731,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/control/send_mode":
                 result = set_send_mode(str(body.get("mode") or ""), client=client)
                 self._json(200 if result.get("ok") else 400, result); return
+            # A4：草稿批准 / 驳回（转发 801，失败把具体 error 原样回给前端）
+            if path in ("/api/draft/approve", "/api/draft/reject"):
+                result = draft_decide(str(body.get("id") or ""),
+                                      path.endswith("approve"), client=client)
+                code = int(result.get("http") or 0) or (200 if result.get("ok") else 400)
+                self._json(code, result); return
             if path == "/api/moments/refresh":
                 module = moments_module()
                 if module is None:

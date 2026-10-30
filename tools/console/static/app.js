@@ -77,6 +77,8 @@ const PAGES = {
   providers: '模型配置',
   logs: '日志',
   bili: 'B站',
+  train: '训练',
+  growth: '成长 / 内驱力',
   moments: '朋友圈',
   diary: '日记',
   web: '上网记录',
@@ -275,6 +277,27 @@ async function api(path, options) {
 }
 
 /* ---------------- 状态 pills ---------------- */
+async function recheckSender() {
+  try {
+    const data = await api('/api/sender/status?force=1');
+    state.sender = (data && data.sender) || null;
+    const sender = state.sender || {};
+    if (sender.available) {
+      toast('发送器可用：' + (sender.module || 'ok'), 'ok');
+    } else {
+      showModal('发送器不可用', (sender.error || '未知错误')
+        + '\n\n尝试过的解释器：\n' + ((sender.tried || []).join('\n') || '（无）'));
+    }
+  } catch (err) {
+    const payload = (err && err.payload) || {};
+    const sender = payload.sender || {};
+    state.sender = payload.sender || state.sender || null;
+    showModal('发送器检测失败', (payload.hint || payload.error || err.message || String(err))
+      + '\n\n尝试过的解释器：\n' + ((sender.tried || []).join('\n') || '（无）'));
+  }
+  renderPills();
+}
+
 function renderPills() {
   const pills = [];
   const status = state.status;
@@ -295,8 +318,25 @@ function renderPills() {
     pills.push(pill('内状态：' + enumLabel('inner_mode', cfg.inner_mode || 'off'), cfg.inner_mode && cfg.inner_mode !== 'off' ? 'info' : ''));
     if (cfg.inner_shadow_only) pills.push(pill('内状态只记录不注入', 'warn'));
   }
+  // 发送器（801 新增 /status.sender；force 重探走 /api/sender/status?force=1）
+  const sender = state.sender
+    || (status && status.status && status.status.sender)
+    || (status && status.sender) || null;
+  if (!sender) {
+    pills.push(pill('发送器：未检测', 'warn'));
+  } else if (sender.available) {
+    pills.push(pill('发送器：' + (sender.module || '可用'), 'ok'));
+  } else {
+    pills.push(pill('发送器不可用', 'err'));
+  }
+  pills.push('<button class="btn small" id="sender-recheck" title="'
+    + esc((sender && sender.error) || '重新探测发送器 venv/模块') + '">重新检测</button>');
   const wrap = $('#status-pills');
-  if (wrap) wrap.innerHTML = pills.join('');
+  if (wrap) {
+    wrap.innerHTML = pills.join('');
+    const recheck = $('#sender-recheck');
+    if (recheck) recheck.onclick = recheckSender;
+  }
 }
 
 /* ---------------- 总览 ---------------- */
@@ -314,6 +354,8 @@ async function renderOverview() {
   try { messages = await api('/api/messages?limit=12' + contactQuery('&')); } catch (e) { errors.push('消息: ' + e.message); }
   state.status = status; state.config = config; state.models = models; state.engine = engine;
   state.contacts = contacts;
+  state.sender = (status && status.ok && status.status && status.status.sender)
+    || state.sender || null;
   renderPills();
 
   if (!status || !status.ok) {
@@ -465,11 +507,27 @@ function wbMediaHtml(m) {
     <span class="wb-media-label">${kindLabel}</span>`;
 }
 
+// A5：送达状态标记（未送达的消息不能当成「已回复」展示）
+const DELIVERY_LABELS = {
+  sent: ['已送达', 'ok'],
+  unverified: ['未证实·可能已发出', 'warn'],
+  sender_unavailable: ['发送器不可用', 'err'],
+  failed: ['未送达', 'err'],
+  draft: ['草稿', 'orange'],
+  unknown: ['状态未知', ''],
+};
+function deliveryBadge(m) {
+  if (!m || m.role === 'user') return '';
+  const entry = DELIVERY_LABELS[m.delivery] || DELIVERY_LABELS.unknown;
+  const note = m.possible_sent ? '（发送超时：可能已发出，不会自动重发）' : '';
+  return `<span class="badge ${entry[1]}" title="送达状态来自 turns.delivery_status${note}">${entry[0]}</span>`;
+}
+
 function wbMessageBubble(m) {
   const mine = m.role !== 'user';
   const text = String(m.text || '');
-  return `<div class="wb-msg ${mine ? 'mine' : ''}">
-    <div class="wb-msg-head">${mine ? '小鱼' : '对方'} ${wbMsgTag(m)} · ${fmtTime(m.ts)}</div>
+  return `<div class="wb-msg ${mine ? 'mine' : ''}" data-delivery="${esc(m.delivery || '')}">
+    <div class="wb-msg-head">${mine ? '小鱼' : '对方'} ${wbMsgTag(m)} ${deliveryBadge(m)} · ${fmtTime(m.ts)}</div>
     ${wbMediaHtml(m)}
     <div class="wb-msg-text">${esc(text)}</div>
   </div>`;
@@ -611,6 +669,51 @@ function feedSignature(items) {
   return (items || []).slice(0, 60).map((e) => [e.ts, e.kind, e.status || '', e.text || '', e.reason || ''].join('~')).join('|');
 }
 
+// A4：待审草稿卡片（批准=true 真实发送；失败必须在这张卡里显示具体 error）
+const DRAFT_REASON_LABELS = {
+  confirm: ['确认模式', ''],
+  send_failed: ['发送失败兜底', 'err'],
+  sender_unavailable: ['发送器不可用', 'err'],
+  send_timeout: ['发送超时·可能已发出', 'warn'],
+  unverified: ['未证实·可能已发出', 'warn'],
+};
+function draftReasonHtml(item) {
+  const entry = DRAFT_REASON_LABELS[item.reason];
+  if (entry) return `<span class="badge ${entry[1]}">${entry[0]}</span>`;
+  return item.reason ? `<span class="badge">${esc(item.reason)}</span>` : '';
+}
+function draftPossibleSentHtml(item) {
+  if (item.possible_sent !== true && item.reason !== 'send_timeout') return '';
+  return '<span class="hint">发送超时：可能已发出，系统不会自动重发；请先在微信里确认再决定批准或驳回。</span>';
+}
+function draftsCardHtml(data) {
+  if (!data) return '';
+  if (data.ok === false) {
+    const reason = data.hint || data.error || '草稿列表读取失败';
+    return `<div class="wb-card"><div class="error-text">草稿列表不可用：${esc(reason)}</div></div>`;
+  }
+  const items = data.items || [];
+  if (!items.length) return '';
+  return `<div class="wb-card">
+    <div class="wb-card-head"><b>待审草稿</b>
+      <span class="muted">${items.length} 条 · 批准后会经 801 真实发送</span>
+      <button class="btn small" id="drafts-refresh">刷新草稿</button></div>
+    <div class="draft-list">${items.map((item) => `
+      <div class="draft-row" data-draft-id="${esc(item.id || '')}">
+        <div class="draft-text">${esc(String(item.text || '').slice(0, 300))}</div>
+        <div class="row" style="gap:6px;align-items:center;flex-wrap:wrap">
+          <span class="muted">${esc(item.contact || '')} · ${item.ts ? fmtAgo(item.ts) : ''}</span>
+          ${draftReasonHtml(item)}
+          ${item.status && item.status !== 'pending' ? `<span class="badge">${esc(item.status)}</span>` : ''}
+          <button class="btn small primary" data-draft-approve="${esc(item.id || '')}">批准发送</button>
+          <button class="btn small" data-draft-reject="${esc(item.id || '')}">驳回</button>
+        </div>
+        ${draftPossibleSentHtml(item)}
+        <div class="error-text" data-draft-err="${esc(item.id || '')}"></div>
+      </div>`).join('')}</div>
+  </div>`;
+}
+
 async function renderFeed(auto) {
   if (!state.feedTab) state.feedTab = 'messages';
   if (state.contact === undefined) state.contact = '';
@@ -633,6 +736,13 @@ async function renderFeed(auto) {
   } else {
     try { feed = await api('/api/feed?limit=200&kind=' + encodeURIComponent(state.feedKind)); }
     catch (e) { errors.push('事件: ' + e.message); }
+  }
+  // A4：只在整页渲染时拉草稿（自动刷新 3s 时不重复请求，避免刷 801）
+  let draftsData = auto ? state.drafts || null : null;
+  if (!auto) {
+    try { draftsData = await api('/api/drafts'); }
+    catch (e) { errors.push('草稿: ' + e.message); }
+    state.drafts = draftsData;
   }
 
   let missingDb = Boolean(contact && messages && messages.ok === false
@@ -684,7 +794,7 @@ async function renderFeed(auto) {
     <input id="feed-query" class="wb-search" placeholder="搜索消息…" value="${esc(state.feedQuery)}">
     <label class="switch"><input type="checkbox" id="feed-auto" ${state.feedAuto ? 'checked' : ''}> 自动刷新 3s</label>
     <label class="switch"><input type="checkbox" id="feed-scroll" ${state.feedScroll ? 'checked' : ''}> 自动滚动</label>
-    <label class="switch" title="暂未实现：需要视频缓存后端"><input type="checkbox" disabled> 实验性：自动缓存聊天视频</label></div>`;
+    <label class="switch" title="自动缓存聊天视频（点开查看当前配置状态）"><input type="checkbox" id="feed-video-cache"> 实验性：自动缓存聊天视频</label></div>`;
 
   const eventTools = `<div class="wb-chips">
       <select id="feed-kind">${FEED_KINDS.map(([value, label]) =>
@@ -738,6 +848,7 @@ async function renderFeed(auto) {
         <div class="wb-card-head">${tabButtons}<span class="muted" id="feed-count">${countLabel()}</span></div>
         ${state.feedTab === 'messages' ? chips : eventTools}
         <div id="feed-list" class="wb-msg-list ${state.feedTab === 'messages' ? '' : 'wb-event-list'}">${listHtml()}</div>
+        ${state.feedTab === 'messages' ? draftsCardHtml(draftsData) : ''}
         ${(state.feedTab === 'messages' && contact && !missingDb) ? `<div class="wb-composer">
           <textarea id="feed-input" rows="2" placeholder="给「${esc(contact)}」发消息（走 801 网关，需在该联系人白名单；Ctrl+Enter 发送）"></textarea>
           <button class="btn primary" id="feed-send">发送</button>
@@ -747,6 +858,59 @@ async function renderFeed(auto) {
     </div>`;
   $('#app').innerHTML = html;
   state.feedSig = feedSignature((feed && feed.items) || []);
+
+  const draftsRefresh = $('#drafts-refresh');
+  if (draftsRefresh) draftsRefresh.onclick = () => renderFeed(false);
+  const draftError = (row, message) => {
+    const el = row ? row.querySelector('[data-draft-err]') : null;
+    if (el) el.textContent = message;
+  };
+  $$('[data-draft-approve]').forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.draftApprove;
+      if (!id) return;
+      const row = btn.closest('[data-draft-id]');
+      if (!window.confirm('批准并真实发送这条草稿？发送由 801 网关执行，可能耗时数十秒。')) return;
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = '发送中…';
+      draftError(row, '');
+      try {
+        const result = await api('/api/draft/approve', { method: 'POST', body: { id } });
+        const status = (result && (result.status || (result.gateway && result.gateway.status))) || '';
+        toast('已提交发送：' + (status || 'ok'), 'ok');
+        renderFeed(false);
+      } catch (err) {
+        const payload = (err && err.payload) || {};
+        const message = payload.hint || payload.error || err.message || String(err);
+        draftError(row, '批准失败：' + message);
+        toast('批准失败：' + message, 'err');
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    };
+  });
+  $$('[data-draft-reject]').forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.draftReject;
+      if (!id) return;
+      const row = btn.closest('[data-draft-id]');
+      if (!window.confirm('驳回并丢弃这条草稿？')) return;
+      btn.disabled = true;
+      draftError(row, '');
+      try {
+        await api('/api/draft/reject', { method: 'POST', body: { id } });
+        toast('已驳回', 'ok');
+        renderFeed(false);
+      } catch (err) {
+        const payload = (err && err.payload) || {};
+        const message = payload.hint || payload.error || err.message || String(err);
+        draftError(row, '驳回失败：' + message);
+        toast('驳回失败：' + message, 'err');
+        btn.disabled = false;
+      }
+    };
+  });
 
   const refresh = $('#feed-refresh');
   if (refresh) refresh.onclick = () => renderFeed(false);
@@ -788,6 +952,18 @@ async function renderFeed(auto) {
   if (autoBox) autoBox.onchange = () => { state.feedAuto = autoBox.checked; };
   const scrollBox = $('#feed-scroll');
   if (scrollBox) scrollBox.onchange = () => { state.feedScroll = scrollBox.checked; };
+  // B6：不再是 disabled 死控件——点开查后端状态并给出文档路径
+  const videoCacheBox = $('#feed-video-cache');
+  if (videoCacheBox) videoCacheBox.onchange = async () => {
+    videoCacheBox.checked = false;
+    try {
+      const info = await api('/api/media/video-cache');
+      showModal('自动缓存聊天视频',
+        (info.hint || '未配置') + '\n\n文档：' + (info.docs || 'docs/'));
+    } catch (err) {
+      showModal('自动缓存聊天视频', '读取配置失败：' + err.message);
+    }
+  };
   document.querySelectorAll('[data-action]').forEach((node) => {
     node.onclick = async () => {
       const action = node.dataset.action;
@@ -837,8 +1013,19 @@ async function renderFeed(auto) {
         const result = await api('/api/manual/send', {
           method: 'POST', body: { contact: contact, text },
         });
-        toast(result.ok ? '已交给网关发送' : (result.error || '发送失败'),
-              result.ok ? 'ok' : 'err');
+        let message = '已交给网关发送';
+        if (!result.ok) {
+          if (result.status === 'sender_unavailable') {
+            message = '发送器不可用（未发出）：' + (result.error || '缺 venv/模块')
+              + (result.draft_id ? '；内容已落草稿 ' + result.draft_id : '');
+          } else if (result.status === 'unverified' || result.possible_sent) {
+            message = '发送超时：可能已发出，不会自动重发' + (result.draft_id ? '；内容已落草稿' : '');
+          } else {
+            message = '发送失败（' + (result.status || 'unknown') + '）：'
+              + (result.error || '见网关日志');
+          }
+        }
+        toast(message, result.ok ? 'ok' : 'err');
         if (result.ok) {
           composer.value = '';
           renderFeed(false);
@@ -1529,6 +1716,13 @@ async function renderSettings() {
   $('#app').innerHTML = `
     ${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
     ${card('主动消息', configCardHtml(cfg))}
+    ${card('发送模式', `
+      <p class="hint">默认 <b>confirm（草稿）</b>：config.json 未显式设置 send_mode 时，
+      回复先落草稿等人工批准；要直接发送请用顶部切换为「自动」，或在 config.json 显式写
+      <code>"send_mode": "auto"</code>（显式值仍优先生效）。</p>
+      <p class="hint">当前：${esc(enumLabel('send_mode',
+        (state.sendMode && state.sendMode.mode) || cfg.send_mode || 'confirm'))}
+        ${state.sendMode && state.sendMode.note ? '· ' + esc(state.sendMode.note) : ''}</p>`)}
     ${card('紧急停止（停止文件）', `
       <div class="row between">
         <div>${stopped ? pill('紧急停止已启用：所有外发被拦截', 'err') : pill('未停发', 'ok')}
@@ -1770,14 +1964,15 @@ function mediaKindLabel(kind) {
 async function renderMedia() {
   $('#app').innerHTML = '<div class="empty">加载媒体页…</div>';
   const errors = [];
-  let caps = null, stats = null, library = null, wishes = null;
+  let caps = null, stats = null, library = null, wishes = null, acquisition = null;
   try { caps = await api('/api/media/capabilities'); } catch (e) { errors.push('能力矩阵: ' + e.message); }
   try { stats = await api('/api/media/stats'); } catch (e) { errors.push('统计: ' + e.message); }
   try { library = await api('/api/library/list?enabled=1&limit=300'); } catch (e) { errors.push('素材库: ' + e.message); }
   try { wishes = await api('/api/media/wishes'); } catch (e) { errors.push('愿望清单: ' + e.message); }
+  try { acquisition = await api('/api/media/acquisition'); } catch (e) { errors.push('获取状态: ' + e.message); }
   const prev = state.media || {};
   state.media = {
-    caps, stats, library, wishes,
+    caps, stats, library, wishes, acquisition,
     type: prev.type || 'text',
     assetPath: prev.assetPath || '',
     result: prev.result || null,
@@ -1892,12 +2087,34 @@ function renderMediaPage(errors) {
   }).join('')}</div>`
     : `<div class="empty">还没有愿望（${esc(wishes.path || 'agi/data/media_wishes.jsonl')} 暂时为空）</div>`;
 
+  const acquisition = data.acquisition || {};
+  const acqCaps = acquisition.capabilities || {};
+  const acqItems = acquisition.items || [];
+  const acqCard = card('素材获取（P5-e，只读）', `
+    <div class="row between">
+      <div>${acquisition.enabled ? pill('已启用', 'ok') : pill('未启用', 'warn')}
+        <span class="hint">${esc(acquisition.note || '')}</span></div>
+      <span class="hint">愿望 ${num(acquisition.wishes)} 条</span>
+    </div>
+    <div class="kv" style="margin-top:8px">
+      <span class="k">愿望清单</span><span class="v">${acqCaps.list_wishes ? '可用（只读）' : '不可用'}</span>
+      <span class="k">联网搜索 / 下载</span><span class="v">${acqCaps.download ? '可用' : '未实现（不会联网）'}</span>
+      <span class="k">人工导入 / 入库</span><span class="v">${acqCaps.manual_import ? '可用' : '—'} / ${acqCaps.add_to_library ? '可用' : '—'}</span>
+      <span class="k">入库目录</span><span class="v mono">${esc((acquisition.library || {}).path || '')}</span>
+    </div>
+    ${acqItems.length ? `<div class="list" style="margin-top:8px">${acqItems.slice(0, 8).map((item) => `
+      <div class="list-item" style="cursor:default"><div class="grow"><div class="title">「${esc(item.wish || '')}」</div>
+        <div class="hint">${esc(item.status || 'pending')}${item.ts ? ' · ' + fmtDateTime(item.ts) : ''}</div></div></div>`).join('')}</div>`
+      : '<div class="empty" style="margin-top:8px">愿望清单为空（她还没表达过缺素材）</div>'}
+  `);
+
   $('#app').innerHTML = `${errors.length ? `<div class="card"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
     <div class="hint" style="margin:0 2px">素材管理请到「素材库」页（新增/编辑类型/含义/标签/启用/删除）；本页只负责发送与导入。</div>
     ${statCards}
     ${card('能力矩阵', capTable)}
     ${card('测试发送（只发文件传输助手）', sendPanel)}
     ${mediaImportPanelHtml(data)}
+    ${acqCard}
     ${card('愿望清单（本地导入满足 / 联网获取仍为预留）', `
       <p class="hint">${esc(wishes.note || '')}</p>${wishesHtml}`)}`;
 
@@ -3004,6 +3221,25 @@ async function loadBiliTab(tab) {
   }
 }
 
+function biliErrorMissingHome(err) {
+  const payload = (err && err.payload) || {};
+  return String(payload.error || '').indexOf('bili_home_missing') >= 0;
+}
+
+function biliHomeMissingHtml(message) {
+  return `<p class="hint">802 的 B站页只是 801 的只读代理；数据/日报由仓库外的
+    <code>~/.dsh/bili-duty</code> DSH 插件产生。插件未安装时这里不会伪造数据。</p>
+    <div class="error-text">${esc(message || '插件家目录不存在（bili_home_missing）')}</div>
+    <ol class="hint" style="margin-top:8px">
+      <li>把 DSH「刷B站」插件放到 <code>~/.dsh/bili-duty</code>（或用环境变量
+        <code>BILI_DUTY_HOME</code> 指向插件家目录）；</li>
+      <li>在插件里扫码登录 B站，并至少跑过一轮，才会出现 feed / 日报；</li>
+      <li>装好后点「重新检测」。</li>
+    </ol>
+    <p class="hint">参考 docs/plans/35-B站日报接话题种子.md；不装插件不影响聊天/微信主链。</p>
+    <button class="btn" id="bili-home-retry">重新检测</button>`;
+}
+
 async function renderBili() {
   $('#app').innerHTML = '<div class="empty">加载 B站…</div>';
   if (!state.token) {
@@ -3012,9 +3248,24 @@ async function renderBili() {
   }
   if (state.bili && state.bili.timer) { clearInterval(state.bili.timer); }
   let status = null, configState = null;
+  let homeMissing = '';
   const errors = [];
-  try { status = await api('/api/bili/status'); } catch (err) { errors.push('状态: ' + err.message); }
-  try { configState = await api('/api/bili/config'); } catch (err) { errors.push('配置: ' + err.message); }
+  try { status = await api('/api/bili/status'); }
+  catch (err) {
+    if (biliErrorMissingHome(err)) homeMissing = err.message || 'bili_home_missing';
+    else errors.push('状态: ' + err.message);
+  }
+  try { configState = await api('/api/bili/config'); }
+  catch (err) {
+    if (biliErrorMissingHome(err)) homeMissing = homeMissing || err.message || 'bili_home_missing';
+    else errors.push('配置: ' + err.message);
+  }
+  if (homeMissing) {
+    $('#app').innerHTML = card('B站 · 未安装 bili-duty 插件', biliHomeMissingHtml(homeMissing));
+    const homeRetry = $('#bili-home-retry');
+    if (homeRetry) homeRetry.onclick = () => renderBili();
+    return;
+  }
   const prev = state.bili || {};
   // 注意：重建对象时必须保留轮询相关的瞬时状态，否则 polledAt 丢失
   // → 过期判断变成 Date.now()-0 > 180s → 二维码一生成就显示"已过期"（实测 bug）
@@ -3257,7 +3508,7 @@ async function renderTrace() {
     mode: prev.mode || '', limit: prev.limit || 50,
     auto: prev.auto || false, turns: null, stats: null,
     selected: prev.selected || null, detail: prev.detail || null,
-    demo: false, error: '', timer: prev.timer || null,
+    error: '', timer: prev.timer || null,
   };
   await loadTrace();
 }
@@ -3311,8 +3562,8 @@ function renderTracePage() {
 
   const unavailableHtml = unavailable ? `<div class="card">
     <div class="error-text">推理过程后端未就绪：${esc(trace.error)}</div>
-    <p class="hint">等 w3-latency 的 task-90（tools/console/trace_api.py）落地后自动切真；现在可以先看演示数据。</p>
-    <button class="btn" id="trace-demo">加载演示数据</button></div>` : '';
+    <p class="hint">trace 数据来自 /api/trace（turn_traces 表）。没有记录时先确认 trace_enabled 打开，并跑过一轮新对话/主动消息；这里只展示真实数据。</p>
+    <button class="btn" id="trace-retry">重试（真实 trace）</button></div>` : '';
 
   $('#app').innerHTML = `
     <div class="card">
@@ -3330,7 +3581,6 @@ function renderTracePage() {
           <button class="btn small" id="trace-refresh">刷新</button>
         </div>
         <div class="row">
-          ${trace.demo ? badge('演示数据', 'orange') : ''}
           ${pill('含用户原文/模型输出，仅本机', 'warn')}
         </div>
       </div>
@@ -3359,8 +3609,8 @@ function renderTracePage() {
       loadTrace();
     }, 5000);
   };
-  const demoBtn = $('#trace-demo');
-  if (demoBtn) demoBtn.onclick = loadTraceDemo;
+  const retryBtn = $('#trace-retry');
+  if (retryBtn) retryBtn.onclick = () => loadTrace();
   $$('[data-trace-id]').forEach((node) => {
     node.onclick = () => loadTraceTurn(node.dataset.traceId);
   });
@@ -3372,11 +3622,6 @@ function renderTracePage() {
 async function loadTraceTurn(id) {
   if (!id) return;
   state.trace.selected = id;
-  if (state.trace.demo) {
-    state.trace.detail = ((state.trace.details || {})[id]) || { id, error: '演示数据里没有这条' };
-    renderTracePage();
-    return;
-  }
   try {
     const detail = await api('/api/trace/turn?id=' + encodeURIComponent(id));
     state.trace.detail = (detail && (detail.item || detail.turn || detail.data)) || detail;
@@ -3477,67 +3722,8 @@ function traceDetailHtml(raw) {
   ${proactive ? traceStep('⑨ 主动消息决策', tracePre(traceText(proactive))) : ''}`;
 }
 
-function traceDemoData() {
-  const now = Date.now() / 1000;
-  const turns = [
-    { id: 'T-demo-001', ts: now - 120, mode: 'chat', user_text: '今天有点累，不太想说话',
-      final_reply: '那就先歇会儿，不用硬撑着跟我聊', latency_ms: 812.4, skipped: false, kind: 'chat' },
-    { id: 'T-demo-002', ts: now - 5400, mode: 'proactive', user_text: '',
-      final_reply: '刚看到你昨天说的那家店今天排队少了', latency_ms: 1203.0, skipped: false, kind: 'proactive' },
-  ];
-  const details = {
-    'T-demo-001': {
-      id: 'T-demo-001', ts: now - 120, mode: 'chat', contact: 'demo',
-      user_text: '今天有点累，不太想说话',
-      system_prompt: '你是一个通过长期对话自我改进的 AI……\n[演示 system prompt，真实页面会显示最终版]',
-      prompt_user: '用户：今天有点累，不太想说话\n最近记忆：…',
-      memories: [{ id: 'UM-demo-1', kind: 'preference', content: '用户不喜欢被催', score: 0.83 },
-                 { id: 'UM-demo-2', kind: 'fact', content: '用户最近加班多', score: 0.71 }],
-      inner: { mode: 'model', source: 'local', latency_ms: 380.5, injected: true,
-        stance: '有点心疼', intent: '先接住情绪，不给建议',
-        monologue: '他都说不想说话了，别追问', behavior: { length: 'short', ask: false, advice: false } },
-      mood: { delta: -2, reason: '听你说累，我心里有点沉', confidence: 78, backend: 'deepseek' },
-      generation: { model: 'deepseek-flash', purpose: 'chat', two_stage: false,
-        usage: { prompt_tokens: 1800, completion_tokens: 40 }, elapsed: 640,
-        reasoning: '用户说累，先共情，不要讲道理。语气放软，短句。',
-        raw_text: '那就先歇会儿，不用硬撑着跟我聊。' },
-      polish: { before: '那就先歇会儿，不用硬撑着跟我聊。', after: '那就先歇会儿，不用硬撑着跟我聊',
-        reasons: ['strip_period', '口语化'] },
-      guard: { blocked: false, regenerated: false, violations: [], final: '那就先歇会儿，不用硬撑着跟我聊' },
-      final_reply: '那就先歇会儿，不用硬撑着跟我聊', latency_ms: 812.4, skipped: false, crisis: false,
-    },
-    'T-demo-002': {
-      id: 'T-demo-002', ts: now - 5400, mode: 'proactive', contact: 'demo',
-      user_text: '',
-      system_prompt: '[演示] 主动消息 prompt：…',
-      prompt_user: '[演示] 最近对话与话题种子',
-      memories: [{ id: 'UM-demo-3', kind: 'event', content: '用户提过想试那家店', score: 0.66 }],
-      inner: { mode: 'rule', source: 'rule', latency_ms: 0, injected: false },
-      mood: { delta: 1, reason: '想到能帮上他，心里轻快', confidence: 70, backend: 'deepseek' },
-      generation: { model: 'deepseek-flash', purpose: 'proactive', two_stage: true,
-        usage: { prompt_tokens: 2200, completion_tokens: 35 }, elapsed: 980,
-        reasoning: '不要复述他说过的话；用具体信息开场，一句就够。',
-        raw_text: '刚看到你昨天说的那家店今天排队少了' },
-      polish: { before: '', after: '', reasons: [] },
-      guard: { blocked: false, regenerated: false, violations: [], final: '刚看到你昨天说的那家店今天排队少了' },
-      final_reply: '刚看到你昨天说的那家店今天排队少了', latency_ms: 1203.0, skipped: false, crisis: false,
-    },
-  };
-  return { turns, details };
-}
-
-function loadTraceDemo() {
-  const demo = traceDemoData();
-  state.trace.demo = true;
-  state.trace.error = '';
-  state.trace.turns = { ok: true, items: demo.turns };
-  state.trace.stats = { ok: true, total: 2, avg_latency_ms: 1007.7,
-    skip_rate: 0, p95_latency_ms: 1203.0 };
-  state.trace.details = demo.details;
-  state.trace.selected = demo.turns[0].id;
-  state.trace.detail = demo.details[demo.turns[0].id];
-  renderTracePage();
-}
+// B1：已删除前端硬编码假 trace（原「加载演示数据」按钮 + traceDemoData/loadTraceDemo）。
+// 推理过程页只展示 /api/trace 的真实数据；没有真实数据时显示空态/后端未就绪提示。
 
 async function copyTraceText(text) {
   try {
@@ -4146,6 +4332,148 @@ function bindModelAdmin() {
   refreshModelDownloads();
 }
 
+/* ---------------- 训练（P30，只读） ---------------- */
+async function renderTrain() {
+  $('#app').innerHTML = '<div class="empty">加载训练状态…</div>';
+  let data = null;
+  try { data = await api('/api/train/status'); }
+  catch (err) {
+    $('#app').innerHTML = card('训练', `<div class="error-text">训练状态读取失败：${esc(err.message || err)}</div>
+      <button class="btn" id="train-retry">重试</button>`);
+    const retry = $('#train-retry');
+    if (retry) retry.onclick = () => renderTrain();
+    return;
+  }
+  const today = data.today || {};
+  const cum = data.cumulative || {};
+  const gate = data.gate || {};
+  const daily = data.daily || {};
+  const dates = daily.dates || [];
+  const minSamples = Number(data.min_samples || 300);
+  const samples = Number(gate.samples !== undefined ? gate.samples : cum.samples) || 0;
+  const progress = Math.max(0, Math.min(100, Math.round(samples / Math.max(1, minSamples) * 100)));
+  const gateBadge = gate.ready === true ? badge('可训练', 'green')
+    : gate.ready === false ? badge('未就绪', 'orange') : badge('门禁未知', '');
+  const reasons = (gate.reasons || []).map((item) => `<span class="badge orange">${esc(item)}</span>`).join(' ');
+  const last = data.last_training;
+  const lastHtml = last
+    ? `<pre class="json">${esc(JSON.stringify(last, null, 2))}</pre>`
+    : '<div class="empty">还没有训练记录（last_training=null；训练默认只计划不执行）</div>';
+  const dateButtons = dates.length
+    ? dates.map((date) => `<button class="btn small" data-train-date="${esc(date)}">${esc(date)}</button>`).join(' ')
+    : '<div class="empty">还没有每日语料记录（agi/data/train/daily 为空）</div>';
+
+  $('#app').innerHTML = `
+    <div class="page-head"><div><h2>训练</h2><p class="muted">只读观测：每日语料 / 门禁 / 训练历史；不会自动开始训练。</p></div>
+      <button class="btn" id="train-refresh">刷新</button></div>
+    <div class="grid cols-4">
+      ${card('今日样本', `<div class="big">${num(today.samples)}</div><div class="muted">可用 ${num(today.usable)} · ${esc(today.date || '')}</div>`)}
+      ${card('累计样本', `<div class="big">${num(cum.samples)}</div><div class="muted">${num(cum.files)} 个日文件</div>`)}
+      ${card('门禁进度', `<div class="big">${samples} / ${minSamples}</div><div class="muted">${progress}%${gate.next_ready ? ' · 下次可训练 ' + esc(gate.next_ready) : ''}</div>`)}
+      ${card('门禁状态', `<div class="big">${gateBadge}</div><div class="muted">${reasons || '无阻塞项'}</div>`)}
+    </div>
+    ${card('最近训练（history.jsonl 最后一条）', lastHtml)}
+    ${card('每日语料', `<div class="row" style="flex-wrap:wrap;gap:6px">${dateButtons}</div>
+      <div id="train-daily" style="margin-top:10px"><div class="hint">点一个日期查看当天日报</div></div>`)}
+    ${card('说明', `<div class="hint">${esc(data.hint || '')}</div>`)}`;
+
+  const refresh = $('#train-refresh');
+  if (refresh) refresh.onclick = () => renderTrain();
+  $$('[data-train-date]').forEach((btn) => {
+    btn.onclick = async () => {
+      const target = $('#train-daily');
+      if (!target) return;
+      const date = btn.dataset.trainDate;
+      target.innerHTML = `<div class="empty">加载 ${esc(date)} 日报…</div>`;
+      try {
+        const detail = await api('/api/train/daily?date=' + encodeURIComponent(date));
+        target.innerHTML = `<div class="row between"><b>${esc(date)}</b><span class="hint">${esc(detail.path || '')}</span></div>
+          <pre class="json">${esc(detail.report || '（日报为空）')}</pre>
+          ${detail.summary ? `<details class="trace-sub"><summary>语气总结</summary><pre class="json">${esc(detail.summary)}</pre></details>` : ''}`;
+      } catch (err) {
+        target.innerHTML = `<div class="error-text">${esc(date)} 日报读取失败：${esc(err.message || err)}</div>`;
+      }
+    };
+  });
+}
+
+/* ---------------- 成长 / 内驱力（P32/P33，只读） ---------------- */
+function growthUnavailableCard(label, err) {
+  const payload = (err && err.payload) || {};
+  const hint = payload.hint || payload.error || (err && err.message) || '未知错误';
+  return card(label, `<div class="error-text">后端未就绪：${esc(hint)}</div>
+    <p class="hint">该页只读；helper 落地后自动可用，不会用假数据填充。</p>`);
+}
+
+function initiativeCard(err, result) {
+  if (err) {
+    const payload = (err && err.payload) || {};
+    return card('内驱力 / 主动度（801）',
+      `<div class="empty">暂无内驱力数据：${esc(payload.hint || payload.error || err.message || '801 未就绪')}</div>`);
+  }
+  const d = result || {};
+  if (d.ok === false) {
+    return card('内驱力 / 主动度（801）',
+      `<div class="empty">暂无内驱力数据：${esc(d.hint || d.error || '')}</div>`);
+  }
+  const drive = Number(d.drive || 0);
+  return card('内驱力 / 主动度（801）', `<div class="kv">
+    <span class="k">联系人</span><span class="v">${esc(d.contact || '未指定')}</span>
+    <span class="k">drive（主动度）</span><span class="v">${d.drive === undefined ? '—' : (drive * 100).toFixed(1) + '%'}</span>
+    <span class="k">drive level</span><span class="v">${esc(d.drive_level || '—')}</span>
+    <span class="k">熟悉度 / 心情 / 信任</span><span class="v">${num(d.familiarity)} / ${num(d.mood)} / ${num(d.trust)}</span>
+    <span class="k">今日用户消息 / 上限</span><span class="v">${num(d.user_msgs_today)} / ${num(d.daily_cap)}</span>
+    <span class="k">今日已主动</span><span class="v">${num(d.today_sent)}</span>
+    <span class="k">7 日消息 / 累计</span><span class="v">${num(d.recent_7d_msgs)} / ${num(d.total_user_msgs)}</span>
+    <span class="k">内驱力开关</span><span class="v">${d.initiative_enabled === false ? '关' : '开'}</span></div>
+    <p class="hint" style="margin-top:8px">只读：这里只展示 801 的判定输入，不会触发发送。</p>`);
+}
+
+async function renderGrowth() {
+  $('#app').innerHTML = '<div class="empty">加载成长 / 内驱力…</div>';
+  if (!state.token) {
+    $('#app').innerHTML = card('成长 / 内驱力',
+      '<div class="error-text">该页需要 admin token：请在右上角填写。</div>');
+    return;
+  }
+  const contact = state.contact || '';
+  let status = null, narrative = null, initiative = null;
+  let statusErr = null, narrativeErr = null, initiativeErr = null;
+  try { status = await api('/api/growth/status'); } catch (err) { statusErr = err; }
+  try { narrative = await api('/api/growth/narrative'); } catch (err) { narrativeErr = err; }
+  try { initiative = await api('/api/initiative/status?contact=' + encodeURIComponent(contact)); }
+  catch (err) { initiativeErr = err; }
+
+  const s = status || {};
+  const statusCard = statusErr ? growthUnavailableCard('成长状态', statusErr) : card('成长状态', `<div class="kv">
+    <span class="k">自我叙事</span><span class="v">${s.enabled ? '开' : '关'}</span>
+    <span class="k">当前叙事</span><span class="v">${s.narrative_available ? '已有（更新于 ' + esc(s.narrative_updated_at || '—') + '）' : '暂无'}</span>
+    <span class="k">周记</span><span class="v">${num(s.weeks)} 篇 · 最近 ${esc(s.last_week || '—')}</span>
+    <span class="k">历史条数</span><span class="v">${num(s.history_count)}</span>
+    <span class="k">下次生成</span><span class="v">${esc(s.next_run || '—')}</span>
+    <span class="k">检查时间</span><span class="v">${esc(s.checked_at || '—')}</span></div>`);
+
+  const n = narrative || {};
+  const history = Array.isArray(n.history) ? n.history : [];
+  const narrativeCard = narrativeErr ? growthUnavailableCard('自我叙事', narrativeErr) : card('自我叙事（最新版）', `
+    ${n.found ? `<pre class="json">${esc(n.text || '')}</pre>` : '<div class="empty">还没有自我叙事（周任务还没生成或未批准）</div>'}
+    <div class="kv" style="margin-top:8px">
+      <span class="k">版本</span><span class="v">${esc(n.version === undefined ? '—' : n.version)}</span>
+      <span class="k">批准</span><span class="v">${esc(n.approved_by || '—')} · ${esc(n.updated_at || '—')}</span>
+      <span class="k">历史</span><span class="v">${history.length} 条</span></div>
+    ${history.length ? `<details class="trace-sub"><summary>历史记录</summary><pre class="json">${esc(JSON.stringify(history, null, 2))}</pre></details>` : ''}`);
+
+  $('#app').innerHTML = `
+    <div class="page-head"><div><h2>成长 / 内驱力</h2>
+      <p class="muted">自我叙事 / 周记 / 801 主动度；全部只读，不会触发发送。</p></div>
+      <button class="btn" id="growth-refresh">刷新</button></div>
+    <div class="grid cols-2">${statusCard}${narrativeCard}</div>
+    ${initiativeCard(initiativeErr, initiative)}`;
+
+  const refresh = $('#growth-refresh');
+  if (refresh) refresh.onclick = () => renderGrowth();
+}
+
 const RENDERERS = {
   overview: renderOverview,
   feed: renderFeed,
@@ -4163,6 +4491,8 @@ const RENDERERS = {
   providers: renderProviders,
   logs: renderLogs,
   bili: renderBili,
+  train: renderTrain,
+  growth: renderGrowth,
   moments: renderMoments,
   diary: renderDiary,
   web: renderWeb,

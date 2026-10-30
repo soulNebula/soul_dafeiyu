@@ -38,7 +38,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | 页面 | 数据来源 |
 | --- | --- |
 | 总览 | `/api/status`（网关 801 代理）+ `/api/engine`（引擎启停卡）；停止不关闭控制台 |+ `/api/feed` + `/api/config` + `/api/models` |
-| 推理过程 | `/api/trace/*`（w3-latency P15-A `tools/console/trace_api.py`）：最近 turn 列表/完整推理链/统计；后端未就绪时显示提示+演示数据 |
+| 推理过程 | `/api/trace/*`（w3-latency P15-A `tools/console/trace_api.py`）：最近 turn 列表/完整推理链/统计；后端未就绪或无真实 trace 时只显示提示与空态（**不再有演示数据**） |
 | 对话流 | `agi/data/wechat/gateway.log`（JSONL 事件，只读 tail，3s 自动刷新） |
 | 内状态 | 联系人库 `inner_states`（只读 URI 连接；mode/injected/state_json/block/延迟/fallback） |
 | 对话测试 | 隔离库 `agi/data/selflearn/console_test.sqlite3` → 进程内 `SelfLearnAgent.send()`，可试提示词/模型效果，不影响真实联系人 |
@@ -52,8 +52,10 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | 模型 | `agi/selflearn/model_registry`（list/health/start/stop；`soul-05b` 可启停，`qwen15` reserved 拒绝；含 inner mode 开关，写回网关 config 热加载） |
 | 数据管理 | `/api/data/*`：体量/备份/导出/导入（写操作 token+审计）；按记忆库/人格库分栏，含 legacy 旧库 |
 | 记忆编辑 | `/api/memory/*`：列表/搜索/claims/行内改重要性/标记/软删除/合并（token+审计） |
-| B站 | 扫码登录（真实 B站 passport 接口，凭证写 `~/.dsh/bili-duty/bili_credential.json`）+ 与 DSH 刷B站同字段配置（`config.json` 白名单）+ 状态/日报 |
+| B站 | 扫码登录（真实 B站 passport 接口，凭证写 `~/.dsh/bili-duty/bili_credential.json`）+ 与 DSH 刷B站同字段配置（`config.json` 白名单）+ 状态/日报；插件缺失（`bili_home_missing`）时显示「未安装 bili-duty 插件」安装提示空态 |
 | 日志 | `gateway.log`(JSONL)/`inner.log`/`prompt_override.log`/regen_failed；搜索+时间倒序+错误标红 |
+| 训练 | `/api/train/status` + `/api/train/daily?date=`：今日/累计样本、门禁（MIN 300 进度/next_ready/reasons）、history 最后一条、最近 14 天日报；只读，空态不造数 |
+| 成长 / 内驱力 | `/api/growth/status` `/api/growth/narrative`（helper `tools/console/growth_api.py`，未就绪返回 501+hint 并显示「后端未就绪」卡）+ `/api/initiative/status?contact=`（801 只读：drive/drive_level/daily_cap）；只读 |
 | 设置 | `/api/config`（主动开关/概率/间隔/静默时段）+ STOP/恢复 |
 
 ## 接口
@@ -65,6 +67,8 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 `/api/data/info` `/api/data/export` `/api/data/export-memories` `/api/data/backup/download`
 `/api/memory/list` `/api/memory/claims`
 `/api/media/capabilities` `/api/media/library?limit=` `/api/media/assets?limit=&kind=` `/api/media/stats` `/api/media/wishes` `/api/media/acquisition` `/api/media/file?path=`
+`/api/train/status` `/api/train/daily?date=` `/api/growth/status` `/api/growth/narrative`
+`/api/initiative/status?contact=` `/api/sender/status?force=` `/api/drafts` `/api/media/video-cache`
 
 写（POST，`X-Admin-Token`，全部写 `agi/data/console_audit.log`）：
 
@@ -85,6 +89,8 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | `/api/data/backup/delete` | `{name, confirm:"删除备份"}` | 删除备份 zip |
 | `/api/memory/update` `/delete` `/mark` `/merge` | `{id,...}` | 记忆编辑；delete=软删除（status=invalid），需 `确认:"删除记忆"` |
 | `/api/media/send`（别名 `/api/media/test-send`） | `{"type":"text|emoji_text|image|gif|sticker|native_emoji","text?":"...","path?":"...","name?":"..."}` | 测试发送；**联系人强制覆盖为「文件传输助手」**；网关暂无媒体接口时返回 501（等 P5-a） |
+| `/api/draft/approve` | `{"id":"D-..."}`（代理自动补 `confirm=true`） | 批准草稿并经 801 真实发送（超时 120s；失败把 801 的 error/hint 原样回前端） |
+| `/api/draft/reject` | `{"id":"D-..."}` | 驳回并丢弃草稿（转发 801；删除类操作，需 token） |
 
 ## 界面结构（AstrBot 风格深色）
 

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -14,8 +15,79 @@ ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("CONSOLE_MOMENTS_DIR") or ROOT / "agi" / "data" / "moments")
 FETCH_SCRIPT = Path(os.environ.get("CONSOLE_MOMENTS_FETCH_SCRIPT")
                     or ROOT / "tools" / "moments_fetch.py")
-FETCH_PYTHON = Path(os.environ.get("CONSOLE_MOMENTS_PYTHON")
-                    or r"E:/agent/venv_wx312/Scripts/python.exe")
+#: 显式覆盖解释器路径（运维/测试可直接 setattr；None = 按候选自动解析）
+FETCH_PYTHON: Path | None = None
+#: 801 网关配置（``wxauto_python`` 与发送器共用同一个 key，不再硬编码本机 E: 盘路径）
+GATEWAY_CONFIG = ROOT / "agi" / "data" / "wechat" / "config.json"
+#: 报错时回给人的配置文档（相对仓库根）
+PYTHON_CONFIG_DOC = "docs/guides/新用户上手.md（发送器 venv 一节）"
+
+
+def _gateway_config() -> dict:
+    """只读 801 网关配置；读不到返回空 dict（不写任何文件）。"""
+    try:
+        payload = json.loads(GATEWAY_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def python_candidates() -> list[tuple[str, Path]]:
+    """朋友圈抓取要用的 Python 3.12 解释器候选（按优先级，全部可缺）。"""
+    candidates: list[tuple[str, Path]] = []
+    env_value = str(os.environ.get("CONSOLE_MOMENTS_PYTHON") or "").strip()
+    if env_value:
+        candidates.append(("env:CONSOLE_MOMENTS_PYTHON", Path(env_value)))
+    configured = str(_gateway_config().get("wxauto_python") or "").strip()
+    if configured:
+        candidates.append(("config:wxauto_python", Path(configured)))
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from agi import paths  # noqa: PLC0415 - 延迟导入，控制台启动不强依赖 agi
+
+        candidates.append(("agi.paths.venv312_python", Path(paths.venv312_python())))
+    except Exception:  # noqa: BLE001 - agi.paths 不可用时忽略该候选
+        pass
+    return candidates
+
+
+def resolve_fetch_python() -> dict:
+    """返回 ``{python, source, tried}``；``python`` 为 None 表示没有可用解释器。"""
+    tried: list[str] = []
+    # 0) 显式覆盖（测试 monkeypatch / 运维手工指定）优先
+    if FETCH_PYTHON is not None:
+        tried.append(f"module:FETCH_PYTHON = {FETCH_PYTHON}")
+        try:
+            override = Path(FETCH_PYTHON)
+            if override.is_file():
+                return {"python": override, "source": "module:FETCH_PYTHON",
+                        "tried": tried}
+        except OSError:
+            pass
+    for source, path in python_candidates():
+        tried.append(f"{source} = {path}")
+        try:
+            if path.is_file():
+                return {"python": path, "source": source, "tried": tried}
+        except OSError:
+            continue
+    return {"python": None, "source": "", "tried": tried}
+
+
+def fetch_python_error() -> dict:
+    """结构化的「找不到 Python」错误：带候选清单与配置办法，不再静默失败。"""
+    resolution = resolve_fetch_python()
+    return {
+        "ok": False,
+        "error": "fetch_python_missing",
+        "tried": resolution["tried"],
+        "hint": ("找不到可用的 Python 3.12 解释器：请设置环境变量 CONSOLE_MOMENTS_PYTHON，"
+                 "或在 agi/data/wechat/config.json 配置 wxauto_python"
+                 f"（{PYTHON_CONFIG_DOC}）。"),
+    }
+
+
 #: 朋友圈图片导出目录（tools/moments_media_export.py 生成）
 MEDIA_DIR = Path(__file__).resolve().parents[2] / "agi" / "data" / "moments" / "media"
 FETCH_TIMEOUT = 180
@@ -137,9 +209,11 @@ def _merge_cache(rows: list[dict]) -> int:
 def fetch_moments(limit: int = 50, keyword: str = "", timeout: int = FETCH_TIMEOUT) -> dict:
     if not FETCH_SCRIPT.is_file():
         return {"ok": False, "error": "fetch_script_missing", "hint": str(FETCH_SCRIPT)}
-    if not FETCH_PYTHON.is_file():
-        return {"ok": False, "error": "fetch_python_missing", "hint": str(FETCH_PYTHON)}
-    command = [str(FETCH_PYTHON), str(FETCH_SCRIPT), "--limit", str(max(1, limit))]
+    resolution = resolve_fetch_python()
+    python = resolution["python"]
+    if python is None:
+        return fetch_python_error()
+    command = [str(python), str(FETCH_SCRIPT), "--limit", str(max(1, limit))]
     if keyword:
         command.extend(["--keyword", str(keyword)])
     try:

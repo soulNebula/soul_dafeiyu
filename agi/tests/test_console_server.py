@@ -2297,3 +2297,99 @@ def test_manual_send_requires_contact_and_text():
     assert console.manual_send("", "hi")["ok"] is False
     assert console.manual_send("某人", "")["ok"] is False
     assert console.manual_send("某人", "x" * 2001)["ok"] is False
+
+
+# ============================================================ 训练 / 成长 / 内驱力（2c）
+def test_http_train_status_and_daily_readonly(tmp_path, monkeypatch):
+    """训练页只读契约：/api/train/status 带 daily 日期与门禁，日报缺失返回 404。"""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    import tools.train.train_gate as gate_mod
+    monkeypatch.setattr(gate_mod, "check_ready",
+                        lambda **kwargs: {"ready": False, "samples": 1,
+                                          "reasons": ["samples<300"],
+                                          "next_ready": "2026-11-01",
+                                          "last_training": None})
+    daily = tmp_path / "train" / "daily"
+    daily.mkdir(parents=True)
+    day = time.strftime("%Y-%m-%d")
+    (daily / f"{day}.jsonl").write_text(
+        json.dumps({"meta": {"quality": "positive"}}, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+    (daily / f"{day}.md").write_text("# 今日日报\n样本 1 条\n", encoding="utf-8")
+    monkeypatch.setattr(console, "TRAIN_ROOT", tmp_path / "train")
+    monkeypatch.setattr(console, "TRAIN_DAILY_DIR", daily)
+    monkeypatch.setattr(console, "TRAIN_HISTORY_PATH", tmp_path / "train" / "history.jsonl")
+
+    status, data = _call("GET", "/api/train/status")
+    assert status == 200 and data["ok"] is True
+    assert data["today"]["samples"] == 1 and data["today"]["usable"] == 1
+    assert data["daily"]["dates"] == [day]
+    assert data["min_samples"] == gate_mod.MIN_SAMPLES
+    assert data["gate"]["ready"] is False
+
+    status, detail = _call("GET", "/api/train/daily?date=" + day)
+    assert status == 200 and "今日日报" in detail["report"]
+    status, detail = _call("GET", "/api/train/daily?date=1999-01-01")
+    assert status == 404 and detail["ok"] is False
+
+
+def test_http_train_status_empty_is_readonly(tmp_path, monkeypatch):
+    """没有任何语料/训练记录时也要 200 + 空态字段，不伪造数据。"""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    import tools.train.train_gate as gate_mod
+    monkeypatch.setattr(gate_mod, "check_ready",
+                        lambda **kwargs: {"ready": False, "samples": 0,
+                                          "reasons": ["samples<300"],
+                                          "next_ready": "", "last_training": None})
+    monkeypatch.setattr(console, "TRAIN_DAILY_DIR", tmp_path / "no-daily")
+    monkeypatch.setattr(console, "TRAIN_HISTORY_PATH", tmp_path / "no-history.jsonl")
+    status, data = _call("GET", "/api/train/status")
+    assert status == 200 and data["ok"] is True
+    assert data["today"]["samples"] == 0
+    assert data["cumulative"]["samples"] == 0
+    assert data["daily"]["dates"] == []
+    assert data["last_training"] is None
+
+
+def test_http_initiative_status_proxies_gateway(monkeypatch):
+    """802 只做代理：/api/initiative/status 透传 contact 并原样回 801 字段。"""
+    seen = {}
+
+    def fake_proxy(path, payload=None, *, method="GET", timeout=30.0):
+        seen["path"] = path
+        return {"ok": True, "contact": "甲", "drive": 0.62,
+                "drive_level": "warm", "quadrant": "warm"}
+
+    monkeypatch.setattr(console, "_gateway_proxy", fake_proxy)
+    status, data = _call("GET", "/api/initiative/status?contact="
+                         + urllib.parse.quote("甲"))
+    assert status == 200 and data["ok"] is True
+    assert "contact=" in seen["path"] and "%E7%94%B2" in seen["path"]
+    assert data["drive_level"] == "warm"
+
+
+def test_http_media_acquisition_lists_wishes_readonly(tmp_path, write_env, monkeypatch):
+    """素材获取只读契约：列出愿望 + 明确 enabled=False/下载未实现（不假装）。"""
+    _media_env(tmp_path, monkeypatch, write_env)
+    status, acq = _call("GET", "/api/media/acquisition")
+    assert status == 200 and acq["enabled"] is False
+    assert acq["mode"] == "read_only"
+    assert acq["wishes"] == 2
+    assert [item["wish"] for item in acq["items"]] == [
+        "想发一只布偶猫的表情", "想发「晚安」贴纸"]
+    caps = acq["capabilities"]
+    assert caps["download"] is False and caps["search_online"] is False
+    assert caps["manual_import"] is True
+    assert "下载" in acq["note"] or "下载管线" in acq["note"]
+    assert acq["library"]["path"].endswith("stickers")
+
+
+def test_http_bili_status_reports_missing_plugin(tmp_path, write_env, monkeypatch):
+    """插件缺失时 /api/bili/status 回 bili_home_missing（前端据此显示安装空态）。"""
+    monkeypatch.setenv("BILI_DUTY_HOME", str(tmp_path / "no-bili-duty"))
+    status, data = _call("GET", "/api/bili/status", token="tok")
+    assert status == 200 and data["ok"] is False
+    assert data["error"] == "bili_home_missing"
+    assert "插件家目录不存在" in data["hint"]

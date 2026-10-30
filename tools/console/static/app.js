@@ -729,7 +729,7 @@ async function renderFeed(auto) {
   const scrollBox = $('#feed-scroll');
   if (scrollBox) scrollBox.onchange = () => { state.feedScroll = scrollBox.checked; };
   document.querySelectorAll('[data-action]').forEach((node) => {
-    node.onclick = () => {
+    node.onclick = async () => {
       const action = node.dataset.action;
       if (action === 'refresh-list') {
         state.contacts = null;
@@ -747,9 +747,18 @@ async function renderFeed(auto) {
         renderFeed(false);
         toast('已重新读取最近 500 条（本地库）', 'ok');
       } else if (action === 'clear-chat') {
-        if (!window.confirm('仅清空当前页面显示，不删除数据库。继续？')) return;
-        state.hideMessages = true;
-        renderFeed(false);
+        if (!window.confirm('清空当前联系人的聊天记录？会先自动备份，聊天记录无法从页面恢复。')) return;
+        try {
+          const result = await api('/api/chat/clear', {
+            method: 'POST',
+            body: {contact: state.contact || '', confirm: '清空聊天'},
+          });
+          if (!result.ok) throw new Error(result.error || '清空失败');
+          toast(`已清空 ${result.total || 0} 条聊天记录`, 'ok');
+          state.hideMessages = false;
+          state.contacts = null;
+          renderFeed(false);
+        } catch (err) { toast(err.message, 'err'); }
       }
     };
   });

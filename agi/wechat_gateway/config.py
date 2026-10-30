@@ -36,6 +36,12 @@ DEFAULTS = {
     # C5：wake 内驱力到期 → 主动候选（只排队、不发送）；engine 停也跑
     "wake_bridge_enabled": True,
     "wake_bridge_interval_s": 300,   # 扫描间隔（秒），实现钳制 ≥60
+    # A9-P0：发送异步化（sender 线程 + job future）。默认关 = 旧行为逐字节不变；
+    # 灰度时打开，出问题改回 false 并重启即可回滚。
+    "send_async": False,
+    "send_async_queue": 200,              # sender 队列上限（满 → blocked/send_queue_full）
+    "send_async_enqueue_timeout_s": 5,    # 入队等待上限
+    "send_async_wait_timeout_s": 150,     # 调用方等待发送结果上限（超时判 unverified，不重发）
     "memory_purge_enabled": False,
     "memory_sleep_hour": 3,
     "port": 801,

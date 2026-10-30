@@ -260,6 +260,16 @@ class Gateway:
         self.sender = WxAutoSender(module_name=str(self.cfg.get("send_module") or "wechatauto"))
         # 发送器能力探测缓存（sender_probe() 写入；/status、/api/sender/status 与启动自检读）
         self.sender_status: dict | None = None
+        # A9-P0：发送异步化（灰度开关 send_async，默认关；关 = 旧行为逐字节不变）。
+        # sender 线程独占窗口/UIA 资源，_send 提交 job 并等待 future，调用方签名不变。
+        self._send_async_enabled = False
+        self._send_worker: threading.Thread | None = None
+        self._send_worker_stop = threading.Event()
+        self._send_queue: queue.Queue | None = None
+        self.send_async_stats: dict = {
+            "queued": 0, "completed": 0, "failed": 0, "dropped": 0,
+            "timeouts": 0, "last_error": "", "last_wait_ms": 0.0,
+        }
         # C6：nightly（摘要/画像/反思/冷归档）由生产 main() 打开；单测构造的 Gateway
         # 默认关闭，避免测试里意外触发 LLM 调用与整库整理。
         self.nightly_enabled = False
@@ -542,6 +552,13 @@ class Gateway:
             except Exception as exc:  # noqa: BLE001
                 self._record("wake_bridge_start_failed",
                              {"error": f"{type(exc).__name__}: {exc}"[:200]})
+        # A9-P0：发送异步化（灰度；默认关，开启失败自动回落旧行为）
+        try:
+            self._start_send_worker()
+        except Exception as exc:  # noqa: BLE001 - 异步化起不来不能阻止网关
+            self._send_async_enabled = False
+            self._record("send_async_start_failed",
+                         {"error": f"{type(exc).__name__}: {exc}"[:200]})
         self.ready = True
         self._record("gateway_started", {"allowed": allowed, "monitored": monitored,
                                           "dry_run": bool(self.cfg.get("dry_run", True))})
@@ -650,6 +667,19 @@ class Gateway:
 
     def stop(self) -> None:
         self.stop_event.set()
+        # A9-P0：停 sender 线程。哨兵 + stop 事件；若正卡在发送，join 有界不阻塞退出。
+        try:
+            if self._send_queue is not None:
+                try:
+                    self._send_queue.put_nowait(None)
+                except queue.Full:
+                    pass
+            self._send_worker_stop.set()
+            if self._send_worker and self._send_worker.is_alive():
+                self._send_worker.join(timeout=3)
+            self._send_async_enabled = False
+        except Exception:  # noqa: BLE001 - 关闭流程不因 sender 卡住中断
+            self._send_async_enabled = False
         # A7：正常关闭也推进游标到“现在”——下次启动从关闭时刻补采，不丢关机期间消息
         try:
             self._save_cursor({"ts": time.time()})
@@ -1826,12 +1856,132 @@ class Gateway:
         ``idem_key``（P0-AB4）：幂等去重键。给了就用它当 reactive 去重键，否则退回
         文本本身。reactive 调用方传 ``f"{turn_id}:{bubble_index}"``：同一轮重试会被
         拦（防重复发送），不同轮次说同一句话不会被误杀（旧实现按文本去重会吞掉）。
+
+        A9-P0：``send_async=true`` 时改为提交给 sender 线程执行并等待 future；调用方
+        拿到的返回值与旧路径一致。开关关闭（默认）时仍走原来的“当前线程持锁直发”。
         """
+        if getattr(self, "_send_async_enabled", False):
+            return self._send_via_worker(
+                contact, text, force=force, reactive=reactive,
+                proactive=proactive, manual=manual, force_quiet=force_quiet,
+                idem_key=idem_key)
         with self._send_lock:
             return self._send_locked(
                 contact, text, force=force, reactive=reactive,
                 proactive=proactive, manual=manual, force_quiet=force_quiet,
                 idem_key=idem_key)
+
+    # ---------------- A9-P0：发送异步化（sender 线程 + job future） ----------------
+    def _start_send_worker(self) -> bool:
+        """按配置启动 sender 线程；返回是否启用。默认关 = 完全旧行为。"""
+        if not bool(self.cfg.get("send_async", False)):
+            return False
+        if self._send_worker and self._send_worker.is_alive():
+            self._send_async_enabled = True
+            return True
+        try:
+            size = max(1, int(self.cfg.get("send_async_queue") or 200))
+        except (TypeError, ValueError):
+            size = 200
+        self._send_queue = queue.Queue(maxsize=size)
+        self._send_worker_stop.clear()
+        self._send_worker = threading.Thread(
+            target=self._sender_loop, name="gateway-sender", daemon=True)
+        self._send_worker.start()
+        self._send_async_enabled = True
+        self._record("send_async_started", {"queue_size": size})
+        return True
+
+    def _sender_loop(self) -> None:
+        """单 sender 线程：串行执行 _send_locked（微信窗口/UIA 只能单实例操作）。"""
+        queue_ref = self._send_queue
+        while not self._send_worker_stop.is_set():
+            if queue_ref is None:
+                break
+            try:
+                job = queue_ref.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if job is None:  # 停止哨兵
+                break
+            try:
+                with self._send_lock:
+                    result = self._send_locked(
+                        job["contact"], job["text"], **job["kwargs"])
+            except Exception as exc:  # noqa: BLE001 - sender 线程不能死
+                result = {"ok": False, "status": "failed",
+                          "error": f"{type(exc).__name__}: {exc}"[:200]}
+                self.send_async_stats["failed"] = int(
+                    self.send_async_stats.get("failed", 0)) + 1
+                self.send_async_stats["last_error"] = result["error"]
+            job["result"] = result
+            job["done"].set()
+            self.send_async_stats["completed"] = int(
+                self.send_async_stats.get("completed", 0)) + 1
+            try:
+                queue_ref.task_done()
+            except ValueError:  # 队列已换/已销毁
+                pass
+
+    def _send_via_worker(self, contact: str, text: str, **kwargs) -> dict:
+        """把一次发送提交给 sender 线程并等待结果（返回值与旧路径同契约）。"""
+        queue_ref = self._send_queue
+        if queue_ref is None or not (
+                self._send_worker and self._send_worker.is_alive()):
+            with self._send_lock:
+                return self._send_locked(contact, text, **kwargs)
+        job = {"contact": contact, "text": text, "kwargs": dict(kwargs),
+               "done": threading.Event(), "result": None}
+        try:
+            enqueue_timeout = max(
+                0.1, float(self.cfg.get("send_async_enqueue_timeout_s") or 5))
+        except (TypeError, ValueError):
+            enqueue_timeout = 5.0
+        try:
+            queue_ref.put(job, timeout=enqueue_timeout)
+        except queue.Full:
+            self.send_async_stats["dropped"] = int(
+                self.send_async_stats.get("dropped", 0)) + 1
+            self._record("send_async_dropped", {"friend": contact,
+                                                "reason": "queue_full"})
+            return {"ok": False, "status": "blocked", "error": "send_queue_full"}
+        self.send_async_stats["queued"] = int(
+            self.send_async_stats.get("queued", 0)) + 1
+        started = time.time()
+        try:
+            wait_timeout = max(
+                1.0, float(self.cfg.get("send_async_wait_timeout_s") or 150))
+        except (TypeError, ValueError):
+            wait_timeout = 150.0
+        if not job["done"].wait(wait_timeout):
+            # 任务可能正在发：不知道发没发 → unverified，**不重发**
+            self.send_async_stats["timeouts"] = int(
+                self.send_async_stats.get("timeouts", 0)) + 1
+            self._record("send_async_timeout", {
+                "friend": contact, "waited_s": round(wait_timeout, 1)})
+            return {"ok": False, "status": "unverified",
+                    "error": "send_async_timeout", "possible_sent": True,
+                    "warning": "send_async_wait_timeout"}
+        self.send_async_stats["last_wait_ms"] = round(
+            (time.time() - started) * 1000, 1)
+        result = job.get("result")
+        return result if isinstance(result, dict) else {
+            "ok": False, "status": "failed", "error": "send_worker_no_result"}
+
+    def send_async_status(self) -> dict:
+        """发送异步化观测（/status 与 802 用；无副作用）。"""
+        stats = dict(self.send_async_stats)
+        try:
+            size = int(self.cfg.get("send_async_queue") or 200)
+        except (TypeError, ValueError):
+            size = 200
+        stats.update({
+            "enabled": bool(self._send_async_enabled),
+            "alive": bool(self._send_worker and self._send_worker.is_alive()),
+            "queue_size": self._send_queue.qsize() if self._send_queue else 0,
+            "queue_max": max(1, size),
+        })
+        return stats
 
     def _send_locked(self, contact: str, text: str, *, force: bool = False,
                      reactive: bool = False, proactive: bool = False,
@@ -2722,6 +2872,8 @@ class Gateway:
             # 发送器能力（sender_probe 缓存；None=还没探测过）。802 顶部状态条据此提示
             # "发送器不可用，请安装 wechatauto/wxauto4"。
             "sender": dict(self.sender_status) if self.sender_status else None,
+            # A9-P0：发送异步化观测（enabled/queue_size/alive/超时与丢弃计数）
+            "send_async": self.send_async_status(),
             "drafts_pending": len(drafts.list_all(path=self.draft_path, limit=200)),
             # P0-AB8：启动时按 TTL 清掉的过期草稿数（配置 draft_ttl_days，默认 7 天）
             "drafts_pruned": int(getattr(self, "drafts_pruned", 0) or 0),

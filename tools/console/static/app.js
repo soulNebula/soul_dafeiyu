@@ -641,7 +641,9 @@ async function renderFeed(auto) {
     if (state.feedTab === 'messages') {
       if (missingDb) return wbMissingDb(contact);
       if (state.hideMessages) return '<div class="empty">当前显示已清空（仅本页；数据库未改动，点「刷新」恢复）</div>';
-      return wbMessageList((messages && messages.items) || []);
+      const items = (messages && messages.items) || [];
+      if (contact && !items.length) return '<div class="empty">数据库已就绪，暂无聊天记录；在下面输入框发第一条消息</div>';
+      return wbMessageList(items);
     }
     return feedList((feed && feed.items) || []);
   };
@@ -691,8 +693,8 @@ async function renderFeed(auto) {
     </div>`;
 
   const selectedItem = contactItems.find((item) => item.alias === contact);
-  // 没有库，或库存在但 0 条消息（还没聊过）→ 都提示去 803 建库/训练
-  if (contact && (!selectedItem || selectedItem.messages === 0)) missingDb = true;
+  // 只有“库不存在”才提示建库；库存在但 0 条消息是空库，可以正常开聊
+  if (contact && (!selectedItem || selectedItem.exists === false)) missingDb = true;
   const activeContact = selectedItem || contactItems.find((item) => item.current);
   const rightHtml = `<aside class="wb-card wb-side">
     <div class="wb-card-head"><b>会话概览</b></div>

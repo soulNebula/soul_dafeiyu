@@ -333,7 +333,8 @@ async function renderOverview() {
       <span class="wb-avatar">${esc(String(item.alias || '?').slice(0, 1))}</span>
       <div class="wb-contact-main"><b>${esc(item.alias || item.db || '—')}</b>
         <span class="muted">${num(item.messages)} 条 · ${item.last_ts ? fmtAgo(item.last_ts) : '暂无消息'}</span></div>
-      ${item.current ? '<span class="wb-tag">当前</span>' : ''}
+      ${item.alias === contact ? '<span class="wb-tag">当前</span>' : ''}
+      ${pending !== null && item.alias === pending && pending !== contact ? '<span class="wb-tag warn-tag">待切换</span>' : ''}
     </div>`).join('') : '<div class="empty">暂无联系人库</div>';
 
   const html = `
@@ -583,6 +584,8 @@ async function renderFeed(auto) {
   try { if (!state.engine) state.engine = await api('/api/engine'); } catch (e) { /* 引擎状态非必需 */ }
   state.contacts = contacts;
   const contact = state.contact || '';
+  const pending = state.pendingContact !== undefined ? state.pendingContact : null;
+  const selected = pending !== null ? pending : contact;
   if (state.feedTab === 'messages') {
     try { messages = await api('/api/messages?limit=' + (state.feedLimit || 200) + '&contact=' + encodeURIComponent(contact)); }
     catch (e) { errors.push('消息: ' + e.message); }
@@ -617,7 +620,7 @@ async function renderFeed(auto) {
 
   const contactItems = (contacts && contacts.items) || [];
   const contactHtml = contactItems.map((item) => `
-    <div class="wb-contact ${item.alias === contact ? 'active' : ''}" data-contact="${esc(item.alias)}">
+    <div class="wb-contact ${item.alias === selected ? 'active' : ''}" data-contact="${esc(item.alias)}">
       <span class="wb-avatar">${esc(String(item.alias || '?').slice(0, 1))}</span>
       <div class="wb-contact-main"><b>${esc(item.alias || item.db || '—')}</b>
         <span class="muted">${num(item.messages)} 条 · ${item.last_ts ? fmtAgo(item.last_ts) : '暂无'}</span></div>
@@ -668,11 +671,12 @@ async function renderFeed(auto) {
   const html = `
     ${wbTopBar({
       title: '对话流', subtitle: `Soul Console · ${state.feedTab === 'messages' ? '聊天消息' : '网关事件'}`,
-      pills: `<span class="wb-pill ok">● 实时</span><span class="wb-pill">${esc(contact || (contacts && contacts.current_label) || '全部')}</span>`,
+      pills: `<span class="wb-pill ok">● 实时</span><span class="wb-pill">${esc(selected || (contacts && contacts.current_label) || '全部')}</span>${pending !== null && pending !== contact ? '<span class="wb-pill warn">待确认切换</span>' : ''}`,
       right: `<button class="btn small" id="feed-refresh">刷新</button>
         <button class="btn small" data-action="refresh-list">刷新列表</button>
         <button class="btn small" data-action="clear-list">清空全部列表</button>
         <button class="btn small" data-action="sync-history">同步历史</button>
+        <button class="btn small ${pending !== null && pending !== contact ? 'primary' : ''}" id="feed-confirm-switch" ${pending !== null && pending !== contact ? '' : 'disabled'}>确认切换</button>
         <button class="btn small danger" data-action="clear-chat">清空聊天</button>`,
     })}
     ${errors.length ? `<div class="wb-card wb-span3"><div class="error-text">${esc(errors.join('；'))}</div></div>` : ''}
@@ -680,7 +684,7 @@ async function renderFeed(auto) {
       <aside class="wb-card wb-side">
         <div class="wb-card-head"><b>联系人</b><span class="muted">${num(contactItems.length)} 个</span></div>
         <div class="wb-contact-list">
-          <div class="wb-contact ${contact === '' ? 'active' : ''}" data-contact="">
+          <div class="wb-contact ${selected === '' ? 'active' : ''}" data-contact="">
             <span class="wb-avatar">全</span><div class="wb-contact-main"><b>全部 / 当前库</b>
             <span class="muted">默认联系人库</span></div></div>
           ${contactHtml}
@@ -709,8 +713,19 @@ async function renderFeed(auto) {
     node.onclick = () => { state.feedFilter = node.dataset.filter; renderFeed(false); };
   });
   document.querySelectorAll('[data-contact]').forEach((node) => {
-    node.onclick = () => { state.contact = node.dataset.contact || ''; renderFeed(false); };
+    node.onclick = () => {
+      state.pendingContact = node.dataset.contact || '';
+      renderFeed(false);
+    };
   });
+  const confirmSwitch = $('#feed-confirm-switch');
+  if (confirmSwitch) confirmSwitch.onclick = () => {
+    if (state.pendingContact === undefined) return;
+    state.contact = state.pendingContact;
+    state.pendingContact = undefined;
+    state.contacts = null;
+    renderFeed(false);
+  };
   document.querySelectorAll('[data-goto]').forEach((node) => {
     node.onclick = () => go(node.dataset.goto);
   });

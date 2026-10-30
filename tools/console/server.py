@@ -3360,7 +3360,7 @@ def memory_clear_all(contact: str = "", confirm: str = "", *, client: str = "") 
     except OSError:
         pass
     tables = (
-        "messages", "user_memories", "claims", "summaries", "attachments",
+        "user_memories", "claims", "summaries",
         "raw_events", "sessions", "session_segments", "turns", "pairs",
         "inner_states", "feedback", "turn_traces", "media_understanding",
         "proactive_events", "research_sources", "reply_media_log",
@@ -3409,7 +3409,7 @@ def memory_clear_all(contact: str = "", confirm: str = "", *, client: str = "") 
           ok=True, client=client)
     return {"ok": True, "deleted": deleted, "total": sum(deleted.values()),
             "backup": backups, "db": str(db_path),
-            "note": "已清空当前联系人的 memory/legacy 记忆库；人格库/提示词/日记保留"}
+            "note": "已清空当前联系人的记忆/事实/摘要；聊天记录、人格库、提示词、日记保留"}
 
 
 def memory_update(contact: str = "", mem_id: str = "", *, content: str | None = None,

@@ -345,6 +345,29 @@ def _safe_internal_rewrite(reply: str, *, fallback: str) -> str:
     return fallback or MEANINGFUL_FALLBACKS[0]
 
 
+def _explicit_sticker_plan(media_choice, path, directives) -> dict | None:
+    """用户明确要表情包时，模型给出的贴纸指令直接兜底成媒体计划。
+
+    2026-10-31：build_plan 内部有冷却/情绪/素材校验，任一环节把贴纸判掉时，
+    用户明明要表情包却只收到"喏，给你"。显式请求优先：找到素材就发（仍走
+    media_enabled 闸门）；找不到素材返回 None（正文承接句兜底）。
+    """
+    for raw in list((directives or {}).get("stickers") or []):
+        name = str(raw or "").strip().lstrip(":").strip()
+        if not name:
+            continue
+        asset = media_choice.find_asset(name, path)
+        if not asset:
+            continue
+        kind = "gif" if str(asset.get("path") or "").lower().endswith(
+            (".gif", ".wxgf")) else "sticker"
+        return {"bubbles": [{"type": kind, "name": name,
+                             "path": asset.get("path")}],
+                "wishes": [], "reason": "model:sticker:" + name,
+                "dropped": [], "stickers": [name]}
+    return None
+
+
 def _ensure_meaningful(reply: Any, *, user_text: str, path: Path | str,
                        recent: list[str] | None = None) -> str:
     """P0-26：最终回复兜底。
@@ -1306,6 +1329,15 @@ class SelfLearnAgent:
                     recent_media=media_choice.recent_media(self.path),
                     allow_sticker=bool(settings.get("sticker_in_reply")),
                     now=time.time())
+                # 显式要贴纸但 build_plan 没给出媒体气泡（冷却/情绪/校验拦掉）→ 兜底
+                has_media_bubble = bool(reply_media and any(
+                    str(b.get("type")) in ("sticker", "gif", "image")
+                    for b in (reply_media.get("bubbles") or [])))
+                if chat_media_directives and not has_media_bubble:
+                    fallback_plan = _explicit_sticker_plan(
+                        media_choice, self.path, chat_media_directives)
+                    if fallback_plan:
+                        reply_media = fallback_plan
                 media_choice.record_media(
                     self.path, bool(reply_media and reply_media.get("bubbles")))
                 if reply_media and reply_media.get("bubbles"):

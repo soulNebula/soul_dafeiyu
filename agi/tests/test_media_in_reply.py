@@ -67,3 +67,19 @@ def test_short_text_plus_sticker_is_not_replaced(tmp_path, monkeypatch):
     assert result["reply"] not in MEANINGFUL_FALLBACKS
     assert "好好" in str(result["reply"])
     assert result["media"] and result["media"]["bubbles"]
+
+
+def test_explicit_sticker_survives_strict_plan_rejection(tmp_path, monkeypatch):
+    """build_plan 被冷却/情绪/校验拦掉时，用户明确要贴纸仍应发出去。"""
+    _patch_media(monkeypatch)
+    monkeypatch.setattr(media_choice, "build_plan",
+                        lambda *args, **kwargs: None)   # 模拟严格校验全拒
+    monkeypatch.setattr(media_choice, "find_asset",
+                        lambda name, path=None: {"name": name,
+                                                 "path": str(tmp_path / "666.png")})
+    agent = SelfLearnAgent(tmp_path / "selflearn.sqlite3",
+                           client=FakeClient("[[media:sticker:666]]"))
+    result = agent.send("给我发个表情包")
+    assert result["reply"] not in MEANINGFUL_FALLBACKS
+    assert result["media"] and result["media"]["bubbles"]
+    assert result["media"]["bubbles"][0]["type"] == "sticker"

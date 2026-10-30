@@ -2387,6 +2387,7 @@ class Gateway:
                     if cls == sendclass.DELIVERED:
                         self.send_times.append(time.time())
                         self.sent_today += 1
+                        self.sent += 1
                         self._note_send_success()
                         if reactive:
                             self._reactive_dedupe[(str(contact or "").strip(),
@@ -2436,6 +2437,7 @@ class Gateway:
             if classification == sendclass.DELIVERED:
                 self.send_times.append(time.time())
                 self.sent_today += 1
+                self.sent += 1
                 self._note_send_success()
                 if reactive:
                     self._reactive_dedupe[(str(contact or "").strip(),

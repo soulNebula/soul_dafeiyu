@@ -90,7 +90,9 @@ DEFAULTS = {
     "send_probe_enabled": True,
     "send_retry_max": 1,
     # 发送子进程超时（秒）。超时 = "不知道发没发"，按 unverified 处理且不自动兜底重发。
-    "send_timeout_s": 20,
+    # 2026-10-31 实测：冷启动/窗口恢复时 UIA 发送可能 >20s（自动回复因此落草稿）。
+    # 回调到 45s；风控由"连续 2 次环境失败自动熔断"兜底，不靠短超时。
+    "send_timeout_s": 45,
     # 多媒体多气泡子进程超时（秒）：媒体链路更慢，单独放宽。
     "send_media_timeout_s": 120,
     # P5-a 发送层多媒体（默认关闭：用户/决策层显式开启前，send_bubbles 一律 blocked）

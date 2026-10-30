@@ -64,7 +64,9 @@ cd C:\Users\Administrator\Desktop\idea
   - 8123/8125：`/v1/models`
 - 输出 PASS/FAIL 表；全部通过退出码 0，否则 1。
 - Token 不再有固定默认值：首次启动生成随机 token 写入 `idea/config.json`（已 gitignore），
-  启动日志会打印一次带 token 的 URL；也可用 `--token` 或 `IDEA_TOKEN` 覆盖：
+  启动日志会打印一次带 token 的 URL；也可用 `--token` 或 `IDEA_TOKEN` 覆盖。
+  忘了 token 时：页面顶栏「取本机令牌」按钮（仅回环可读；`IDEA_DISABLE_LOCAL_TOKEN=1` 可关闭），
+  或直接打开启动日志里的带 token URL：
 
 ```bat
 scripts\smoke_all.py --token <idea/config.json 里的 admin_token>

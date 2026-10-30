@@ -20,6 +20,8 @@ cd C:\Users\Administrator\Desktop\idea
 
 - **没有固定默认口令**：首次启动会生成 32 位随机 token，写进 `idea/config.json`（已 gitignore），
   并在启动日志打印一次带 token 的 URL；也可用 `IDEA_TOKEN` 显式覆盖（旧默认 `8888` 不再被自动接受）；
+- **忘了 token**：页面顶栏点「取本机令牌」即可（仅 127.0.0.1/::1 回环可读，与 802 的 `/api/token` 同口径；
+  不想暴露可设 `IDEA_DISABLE_LOCAL_TOKEN=1`）；浏览器里残留的旧 `8888` 会被自动清除并提示；
 - 需要微信网关（801）在跑时，概览/服务页才有实时数据；802 控制台独立运行；
 - 一键启停/冒烟见 [docs/RUN.md](docs/RUN.md)。
 

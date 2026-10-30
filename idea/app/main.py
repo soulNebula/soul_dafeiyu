@@ -8,9 +8,11 @@ M3：TrainLab（数据/训练/导出）、Model Studio（模型/适配器/GGUF�
 from __future__ import annotations
 
 import hmac
+import os
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import (Depends, FastAPI, File, Header, HTTPException, Query,
+                     Request, UploadFile)
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -35,6 +37,40 @@ def require_token(x_admin_token: str | None = Header(default=None),
     return True
 
 
+#: 本机令牌便利入口：与 802 的 /api/token 同安全口径——只允许回环客户端读取。
+#: 目的：803 改随机口令后，用户不必去翻 idea/config.json；浏览器地址栏就是本机回环。
+#: 不想暴露可设 IDEA_DISABLE_LOCAL_TOKEN=1。
+LOCAL_TOKEN_PORTS_OK = ("127.0.0.1", "localhost", "::1")
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    """Host/peer 字符串是否回环（兼容 127.0.0.1:803 / [::1]:803 / localhost）。"""
+    value = str(host or "").strip().lower()
+    if not value:
+        return False
+    if value.startswith("["):
+        end = value.find("]")
+        value = value[1:end] if end > 0 else value.strip("[")
+    else:
+        value = value.split(":", 1)[0]
+    return value in LOCAL_TOKEN_PORTS_OK
+
+
+@app.get("/api/wb/local-token")
+def local_token(request: Request):
+    """仅本机回环可读 803 管理令牌（方便首次连接；不写入日志、不回传前端以外的地方）。"""
+    if str(os.environ.get("IDEA_DISABLE_LOCAL_TOKEN") or "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        raise HTTPException(status_code=403, detail="local token disabled")
+    host = request.headers.get("host") or ""
+    peer = request.client.host if request.client else ""
+    if not (_is_loopback_host(host) and _is_loopback_host(peer)):
+        raise HTTPException(status_code=403, detail="loopback only")
+    return {"ok": True, "token": idea_config.admin_token(),
+            "config_path": str(idea_config.CONFIG_PATH)}
+
+
+## 启动自检
 @app.on_event("startup")
 def _print_access_url() -> None:
     """启动时打印一次含 token 的访问 URL（token 落 idea/config.json，不进仓库）。"""

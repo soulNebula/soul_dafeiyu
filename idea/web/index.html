@@ -14,6 +14,7 @@
       <span id="conn-dot" class="dot"></span>
       <input id="token" placeholder="管理令牌（见 idea/config.json 或 803 启动日志）" value="" autocomplete="off">
       <button id="connect" class="btn small">连接</button>
+      <button id="local-token" class="btn small" title="仅本机回环可用：从 803 配置读取当前令牌">取本机令牌</button>
       <span id="conn-text" class="muted small">未连接</span>
     </div>
     <button id="terminal-toggle" class="btn small">终端</button>
@@ -309,8 +310,11 @@
 <div id="toast" class="toast"></div>
 
 <script>
+const WEAK_TOKENS = new Set(['8888', '123456', 'admin', 'password', 'test', 'token', '']);
+let bootToken = localStorage.getItem('idea_token') || '';
+if (WEAK_TOKENS.has(bootToken.trim().toLowerCase())) { try { localStorage.removeItem('idea_token'); } catch (e) {} bootToken = ''; }
 const S = {
-  token: localStorage.getItem('idea_token') || new URLSearchParams(location.search).get('token') || '',
+  token: bootToken || (new URLSearchParams(location.search).get('token') || ''),
   view: new URLSearchParams(location.search).get('view') || 'welcome',
   services: [], overview: null, data: { dbs: [], db: '', table: '', page: 1, pages: 1, search: '',
           showAll: sessionStorage.getItem('idea_db_show_all') === '1' },
@@ -474,7 +478,12 @@ function connect() {
   if (!value) { toast('请输入管理令牌（见 idea/config.json 或 803 启动日志）', 'err'); return; }
   S.token = value;
   localStorage.setItem('idea_token', S.token);
-  api('/health').then(() => { toast('连接成功'); showView(S.view); }).catch(e => toast(e.message, 'err'));
+  api('/health').then(() => { toast('连接成功'); showView(S.view); }).catch(e => {
+    const msg = String((e && e.message) || e || '');
+    if (/401|admin token required|令牌/i.test(msg)) {
+      toast('令牌无效：旧口令 8888 已停用。点「取本机令牌」自动填入，或从 803 启动日志 / idea/config.json 复制新 token', 'err');
+    } else { toast(msg, 'err'); }
+  });
 }
 
 /* ---------------------------------------------------------------- 概览 */
@@ -1873,6 +1882,19 @@ $('#dl-start').onclick = () => withBusy($('#dl-start'), startDownload);
 $$('[data-dl-tab]').forEach(b => b.onclick = () => setDlTab(b.dataset.dlTab));
 $('#import-path').addEventListener('change', () => { if (!$('#import-name').value.trim()) $('#import-name').value = $('#import-path').value.split(/[\\/]/).pop().replace(/\.gguf$/i, ''); });
 $('#dl-url').addEventListener('input', () => { if (!$('#dl-name').value.trim()) { const v = $('#dl-url').value.split('/').pop() || ''; $('#dl-name').value = v.split('?')[0].replace(/\.gguf$/i, '').replace(/\.safetensors$/i, ''); } });
+$('#local-token').onclick = async () => {
+  try {
+    const r = await fetch('/api/wb/local-token');
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.token) throw new Error(d.detail || ('HTTP ' + r.status));
+    $('#token').value = d.token; S.token = d.token;
+    try { localStorage.setItem('idea_token', d.token); } catch (e) {}
+    toast('已填入本机令牌');
+    connect();
+  } catch (e) {
+    toast('取本机令牌失败：' + ((e && e.message) || e) + '（仅本机回环可用；可手动从 idea/config.json 复制）', 'err');
+  }
+};
 $('#token').value = S.token;
 $('#token').addEventListener('change', () => { S.token = $('#token').value.trim(); localStorage.setItem('idea_token', S.token); });
 connect();

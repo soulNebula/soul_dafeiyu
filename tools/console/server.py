@@ -3336,6 +3336,36 @@ def _memory_write(contact: str, mem_id: str, mutate) -> dict:
         con.close()
 
 
+def create_contact_db(alias: str, *, client: str = "") -> dict:
+    """为还没有库的联系人一键创建 memory/persona 库（空库，不生成训练数据）。"""
+    name = str(alias or "").strip()
+    if not name:
+        return {"ok": False, "error": "联系人不能为空"}
+    if len(name) > 60:
+        return {"ok": False, "error": "联系名过长"}
+    try:
+        existing = _contact_db_by_alias(name)
+    except Exception:  # noqa: BLE001
+        existing = None
+    if existing is not None and Path(existing).is_file():
+        return {"ok": True, "created": False, "db": str(existing), "alias": name,
+                "note": "该联系人已有数据库"}
+    stem = hashlib.sha1(name.encode("utf-8")).hexdigest()[:14]
+    base = Path(CONTACTS_DIR) / (stem + ".sqlite3")
+    try:
+        from agi.selflearn import db as db_mod
+        conn = db_mod.connect(base)
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    audit("contact_db_create", {"alias": name, "db": str(base)}, ok=True, client=client)
+    return {"ok": True, "created": True, "db": str(base), "alias": name,
+            "note": "已创建空数据库，可直接聊天；记忆会从这里开始积累"}
+
+
 def memory_clear_all(contact: str = "", confirm: str = "", *, client: str = "") -> dict:
     """清空当前联系人记忆库（先备份；人格库/提示词/日记保留）。
 
@@ -5553,6 +5583,9 @@ class Handler(BaseHTTPRequestHandler):
                     importance=body.get("importance") if "importance" in body else None,
                     status=body.get("status") if "status" in body else None,
                     client=client)
+                self._json(200 if result.get("ok") else 400, result); return
+            if path == "/api/contacts/create":
+                result = create_contact_db(str(body.get("alias") or ""), client=client)
                 self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/chat/clear":
                 result = chat_clear_all(

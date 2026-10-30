@@ -408,6 +408,29 @@ async function renderOverview() {
   document.querySelectorAll('[data-contact]').forEach((node) => {
     node.onclick = () => { state.contact = node.dataset.contact || ''; go('feed'); };
   });
+  const createDb = $('#create-contact-db');
+  if (createDb) createDb.onclick = async () => {
+    const alias = createDb.dataset.alias || state.contact || '';
+    if (!alias) return;
+    createDb.disabled = true;
+    createDb.textContent = '创建中…';
+    try {
+      const result = await api('/api/contacts/create', {
+        method: 'POST', body: {alias},
+      });
+      if (!result.ok) throw new Error(result.error || '创建失败');
+      toast(result.created ? '数据库已创建，已切换到该联系人' : (result.note || '该联系人已有数据库'), 'ok');
+      state.contact = alias;
+      state.pendingContact = undefined;
+      persistContact(alias);
+      state.contacts = null;
+      renderFeed(false);
+    } catch (err) {
+      toast(err.message, 'err');
+      createDb.disabled = false;
+      createDb.textContent = '一键创建数据库';
+    }
+  };
   document.querySelectorAll('[data-goto]').forEach((node) => {
     node.onclick = () => go(node.dataset.goto);
   });
@@ -840,9 +863,12 @@ function wbMissingDb(alias) {
   return `<div class="wb-empty">
     <div class="wb-empty-icon">🗂️</div>
     <b>联系人「${esc(alias)}」还没有数据库或聊天记录</b>
-    <p class="muted">不同联系人使用各自的数据库（记忆、人格、对话隔离）。先到 <b>803 工作台</b>
-      创建该联系人的数据并训练模型，再回到这里切换。</p>
-    <a class="btn primary small" href="http://127.0.0.1:803" target="_blank" rel="noopener">打开 803 工作台</a>
+    <p class="muted">不同联系人使用各自的数据库（记忆、人格、对话隔离）。
+      可以直接为当前联系人创建空库，之后聊天会从这里开始积累；也可以去 803 工作台建库/训练。</p>
+    <div class="row" style="justify-content:center;gap:8px;flex-wrap:wrap">
+      <button class="btn primary small" id="create-contact-db" data-alias="${esc(alias)}">一键创建数据库</button>
+      <a class="btn small" href="http://127.0.0.1:803" target="_blank" rel="noopener">打开 803 工作台</a>
+    </div>
   </div>`;
 }
 

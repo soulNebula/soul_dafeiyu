@@ -426,3 +426,16 @@ def test_catch_up_reports_backend_not_ready(receiver_factory):
     assert stats["ready"] is False
     assert stats["error"] == "backend_not_ready"
     assert messages == []
+
+
+def test_monitor_recent_messages_accepts_names_kwarg():
+    """A7 真机回归：网关补采会传 names=monitored_contacts。
+
+    2026-10-31 真机事故：`_catchup_loader` 传了 names=，但 MonitorBackend.recent_messages
+    没这个参数 → 补采 120s 超时。这里锁住签名，避免再次只靠 fake backend 测试。
+    """
+    from wx_core.monitor import MonitorBackend
+
+    backend = MonitorBackend({"monitored": ["好友A"]})
+    assert backend.recent_messages(
+        since_ts=0.0, until_ts=1.0, limit=10, names=["好友A"]) is None

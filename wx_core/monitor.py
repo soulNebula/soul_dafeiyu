@@ -1091,7 +1091,7 @@ class MonitorBackend:
 
     # ---------------- A7：启动补采（只读本地库，不推 events、不改状态） ----------------
     def recent_messages(self, *, since_ts: float, until_ts: float,
-                        limit: int = 200):
+                        limit: int = 200, names: list[str] | None = None):
         """返回 ``since_ts <= ts <= until_ts`` 的入站消息 dict 列表（按时间升序）。
 
         供网关重启补采用（``Gateway._catchup_loader`` 调用）。语义约束：
@@ -1101,7 +1101,9 @@ class MonitorBackend:
         * 数据库直读未就绪（``_db is None``，例如微信刚启动）→ 返回 ``None``，
           网关会隔 2s 重试直到超时；
         * 只取本地账号维度可解析的监听好友，``sender`` 必须是 ``friend``
-          （自己发的不补，避免回环）。
+          （自己发的不补，避免回环）；
+        * ``names``：调用方显式指定要补采的会话（网关传 monitored_contacts）；
+          不传则用后端自己的 ``_monitored``。
         """
         db = self._db
         if db is None:
@@ -1110,7 +1112,10 @@ class MonitorBackend:
             cap = max(1, min(int(limit), 1000))
         except (TypeError, ValueError):
             cap = 200
-        names = [str(n) for n in (self._monitored or []) if str(n).strip()]
+        if names is None:
+            names = [str(n) for n in (self._monitored or []) if str(n).strip()]
+        else:
+            names = [str(n) for n in names if str(n).strip()]
         sources = getattr(db, "sources", None)
         if not isinstance(sources, dict):
             return None

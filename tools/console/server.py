@@ -3337,20 +3337,28 @@ def _memory_write(contact: str, mem_id: str, mutate) -> dict:
 
 
 def memory_clear_all(contact: str = "", confirm: str = "", *, client: str = "") -> dict:
-    """清空当前联系人记忆库（先备份；人格库/提示词/日记保留）。"""
+    """清空当前联系人记忆库（先备份；人格库/提示词/日记保留）。
+
+    旧版数据可能同时存在 .memory.sqlite3 和 .legacy.sqlite3，列表接口可能读 legacy；
+    这里把同一联系人的 memory/legacy 库都清掉，避免“清了还有”。
+    """
     if str(confirm or "").strip() != "清除所有记忆":
         return {"ok": False, "error": "confirm_phrase_mismatch",
                 "hint": "必须确认：清除所有记忆"}
     db_path, error = _memory_db(contact)
     if error:
         return error
+    base = Path(db_path)
+    stem = base.name.split(".", 1)[0]
+    candidates = [base]
     try:
-        backup_dir = Path(SELFLEARN_DIR) / "db_backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        backup = backup_dir / f"{Path(db_path).name}.clear-{time.strftime('%Y%m%d-%H%M%S')}.bak"
-        shutil.copy2(db_path, backup)
-    except OSError as exc:
-        return {"ok": False, "error": f"backup_failed: {exc}"}
+        for sibling in base.parent.glob(stem + ".*sqlite3"):
+            if sibling.name.endswith(".persona.sqlite3"):
+                continue
+            if sibling not in candidates:
+                candidates.append(sibling)
+    except OSError:
+        pass
     tables = (
         "messages", "user_memories", "claims", "summaries", "attachments",
         "raw_events", "sessions", "session_segments", "turns", "pairs",
@@ -3360,31 +3368,48 @@ def memory_clear_all(contact: str = "", confirm: str = "", *, client: str = "") 
         "conflicts", "score_records", "weak_rechecks", "search_documents",
     )
     deleted: dict[str, int] = {}
+    backups: list[str] = []
+    backup_dir = Path(SELFLEARN_DIR) / "db_backups"
     try:
-        con = sqlite3.connect(str(db_path), timeout=10)
+        backup_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return {"ok": False, "error": f"backup_dir_failed: {exc}"}
+    for path in candidates:
+        if not path.is_file():
+            continue
         try:
-            existing = {row[0] for row in con.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'")}
-            with con:
-                for table in tables:
-                    if table not in existing:
-                        continue
-                    try:
-                        count = con.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
-                        if count:
-                            con.execute(f'DELETE FROM "{table}"')
-                            deleted[table] = int(count)
-                    except sqlite3.Error:
-                        continue
-        finally:
-            con.close()
-    except sqlite3.Error as exc:
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "backup": str(backup)}
-    audit("memory_clear_all", {"contact": contact or "default", "deleted": sum(deleted.values())},
+            backup = backup_dir / f"{path.name}.clear-{time.strftime('%Y%m%d-%H%M%S')}.bak"
+            shutil.copy2(path, backup)
+            backups.append(str(backup))
+        except OSError as exc:
+            return {"ok": False, "error": f"backup_failed: {exc}"}
+        try:
+            con = sqlite3.connect(str(path), timeout=10)
+            try:
+                existing = {row[0] for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                with con:
+                    for table in tables:
+                        if table not in existing:
+                            continue
+                        try:
+                            count = con.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
+                            if count:
+                                con.execute(f'DELETE FROM "{table}"')
+                                deleted[f"{path.name}:{table}"] = int(count)
+                        except sqlite3.Error:
+                            continue
+            finally:
+                con.close()
+        except sqlite3.Error as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                    "backup": backups}
+    audit("memory_clear_all", {"contact": contact or "default",
+                               "deleted": sum(deleted.values())},
           ok=True, client=client)
     return {"ok": True, "deleted": deleted, "total": sum(deleted.values()),
-            "backup": str(backup), "db": str(db_path),
-            "note": "已清空当前联系人记忆；人格库/提示词/日记保留"}
+            "backup": backups, "db": str(db_path),
+            "note": "已清空当前联系人的 memory/legacy 记忆库；人格库/提示词/日记保留"}
 
 
 def memory_update(contact: str = "", mem_id: str = "", *, content: str | None = None,

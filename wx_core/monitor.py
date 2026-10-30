@@ -27,7 +27,7 @@ from . import (builtin_emoji, db_source, emoticon, extract, media_cache, media_e
                store, textlog, wechat_keys)
 from . import layout as L
 from . import win as W
-from .models import (KIND_EMOJI, KIND_FILE, KIND_IMAGE, KIND_SYSTEM, KIND_TEXT, KIND_VOICE, Friend, Message,
+from .models import (KIND_EMOJI, KIND_FILE, KIND_IMAGE, KIND_SYSTEM, KIND_TEXT, KIND_VOICE, SENDER_FRIEND, Friend, Message,
                      event_friends, event_log, event_message, event_status)
 
 VK_CONTROL = 0x11
@@ -36,6 +36,26 @@ VK_BACK = 0x08
 VK_ESCAPE = 0x1B
 
 _UNREAD_SUFFIX = ("①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "...")
+
+#: A8：数据库直读/轮询失败后的重试退避（秒），第 N 次连续失败用第 N 项，越界取最后一项。
+#: 30 → 60 → 120 → 240 → 300 封顶；任何一次成功立即清零（见 ``_reset_db_retry``）。
+DB_RETRY_BACKOFF_S = (30.0, 60.0, 120.0, 240.0, 300.0)
+
+
+def db_retry_delay(attempt: int) -> float:
+    """第 ``attempt`` 次连续失败后应等待的秒数（attempt<=0 表示无需等待）。
+
+    A8：旧实现只在 ``_db_failed`` 上做"一次失败即永久退 OCR"，微信重启/升级、
+    数据库被占用等**瞬时**故障会把直读永久关掉，必须重启进程才能恢复。这里给出
+    纯函数退避表，便于测试与观测，不引入随机抖动（便于按日志复现）。
+    """
+    try:
+        n = int(attempt)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return 0.0
+    return float(DB_RETRY_BACKOFF_S[min(n, len(DB_RETRY_BACKOFF_S)) - 1])
 
 
 def norm_name(name: str) -> str:
@@ -110,9 +130,14 @@ class MonitorBackend:
         self._stickers: dict = {}
         self._used_stickers: set[str] = set()
         self._db = None
+        # A8：``_db_failed`` 保留原字段名/类型（兼容外部读状态），语义改为"当前处于失败
+        # 退避期"，不再永久关闭直读；``_db_retry_at`` 到点后由 ``_tick`` 自动重试。
         self._db_failed = False
         self._db_switch_last = 0.0
         self._db_errors = 0
+        self._db_retry_count = 0      # 连续失败次数（成功一次清零）
+        self._db_retry_at = 0.0       # 下次允许重试的 epoch 秒（0 = 立即可试）
+        self._db_last_error = ""      # 最近一次直读错误（观测用，不改原日志字段）
         self._ephemeral = False            # 兼容字段（历史同步改为按条 persist 控制）
         self._history_tmp: Path | None = None
         self._last_frame_sig = ""
@@ -176,6 +201,13 @@ class MonitorBackend:
                 "monitor_state": self._monitor_state,
                 "last_ocr_ms": self._last_ocr_ms,
                 "friends_count": len(self._friends),
+                # A8：直读状态（新增字段，不改原有键；``db_retry_in_s`` 供界面显示倒计时）
+                "db_direct": bool(self._db is not None),
+                "db_failed": bool(self._db_failed),
+                "db_errors": int(self._db_errors),
+                "db_retry_count": int(self._db_retry_count),
+                "db_retry_in_s": self._db_retry_in_s(),
+                "db_last_error": str(self._db_last_error),
             }
 
     def sync_history(self, names: list[str], count: int | None = None) -> dict:
@@ -294,6 +326,13 @@ class MonitorBackend:
             "monitor_state": self._monitor_state,
             "last_ocr_ms": self._last_ocr_ms,
             "friends_count": len(self._friends),
+            # A8：与 get_state 同口径（接口/事件两边都能看到退避状态）
+            "db_direct": bool(self._db is not None),
+            "db_failed": bool(self._db_failed),
+            "db_errors": int(self._db_errors),
+            "db_retry_count": int(self._db_retry_count),
+            "db_retry_in_s": self._db_retry_in_s(),
+            "db_last_error": str(self._db_last_error),
         }
         payload.update(data)
         self._emit(event_status(**payload))
@@ -351,8 +390,8 @@ class MonitorBackend:
                 except Exception:
                     pass
                 self._db = None
-                self._db_failed = False
-                self._db_errors = 0
+                # A8：换账号仍是"硬重置"语义——清空退避计数，允许立即重建直读
+                self._reset_db_retry()
                 self._image_keys_tried = False
                 self.config["image_wxid"] = ""
                 self._stickers = {}
@@ -369,10 +408,56 @@ class MonitorBackend:
         except Exception:
             pass
 
+    # ---------------- A8：DB 直读退避重试 ----------------
+    def _db_retry_in_s(self, now: float | None = None) -> float:
+        """距离下次允许重试还有多少秒（非退避期为 0）；只用于观测，不加锁。"""
+        if not self._db_failed:
+            return 0.0
+        now = time.time() if now is None else float(now)
+        try:
+            return max(0.0, round(float(self._db_retry_at or 0.0) - now, 1))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _db_retry_due(self, now: float | None = None) -> bool:
+        """现在是否允许（重新）尝试启用数据库直读。
+
+        未失败过 → True（首次尝试）；失败过 → 只在退避到点后返回 True。
+        """
+        if not self._db_failed:
+            return True
+        now = time.time() if now is None else float(now)
+        try:
+            return now >= float(self._db_retry_at or 0.0)
+        except (TypeError, ValueError):
+            return True
+
+    def _arm_db_retry(self, reason: str) -> float:
+        """记一次直读失败并把下次重试排到退避之后；返回本次等待秒数。
+
+        只改退避状态，不关闭 OCR 回退路径：退避期内 ``_tick`` 仍走截图/OCR，
+        到点后自动再试 DB 直读。
+        """
+        self._db_retry_count = int(self._db_retry_count) + 1
+        delay = db_retry_delay(self._db_retry_count)
+        self._db_retry_at = time.time() + delay
+        self._db_failed = True
+        self._db_last_error = str(reason or "")[:300]
+        return delay
+
+    def _reset_db_retry(self) -> None:
+        """直读恢复成功（或换账号硬重置）：清空失败/退避状态。"""
+        self._db_failed = False
+        self._db_errors = 0
+        self._db_retry_count = 0
+        self._db_retry_at = 0.0
+        self._db_last_error = ""
+
     def _tick(self) -> None:
         self._check_account_switch()
         # 数据库直读不需要截图窗口：先尝试启用/推进直读
-        if (self._db is None and not self._db_failed
+        # A8：失败过也要按退避重试（旧实现 not self._db_failed 会永久关掉直读）
+        if (self._db is None and self._db_retry_due()
                 and self.config.get("db_direct", True) and list(self._monitored)):
             self._ensure_image_keys()
             self._init_db(list(self._monitored))
@@ -937,6 +1022,8 @@ class MonitorBackend:
             if not ok:
                 raise RuntimeError("没有被监听好友能解析出 wxid（可能是群聊）")
             self._db = bridge
+            # A8：重建成功即清零失败/退避状态（可能之前失败过多轮）
+            self._reset_db_retry()
             try:
                 from . import config as _cfg
                 _cfg.save(self.config)
@@ -944,8 +1031,9 @@ class MonitorBackend:
                 pass
             self._log(f"数据库直读已启用（{len(ok)} 个会话）：文字精确、图片/表情包/文件/语音时长与消息一一对应")
         except Exception as exc:  # noqa: BLE001
-            self._db_failed = True
-            self._log(f"数据库直读不可用，继续 OCR 模式：{exc}", "warn")
+            delay = self._arm_db_retry(f"{type(exc).__name__}: {exc}")
+            self._log(
+                f"数据库直读不可用，继续 OCR 模式（{delay:.0f}s 后自动重试）：{exc}", "warn")
 
     def _tick_db(self, win=None) -> None:
         if self._want_friends:
@@ -957,19 +1045,23 @@ class MonitorBackend:
             return
         try:
             msgs = self._db.poll()
-            self._db_errors = 0
+            # A8：轮询成功一次即视为恢复（清零错误计数与退避状态，重新计 5 次窗口）
+            self._reset_db_retry()
         except Exception as exc:  # noqa: BLE001
             self._db_errors += 1
+            self._db_last_error = f"{type(exc).__name__}: {exc}"[:300]
             self._log(f"数据库轮询失败: {exc}", "warn")
             msgs = []
             if self._db_errors >= 5:
-                self._log("数据库直读连续失败，自动回退 OCR 模式", "warn")
+                delay = self._arm_db_retry(
+                    f"连续 {self._db_errors} 次轮询失败: {type(exc).__name__}: {exc}")
+                self._log(
+                    f"数据库直读连续失败，{delay:.0f}s 后自动重试（期间回退 OCR 模式）", "warn")
                 try:
                     self._db.close()
                 except Exception:
                     pass
                 self._db = None
-                self._db_failed = True
                 self._error = ""
                 self._monitor_state = "waiting"
                 self._status()
@@ -996,6 +1088,59 @@ class MonitorBackend:
             except Exception:
                 pass
         self._status()
+
+    # ---------------- A7：启动补采（只读本地库，不推 events、不改状态） ----------------
+    def recent_messages(self, *, since_ts: float, until_ts: float,
+                        limit: int = 200):
+        """返回 ``since_ts <= ts <= until_ts`` 的入站消息 dict 列表（按时间升序）。
+
+        供网关重启补采用（``Gateway._catchup_loader`` 调用）。语义约束：
+
+        * **只读**：直接走已建立的 DB 直读桥（``db_source.DbBridge``），不写
+          messages/文本日志、不 ``_emit``、不推进 ``last_id``，避免和正常轮询抢状态；
+        * 数据库直读未就绪（``_db is None``，例如微信刚启动）→ 返回 ``None``，
+          网关会隔 2s 重试直到超时；
+        * 只取本地账号维度可解析的监听好友，``sender`` 必须是 ``friend``
+          （自己发的不补，避免回环）。
+        """
+        db = self._db
+        if db is None:
+            return None
+        try:
+            cap = max(1, min(int(limit), 1000))
+        except (TypeError, ValueError):
+            cap = 200
+        names = [str(n) for n in (self._monitored or []) if str(n).strip()]
+        sources = getattr(db, "sources", None)
+        if not isinstance(sources, dict):
+            return None
+        out: list[dict] = []
+        for friend in names:
+            state = sources.get(friend) or {}
+            username = str(state.get("username") or "")
+            if not username:
+                continue
+            try:
+                rows = db.reader.read_messages(username, 0, limit=max(cap * 3, 300))
+            except Exception as exc:  # noqa: BLE001 - 单个好友读失败不影响其它人
+                self._log(f"补采读库失败（{friend}）: {exc}", "warn")
+                continue
+            for row in rows or []:
+                try:
+                    ts = float(row.get("create_time") or 0.0)
+                except (TypeError, ValueError):
+                    ts = 0.0
+                if ts < float(since_ts) or ts > float(until_ts):
+                    continue
+                try:
+                    msg = db._convert(friend, username, row)
+                except Exception:  # noqa: BLE001 - 单条坏 row 跳过
+                    continue
+                if msg is None or msg.sender != SENDER_FRIEND:
+                    continue
+                out.append(msg.to_dict())
+        out.sort(key=lambda d: float(d.get("ts") or 0.0))
+        return out[:cap]
 
     def _publish_message(self, msg: Message, silent: bool = False, persist: bool = True) -> None:
         if persist:

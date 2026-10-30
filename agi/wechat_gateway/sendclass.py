@@ -69,6 +69,10 @@ def classify_send_result(result: Any) -> str:
     if state == "clipboard":
         # 只有 ok=True 的 clipboard 才是"内容保留、等人工粘贴"；ok=False 保守算失败
         return CLIPBOARD if ok else FAILED
+    if state in ("unverified", "timeout", "unknown"):
+        # 发送超时/未知结果：内容可能已发出，但**没有送达证据** → 不计 sent、不重置熔断。
+        # 这类结果不能算 FAILED，否则会被熔断当成"发送故障"重复计数。
+        return UNVERIFIED
     if state == "draft":
         # P0-4：真失败落草稿会打 send_failed=True；旧 confirm 草稿没有该键
         if not ok and result.get("send_failed"):

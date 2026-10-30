@@ -59,6 +59,9 @@ def _gateway(tmp_path, cfg_path, **extra):
         "proactive_interval_min_s": 60, "proactive_interval_max_s": 60,
         "quiet_hours": [23, 8],
         "admin_token": "tok",
+        # 这些用例只验证"闸门是否真的拦住"：显式给 auto，避免依赖默认值改动
+        # （2026-10-30 起发送默认值已改为 confirm，缺省会让断言先落到 draft）。
+        "send_mode": "auto",
         **extra,
     })
     cfg = gw_config.load()

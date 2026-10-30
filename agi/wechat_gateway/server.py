@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import config as cfg
 from . import control, drafts, media as media_mod, policy, sendclass
-from .receiver import WeChatReceiver, is_mention, looks_like_pat
+from .receiver import ReceiveCursor, WeChatReceiver, is_mention, looks_like_pat
 from .sender import WxAutoSender
 from .. import textguard
 
@@ -218,7 +218,8 @@ def _delivery_status_from_classes(classes: list[str]) -> str:
 
 class Gateway:
     def __init__(self, cfg_obj: dict, *, stop_path: Path | str | None = None,
-                 config_path: Path | str | None = None):
+                 config_path: Path | str | None = None,
+                 cursor_path: Path | str | None = None):
         self.cfg = dict(cfg_obj)
         self.draft_path = self.cfg.get("drafts_path") or drafts.DEFAULT_PATH
         # P0-AB：日志路径「调用时」解析（env SOULAGENT_LOG_DIR → 数据目录），
@@ -237,6 +238,19 @@ class Gateway:
             self._cfg_mtime = int(self.config_path.stat().st_mtime_ns)
         except OSError:
             self._cfg_mtime = 0
+        # A7：入站接收游标（重启补采用）。默认与 config.json 同目录；
+        # 测试把 config_path 指到 tmp 时自动隔离，也可显式传 cursor_path。
+        self.cursor_path = (Path(cursor_path) if cursor_path is not None
+                            else self.config_path.parent / "cursor.json")
+        self.cursor = ReceiveCursor(self.cursor_path)
+        self.catchup_thread = None
+        self.catchup: dict = {"enabled": False, "since": 0.0, "until": 0.0,
+                              "forwarded": 0, "duplicates": 0, "filtered": 0,
+                              "done": False, "error": ""}
+        self._cursor_warned = ""
+        # 只有真正 start() 过的网关才写盘：避免测试/离线构造的 Gateway（cfg 无
+        # config_path 时默认指向生产目录）把游标写进生产数据目录。
+        self._cursor_enabled = False
         # P18-A：引擎软开关（监听+自动回复+主动）；默认 true
         self.engine_enabled = bool(self.cfg.get("engine_enabled", True))
         self.engine_since = time.time()
@@ -244,6 +258,11 @@ class Gateway:
         self.receiver = None
         self.backend = None
         self.sender = WxAutoSender(module_name=str(self.cfg.get("send_module") or "wechatauto"))
+        # 发送器能力探测缓存（sender_probe() 写入；/status、/api/sender/status 与启动自检读）
+        self.sender_status: dict | None = None
+        # C6：nightly（摘要/画像/反思/冷归档）由生产 main() 打开；单测构造的 Gateway
+        # 默认关闭，避免测试里意外触发 LLM 调用与整库整理。
+        self.nightly_enabled = False
         self.queue: "queue.Queue[dict]" = queue.Queue(maxsize=200)
         self.worker = None
         self.stop_event = threading.Event()
@@ -355,6 +374,66 @@ class Gateway:
         return Path(os.environ.get("WECHAT_WXAUTO_PYTHON")
                     or self.cfg.get("wxauto_python") or WXAUTO_PYTHON)
 
+    SENDER_PROBE_TTL_S = 60.0
+
+    def sender_probe(self, *, force: bool = False) -> dict:
+        """探测发送器 venv 里可用的发送模块（供 /api/sender/status 与启动自检）。
+
+        为什么需要：网关会把配置里的 ``send_module`` 强制下发给发送子进程；若该模块
+        在发送器 venv 里不存在，每次发送都会失败（真机事故：No module named
+        'wechatauto'）。探测结果缓存 60s，只在启动/管理 API 显式请求时执行，
+        不进入每轮发送热路径。
+        """
+        now = time.time()
+        cached = getattr(self, "sender_status", None)
+        if cached and not force and (
+                now - float(cached.get("checked_at") or 0.0)) < float(self.SENDER_PROBE_TTL_S):
+            return dict(cached)
+        py = self.wxauto_python
+        status: dict = {"available": False, "module": "", "python": str(py),
+                        "error": "", "tried": [], "checked_at": now}
+        if not py.exists():
+            status["error"] = f"缺少发送器 venv: {py}"
+            self.sender_status = status
+            return dict(status)
+        requested = str(self.cfg.get("send_module") or "").strip()
+        tried: list[str] = []
+        for cand in ([requested] if requested else []) + ["wechatauto", "wxauto4"]:
+            if cand and cand not in tried:
+                tried.append(cand)
+        status["tried"] = tried
+        code = (
+            "import importlib, json, os\n"
+            "ok = ''\n"
+            "for m in json.loads(os.environ['SENDER_CANDIDATES']):\n"
+            "    try:\n"
+            "        importlib.import_module(m)\n"
+            "        ok = m\n"
+            "        break\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "print(json.dumps({'module': ok}))\n"
+        )
+        try:
+            proc = subprocess.run(
+                [str(py), "-c", code], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=15,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8",
+                     "SENDER_CANDIDATES": json.dumps(tried, ensure_ascii=False)})
+            lines = (proc.stdout or "").strip().splitlines()
+            data = json.loads(lines[-1]) if lines else {}
+            module = str(data.get("module") or "")
+            status["module"] = module
+            status["available"] = bool(module)
+            if not module:
+                status["error"] = (proc.stderr or "没有可用的发送模块").strip()[-300:]
+        except subprocess.TimeoutExpired:
+            status["error"] = "发送器探测超时（15s）"
+        except Exception as exc:  # noqa: BLE001
+            status["error"] = f"{type(exc).__name__}: {exc}"[:300]
+        self.sender_status = status
+        return dict(status)
+
     def start(self) -> None:
         if not self.cfg.get("enabled"):
             self.start_error = "enabled=false"
@@ -378,12 +457,32 @@ class Gateway:
         except Exception as exc:  # noqa: BLE001
             self.start_error = f"{type(exc).__name__}: {exc}"
             return
+        # A7：重启补采——有游标就从游标开始（receiver 的 since 同时过滤旧事件），
+        # 没游标则保持旧行为 since=time.time()（首次部署不补历史）。
+        self._cursor_enabled = True
+        started_ts = time.time()
+        catchup_since = 0.0
+        catchup_exclude = ""
+        try:
+            cursor_ts = self.cursor.load()
+        except Exception:  # noqa: BLE001 - 游标读取绝不阻塞启动
+            cursor_ts = None
+        if cursor_ts and float(cursor_ts) > 0:
+            since = min(float(cursor_ts), started_ts)
+            catchup_since = since
+            # 游标那条消息 ts 正好等于 since，按 id 精确跳过（否则重启后重复回一次）
+            catchup_exclude = str(self.cursor.last_id or "")
+        else:
+            since = started_ts
         self.receiver = WeChatReceiver(
-            backend, allowed, self.on_inbound, since=time.time(),
+            backend, allowed, self.on_inbound, since=since,
             mention_name=str(self.cfg.get("mention_name") or ""))
         self.receiver.start()
         self.worker = threading.Thread(target=self._work, name="gateway-worker", daemon=True)
         self.worker.start()
+        if catchup_since > 0:
+            # worker 先起，补采消息进队列才有消费者（队列上限 200，补采同样受上限约束）
+            self._start_catchup(catchup_since, started_ts, catchup_exclude)
         if self.cfg.get("proactive_enabled"):
             self.proactive_thread = threading.Thread(
                 target=self._proactive_loop, name="gateway-proactive", daemon=True)
@@ -433,8 +532,115 @@ class Gateway:
         self._record("gateway_started", {"allowed": allowed, "monitored": monitored,
                                           "dry_run": bool(self.cfg.get("dry_run", True))})
 
+    # ---------------- A7：接收游标 + 启动补采 ----------------
+    CATCHUP_READY_TIMEOUT_S = 120.0   # 等后端 DB 就绪的上限（微信刚启动时可能更慢）
+    CATCHUP_POLL_S = 2.0              # 未就绪时的重试间隔
+
+    def _save_cursor(self, msg: dict) -> None:
+        """每处理一条入站消息就把游标推进到它的时间戳（原子写；失败只观测）。
+
+        游标只做“重启补采下界”，不参与去重（去重仍由 receiver 的 id 表负责）。
+        """
+        if not getattr(self, "_cursor_enabled", False):
+            return  # 未 start() 的离线/测试实例不写盘（避免污染生产游标）
+        try:
+            ts = float(msg.get("ts") or 0.0)
+        except (TypeError, ValueError):
+            ts = 0.0
+        if ts <= 0:
+            ts = time.time()
+        saved = self.cursor.save(ts, str(msg.get("id") or ""))
+        if not saved and self.cursor.last_error and self.cursor.last_error != self._cursor_warned:
+            # 同一种错误只记一次，避免磁盘故障时每条消息刷一行日志
+            self._cursor_warned = self.cursor.last_error
+            self._record("cursor_save_failed", {"error": self.cursor.last_error})
+
+    def _start_catchup(self, since_ts: float, until_ts: float,
+                       exclude_id: str = "") -> None:
+        """起 daemon 线程补采 ``(since_ts, until_ts]`` 的入站消息（不阻塞 start()）。"""
+        self.catchup = {"enabled": True, "since": float(since_ts),
+                        "until": float(until_ts), "forwarded": 0,
+                        "duplicates": 0, "filtered": 0, "done": False, "error": ""}
+        self._record("catchup_started", {"since": since_ts, "until": until_ts})
+        try:
+            self.catchup_thread = threading.Thread(
+                target=self._catchup_worker, name="gateway-catchup",
+                args=(float(since_ts), float(until_ts), str(exclude_id or "")),
+                daemon=True)
+            self.catchup_thread.start()
+        except Exception as exc:  # noqa: BLE001 - 补采起不来不影响正常收消息
+            self.catchup.update({"done": True,
+                                 "error": f"{type(exc).__name__}: {exc}"[:200]})
+            self._record("catchup_start_failed", {"error": self.catchup["error"]})
+
+    def _catchup_loader(self, since_ts: float, until_ts: float, limit: int):
+        """把后端（MonitorBackend）的 ``recent_messages`` 适配成 receiver 的 loader。"""
+        loader = getattr(self.backend, "recent_messages", None)
+        if not callable(loader):
+            return None
+        names = [str(x) for x in (self.cfg.get("monitored_contacts") or [])
+                 if str(x).strip()]
+        return loader(since_ts=since_ts, until_ts=until_ts, limit=int(limit),
+                      names=names or None)
+
+    def _catchup_worker(self, since_ts: float, until_ts: float,
+                        exclude_id: str = "") -> None:
+        """轮询等后端 DB 就绪 → 一次性补采（最多 ``catchup_max_items`` / ``catchup_window_s``）。"""
+        try:
+            timeout = float(self.cfg.get("catchup_ready_timeout_s")
+                            or self.CATCHUP_READY_TIMEOUT_S)
+        except (TypeError, ValueError):
+            timeout = self.CATCHUP_READY_TIMEOUT_S
+        try:
+            max_items = int(self.cfg.get("catchup_max_items") or 200)
+        except (TypeError, ValueError):
+            max_items = 200
+        try:
+            window_s = float(self.cfg.get("catchup_window_s") or 86400.0)
+        except (TypeError, ValueError):
+            window_s = 86400.0
+        deadline = time.time() + max(1.0, timeout)
+        last: dict = {}
+        while not self.stop_event.is_set():
+            try:
+                last = self.receiver.catch_up(
+                    self._catchup_loader, since_ts=since_ts, until_ts=until_ts,
+                    max_items=max_items, window_s=window_s,
+                    exclude_id=exclude_id)
+            except Exception as exc:  # noqa: BLE001 - 补采异常不能拖垮网关
+                last = {"ready": False,
+                        "error": f"{type(exc).__name__}: {exc}"[:200]}
+            last = last if isinstance(last, dict) else {}
+            if last.get("ready"):
+                self.catchup.update({
+                    "forwarded": int(last.get("forwarded") or 0),
+                    "duplicates": int(last.get("duplicates") or 0),
+                    "filtered": int(last.get("filtered") or 0),
+                    "done": True, "error": str(last.get("error") or "")})
+                self._record("catchup_done", {
+                    "since": since_ts, "until": until_ts,
+                    "loaded": int(last.get("loaded") or 0),
+                    "forwarded": int(last.get("forwarded") or 0),
+                    "duplicates": int(last.get("duplicates") or 0),
+                    "filtered": int(last.get("filtered") or 0)})
+                return
+            if time.time() >= deadline:
+                self.catchup.update({
+                    "done": True,
+                    "error": str(last.get("error") or "catchup_timeout")})
+                self._record("catchup_timeout", {
+                    "since": since_ts, "until": until_ts,
+                    "error": self.catchup["error"]})
+                return
+            self.stop_event.wait(self.CATCHUP_POLL_S)
+
     def stop(self) -> None:
         self.stop_event.set()
+        # A7：正常关闭也推进游标到“现在”——下次启动从关闭时刻补采，不丢关机期间消息
+        try:
+            self._save_cursor({"ts": time.time()})
+        except Exception:  # noqa: BLE001 - 关闭流程不因游标失败中断
+            pass
         if self.receiver:
             self.receiver.stop()
         if self.backend:
@@ -932,6 +1138,9 @@ class Gateway:
             return
         self._record("inbound", {"friend": msg.get("friend"), "text": msg.get("text"),
                                   "id": msg.get("id")})
+        # A7：处理到这条就把游标推进到它的 ts（无论后续被 auto_reply/投诉闸拦下，
+        # 都算“已消费”，避免下次重启反复回放同一批旧消息）
+        self._save_cursor(msg)
         # P34：用户回复 → 内驱力队列里该联系人的 active 欲望「被满足」
         if self.cfg.get("urges_enabled", True):
             try:
@@ -1173,6 +1382,23 @@ class Gateway:
                 aggregate[key] += int(event[key])
             for key in ("compressed", "keyword", "dormant", "purged"):
                 aggregate[key] += int(event[key])
+            # C6（2026-10-30）：夜间整理（摘要/画像/反思/冷归档/记忆指标）以前只能
+            # 手动跑 CLI；睡眠整理时顺带跑一次。LLM 不可用时会自动跳过 LLM 步骤，
+            # 只做本地整理；单库失败只记录，不影响其它库与网关。
+            if self.nightly_enabled and bool(self.cfg.get("nightly_on_sleep", True)):
+                try:
+                    from agi.selflearn import nightly
+                    from agi.selflearn.chat import SelfLearnAgent
+                    night_client = getattr(SelfLearnAgent(path), "client", None)
+                    report = nightly.run(path, night_client)
+                    aggregate["nightly"] = int(aggregate.get("nightly", 0)) + 1
+                    self._record("nightly", {
+                        "path": str(path), "ok": bool(report.get("ok")),
+                        "steps": sorted((report.get("steps") or {}).keys())})
+                except Exception as exc:  # noqa: BLE001 - 单库失败不影响睡眠整理
+                    self._record("nightly_error", {
+                        "path": str(path),
+                        "error": f"{type(exc).__name__}: {exc}"[:200]})
         self.last_memory_sleep = aggregate
         return aggregate
 
@@ -1718,12 +1944,17 @@ class Gateway:
                 self._record("send_uia_failed", {"friend": contact,
                                                  "error": f"{type(exc).__name__}: {exc}"[:200]})
         if not self.wxauto_python.exists():
-            return self._on_send_failure(contact, text, f"缺少 wxauto venv: {self.wxauto_python}")
+            return self._on_sender_unavailable(
+                contact, text, f"缺少发送器 venv: {self.wxauto_python}")
         cmd = [str(self.wxauto_python), "-m", "agi.wechat_gateway.send_cli",
                "--contact", contact, "--text", text]
         try:
+            timeout_s = max(5.0, float(self.cfg.get("send_timeout_s") or 45))
+        except (TypeError, ValueError):
+            timeout_s = 45.0
+        try:
             proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=90,
+                                  encoding="utf-8", errors="replace", timeout=timeout_s,
                                   env={**os.environ, "PYTHONIOENCODING": "utf-8",
                                        "WECHAT_SEND_PROBE_ENABLED":
                                            "1" if self.cfg.get("send_probe_enabled", True) else "0",
@@ -1737,6 +1968,12 @@ class Gateway:
                 return self._on_send_failure(
                     contact, text, (proc.stderr or "send_cli 无输出")[-500:])
             out = json.loads(line)
+            # P0：发送器缺失属于"环境不可用"，不是"这条消息内容有问题"。单独审计 +
+            # 内容落草稿 + 给出可操作提示（真机事故：No module named 'wechatauto'）。
+            if str(out.get("status") or "").strip().lower() == "sender_unavailable":
+                return self._on_sender_unavailable(
+                    contact, text, str(out.get("error") or "sender_unavailable"),
+                    tried=out.get("tried"))
             classification = sendclass.classify_send_result(out)
             if classification == sendclass.DELIVERED:
                 self.send_times.append(time.time())
@@ -1745,9 +1982,15 @@ class Gateway:
                     self._reactive_dedupe[(str(contact or "").strip(),
                                            dedupe_token)] = now
             elif classification == sendclass.FAILED:
+                err_text = str(out.get("error") or out.get("status") or "failed")
+                # P0：发送器缺模块（venv 里没装 wechatauto/wxauto4）会被 sender 报成
+                # ModuleNotFoundError。这是环境配置错，不是"这条消息发送失败"：
+                # 单独审计 + 落草稿 + 可直接展示的 sender_unavailable 状态。
+                if "no module named" in err_text.lower() or "modulenotfound" in err_text.lower():
+                    return self._on_sender_unavailable(contact, text, err_text,
+                                                       tried=out.get("tried"))
                 return self._on_send_failure(
-                    contact, text,
-                    str(out.get("error") or out.get("status") or "failed"),
+                    contact, text, err_text,
                     error_key=str(out.get("error_key") or ""),
                     stage=str(out.get("stage") or ""))
             else:
@@ -1755,6 +1998,21 @@ class Gateway:
                 # 原样交给调用方按统一口径计数（窗口兜底在 _on_send_failure 里）
                 out["classification"] = classification
             return out
+        except subprocess.TimeoutExpired:
+            # P0：超时 = 不知道发没发（SendMsg 可能已执行）。旧实现把它当"未发送"，
+            # 随后窗口兜底再发一遍 → 同一条内容可能被发两次。这里改判 unverified，
+            # 且**不自动兜底重发**；内容落草稿供人工确认。
+            self._record("send_timeout", {"friend": contact, "timeout_s": timeout_s})
+            self.unverified += 1
+            draft = self._archive_failed_draft(contact, text, "send_timeout",
+                                               reason="send_timeout")
+            result = {"ok": False, "status": "unverified",
+                      "classification": sendclass.UNVERIFIED,
+                      "error": "send_timeout", "possible_sent": True,
+                      "warning": "send_timeout_unverified"}
+            if draft is not None:
+                result.update({"draft_id": draft["id"], "requires_confirm": True})
+            return result
         except Exception as exc:  # noqa: BLE001
             return self._on_send_failure(contact, text, f"{type(exc).__name__}: {exc}")
 
@@ -1994,6 +2252,7 @@ class Gateway:
                                                  "error": f"{type(exc).__name__}: {exc}"[:200]})
 
         # ⑧ 真发：wxauto4 venv 子进程（与文本发送同一条链路）
+        timed_out = False
         if not self.wxauto_python.exists():
             payload_items = []
             error = f"缺少 wxauto venv: {self.wxauto_python}"
@@ -2005,8 +2264,12 @@ class Gateway:
             error = ""
             payload_items = []
             try:
+                media_timeout_s = max(10.0, float(self.cfg.get("send_media_timeout_s") or 120))
+            except (TypeError, ValueError):
+                media_timeout_s = 120.0
+            try:
                 proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True,
-                                      encoding="utf-8", errors="replace", timeout=120,
+                                      encoding="utf-8", errors="replace", timeout=media_timeout_s,
                                       env={**os.environ, "PYTHONIOENCODING": "utf-8",
                                            "WECHAT_SEND_PROBE_ENABLED":
                                                "1" if self.cfg.get("send_probe_enabled", True) else "0",
@@ -2023,6 +2286,11 @@ class Gateway:
                 else:
                     parsed = json.loads(line)
                     payload_items = parsed.get("items") or []
+            except subprocess.TimeoutExpired:
+                # 超时 = 不知道有没有发出：标记后**不自动兜底**，避免同一条媒体发两次。
+                timed_out = True
+                error = (f"send_timeout: 媒体发送超时（{media_timeout_s}s），"
+                         f"不确定是否发出，未自动重试")
             except Exception as exc:  # noqa: BLE001
                 error = f"{type(exc).__name__}: {exc}"
 
@@ -2039,7 +2307,8 @@ class Gateway:
             result.setdefault("type", str(item.get("type") or ""))
             # ⑨a UIA 兜底（P0-2）：fallback_enabled + fallback_send_mode=uia 时逐条走
             # uia_sender：文本类用文字发送，图片/贴纸/GIF 用剪贴板粘贴媒体。
-            if (not result.get("ok") and self.cfg.get("fallback_enabled")
+            if (not result.get("ok") and not timed_out
+                    and self.cfg.get("fallback_enabled")
                     and str(self.cfg.get("fallback_send_mode") or "").strip().lower() == "uia"):
                 try:
                     from . import uia_sender
@@ -2073,7 +2342,8 @@ class Gateway:
                 except Exception:  # noqa: BLE001 - 兜底失败保持原错误
                     pass
             # ⑨b 窗口级兜底：wxauto4 失败时用剪贴板粘贴图片/文字（默认开启才走）
-            if (not result.get("ok") and self.cfg.get("fallback_enabled")
+            if (not result.get("ok") and not timed_out
+                    and self.cfg.get("fallback_enabled")
                     and str(self.cfg.get("fallback_mode") or "").strip().lower() == "auto"
                     and str(item.get("type") or "").strip().lower() in ("image", "gif", "sticker")):
                 try:
@@ -2219,6 +2489,42 @@ class Gateway:
             result["stage"] = stage
         return result
 
+    def _on_sender_unavailable(self, contact: str, text: str, detail: str, *,
+                               tried: object = None) -> dict:
+        """发送器不可用（缺 venv/缺模块）：单独审计 + 内容落草稿 + 返回可操作状态。
+
+        与普通 ``_on_send_failure`` 的区别：这是**环境配置错误**（装错 venv / 没装
+        wechatauto），不是这条内容发送失败；不该被展示成"发送失败"让用户以为对方
+        拒收，也不该伪装成普通 send_failed 去污染熔断统计。
+        """
+        message = str(detail or "sender_unavailable")
+        tried_list = [str(x) for x in (tried or [])] if isinstance(tried, (list, tuple)) else []
+        self.sender_status = {
+            "available": False, "module": "", "python": str(self.wxauto_python),
+            "error": message[:300], "tried": tried_list, "checked_at": time.time()}
+        self._record("send_unavailable", {
+            "friend": contact, "error": message[:200],
+            "error_key": "sender_unavailable", "stage": "send",
+            "tried": tried_list})
+        # 发送器不可用（缺 venv/缺模块）时，窗口级/UIA 兜底仍可能可用——先试兜底：
+        # 兜底成功按 clipboard/unverified 原样返回；只有兜底也不可用才落草稿并标
+        # sender_unavailable（环境配置错，不是"这条内容发送失败"）。
+        fallback = self._on_send_failure(contact, text, message,
+                                         error_key="sender_unavailable",
+                                         stage="sender_unavailable")
+        classification = sendclass.classify_send_result(fallback)
+        if classification in (sendclass.DELIVERED, sendclass.UNVERIFIED,
+                              sendclass.CLIPBOARD):
+            fallback["error_kind"] = "sender_unavailable"
+            fallback["sender_status"] = dict(self.sender_status)
+            return fallback
+        result: dict = dict(fallback)
+        result.update({"ok": False, "status": "sender_unavailable",
+                       "error": message[:200], "error_kind": "sender_unavailable",
+                       "possible_sent": False,
+                       "sender_status": dict(self.sender_status)})
+        return result
+
     @staticmethod
     def _normalize_error_key(error: str) -> str:
         """与 sender/proactive_worker 同口径：0x… → 0xADDR，压空白，取前 60 字。"""
@@ -2353,6 +2659,9 @@ class Gateway:
             "clipboard": self.clipboard,
             "planned": self.planned,
             "send_mode": control.send_mode(self.cfg),
+            # 发送器能力（sender_probe 缓存；None=还没探测过）。802 顶部状态条据此提示
+            # "发送器不可用，请安装 wechatauto/wxauto4"。
+            "sender": dict(self.sender_status) if self.sender_status else None,
             "drafts_pending": len(drafts.list_all(path=self.draft_path, limit=200)),
             # P0-AB8：启动时按 TTL 清掉的过期草稿数（配置 draft_ttl_days，默认 7 天）
             "drafts_pruned": int(getattr(self, "drafts_pruned", 0) or 0),
@@ -2389,6 +2698,9 @@ class Gateway:
             "stale_suppressed_reason": stale_reason or None,
             "backend": state,
             "receiver": self.receiver.status() if self.receiver else None,
+            # A7：接收游标与启动补采观测（不含聊天内容，只有时间戳/计数）
+            "cursor": self.cursor.status(),
+            "catchup": dict(self.catchup),
             "recent": list(self.recent)[-20:],
         }
 
@@ -2643,6 +2955,15 @@ def make_handler(gateway: Gateway):
             if path == "/status":
                 self._json(200, gateway.status())
                 return
+            # P0：发送器能力探测（force=1 强制重探；默认缓存 60s）。802 启动时调用一次，
+            # 缺模块时能直接告诉用户"发送器不可用"，而不是等第一条回复失败。
+            if path == "/api/sender/status":
+                force = str(self._query_param("force", "0") or "").strip().lower() in (
+                    "1", "true", "yes", "on")
+                probe = gateway.sender_probe(force=force)
+                self._json(200, {"ok": True, "sender": probe,
+                                 "available": bool(probe.get("available"))})
+                return
             # P18-A：引擎状态（控制台按钮读这个，比 /status 轻）
             if path == "/api/engine":
                 self._json(200, gateway.engine_state())
@@ -2733,6 +3054,20 @@ def main(argv=None) -> int:
             print(f"[gateway] 警告：{warning}", flush=True)
     gateway = Gateway(cfg_obj)
     gateway.start()
+    # C6：生产网关打开 nightly（睡眠整理时跑摘要/画像/反思）；测试构造的实例不受影响。
+    gateway.nightly_enabled = True
+    # P0：启动自检发送器。缺模块时立刻打印可操作提示（不再等第一条回复失败）。
+    try:
+        probe = gateway.sender_probe(force=True)
+        if probe.get("available"):
+            print(f"[gateway] 发送器: {probe.get('module')} （{probe.get('python')}）",
+                  flush=True)
+        else:
+            print(f"[gateway] 警告：发送器不可用 —— {probe.get('error')}；"
+                  f"请在 {probe.get('python')} 里安装 wechatauto 或 wxauto4",
+                  flush=True)
+    except Exception as exc:  # noqa: BLE001 - 自检失败不阻止网关启动
+        print(f"[gateway] 发送器自检失败（不影响启动）：{exc}", flush=True)
     port = int(cfg_obj.get("port") or 801)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(gateway))
     print(f"wechat_gateway http://127.0.0.1:{port}/  ready={gateway.ready} "

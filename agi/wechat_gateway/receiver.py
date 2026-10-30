@@ -41,12 +41,15 @@ P29：真机拍一拍不一定以 ``kind=system`` 送达——wx_core 可能把�
 """
 from __future__ import annotations
 
+import json
 import queue
 import threading
+import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Callable
 
-__all__ = ["WeChatReceiver"]
+__all__ = ["ReceiveCursor", "WeChatReceiver"]
 
 EVENT_MESSAGE = "message"
 SENDER_FRIEND = "friend"
@@ -54,6 +57,11 @@ KIND_TEXT = "text"
 
 DEFAULT_POLL_INTERVAL = 0.2
 DEFAULT_MAX_SEEN_IDS = 4096
+
+#: A7：启动补采的默认上限（条数 / 时间窗），防止游标缺失或太久远时灾难性回放。
+DEFAULT_CATCHUP_MAX_ITEMS = 200
+DEFAULT_CATCHUP_WINDOW_S = 86400.0
+CURSOR_VERSION = 1
 
 
 def _clean(value: object) -> str:
@@ -92,6 +100,90 @@ def looks_like_pat(text: object) -> bool:
     if after[:1] in ("我", "你", "他", "她", "它", "对", "咱", "俺"):
         return True
     return any(mark in value for mark in ("「", "」", '"', "“", "”"))
+
+
+class ReceiveCursor:
+    """A7：入站接收游标（``agi/data/wechat/cursor.json``，一行 JSON，原子写）。
+
+    记录"网关处理到哪条入站消息"，供重启后补采 ``(last_ts, 启动时刻]`` 之间的消息。
+    设计约束：
+
+    * 游标只是**可再生的优化**：文件缺失/损坏/不可写都不抛异常，调用方按旧行为
+      （``since=time.time()``）继续跑，绝不让磁盘问题挡住收消息；
+    * 单调递增：``save()`` 只会把 ``last_ts`` 往前推，回放的旧消息不会把游标拉回去；
+    * 原子写：同目录 ``*.tmp`` + ``os.replace``，避免半截 JSON。
+    """
+
+    def __init__(self, path: Path | str | None):
+        self.path: Path | None = Path(path) if path else None
+        self._lock = threading.Lock()
+        self.last_ts = 0.0
+        self.last_id = ""
+        self.saved = 0
+        self.last_error = ""
+
+    def load(self) -> float | None:
+        """读游标时间戳；文件不存在/无有效值 → ``None``（调用方退回旧行为）。"""
+        if self.path is None:
+            return None
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except Exception as exc:  # noqa: BLE001 - 游标坏了按"没有游标"处理
+            self.last_error = f"cursor_load_failed: {type(exc).__name__}: {exc}"[:200]
+            return None
+        if not isinstance(raw, dict):
+            self.last_error = "cursor_load_failed: not a dict"
+            return None
+        try:
+            ts = float(raw.get("last_ts") or 0.0)
+        except (TypeError, ValueError):
+            ts = 0.0
+        if ts <= 0:
+            return None
+        self.last_ts = ts
+        self.last_id = str(raw.get("last_id") or "")
+        return ts
+
+    def save(self, ts: object, msg_id: str = "") -> bool:
+        """把游标推进到 ``ts``（只前进不后退）并原子落盘；失败返回 False 不抛异常。"""
+        try:
+            value = float(ts)
+        except (TypeError, ValueError):
+            return False
+        if value <= 0:
+            return False
+        with self._lock:
+            self.last_ts = max(float(self.last_ts or 0.0), value)
+            if msg_id:
+                self.last_id = str(msg_id)
+            self.saved += 1
+            if self.path is None:
+                return False
+            try:
+                target = self.path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp = target.with_name(target.name + ".tmp")
+                payload = {"version": CURSOR_VERSION,
+                           "last_ts": self.last_ts,
+                           "last_id": self.last_id,
+                           "updated_at": time.time()}
+                tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+                tmp.replace(target)
+                self.last_error = ""
+                return True
+            except Exception as exc:  # noqa: BLE001 - 写游标失败不影响主链
+                self.last_error = f"cursor_save_failed: {type(exc).__name__}: {exc}"[:200]
+                return False
+
+    def status(self) -> dict:
+        """观测快照（/status 用；不含任何聊天内容）。"""
+        return {"path": str(self.path) if self.path else "",
+                "last_ts": self.last_ts,
+                "last_id": self.last_id,
+                "saved": self.saved,
+                "last_error": self.last_error}
 
 
 class WeChatReceiver:
@@ -286,6 +378,94 @@ class WeChatReceiver:
                 "since": self.since,
             })
         return data
+
+    # ------------------------------------------------------------------
+    # A7：启动补采（游标 → 启动时刻之间的入站消息）
+    # ------------------------------------------------------------------
+    def catch_up(self, loader: Callable[..., object], *, since_ts: float,
+                 until_ts: float | None = None,
+                 max_items: int = DEFAULT_CATCHUP_MAX_ITEMS,
+                 window_s: float = DEFAULT_CATCHUP_WINDOW_S,
+                 exclude_id: str = "") -> dict:
+        """把 ``since_ts`` 之后、``until_ts`` 之前的入站消息补进同一条过滤链。
+
+        ``loader(since, until, limit)`` 返回消息 **data dict** 列表（``Message.to_dict()``
+        形态），或 ``None`` 表示后端数据库还没就绪（调用方稍后重试）。
+
+        ``exclude_id``：游标里记录的最后一条已处理消息 id。它的 ts 正好等于游标，
+        若只按时间过滤会被重复回放（重启后内存去重表已清空），因此按 id 精确跳过。
+
+        复用 :meth:`process_event`：白名单 / kind / sender / 去重 / ``since`` 时间下界
+        完全一致，不另开语义；补采只是"另一条把事件喂进来的路径"。
+        """
+        stats: dict = {"ok": False, "ready": False, "loaded": 0, "forwarded": 0,
+                       "duplicates": 0, "filtered": 0, "skipped_cursor": 0,
+                       "since": float(since_ts or 0.0), "until": 0.0,
+                       "max_items": int(max_items), "window_s": float(window_s),
+                       "error": ""}
+        now = time.time()
+        try:
+            until = float(until_ts if until_ts is not None else now)
+        except (TypeError, ValueError):
+            until = now
+        if until <= 0:
+            until = now
+        # 灾难保护：游标太久远时把补采下界截到 window_s 以内（默认 24h）
+        floor = now - max(0.0, float(window_s))
+        try:
+            since = max(float(since_ts or 0.0), floor)
+        except (TypeError, ValueError):
+            since = floor
+        stats["since"] = since
+        stats["until"] = until
+        try:
+            limit = max(1, min(int(max_items), 1000))
+        except (TypeError, ValueError):
+            limit = DEFAULT_CATCHUP_MAX_ITEMS
+        try:
+            rows = loader(since, until, limit)
+        except Exception as exc:  # noqa: BLE001 - 补采失败只记录，不影响正常收消息
+            stats["error"] = f"catchup_loader_failed: {type(exc).__name__}: {exc}"[:200]
+            return stats
+        if rows is None:
+            stats["error"] = "backend_not_ready"
+            return stats
+        with self._state_lock:
+            before = dict(self._stats)
+        try:
+            items = list(rows)
+        except TypeError:
+            items = []
+        for data in items[:limit]:
+            stats["loaded"] += 1
+            if not isinstance(data, dict):
+                continue
+            try:
+                ts = float(data.get("ts") or 0.0)
+            except (TypeError, ValueError):
+                ts = 0.0
+            if ts and not (since <= ts <= until):
+                continue
+            # 游标里那条"最后已处理"的消息 ts == since，时间窗过滤挡不住，按 id 精确跳过
+            if exclude_id and str(data.get("id") or "") == str(exclude_id):
+                stats["skipped_cursor"] += 1
+                continue
+            try:
+                self.process_event({"type": EVENT_MESSAGE, "data": dict(data)})
+            except Exception as exc:  # noqa: BLE001 - 单条坏数据只丢自己
+                self.last_error = (
+                    f"catchup_process_failed: {type(exc).__name__}: {exc}"[:200])
+        with self._state_lock:
+            after = dict(self._stats)
+        stats["forwarded"] = max(0, int(after.get("messages_forwarded", 0))
+                                 - int(before.get("messages_forwarded", 0)))
+        stats["duplicates"] = max(0, int(after.get("duplicates_dropped", 0))
+                                  - int(before.get("duplicates_dropped", 0)))
+        stats["filtered"] = max(0, int(after.get("messages_filtered", 0))
+                                - int(before.get("messages_filtered", 0)))
+        stats["ok"] = True
+        stats["ready"] = True
+        return stats
 
     # 便于只读观察
     @property

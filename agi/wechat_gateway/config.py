@@ -30,6 +30,9 @@ DEFAULTS = {
     "engine_enabled": True,
     # P38：每天 03:00 睡眠整理（衰减/渐进遗忘/休眠清理）；engine 停也跑
     "memory_decay_enabled": True,
+    # C6：睡眠整理时顺带跑一次 nightly（摘要/画像/反思/冷归档/记忆指标）；
+    # 只有生产 main() 启动的网关会开（self.nightly_enabled），测试构造的实例默认不跑。
+    "nightly_on_sleep": True,
     "memory_purge_enabled": False,
     "memory_sleep_hour": 3,
     "port": 801,
@@ -51,7 +54,9 @@ DEFAULTS = {
     "rate_per_minute": 3,
     "reactive_rate_per_minute": 8,
     "daily_limit": 200,
-    "send_mode": "auto",
+    # P0：缺省必须是人工确认（与 control.DEFAULT_SEND_MODE、风控文档口径一致）。
+    # 生产要自动发送时在 config.json 显式写 "send_mode": "auto"，不要在默认值里放开。
+    "send_mode": "confirm",
     "send_backend": "sender",  # sender = wxauto 系发送器子进程（默认 wechatauto 模块）| uia
     "send_module": "wechatauto",  # 发送器模块：wechatauto（当前）/ wxauto4（历史）   # 历史兼容默认；control.send_mode 对缺省 key 兜底 confirm；生产 config.json=confirm
     "admin_token": "",
@@ -63,6 +68,10 @@ DEFAULTS = {
     # P0-4 发送容错：发送前句柄双验（send_probe 审计）开关、非确定性失败的额外重试次数
     "send_probe_enabled": True,
     "send_retry_max": 1,
+    # 发送子进程超时（秒）。超时 = "不知道发没发"，按 unverified 处理且不自动兜底重发。
+    "send_timeout_s": 45,
+    # 多媒体多气泡子进程超时（秒）：媒体链路更慢，单独放宽。
+    "send_media_timeout_s": 120,
     # P5-a 发送层多媒体（默认关闭：用户/决策层显式开启前，send_bubbles 一律 blocked）
     "media_enabled": False,
     "media_dirs": [],              # 追加白名单目录（默认三个目录见 agi/wechat_gateway/media.py）

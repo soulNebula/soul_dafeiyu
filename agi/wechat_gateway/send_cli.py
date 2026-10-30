@@ -86,16 +86,28 @@ def main(argv=None) -> int:
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
     module_name = (os.environ.get("WECHAT_SEND_MODULE") or "").strip()
+    # P0：网关会无条件下发 WECHAT_SEND_MODULE（来自配置 send_module）。旧实现一旦
+    # 该模块在发送器 venv 里不存在就直接 ImportError 整次失败（真机事故：
+    # No module named 'wechatauto'，所有回复发不出去）。这里改成"优先用配置的模块，
+    # 不可用就自动回退到 wechatauto / wxauto4"，全不可用才报告 sender_unavailable。
+    candidates = ([module_name] if module_name else []) + ["wechatauto", "wxauto4"]
+    tried: list[str] = []
+    module_name = ""
+    for cand in candidates:
+        if not cand or cand in tried:
+            continue
+        tried.append(cand)
+        try:
+            importlib.import_module(cand)
+            module_name = cand
+            break
+        except Exception:  # noqa: BLE001 - 缺模块/导入期报错都继续试下一个
+            continue
     if not module_name:
-        # 自动探测：优先 wechatauto（当前可用），退回 wxauto4（历史方案）
-        for cand in ("wechatauto", "wxauto4"):
-            try:
-                importlib.import_module(cand)
-                module_name = cand
-                break
-            except Exception:  # noqa: BLE001
-                continue
-        module_name = module_name or "wxauto4"
+        # 一个都导不进来：保留历史行为（交给 WxAutoSender 在真正发送时给出
+        # ModuleNotFoundError），网关会把它识别成 sender_unavailable 并落草稿；
+        # 这里不能直接退出，否则 --dry-run / 测试注入的发送器会被误杀。
+        module_name = (os.environ.get("WECHAT_SEND_MODULE") or "").strip() or "wechatauto"
     sender = WxAutoSender(cfg=_env_cfg(),
                           module_name=module_name,
                           log_path=os.environ.get("WECHAT_GATEWAY_LOG") or None)

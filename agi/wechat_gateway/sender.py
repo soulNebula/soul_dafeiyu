@@ -696,8 +696,16 @@ class WxAutoSender:
         try:
             # 必须显式带 who/exact：不传时 wechatauto 会自己找当前聊天页，
             # 窗口布局变化时容易卡住并超时（2026-10-30 实测）。
-            response = (send_files(path, who=who, exact=True) if who
-                        else send_files(path))
+            # 兼容旧实现/测试桩：SendFiles 只接受 path 时按 TypeError 回退一次。
+            if who:
+                try:
+                    response = send_files(path, who=who, exact=True)
+                except TypeError as exc:
+                    if "keyword" not in str(exc).lower():
+                        raise
+                    response = send_files(path)
+            else:
+                response = send_files(path)
         except Exception as exc:  # noqa: BLE001
             return False, f"{type(exc).__name__}: {str(exc)[:300]}"
         ok, detail = self._send_succeeded(response)

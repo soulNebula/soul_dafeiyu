@@ -265,3 +265,55 @@ def test_rechecks_do_not_modify_variants_or_weak_checks(tmp_path):
     assert _rows(path, "SELECT * FROM variants ORDER BY id") == variants_before
     assert _count(path, "weak_checks") == weak_checks_before
     assert _rows(path, "SELECT level FROM skills WHERE id=?", (skills.SKILL_ID,))[0]["level"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# C4：due_rechecks 只提醒、不自动判（只读，不 run_recheck、不降级）
+# --------------------------------------------------------------------------- #
+def test_due_rechecks_empty_table_returns_empty_list(tmp_path):
+    path = tmp_path / "selflearn.sqlite3"
+
+    assert wv.due_rechecks(path, now=1000.0) == []
+
+
+def test_due_rechecks_returns_only_matured_plans(tmp_path):
+    path = tmp_path / "selflearn.sqlite3"
+    wv.schedule_recheck(path, "S-1", "跨时间复测", now=1000.0)
+    due_at = 1000.0 + wv.RECHECK_INTERVAL_SECONDS
+
+    assert wv.due_rechecks(path, now=due_at - 0.5) == []
+
+    items = wv.due_rechecks(path, now=due_at + 7.5)
+    assert len(items) == 1
+    item = items[0]
+    assert set(item) == {"skill_id", "next_at", "reason", "variant",
+                         "level", "overdue_s"}
+    assert item["skill_id"] == "S-1"
+    assert item["next_at"] == due_at
+    assert item["reason"] == "跨时间复测"
+    assert item["variant"] is None
+    assert item["level"] == 0
+    assert item["overdue_s"] == 7.5
+
+    # 只读：计划仍是 pending，没有复测记录，也没有改等级
+    assert wv.status(path, now=due_at + 7.5)["counts"]["scheduled"] == 1
+    assert _count(path, "weak_rechecks") == 0
+    assert _rows(path, "SELECT level FROM skills") == []
+
+
+def test_due_rechecks_reports_variant_and_level_without_mutation(tmp_path):
+    path = tmp_path / "selflearn.sqlite3"
+    variant = skills.add_dynamic_variant(path, "复测用策略")
+    _seed_skill(path, level=4)
+    wv.schedule_recheck(path, skills.SKILL_ID, "看变体", now=0.0)
+
+    due = wv.due_rechecks(path, now=wv.RECHECK_INTERVAL_SECONDS + 5)
+
+    assert len(due) == 1
+    assert due[0]["variant"] == variant["id"]
+    assert due[0]["level"] == 4
+    assert due[0]["overdue_s"] == 5.0
+    # 提醒不改任何技能等级/复测账本
+    assert _rows(path, "SELECT level FROM skills WHERE id=?",
+                 (skills.SKILL_ID,))[0]["level"] == 4
+    assert _count(path, "weak_rechecks") == 0

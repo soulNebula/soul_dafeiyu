@@ -44,7 +44,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | 对话测试 | 隔离库 `agi/data/selflearn/console_test.sqlite3` → 进程内 `SelfLearnAgent.send()`，可试提示词/模型效果，不影响真实联系人 |
 | 素材库 | `media_assets`（memory 库）+ `tools/console/media_store.py`：增删改/类型/含义/标签/启用/软删回收；126 个现有素材自动导入 builtin=1 |
 | 媒体 | `agi/wechat_gateway/media.capabilities()`（import 失败降级静态矩阵）+ `emoji_archive`/目录扫描 + `agi/data/media_wishes.jsonl`；测试发送只允许文件传输助手 |
-| 内状态（心情卡片） | `/api/mood`（`mood_judge.snapshot`）：心情值/7 情绪/注入预览/时间线；`/api/mood/inject`、`/api/mood/enabled` 只写 mood.json 白名单键 |
+| 内状态（心情卡片） | `/api/mood`（`mood_judge.snapshot`）：心情值/7 情绪/注入预览/时间线；返回带 `source:"mood_judge"` 与 `affect_note`（**affect 0–1 是内部连续量，不作为心情显示**）；`/api/mood/inject`、`/api/mood/enabled` 只写 mood.json 白名单键 |
 | 记忆 | `agi/selflearn/memory.metrics()` + `user_memories` 最近 50 条 + `/api/tone`（AI 语气 vs `agi/eval_data/human_tone/profile.md` 真人基线） |
 | 提示词 | `agi/selflearn/prompt_store`（11 个内置键的 defaults/overrides/effective；降级时直读 `agi/data/prompts.json`）。左列选键 → 右侧大文本框编辑 → 保存/恢复默认/全部恢复默认 |
 | 模型配置 | 网关 `config.json` 的白名单键（llm_model/llm_temperature/llm_max_tokens/soul_server_url/soul_timeout_s/inner_schema）+ DeepSeek key 仅显示已配置/未配置 |
@@ -55,7 +55,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 | B站 | 扫码登录（真实 B站 passport 接口，凭证写 `~/.dsh/bili-duty/bili_credential.json`）+ 与 DSH 刷B站同字段配置（`config.json` 白名单）+ 状态/日报；插件缺失（`bili_home_missing`）时显示「未安装 bili-duty 插件」安装提示空态 |
 | 日志 | `gateway.log`(JSONL)/`inner.log`/`prompt_override.log`/regen_failed；搜索+时间倒序+错误标红 |
 | 训练 | `/api/train/status` + `/api/train/daily?date=`：今日/累计样本、门禁（MIN 300 进度/next_ready/reasons）、history 最后一条、最近 14 天日报；只读，空态不造数 |
-| 成长 / 内驱力 | `/api/growth/status` `/api/growth/narrative`（helper `tools/console/growth_api.py`，未就绪返回 501+hint 并显示「后端未就绪」卡）+ `/api/initiative/status?contact=`（801 只读：drive/drive_level/daily_cap）；只读 |
+| 成长 / 内驱力 | `/api/growth/status` `/api/growth/narrative`（helper `tools/console/growth_api.py`，未就绪返回 501+hint 并显示「后端未就绪」卡）+ `/api/growth/weak-due`（到期复测，只提醒不自动判定/降级）+ `/api/wake/pending?limit=`（`share_candidates` 里 kind=wake，已排队不自动发送）+ `/api/initiative/status?contact=`（801 只读：drive/drive_level/daily_cap）；只读 |
 | 设置 | `/api/config`（主动开关/概率/间隔/静默时段）+ STOP/恢复 |
 
 ## 接口
@@ -69,6 +69,7 @@ curl -s -X POST -H "X-Admin-Token: $TOKEN" -H 'Content-Type: application/json' \
 `/api/media/capabilities` `/api/media/library?limit=` `/api/media/assets?limit=&kind=` `/api/media/stats` `/api/media/wishes` `/api/media/acquisition` `/api/media/file?path=`
 `/api/train/status` `/api/train/daily?date=` `/api/growth/status` `/api/growth/narrative`
 `/api/initiative/status?contact=` `/api/sender/status?force=` `/api/drafts` `/api/media/video-cache`
+`/api/growth/weak-due?contact=` `/api/wake/pending?limit=&contact=`（两者需 token，口径同 `/api/growth/*`；weak-due 不可用时 `ok:false + weak_due_unavailable`，不是 501）
 
 写（POST，`X-Admin-Token`，全部写 `agi/data/console_audit.log`）：
 

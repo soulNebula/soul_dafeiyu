@@ -8,6 +8,8 @@
 - ``due()`` 只查询，不改状态、不发送；
 - ``run_due()`` 只做三件事：按预算选一批、写 ``wake_runs`` 审计、把意图标成
   ``done`` / ``dropped``。它**没有**任何微信/网络调用；
+- ``bridge_due()`` 在 ``run_due`` 之后把每条已处理意图转成分享**候选**
+  （``share_candidates`` + ``share_events(action="queued")``），仍不发送；
 - 去重键是 ``(kind, 归一化后的 text)``：同一条待办不会排队两次；已有更早的
   唤醒时间或更高优先级会合并进去；
 - 预算分两层：单次 ``budget`` 与 ``DAILY_WAKE_BUDGET``（按本地自然日统计
@@ -24,7 +26,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import db
+from . import db, share_store
 from .config import DB_PATH
 
 #: 显式声明：本模块不发送任何消息，唤醒只产生审计与队列状态
@@ -374,3 +376,75 @@ def run_due(path: Path | str = DB_PATH, now: float | None = None,
         },
         "note": "唤醒只写审计并把意图标为 done/dropped，不自动发微信",
     }
+
+
+def bridge_due(path: Path | str = DB_PATH, now: float | None = None,
+               limit: int = 5) -> dict[str, Any]:
+    """把**到期内驱力**转成分享候选（只生成候选，不发送）。
+
+    复用 :func:`run_due` 的预算/去重/审计：先由 run_due 选出并标记 due 意图
+    （写 ``wake_runs``、意图置 done/dropped），再对每条已处理意图落一条
+    ``share_candidates(level="thought", kind="wake")`` 与
+    ``share_events(action="queued")`` 审计。重复调用时 run_due 已无 pending，
+    返回 ``queued=0``，不会重复排队。
+    """
+    now = _clock(now)
+    capacity = _budget(limit)
+    processed = run_due(path, now=now, budget=capacity)
+
+    items: list[dict[str, Any]] = []
+    queued = 0
+    for intent in processed.get("intents") or []:
+        intent_id = str(intent.get("id") or "")
+        text = str(intent.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            score = float(intent.get("priority") or 0.5)
+        except (TypeError, ValueError):
+            score = 0.5
+        evidence = [{"intent_id": intent_id,
+                     "kind": intent.get("kind"),
+                     "wake_at": intent.get("wake_at"),
+                     "late_seconds": intent.get("late_seconds")}]
+        candidate = share_store.record_candidate(
+            path, level="thought", kind="wake", text=text,
+            reason=str(intent.get("reason") or ""), source="wake",
+            source_id=intent_id, score=score, status="candidate",
+            evidence=evidence)
+        item: dict[str, Any] = {
+            "intent_id": intent_id, "text": text,
+            "candidate_id": "", "status": "skipped",
+        }
+        if candidate.get("ok"):
+            share_store.record_event(
+                path, str(candidate.get("id") or ""), "queued",
+                {"auto_send": AUTO_SEND, "intent_id": intent_id,
+                 "late_seconds": intent.get("late_seconds")})
+            item["candidate_id"] = str(candidate.get("id") or "")
+            item["status"] = "queued"
+            queued += 1
+        else:
+            item["error"] = str(candidate.get("error") or "candidate_failed")
+        items.append(item)
+
+    return {
+        "ok": True,
+        "now": now,
+        "limit": capacity,
+        "queued": queued,
+        "items": items,
+        "processed": int(processed.get("processed") or 0),
+        "runs": processed.get("runs") or [],
+        "deferred": processed.get("deferred") or [],
+        "budget_blocked": processed.get("budget_blocked") or [],
+        "sent": False,
+        "auto_send": AUTO_SEND,
+        "note": "只生成候选，不发送",
+    }
+
+
+__all__ = [
+    "AUTO_SEND", "DAILY_WAKE_BUDGET", "QUERY_LIMIT", "REASON_LIMIT",
+    "add", "bridge_due", "due", "run_due",
+]

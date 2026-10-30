@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from agi.selflearn import db, nightly
+from agi.selflearn import db, nightly, skills, weak_validation
 
 
 class FakeClient:
@@ -44,3 +44,37 @@ def test_nightly_rebuilds_sessions(tmp_path):
     r = nightly.run(path, None)
     assert r["steps"]["sessions"]["sessions"] >= 1
     assert r["steps"]["sessions"]["segments"] >= 1
+
+
+# --------------------------------------------------------------------------- #
+# C4：nightly 输出 weak_due（只提醒/报表，不 run_recheck、不降级）
+# --------------------------------------------------------------------------- #
+def test_nightly_reports_weak_due_without_changing_level(tmp_path):
+    path = tmp_path / "n4.sqlite3"
+    skills.ensure_defaults(path)
+    con = db.connect(path)
+    con.execute("UPDATE skills SET level=? WHERE id=?", (3, skills.SKILL_ID))
+    con.commit(); con.close()
+    # now=0 排的计划在真实 now（nightly 内部用 time.time()）已经到期
+    weak_validation.schedule_recheck(path, skills.SKILL_ID, "到期复测", now=0.0)
+
+    result = nightly.run(path, None)
+
+    assert result["steps"]["weak_due"]["ok"] is True
+    assert result["steps"]["weak_due"]["count"] == 1
+    due_item = result["steps"]["weak_due"]["items"][0]
+    assert due_item["skill_id"] == skills.SKILL_ID
+    assert due_item["level"] == 3
+    assert due_item["reason"] == "到期复测"
+
+    # 只提醒：不写复测记录、不改技能等级
+    con = db.connect(path)
+    try:
+        rechecks = int(con.execute(
+            "SELECT count(*) FROM weak_rechecks").fetchone()[0])
+        level = int(con.execute(
+            "SELECT level FROM skills WHERE id=?", (skills.SKILL_ID,)).fetchone()[0])
+    finally:
+        con.close()
+    assert rechecks == 0
+    assert level == 3

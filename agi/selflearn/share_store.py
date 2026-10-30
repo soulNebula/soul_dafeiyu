@@ -17,21 +17,38 @@ def _id(*parts) -> str:
 
 def record_candidate(path: Path | str, *, level: str, kind: str, text: str,
                      reason: str = "", source: str = "", source_id: str = "",
-                     score: float = 0.0, status: str = "candidate") -> dict[str, Any]:
+                     score: float = 0.0, status: str = "candidate",
+                     evidence: Any = None) -> dict[str, Any]:
+    """记一条分享候选；只落本地、不发送。
+
+    ``evidence`` 是调用方给的审计证据（如 wake 意图 id/触发时间）。表结构没有
+    独立证据列（不改 schema），这里把其 JSON 摘要附在 ``reason`` 尾部，保证
+    「候选从哪来」可追溯；``share_events`` 里另有独立审计行。
+    """
     if not str(text or "").strip():
         return {"ok": False, "error": "text 不能为空"}
     now = time.time()
     cid = _id(level, kind, text, source_id, now)
+    reason_text = str(reason or "")[:300]
+    if evidence is not None:
+        try:
+            evidence_text = json.dumps(evidence, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            evidence_text = str(evidence)
+        evidence_text = evidence_text[:200]
+        reason_text = (reason_text + " evidence=" + evidence_text
+                       if reason_text else "evidence=" + evidence_text)[:300]
     con = db.connect(path)
     try:
         con.execute("INSERT INTO share_candidates(id,level,kind,text,reason,source,source_id,score,status,created_at) "
                     "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (cid, str(level), str(kind), str(text)[:500], str(reason)[:300],
+                    (cid, str(level), str(kind), str(text)[:500], reason_text,
                      str(source), str(source_id), float(score), str(status), now))
         con.commit()
     finally:
         con.close()
-    return {"ok": True, "id": cid, "level": level, "kind": kind, "score": score}
+    return {"ok": True, "id": cid, "level": level, "kind": kind, "score": score,
+            "evidence": evidence}
 
 
 def record_event(path: Path | str, candidate_id: str, action: str,

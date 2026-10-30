@@ -416,3 +416,43 @@ def status(path: Path | str = DB_PATH, *, now: float | None = None) -> dict[str,
         "last_recheck_at": float(last_recheck_at) if last_recheck_at else None,
         "note": "这里只汇总证据；降级需上层决定，本模块不改 level",
     }
+
+
+def due_rechecks(path: Path | str = DB_PATH,
+                 now: float | None = None) -> list[dict[str, Any]]:
+    """只读：列出**已到期**的跨时间复测计划（不写库、不改 level、不 run_recheck）。
+
+    数据来源是 :func:`schedule_recheck` 写入 ``state`` 表
+    （``weak_recheck_schedules``）的既有计划，不新增表；返回按到期时间升序的
+    ``[{skill_id, next_at, reason, variant, level, overdue_s}, ...]``。
+    调用方（nightly 报表 / 人工）自己决定是否 run_recheck——本函数只提醒，不判。
+    """
+    now = _clock(now)
+    con = db.connect(path)
+    try:
+        schedules = _load_map(con, SCHEDULE_KEY)
+        items: list[dict[str, Any]] = []
+        for skill_id, schedule in schedules.items():
+            if not isinstance(schedule, dict):
+                continue
+            if str(schedule.get("status") or "") != "pending":
+                continue
+            try:
+                due_at = float(schedule.get("due_at") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if due_at > now:
+                continue
+            sid = str(skill_id)
+            items.append({
+                "skill_id": sid,
+                "next_at": due_at,
+                "reason": str(schedule.get("reason") or ""),
+                "variant": _pick_variant(con, sid),
+                "level": _level(con, sid),
+                "overdue_s": round(max(0.0, now - due_at), 3),
+            })
+    finally:
+        con.close()
+    items.sort(key=lambda item: (item["next_at"], item["skill_id"]))
+    return items

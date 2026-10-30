@@ -306,6 +306,9 @@ class Gateway:
         # P38：每天 03:00 睡眠整理（衰减/渐进遗忘/休眠清理；engine 停也跑）
         self.memory_sleep_thread = None
         self.last_memory_sleep: dict = {}
+        # C5：wake 内驱力到期 → 主动候选（只排队，不发送）
+        self.wake_bridge_thread = None
+        self.last_wake_bridge: dict = {}
         self.pending: dict[str, dict] = {}
         self.last_inbound: dict[str, float] = {}
         self.send_times = deque()
@@ -527,6 +530,17 @@ class Gateway:
                 self.memory_sleep_thread.start()
             except Exception as exc:  # noqa: BLE001
                 self._record("memory_sleep_start_failed",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
+        # C5：wake 到期只生成主动候选（排队，不发送）；engine 停也跑——候选不打扰人。
+        if self.cfg.get("wake_bridge_enabled", True) and not (
+                self.wake_bridge_thread and self.wake_bridge_thread.is_alive()):
+            try:
+                self.wake_bridge_thread = threading.Thread(
+                    target=self._wake_bridge_loop, name="gateway-wake-bridge",
+                    daemon=True)
+                self.wake_bridge_thread.start()
+            except Exception as exc:  # noqa: BLE001
+                self._record("wake_bridge_start_failed",
                              {"error": f"{type(exc).__name__}: {exc}"[:200]})
         self.ready = True
         self._record("gateway_started", {"allowed": allowed, "monitored": monitored,
@@ -1412,6 +1426,52 @@ class Gateway:
                 self._run_memory_sleep()
             except Exception as exc:  # noqa: BLE001 - 睡眠整理失败不影响网关
                 self._record("memory_sleep_error",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
+
+    # ---------------- C5：wake 到期 → 主动候选（只排队，不发送） ----------------
+    def _run_wake_bridge(self, now: float | None = None) -> dict:
+        """扫一遍联系人库：到期的 wake 意图 → share_candidates + wake_runs 审计。
+
+        不生成、不发送，只把"她曾经想做但时间没到"的事排队成候选，由 802 展示，
+        后续是否采用由主动链/人工决定。
+        """
+        now = time.time() if now is None else float(now)
+        summary: dict = {"ok": True, "ts": now, "paths": 0, "queued": 0, "errors": []}
+        try:
+            from agi.selflearn import wake as wake_mod
+        except Exception as exc:  # noqa: BLE001
+            self._record("wake_bridge_error",
+                         {"error": f"{type(exc).__name__}: {exc}"[:200]})
+            return {"ok": False, "ts": now, "paths": 0, "queued": 0,
+                    "errors": [str(exc)[:200]]}
+        for path in self._memory_decay_paths():
+            try:
+                result = wake_mod.bridge_due(path, now=now)
+            except Exception as exc:  # noqa: BLE001 - 单库失败不影响其它
+                summary["errors"].append(f"{path}: {type(exc).__name__}")
+                self._record("wake_bridge_error", {
+                    "path": str(path),
+                    "error": f"{type(exc).__name__}: {exc}"[:200]})
+                continue
+            queued = int(result.get("queued") or 0)
+            summary["paths"] += 1
+            summary["queued"] += queued
+            if queued:
+                self._record("wake_bridged", {"path": str(path), "queued": queued})
+        self.last_wake_bridge = summary
+        return summary
+
+    def _wake_bridge_loop(self) -> None:
+        """每 wake_bridge_interval_s（默认 300s）扫一次；只排队候选，不发送。"""
+        try:
+            interval = max(60.0, float(self.cfg.get("wake_bridge_interval_s") or 300))
+        except (TypeError, ValueError):
+            interval = 300.0
+        while not self.stop_event.wait(interval):
+            try:
+                self._run_wake_bridge()
+            except Exception as exc:  # noqa: BLE001 - 候选失败不影响网关
+                self._record("wake_bridge_error",
                              {"error": f"{type(exc).__name__}: {exc}"[:200]})
 
     def _work(self) -> None:
@@ -2692,6 +2752,8 @@ class Gateway:
                               "max": self.cfg.get("proactive_probability_max")},
                           "last": self.last_proactive},
             "inner": inner_status,
+            # C5：wake 到期候选的最近一次扫描结果（queued/paths/errors；只排队不发送）
+            "wake_bridge": dict(self.last_wake_bridge) if self.last_wake_bridge else None,
             # P0-24/P6-b：stale_suppressed=true 表示当前处于「预期不发送」状态，
             # 哨兵主动静默；reason ∈ {disabled, stopped, quiet, grace} 或 null。
             "stale_suppressed": bool(stale_reason),

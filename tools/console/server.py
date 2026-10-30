@@ -2412,6 +2412,133 @@ def initiative_status(contact: str = "") -> dict:
     return result
 
 
+def _current_db_path(contact: str = "") -> Path | None:
+    """当前联系人库：显式 contact 优先，否则默认当前库。"""
+    raw = str(contact or "").strip()
+    return _contact_db_by_alias(raw) if raw else contact_db_path()
+
+
+def _weak_validation_module():
+    """加载 agi.selflearn.weak_validation；不可用返回 None（端点降级为 ok:false）。"""
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from agi.selflearn import weak_validation
+        return weak_validation
+    except Exception:  # noqa: BLE001 - 只读观测页，失败降级
+        return None
+
+
+def _normalize_weak_due_row(row: dict) -> dict:
+    """把 core-brain 的 due 项归一成前端契约字段（缺字段给 None/空串）。"""
+    return {
+        "skill_id": str(row.get("skill_id") or ""),
+        "next_at": row.get("next_at") if row.get("next_at") is not None
+                   else row.get("due_at"),
+        "reason": str(row.get("reason") or ""),
+        "variant": str(row.get("variant") or ""),
+        "level": row.get("level"),
+        "overdue_s": row.get("overdue_s") if row.get("overdue_s") is not None
+                     else row.get("overdue_seconds"),
+    }
+
+
+def weak_due(contact: str = "") -> dict:
+    """GET /api/growth/weak-due：到期复测提醒（只读，不会自动判定/降级）。
+
+    依赖 ``agi.selflearn.weak_validation.due_rechecks(path, now=None)``（core-brain 落地）；
+    模块/库/函数任一不可用都返回 ``ok:false + error:"weak_due_unavailable"``（**不返回 501**）。
+    """
+    module = _weak_validation_module()
+    if module is None:
+        return {"ok": False, "error": "weak_due_unavailable",
+                "hint": "agi.selflearn.weak_validation 不可用（模块未落地/导入失败）",
+                "count": 0, "items": []}
+    func = getattr(module, "due_rechecks", None)
+    if not callable(func):
+        return {"ok": False, "error": "weak_due_unavailable",
+                "hint": "weak_validation.due_rechecks 尚未落地（等 core-brain 后端 API）",
+                "count": 0, "items": []}
+    db_path = _current_db_path(contact)
+    if db_path is None or not Path(db_path).is_file():
+        return {"ok": False, "error": "weak_due_unavailable",
+                "hint": f"找不到联系人库: {contact or 'default'}", "count": 0, "items": []}
+    try:
+        raw = func(db_path)
+    except Exception as exc:  # noqa: BLE001 - 只读观测页，失败降级
+        return {"ok": False, "error": "weak_due_unavailable",
+                "hint": f"{type(exc).__name__}: {exc}", "count": 0, "items": []}
+    if isinstance(raw, dict):
+        rows = raw.get("items")
+        if rows is None:
+            rows = raw.get("due") or raw.get("rechecks") or []
+    elif isinstance(raw, list):
+        rows = raw
+    else:
+        rows = []
+    items = [_normalize_weak_due_row(row) for row in rows
+             if isinstance(row, dict)][:200]
+    return {"ok": True, "count": len(items), "items": items,
+            "note": "只提醒，不会自动判定/降级"}
+
+
+def _share_store_module():
+    """加载 agi.selflearn.share_store；不可用返回 None。"""
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from agi.selflearn import share_store
+        return share_store
+    except Exception:  # noqa: BLE001 - 只读观测页，失败降级
+        return None
+
+
+def wake_pending(limit: int = 10, contact: str = "") -> dict:
+    """GET /api/wake/pending：``share_candidates`` 里 kind=="wake" 的到期候选。
+
+    只读：候选只是"已排队"，不会自动发送；空列表也返回 ok:true,count:0。
+    """
+    module = _share_store_module()
+    if module is None:
+        return {"ok": False, "error": "wake_pending_unavailable",
+                "hint": "agi.selflearn.share_store 不可用（模块未落地/导入失败）",
+                "count": 0, "items": []}
+    try:
+        limit = max(1, min(50, int(limit)))
+    except (TypeError, ValueError):
+        limit = 10
+    db_path = _current_db_path(contact)
+    if db_path is None or not Path(db_path).is_file():
+        return {"ok": True, "count": 0, "items": [],
+                "note": f"联系人库不存在（{contact or 'default'}）：没有 wake 候选"}
+    try:
+        rows = module.list_candidates(db_path, limit=limit * 4)
+    except Exception as exc:  # noqa: BLE001 - 只读观测页，失败降级
+        return {"ok": False, "error": "wake_pending_unavailable",
+                "hint": f"{type(exc).__name__}: {exc}", "count": 0, "items": []}
+    if not isinstance(rows, list):
+        rows = []
+    items: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("kind") or "") != "wake":
+            continue
+        items.append({
+            "id": str(row.get("id") or ""),
+            "kind": "wake",
+            "text": str(row.get("text") or "")[:300],
+            "reason": str(row.get("reason") or "")[:200],
+            "level": str(row.get("level") or ""),
+            "score": row.get("score"),
+            "created_at": row.get("created_at"),
+        })
+        if len(items) >= limit:
+            break
+    return {"ok": True, "count": len(items), "items": items,
+            "note": "已排队为候选，不会自动发送"}
+
+
 #: 「自动缓存聊天视频」目前只有解析能力（webui/videos.py），没有抓取/落盘管线
 VIDEO_CACHE_DOC = "docs/plans/31-媒体能力-实现记录.md"
 
@@ -4266,7 +4393,7 @@ def _mood_settings_view() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def mood_snapshot(contact: str = "", limit: int = 20) -> dict:
+def _mood_snapshot_raw(contact: str = "", limit: int = 20) -> dict:
     store = _mood_store()
     if store is None:
         return {"ok": False, "error": "mood_unavailable",
@@ -4294,6 +4421,24 @@ def mood_snapshot(contact: str = "", limit: int = 20) -> dict:
     result["db"] = str(db_path)
     result["settings_path"] = str(MOOD_SETTINGS_PATH)
     result["pending_inject"] = bool(snapshot.get("pending_inject"))
+    return result
+
+
+MOOD_SOURCE = "mood_judge"
+MOOD_AFFECT_NOTE = ("内在状态（affect 0–1）是内部连续量，不作为心情显示；"
+                    "本卡只展示 mood_judge 的 0–100 判定。")
+
+
+def mood_snapshot(contact: str = "", limit: int = 20) -> dict:
+    """802 心情卡：mood_judge 判定 + 口径说明（C7）。
+
+    ``source="mood_judge"`` 明确数据来源；``affect_note`` 说明 affect(0–1) 是
+    内部连续量、不是心情分数——避免把内状态误读成心情。
+    """
+    result = _mood_snapshot_raw(contact=contact, limit=limit)
+    if isinstance(result, dict):
+        result.setdefault("source", MOOD_SOURCE)
+        result.setdefault("affect_note", MOOD_AFFECT_NOTE)
     return result
 
 
@@ -5475,6 +5620,14 @@ class Handler(BaseHTTPRequestHandler):
                     "growth_backend_unavailable") else (
                     200 if result.get("ok", True) else 500)
                 self._json(code, result); return
+            # C4/C5：成长页到期复测 / wake 候选（只读，鉴权口径与 /api/growth/* 一致）
+            if path in ("/api/growth/weak-due", "/api/wake/pending"):
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                contact = str((query.get("contact") or [""])[0] or "")
+                if path == "/api/growth/weak-due":
+                    self._json(200, weak_due(contact)); return
+                self._json(200, wake_pending(self._limit(query, 10), contact)); return
             if path == "/api/train/daily":
                 date = str((query.get("date") or [""])[0] or "")
                 result = train_daily(date)

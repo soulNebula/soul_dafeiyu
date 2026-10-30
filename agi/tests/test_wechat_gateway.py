@@ -269,3 +269,34 @@ def test_server_text_pat_variants_convert_and_log(tmp_path, monkeypatch):
     g._reply({"friend": "好友A", "kind": "text", "text": "今天拍了拍照，光线不错"})
     assert _CapturingAgent.texts[-1] == "今天拍了拍照，光线不错"
     assert len([e for e in g.recent if e.get("kind") == "pat_detected"]) == len(raws)
+
+
+# --------------------------------------------------------------------------- #
+# C5：wake 到期 → 主动候选（只排队，不发送）
+# --------------------------------------------------------------------------- #
+def test_wake_bridge_queues_candidates_without_sending(tmp_path):
+    from agi.selflearn import share_store, wake
+    from agi.wechat_gateway.server import Gateway
+
+    cfg = {
+        "enabled": True, "allowed_contacts": ["好友A"],
+        "monitored_contacts": ["好友A"], "admin_token": "tok",
+        "send_mode": "confirm",
+        "drafts_path": str(tmp_path / "drafts.jsonl"),
+        "log_path": str(tmp_path / "gateway.log"),
+    }
+    gw = Gateway(cfg)
+    path = gw._memory_decay_paths()[0]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = 1_800_000_000.0
+    wake.add(path, "check_in", "记得问她面试结果", now - 30, reason="面试")
+    summary = gw._run_wake_bridge(now=now)
+    assert summary["ok"] is True and summary["queued"] == 1
+    candidates = share_store.list_candidates(path, limit=10)
+    assert any(c.get("kind") == "wake" and "面试" in str(c.get("text"))
+               for c in candidates)
+    # 只排队不发送：没有任何外发事件
+    assert not [e for e in gw.recent
+                if e.get("kind") in ("send", "sent", "outbound")]
+    # 幂等：run_due 已标记 done，再扫不重复排队
+    assert gw._run_wake_bridge(now=now)["queued"] == 0

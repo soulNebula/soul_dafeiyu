@@ -33,6 +33,9 @@ DEFAULTS = {
     # C6：睡眠整理时顺带跑一次 nightly（摘要/画像/反思/冷归档/记忆指标）；
     # 只有生产 main() 启动的网关会开（self.nightly_enabled），测试构造的实例默认不跑。
     "nightly_on_sleep": True,
+    # C5：wake 内驱力到期 → 主动候选（只排队、不发送）；engine 停也跑
+    "wake_bridge_enabled": True,
+    "wake_bridge_interval_s": 300,   # 扫描间隔（秒），实现钳制 ≥60
     "memory_purge_enabled": False,
     "memory_sleep_hour": 3,
     "port": 801,

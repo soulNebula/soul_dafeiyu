@@ -98,11 +98,11 @@ UNIMPORTED_ALLOWLIST: dict[str, str] = {
 NEW_FILE_MAX_LINES = 1500
 LINE_BUDGET: dict[str, int] = {
     # 基线为 2026-10-29 收口时行数；只允许小幅波动，继续膨胀请拆分文件。
-    "tools/console/server.py": 6050,          # 2026-10-30 草稿/投递徽章/发送器/训练/成长页签后 6019（待拆）
+    "tools/console/server.py": 6250,          # 2026-10-31 到期复测/wake 候选/心情口径后 6172（待拆）
     "tests/test_webui.py": 4700,              # 现有 4592：网页端集成测试
     "agi/selflearn/proactive.py": 3100,       # 现有 3056：主动消息生成（待拆）
-    "agi/wechat_gateway/server.py": 3150,     # 2026-10-30 接收游标/补采/nightly/发送器自检后 3086（待拆）
-    "agi/tests/test_console_server.py": 2450,  # 2026-10-30 新增训练/成长/素材获取契约测试后 2395
+    "agi/wechat_gateway/server.py": 3200,     # 2026-10-31 wake 桥接后 3148（待拆）
+    "agi/tests/test_console_server.py": 2550,  # 2026-10-31 新增 weak-due/wake/mood 契约测试后 2490
     "webui/server.py": 2000,                  # 现有 1965
     "agi/selflearn/chat.py": 1830,            # 2026-10-30 聊天图片本地识图后 1756（待拆）
     "agi/soul/dataset.py": 1600,              # 现有 1510

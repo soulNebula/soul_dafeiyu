@@ -9,6 +9,7 @@ import json
 import sqlite3
 import sys
 import time
+import types
 import urllib.error
 import urllib.parse
 import zipfile
@@ -2393,3 +2394,97 @@ def test_http_bili_status_reports_missing_plugin(tmp_path, write_env, monkeypatc
     assert status == 200 and data["ok"] is False
     assert data["error"] == "bili_home_missing"
     assert "插件家目录不存在" in data["hint"]
+
+
+# ============================================================ C4/C5/C7（802 成长页 / 心情口径）
+def test_http_growth_weak_due_unavailable_is_not_501(tmp_path, write_env, monkeypatch):
+    """weak_validation 模块不可用：401→200(ok:false)，错误码 weak_due_unavailable，绝不是 501。"""
+    monkeypatch.setattr(console, "_weak_validation_module", lambda: None)
+    status, data = _call("GET", "/api/growth/weak-due")
+    assert status == 401
+    status, data = _call("GET", "/api/growth/weak-due", token="tok")
+    assert status == 200, data
+    assert data["ok"] is False and data["error"] == "weak_due_unavailable"
+    assert data["count"] == 0 and data["items"] == []
+    assert data.get("hint")
+
+
+def test_http_growth_weak_due_ok_normalizes_items(tmp_path, write_env, monkeypatch):
+    """正常路径：due_rechecks 的 items 归一成 {skill_id,next_at,reason,variant,level,overdue_s}。"""
+    db = tmp_path / "contact.sqlite3"
+    db.write_bytes(b"")
+    monkeypatch.setattr(console, "contact_db_path", lambda: db)
+    fake = types.SimpleNamespace(due_rechecks=lambda path: {"items": [
+        {"skill_id": "SK-1", "next_at": 1800000000.0, "reason": "连续失败",
+         "variant": "v2", "level": 2, "overdue_s": 120.5},
+    ]})
+    monkeypatch.setattr(console, "_weak_validation_module", lambda: fake)
+    status, data = _call("GET", "/api/growth/weak-due", token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["count"] == 1
+    row = data["items"][0]
+    assert row["skill_id"] == "SK-1" and row["level"] == 2
+    assert row["overdue_s"] == 120.5 and row["variant"] == "v2"
+
+
+def test_http_growth_weak_due_missing_db(tmp_path, write_env, monkeypatch):
+    """库不可用：同样 ok:false + weak_due_unavailable，不 501、不抛异常。"""
+    class _NeverCalled:
+        @staticmethod
+        def due_rechecks(path):
+            raise AssertionError("库不存在时不应调用 due_rechecks")
+
+    monkeypatch.setattr(console, "_weak_validation_module", lambda: _NeverCalled)
+    monkeypatch.setattr(console, "contact_db_path", lambda: None)
+    status, data = _call("GET", "/api/growth/weak-due", token="tok")
+    assert status == 200 and data["ok"] is False
+    assert data["error"] == "weak_due_unavailable"
+
+
+def test_http_wake_pending_empty(tmp_path, write_env, monkeypatch):
+    """无候选：ok:true,count:0（页面显示空态，不是错误）。"""
+    db = tmp_path / "contact.sqlite3"
+    db.write_bytes(b"")
+    monkeypatch.setattr(console, "contact_db_path", lambda: db)
+    fake = types.SimpleNamespace(list_candidates=lambda path, limit=20: [])
+    monkeypatch.setattr(console, "_share_store_module", lambda: fake)
+    status, data = _call("GET", "/api/wake/pending", token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["count"] == 0 and data["items"] == []
+
+
+def test_http_wake_pending_filters_wake_kind(tmp_path, write_env, monkeypatch):
+    """只保留 kind=="wake" 的候选；其它 kind 不混进「内驱力到期候选」。"""
+    db = tmp_path / "contact.sqlite3"
+    db.write_bytes(b"")
+    rows = [
+        {"id": "C-1", "kind": "wake", "text": "想问你周末有空吗", "level": "L1",
+         "score": 0.7, "created_at": 1800000000.0},
+        {"id": "C-2", "kind": "share", "text": "不该出现", "level": "L1",
+         "score": 0.3, "created_at": 1800000001.0},
+    ]
+    monkeypatch.setattr(console, "contact_db_path", lambda: db)
+    fake = types.SimpleNamespace(list_candidates=lambda path, limit=20: rows)
+    monkeypatch.setattr(console, "_share_store_module", lambda: fake)
+    status, data = _call("GET", "/api/wake/pending?limit=10", token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["count"] == 1
+    assert data["items"][0]["kind"] == "wake"
+    assert data["items"][0]["text"] == "想问你周末有空吗"
+
+
+def test_http_mood_adds_source_and_affect_note(tmp_path, write_env, monkeypatch):
+    """C7：/api/mood 明确 source=mood_judge，并带 affect(0–1) 口径说明。"""
+    db = tmp_path / "contact.sqlite3"
+    db.write_bytes(b"")
+    monkeypatch.setattr(console, "contact_db_path", lambda: db)
+    fake = types.SimpleNamespace(
+        snapshot=lambda path, timeline_limit=20: {
+            "mood": 72, "mood_label": "平静", "dims": {}, "settings": {},
+            "timeline": [], "last_reason": "", "pending_inject": False})
+    monkeypatch.setattr(console, "_mood_store", lambda: fake)
+    status, data = _call("GET", "/api/mood", token="tok")
+    assert status == 200 and data["ok"] is True
+    assert data["source"] == "mood_judge"
+    assert "affect" in data["affect_note"] and "0–1" in data["affect_note"]
+    assert data["mood"] == 72

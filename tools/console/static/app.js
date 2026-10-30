@@ -1140,9 +1140,12 @@ function moodTimelineHtml(timeline) {
 
 function moodCardHtml(mood) {
   if (!mood) return '';
+  const title = '心情（mood_judge，0–100）';
+  const affectNote = '内在状态（affect 0–1）是内部连续量，不作为心情显示';
   if (!mood.ok) {
-    return card('心情', `<div class="error-text">心情不可用：${esc(mood.error || 'mood_unavailable')}</div>
-      <p class="hint">${esc(mood.hint || '')}</p>`);
+    return card(title, `<div class="error-text">心情不可用：${esc(mood.error || 'mood_unavailable')}</div>
+      <p class="hint">${esc(mood.hint || '')}</p>
+      <p class="hint">${esc(mood.affect_note || affectNote)}</p>`);
   }
   const settings = mood.settings || {};
   const dims = mood.dims || {};
@@ -1152,6 +1155,10 @@ function moodCardHtml(mood) {
   const preview = String(mood.injected_preview || '').trim();
   const confidenceMin = Number(settings.confidence_min || 0);
   return `<div class="card mood-card">
+    <div class="row between" style="align-items:baseline">
+      <b>${title}${mood.source ? ' · 来源 ' + esc(mood.source) : ''}</b>
+      <span class="hint">${esc(mood.affect_note || affectNote)}</span>
+    </div>
     <div class="row between">
       <div class="row mood-head">
         <div class="mood-big">${esc(mood.mood === undefined ? '—' : Number(mood.mood).toFixed(0))}</div>
@@ -1204,7 +1211,7 @@ async function renderInner() {
   }
   state.inner = data;
   try { mood = await api('/api/mood?limit=10'); }
-  catch (e) { mood = { ok: false, error: e.message, hint: '心情卡片需要 admin token' }; }
+  catch (e) { mood = { ok: false, error: e.message, hint: '心情卡（mood_judge）需要 admin token' }; }
   state.mood = mood;
   const items = (data && data.items) || [];
   const cards = items.map((item) => innerCard(item)).join('');
@@ -1254,7 +1261,7 @@ function innerCard(item) {
     <div class="state-grid">
       ${stateCell('stance', st.stance)}
       ${stateCell('intent', st.intent)}
-      ${stateCell('mood', st.mood)}
+      ${stateCell('内在状态', st.mood)}
       ${stateCell('energy', st.energy)}
       ${stateCell('sharing', st.sharing)}
       ${stateCell('trust', st.trust)}
@@ -4429,6 +4436,54 @@ function initiativeCard(err, result) {
     <p class="hint" style="margin-top:8px">只读：这里只展示 801 的判定输入，不会触发发送。</p>`);
 }
 
+function weakDueCard(err, data) {
+  const label = '到期复测（只提醒，不会自动判定/降级）';
+  if (err) {
+    const payload = (err && err.payload) || {};
+    return card(label, `<div class="empty">到期复测不可用：${esc(payload.hint || payload.error || err.message || '')}</div>`);
+  }
+  const d = data || {};
+  if (d.ok === false) {
+    return card(label, `<div class="empty">到期复测不可用：${esc(d.hint || d.error || 'weak_due_unavailable')}</div>
+      <p class="hint">core-brain 的 weak_validation.due_rechecks 落地后自动可用；这里不伪造数据。</p>`);
+  }
+  const items = d.items || [];
+  const fmtOverdue = (seconds) => {
+    const value = Number(seconds || 0);
+    if (!(value > 0)) return '刚到期';
+    if (value >= 86400) return Math.round(value / 86400) + ' 天';
+    if (value >= 3600) return Math.round(value / 3600) + ' 小时';
+    return Math.round(value / 60) + ' 分钟';
+  };
+  const rows = items.slice(0, 5).map((row) => `<div class="list-item" style="cursor:default"><div class="grow">
+    <div class="title mono">${esc(row.skill_id || '—')}${row.level !== undefined && row.level !== null ? ' ' + badge('L' + esc(row.level), '') : ''}</div>
+    <div class="hint">原因：${esc(row.reason || '—')}${row.variant ? ' · 变体 ' + esc(row.variant) : ''}
+      ${row.next_at ? ' · 计划 ' + fmtDateTime(row.next_at) : ''} · 逾期 ${esc(fmtOverdue(row.overdue_s))}</div></div></div>`).join('');
+  return card(label, `<div class="row between"><div><b>${num(d.count === undefined ? items.length : d.count)} 条到期复测</b>
+      <span class="hint">只提醒，不会自动判定/降级</span></div></div>
+    ${rows || '<div class="empty" style="margin-top:8px">没有到期的复测计划</div>'}`);
+}
+
+function wakeCard(err, data) {
+  const label = '内驱力到期候选（wake）';
+  if (err) {
+    const payload = (err && err.payload) || {};
+    return card(label, `<div class="empty">wake 候选不可用：${esc(payload.hint || payload.error || err.message || '')}</div>`);
+  }
+  const d = data || {};
+  if (d.ok === false) {
+    return card(label, `<div class="empty">wake 候选不可用：${esc(d.hint || d.error || 'wake_pending_unavailable')}</div>`);
+  }
+  const items = d.items || [];
+  const rows = items.slice(0, 10).map((row) => `<div class="list-item" style="cursor:default"><div class="grow">
+    <div class="title">${esc(row.text || '（空候选）')}</div>
+    <div class="hint">${row.level ? 'level ' + esc(row.level) + ' · ' : ''}${row.created_at ? fmtDateTime(row.created_at) : '—'}
+      ${row.reason ? ' · ' + esc(row.reason) : ''}</div></div></div>`).join('');
+  return card(label, `<div class="row between"><div><b>${num(d.count === undefined ? items.length : d.count)} 条候选</b>
+      <span class="hint">已排队为候选，不会自动发送</span></div></div>
+    ${rows || '<div class="empty" style="margin-top:8px">没有 wake 候选（share_candidates 为空）</div>'}`);
+}
+
 async function renderGrowth() {
   $('#app').innerHTML = '<div class="empty">加载成长 / 内驱力…</div>';
   if (!state.token) {
@@ -4438,11 +4493,18 @@ async function renderGrowth() {
   }
   const contact = state.contact || '';
   let status = null, narrative = null, initiative = null;
+  let weakDue = null, wakePendingData = null;
   let statusErr = null, narrativeErr = null, initiativeErr = null;
+  let weakErr = null, wakeErr = null;
   try { status = await api('/api/growth/status'); } catch (err) { statusErr = err; }
   try { narrative = await api('/api/growth/narrative'); } catch (err) { narrativeErr = err; }
   try { initiative = await api('/api/initiative/status?contact=' + encodeURIComponent(contact)); }
   catch (err) { initiativeErr = err; }
+  // C4/C5：到期复测 + wake 候选（只读；空/模块未就绪都显示空态）
+  try { weakDue = await api('/api/growth/weak-due?contact=' + encodeURIComponent(contact)); }
+  catch (err) { weakErr = err; }
+  try { wakePendingData = await api('/api/wake/pending?limit=10&contact=' + encodeURIComponent(contact)); }
+  catch (err) { wakeErr = err; }
 
   const s = status || {};
   const statusCard = statusErr ? growthUnavailableCard('成长状态', statusErr) : card('成长状态', `<div class="kv">
@@ -4468,6 +4530,7 @@ async function renderGrowth() {
       <p class="muted">自我叙事 / 周记 / 801 主动度；全部只读，不会触发发送。</p></div>
       <button class="btn" id="growth-refresh">刷新</button></div>
     <div class="grid cols-2">${statusCard}${narrativeCard}</div>
+    <div class="grid cols-2">${weakDueCard(weakErr, weakDue)}${wakeCard(wakeErr, wakePendingData)}</div>
     ${initiativeCard(initiativeErr, initiative)}`;
 
   const refresh = $('#growth-refresh');

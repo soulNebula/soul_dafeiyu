@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""M4 夜间整理：摘要 / 画像 / 自反思 / 弱验证状态。
+"""M4 夜间整理：摘要 / 画像 / 自反思 / 弱验证状态与到期提醒。
 
 只写本地状态，不发送微信、不自动改人格/技能等级。
 """
@@ -46,6 +46,14 @@ def run(path: Path | str, client=None, *, force: bool = False) -> dict[str, Any]
         steps["weak"] = weak_validation.status(path)
     except Exception as exc:  # noqa: BLE001
         steps["weak"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    # C4：弱验证到期只提醒/报表——不调用 run_recheck、不降级（due_rechecks 只读）
+    try:
+        weak_due = weak_validation.due_rechecks(path, now=started)
+        steps["weak_due"] = {"ok": True, "count": len(weak_due),
+                             "items": weak_due}
+    except Exception as exc:  # noqa: BLE001
+        steps["weak_due"] = {"ok": False, "count": 0, "items": [],
+                             "error": f"{type(exc).__name__}: {exc}"}
     # P1-a：记忆重要性按天衰减 + 长期低重要且未访问 → dormant（不删除、检索排除）
     try:
         steps["memory_decay"] = memory.decay(path)

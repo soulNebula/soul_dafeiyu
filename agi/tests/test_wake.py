@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agi.selflearn import db, scheduler, wake
+from agi.selflearn import db, scheduler, share_store, wake
 
 
 def _rows(path, sql: str, params=()):
@@ -301,3 +301,80 @@ def test_reason_is_truncated_and_module_has_no_wechat_or_network_code(tmp_path):
     source = Path(wake.__file__).read_text(encoding="utf-8")
     for token in ("wxauto", "requests", "urllib", "http://", "https://"):
         assert token not in source
+
+
+# --------------------------------------------------------------------------- #
+# C5：到期内驱力 → 分享候选（只生成候选，不发送）
+# --------------------------------------------------------------------------- #
+def test_bridge_due_creates_share_candidate_and_marks_intent(tmp_path):
+    path = tmp_path / "selflearn.sqlite3"
+    intent_id = wake.add(path, "follow_up", "问问面试结果", 1000.0, 0.9,
+                         "承诺到期")
+
+    result = wake.bridge_due(path, now=1500.0)
+
+    assert result["ok"] is True
+    assert result["queued"] == 1
+    assert result["processed"] == 1
+    assert result["note"] == "只生成候选，不发送"
+    assert result["sent"] is False
+    assert result["auto_send"] is False
+
+    item = result["items"][0]
+    assert item["intent_id"] == intent_id
+    assert item["status"] == "queued"
+    assert item["candidate_id"].startswith("SH-")
+
+    # 意图被 run_due 标记 done，且写了 wake_runs 审计
+    assert _rows(path, "SELECT status FROM intents")[0]["status"] == "done"
+    assert _count(path, "wake_runs") == 1
+
+    candidates = _rows(path, "SELECT * FROM share_candidates")
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["id"] == item["candidate_id"]
+    assert candidate["level"] == "thought"
+    assert candidate["kind"] == "wake"
+    assert candidate["text"] == "问问面试结果"
+    assert candidate["status"] == "candidate"
+    assert candidate["source"] == "wake"
+    assert candidate["source_id"] == intent_id
+    assert "evidence=" in candidate["reason"]  # 审计证据附在 reason
+
+    stats = share_store.stats(path)
+    assert stats == {"ok": True, "candidates": 1, "events": 1}
+    events = _rows(path, "SELECT * FROM share_events")
+    assert events[0]["action"] == "queued"
+    assert events[0]["candidate_id"] == item["candidate_id"]
+
+
+def test_bridge_due_is_idempotent_after_run(tmp_path):
+    path = tmp_path / "selflearn.sqlite3"
+    wake.add(path, "check", "回访", 1000.0)
+    assert wake.bridge_due(path, now=1500.0)["queued"] == 1
+
+    again = wake.bridge_due(path, now=1600.0)
+
+    assert again["ok"] is True
+    assert again["queued"] == 0
+    assert again["processed"] == 0
+    assert again["items"] == []
+    assert _count(path, "share_candidates") == 1
+    assert _count(path, "wake_runs") == 1
+    assert share_store.stats(path)["events"] == 1
+
+
+def test_bridge_due_respects_limit_and_leaves_rest_pending(tmp_path):
+    path = tmp_path / "selflearn.sqlite3"
+    ids = [wake.add(path, "check", text, 1000.0, priority)
+           for text, priority in (("A", 0.9), ("B", 0.8), ("C", 0.7))]
+
+    result = wake.bridge_due(path, now=1500.0, limit=2)
+
+    assert result["limit"] == 2
+    assert result["queued"] == 2
+    assert [item["intent_id"] for item in result["items"]] == ids[:2]
+    assert _count(path, "share_candidates") == 2
+    statuses = {row["id"]: row["status"]
+                for row in _rows(path, "SELECT id,status FROM intents")}
+    assert statuses == {ids[0]: "done", ids[1]: "done", ids[2]: "pending"}

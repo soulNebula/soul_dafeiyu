@@ -25,6 +25,7 @@ from . import config as cfg
 from . import control, drafts, media as media_mod, policy, sendclass
 from . import send_async as send_async_mod
 from . import send_breaker as send_breaker_mod
+from . import reply_pool as reply_pool_mod
 from .receiver import ReceiveCursor, WeChatReceiver, is_mention, looks_like_pat
 from .sender import WxAutoSender
 from .. import textguard
@@ -280,6 +281,10 @@ class Gateway:
             threshold=int(self.cfg.get("send_breaker_threshold")
                           or send_breaker_mod.DEFAULT_THRESHOLD))
         self.send_breaker = self._send_breaker.data
+        # A9-P2：回复生成线程池（默认关；开 = 生成与发送解耦，每联系人串行）
+        self._reply_pool = None
+        self._reply_done: "queue.Queue" = queue.Queue()
+        self._reply_inflight: set[str] = set()
         # C6：nightly（摘要/画像/反思/冷归档）由生产 main() 打开；单测构造的 Gateway
         # 默认关闭，避免测试里意外触发 LLM 调用与整库整理。
         self.nightly_enabled = False
@@ -569,6 +574,13 @@ class Gateway:
             self._send_async_enabled = False
             self._record("send_async_start_failed",
                          {"error": f"{type(exc).__name__}: {exc}"[:200]})
+        # A9-P2：回复生成池（默认关；失败自动回落单 worker 内联生成）
+        try:
+            self._start_reply_pool()
+        except Exception as exc:  # noqa: BLE001 - 生成池起不来不能阻止网关
+            self._reply_pool = None
+            self._record("reply_pool_start_failed",
+                         {"error": f"{type(exc).__name__}: {exc}"[:200]})
         self.ready = True
         self._record("gateway_started", {"allowed": allowed, "monitored": monitored,
                                           "dry_run": bool(self.cfg.get("dry_run", True))})
@@ -678,6 +690,10 @@ class Gateway:
     def stop(self) -> None:
         self.stop_event.set()
         # A9：停 sender 任务池（排队任务取消并回结果；正在发送的 join 有界）
+        try:
+            self._stop_reply_pool()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             if self._send_pool is not None:
                 self._send_pool.stop(timeout=3)
@@ -1550,9 +1566,16 @@ class Gateway:
                 self.failed += 1
                 self._record("flush_error", {"error": f"{type(exc).__name__}: {exc}"})
             try:
+                self._drain_reply_done()
+            except Exception as exc:  # noqa: BLE001
+                self._record("reply_pool_drain_error",
+                             {"error": f"{type(exc).__name__}: {exc}"[:200]})
+            try:
                 self._check_stale()
             except Exception:  # noqa: BLE001 - 哨兵失败不能影响主循环
                 pass
+        self._stop_reply_pool()
+        self._drain_reply_done()
         self._flush_pending(force=True)
 
     def _buffer_inbound(self, msg: dict) -> None:
@@ -1623,6 +1646,12 @@ class Gateway:
             msg.update({"friend": contact, "text": chr(10).join(texts),
                         "kind": "text"})
             attempt = int(buf.get("attempt") or 0)
+            # A9-P2：有生成池时提交异步生成，完成事件由 _drain_reply_done 处理
+            if self._reply_pool_enabled() and self._submit_reply_job(
+                    contact, msg, texts):
+                self._record("reply_pool_submitted", {
+                    "friend": contact, "texts": len(texts)})
+                continue
             try:
                 self.in_flight_contact = str(contact or "")
                 self._reply(msg)
@@ -1921,9 +1950,21 @@ class Gateway:
         return True
 
     def _send_job_runner(self, job) -> dict:
-        """任务池执行线程回调：全局发送锁只包真实发送这一段。"""
+        """任务池执行线程回调：全局发送锁只包真实发送这一段（P3 记分段耗时审计）。"""
         with self._send_lock:
-            return self._send_locked(job.contact, job.text, **job.kwargs)
+            result = self._send_locked(job.contact, job.text, **job.kwargs)
+        try:
+            wait_ms = round((job.started_at - job.created_at) * 1000, 1)                 if job.started_at else None
+            exec_ms = round((time.time() - job.started_at) * 1000, 1)                 if job.started_at else None
+            self._record("send_job", {
+                "friend": job.contact,
+                "priority": send_async_mod.PRIORITY_NAMES.get(job.priority),
+                "wait_ms": wait_ms, "exec_ms": exec_ms,
+                "status": str((result or {}).get("status") or ""),
+            })
+        except Exception:  # noqa: BLE001 - 审计失败不影响发送结果
+            pass
+        return result
 
     def _send_via_worker(self, contact: str, text: str, **kwargs) -> dict:
         """提交给任务池并等待结果（返回值与旧路径同契约）。"""
@@ -2023,6 +2064,164 @@ class Gateway:
         result = self._send_breaker.reset(source)
         self._record("send_breaker_reset", {"source": source})
         return result
+
+    # ---------------- A9-P2：回复生成池（生成与发送解耦） ----------------
+    def _reply_pool_enabled(self) -> bool:
+        return bool(self._reply_pool is not None and self._reply_pool.alive()
+                    and self.cfg.get("reply_pool_enabled", False))
+
+    def _start_reply_pool(self) -> bool:
+        if not bool(self.cfg.get("reply_pool_enabled", False)):
+            return False
+        if self._reply_pool is not None and self._reply_pool.alive():
+            return True
+        try:
+            workers = max(1, int(self.cfg.get("reply_workers") or 2))
+        except (TypeError, ValueError):
+            workers = 2
+        try:
+            queue_size = max(workers, int(self.cfg.get("reply_pool_queue") or 200))
+        except (TypeError, ValueError):
+            queue_size = 200
+        self._reply_pool = reply_pool_mod.ReplyPool(
+            self._reply_job_runner, workers=workers,
+            queue_size=queue_size).start()
+        self._record("reply_pool_started", {"workers": workers,
+                                            "queue_size": queue_size})
+        return True
+
+    def _reply_job_runner(self, job) -> None:
+        """生成池 worker：只做 LLM 生成 + 发送（发送走发送池，本线程等结果）。"""
+        self.in_flight_contact = str(job.contact or "")
+        try:
+            self._reply(job.msg)
+        finally:
+            self.in_flight_contact = ""
+
+    def _submit_reply_job(self, contact: str, msg: dict, texts: list[str]) -> bool:
+        if not self._reply_pool_enabled() or contact in self._reply_inflight:
+            return False
+        if contact in self._reply_inflight:
+            return False
+
+        def _done(job, error: str) -> None:
+            self._reply_done.put((job.contact, list(job.texts), str(error or "")))
+
+        job = reply_pool_mod.ReplyJob(contact=contact, msg=msg,
+                                      texts=list(texts), on_done=_done)
+        submitted = self._reply_pool.submit(job)
+        if submitted != "ok":
+            self._record("reply_pool_rejected", {"friend": contact,
+                                                 "reason": submitted})
+            return False
+        self._reply_inflight.add(contact)
+        return True
+
+    def _drain_reply_done(self) -> None:
+        """把生成池完成事件应用到 pending（只在 dispatcher 线程里调用）。"""
+        while True:
+            try:
+                contact, texts, error = self._reply_done.get_nowait()
+            except queue.Empty:
+                break
+            self._reply_inflight.discard(contact)
+            if error:
+                self._apply_flush_failure(contact, texts,
+                                          f"reply_pool_error: {error}")
+            else:
+                self._apply_flush_success(contact, texts)
+
+    def _apply_flush_success(self, contact: str, texts: list[str]) -> None:
+        buf = self.pending.get(contact)
+        if not buf:
+            return
+        current = [x for x in (buf.get("texts") or []) if x]
+        submitted = [x for x in (texts or []) if x]
+        if current[:len(submitted)] != submitted:
+            # 状态不一致（理论上不该发生）：宁可清掉 pending，避免无限重复回复
+            self.pending.pop(contact, None)
+            return
+        remaining = current[len(submitted):]
+        if remaining:
+            try:
+                debounce_ms = int(self.cfg.get("reply_debounce_ms") or 0)
+            except (TypeError, ValueError):
+                debounce_ms = 0
+            self.pending[contact] = {
+                **buf, "texts": remaining, "attempt": 0,
+                "deadline": time.time() + max(0, debounce_ms) / 1000.0,
+            }
+            self.pending[contact].pop("retry_at", None)
+        else:
+            self.pending.pop(contact, None)
+
+    def _apply_flush_failure(self, contact: str, texts: list[str],
+                             error: str) -> None:
+        buf = self.pending.get(contact)
+        if not buf:
+            return
+        attempt = int(buf.get("attempt") or 0) + 1
+        self.failed += 1
+        self._record("worker_error", {"error": error[:400], "friend": contact,
+                                      "attempt": attempt})
+        if attempt >= FLUSH_RETRY_MAX:
+            self.pending.pop(contact, None)
+            self.flush_dropped += 1
+            self._persist_pending_lost(contact, buf, texts, error, attempt)
+            self._record("flush_dropped", {
+                "friend": contact, "attempt": attempt,
+                "error": error[:200], "texts": len(texts),
+                "lost_path": str(self.pending_lost_path)})
+        else:
+            back = dict(buf)
+            back.update({"texts": list(buf.get("texts") or []),
+                         "attempt": attempt,
+                         "retry_at": time.time() + min(60.0, 2.0 ** attempt)})
+            self.pending[contact] = back
+            self.flush_retry += 1
+            self._record("flush_retry", {
+                "friend": contact, "attempt": attempt,
+                "retry_in_s": round(min(60.0, 2.0 ** attempt), 1),
+                "error": error[:200]})
+
+    def reply_pool_status(self) -> dict:
+        pool = self._reply_pool
+        if pool is None:
+            return {"enabled": bool(self.cfg.get("reply_pool_enabled", False)),
+                    "alive": False, "workers": 0, "queued": 0,
+                    "inflight": 0, "completed": 0, "failed": 0,
+                    "rejected": 0}
+        stats = pool.snapshot()
+        stats["enabled"] = bool(self.cfg.get("reply_pool_enabled", False))
+        return stats
+
+    def _stop_reply_pool(self) -> None:
+        pool = self._reply_pool
+        if pool is None:
+            return
+        try:
+            pool.stop(timeout=3)
+        except Exception:  # noqa: BLE001
+            pass
+        self._reply_pool = None
+
+    def metrics_snapshot(self) -> dict:
+        """A9-P3：发送/生成/熔断的统一观测快照（只读，/status 与 /api/metrics 用）。"""
+        return {
+            "ok": True,
+            "ts": time.time(),
+            "uptime_s": round(time.time() - float(self.started_at or time.time()), 1),
+            "queue": {"inbound": self.queue.qsize(),
+                      "dropped_inbound": int(getattr(self, "dropped_inbound", 0) or 0),
+                      "in_flight_contact": str(getattr(self, "in_flight_contact", "") or "")},
+            "send_async": self.send_async_status(),
+            "reply_pool": self.reply_pool_status(),
+            "send_breaker": dict(self.send_breaker),
+            "counts": {"sent": self.sent, "failed": self.failed,
+                       "unverified": self.unverified, "planned": self.planned},
+            "flush": {"retry": int(getattr(self, "flush_retry", 0) or 0),
+                      "dropped": int(getattr(self, "flush_dropped", 0) or 0)},
+        }
 
     def _send_locked(self, contact: str, text: str, *, force: bool = False,
                      reactive: bool = False, proactive: bool = False,
@@ -2927,6 +3126,7 @@ class Gateway:
             # A9-P0：发送异步化观测（enabled/queue_size/alive/超时与丢弃计数）
             "send_async": self.send_async_status(),
             "send_breaker": dict(self.send_breaker),
+            "reply_pool": self.reply_pool_status(),
             "drafts_pending": len(drafts.list_all(path=self.draft_path, limit=200)),
             # P0-AB8：启动时按 TTL 清掉的过期草稿数（配置 draft_ttl_days，默认 7 天）
             "drafts_pruned": int(getattr(self, "drafts_pruned", 0) or 0),
@@ -3227,6 +3427,9 @@ def make_handler(gateway: Gateway):
                 return
             if path == "/status":
                 self._json(200, gateway.status())
+                return
+            if path == "/api/metrics":
+                self._json(200, gateway.metrics_snapshot())
                 return
             # P0：发送器能力探测（force=1 强制重探；默认缓存 60s）。802 启动时调用一次，
             # 缺模块时能直接告诉用户"发送器不可用"，而不是等第一条回复失败。

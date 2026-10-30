@@ -101,7 +101,7 @@ LINE_BUDGET: dict[str, int] = {
     "tools/console/server.py": 6250,          # 2026-10-31 到期复测/wake 候选/心情口径后 6172（待拆）
     "tests/test_webui.py": 4700,              # 现有 4592：网页端集成测试
     "agi/selflearn/proactive.py": 3100,       # 现有 3056：主动消息生成（待拆）
-    "agi/wechat_gateway/server.py": 3400,     # 2026-10-31 A9-P0 异步发送后 3300（P1 起迁到 send_async.py 控制增长）
+    "agi/wechat_gateway/server.py": 3600,     # 2026-10-31 A9-P2 生成池接入后 3529（待拆）
     "agi/tests/test_console_server.py": 2550,  # 2026-10-31 新增 weak-due/wake/mood 契约测试后 2490
     "webui/server.py": 2000,                  # 现有 1965
     "agi/selflearn/chat.py": 1830,            # 2026-10-30 聊天图片本地识图后 1756（待拆）

@@ -13,6 +13,7 @@
 | 文档 | 用途 | 什么时候看 |
 | --- | --- | --- |
 | [`architecture/ARCHITECTURE.md`](architecture/ARCHITECTURE.md) | 系统架构（双后端、801/802 主链、发送闸门、主动链登记、数据层） | 改接入/对话/主动/数据层前 |
+| [`architecture/A9-发送异步化.md`](architecture/A9-发送异步化.md) | A9 发送异步化 P0–P3：链路、开关与回滚、观测、压测/灰度证据 | 改发送/并发模型前 |
 | [`architecture/README.md`](architecture/README.md) | 设计规格索引（00–14，含 TrainLab 10 / Workbench 11） | 查产品语义与边界 |
 | [`architecture/PLAN.md`](architecture/PLAN.md) | 设计规格的施工图入口 | 实现前对照规格 |
 | [`architecture/SPEC.md`](architecture/SPEC.md) | 项目规格总表 | 查完整需求/接口 |

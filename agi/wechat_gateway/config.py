@@ -50,6 +50,10 @@ DEFAULTS = {
     # 风控熔断：连续 N 次环境类发送失败（超时/发送器不可用）→ 禁止外发，需人工 reset
     "send_breaker_enabled": True,
     "send_breaker_threshold": 2,
+    # A9-P2：回复生成池（默认关；开 = 每联系人串行、跨联系人并行生成）
+    "reply_pool_enabled": False,
+    "reply_workers": 2,
+    "reply_pool_queue": 200,
     "memory_purge_enabled": False,
     "memory_sleep_hour": 3,
     "port": 801,

@@ -38,6 +38,8 @@ class SendJob:
     ttl_s: float = 180.0
     created_at: float = field(default_factory=time.time)
     seq: int = 0
+    started_at: float = 0.0
+    finished_at: float = 0.0
     done: threading.Event = field(default_factory=threading.Event)
     result: dict | None = None
 
@@ -214,6 +216,7 @@ class SenderPool:
                                    "expired": True})
                 continue
             started = time.time()
+            job.started_at = started
             try:
                 result = self._runner(job)
                 if not isinstance(result, dict):
@@ -222,5 +225,6 @@ class SenderPool:
             except Exception as exc:  # noqa: BLE001 - 执行线程不能死
                 result = {"ok": False, "status": "failed",
                           "error": f"{type(exc).__name__}: {exc}"[:200]}
-            self.stats["last_wait_ms"] = round((time.time() - started) * 1000, 1)
+            job.finished_at = time.time()
+            self.stats["last_wait_ms"] = round((job.finished_at - started) * 1000, 1)
             self._finish(job, result)

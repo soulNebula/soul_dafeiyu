@@ -45,6 +45,9 @@ TIER_WARM_DAYS = 90.0         # 30–90 天：前阵子，只挑重要的
 #: 默认每层预算：最近 4 条 + 前阵子 2 条 + 更早以前 1 条（总 7）
 TIER_BUDGET = {"hot": 4, "warm": 2, "cold": 1}
 WARM_MIN_IMPORTANCE = 0.35    # warm 无查询命中时的最低重要性门槛
+#: hot 层"防串味"门槛：本轮 query 无词面重叠时，只有重要性够高的稳定画像事实
+#: （名字/职业/长期偏好等）才允许注入；否则最近 4 条名额会被无关旧事占满。
+HOT_MIN_IMPORTANCE = 0.65
 COLD_STABLE_KINDS = frozenset({"value", "preference", "plan"})  # cold 只收稳定事实
 COLD_MIN_IMPORTANCE = 0.5     # cold 稳定事实的 importance 门槛
 #: 用户明确"翻旧账"的线索：cold 候选放开（仍限稳定事实）、hybrid 老片段豁免
@@ -521,6 +524,12 @@ def retrieve_tiered(path: Path | str = DB_PATH, query: str = "",
                 importance = DEFAULT_IMPORTANCE
             if tier == "warm":
                 if importance < WARM_MIN_IMPORTANCE and overlap <= 0:
+                    continue
+            elif tier == "hot":
+                # 防串味（2026-10-30）：hot 不再"无差别全收"。q 非空时，与本轮话题
+                # 无词面重叠且重要性不高的记忆不占 hot 预算；q 为空（旧 retrieve("")）
+                # 保持历史语义，避免破坏兼容调用方。
+                if q and overlap <= 0 and importance < HOT_MIN_IMPORTANCE:
                     continue
             elif tier == "cold":
                 if str(row.get("kind") or "") not in COLD_STABLE_KINDS:

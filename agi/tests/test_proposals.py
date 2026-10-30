@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from agi.selflearn import db, proposals
+from agi.selflearn import db, persona_layers, proposals
 
 
 def _raw(path, proposal_id: str) -> dict:
@@ -337,3 +337,123 @@ def test_proposals_never_touch_persona_skills_or_variants(tmp_path):
 
     assert after == before
     assert _count(path) == 2
+
+
+# --------------------------------------------------------------------------- #
+# C2：merged 后的 apply 点（persona_trait → core 人格层）
+# --------------------------------------------------------------------------- #
+def _create_trait(path, key: str = "tone", value: str = "quiet") -> dict:
+    return proposals.create(
+        path, "persona_trait", key, {"value": value}, ["T-1001", "T-1002"])
+
+
+def _core_rows(path) -> list[dict]:
+    con = db.connect(path)
+    try:
+        return [dict(r) for r in con.execute(
+            "SELECT * FROM persona_layers WHERE layer='core' AND status='active' "
+            "ORDER BY created_at, id").fetchall()]
+    finally:
+        con.close()
+
+
+def test_merged_persona_trait_applies_to_core_layer(tmp_path):
+    path = tmp_path / "selflearn.sqlite3"
+    created = _create_trait(path, "tone", "quiet")
+
+    assert proposals.transition(path, created["id"], "gray")["ok"] is True
+    merged = proposals.transition(path, created["id"], "merge")
+
+    assert merged["ok"] is True
+    assert merged["status"] == "merged"
+    assert merged["applied"] is True
+    assert "apply_error" not in merged
+    assert merged["apply"]["already_applied"] is False
+
+    rows = _core_rows(path)
+    assert len(rows) == 1
+    assert rows[0]["key"] == "tone"
+    assert rows[0]["value"] == "quiet"
+    assert rows[0]["approved_by"] == f"proposal:{created['id']}"
+
+    ctx = persona_layers.context(path)
+    assert "core:" in ctx and "tone=quiet" in ctx
+    logs = persona_layers.changelog(path, limit=50)
+    assert any(row["key"] == "tone" and row["action"] == "approve"
+               for row in logs)
+
+
+def test_apply_merged_is_idempotent(tmp_path):
+    path = tmp_path / "selflearn.sqlite3"
+    created = _create_trait(path, "pace", "慢一点")
+    proposals.transition(path, created["id"], "gray")
+    proposals.transition(path, created["id"], "merge")
+
+    first = proposals.apply_merged(path, created["id"])
+    assert first["ok"] is True
+    assert first["applied"] is False
+    assert first["already_applied"] is True
+
+    second = proposals.apply_merged(path, created["id"])
+    assert second["ok"] is True
+    assert second["already_applied"] is True
+
+    rows = [row for row in _core_rows(path) if row["key"] == "pace"]
+    assert len(rows) == 1
+    assert rows[0]["value"] == "慢一点"
+    # 幂等不重复写 changelog 的 apply 记录
+    logs = [row for row in persona_layers.changelog(path, limit=100)
+            if row["key"] == "pace"]
+    assert len(logs) == 1
+
+
+def test_apply_merged_rejects_non_merged_proposal(tmp_path):
+    path = tmp_path / "selflearn.sqlite3"
+    draft = _create_trait(path)
+
+    result = proposals.apply_merged(path, draft["id"])
+    assert result["ok"] is False
+    assert result["code"] == "not_merged"
+    assert _core_rows(path) == []
+
+    missing = proposals.apply_merged(path, "P-19990101-001")
+    assert missing["ok"] is False and missing["code"] == "not_found"
+
+
+def test_merged_unknown_kind_reports_unsupported(tmp_path):
+    path = tmp_path / "selflearn.sqlite3"
+    created = proposals.create(
+        path, "knob_adjust", "length_budget", {"value": 120}, ["T-1"])
+    proposals.transition(path, created["id"], "gray")
+    merged = proposals.transition(path, created["id"], "merge")
+
+    assert merged["ok"] is True
+    assert merged["status"] == "merged"
+    assert merged["applied"] is False
+    assert merged["apply"]["code"] == "unsupported_kind"
+    assert "unknown proposal kind" in merged["apply_error"]
+
+    direct = proposals.apply_merged(path, created["id"])
+    assert direct["ok"] is False
+    assert direct["code"] == "unsupported_kind"
+    assert direct["kind"] == "knob_adjust"
+
+
+def test_transition_surfaces_apply_error(tmp_path, monkeypatch):
+    path = tmp_path / "selflearn.sqlite3"
+    created = _create_trait(path)
+    proposals.transition(path, created["id"], "gray")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(persona_layers, "apply_core", boom)
+    merged = proposals.transition(path, created["id"], "merge")
+
+    # 状态迁移本身成功，但 apply 失败必须显式可见，不能静默
+    assert merged["ok"] is True
+    assert merged["status"] == "merged"
+    assert merged["applied"] is False
+    assert "disk full" in merged["apply_error"]
+    assert merged["apply"]["code"] == "apply_failed"
+    assert _core_rows(path) == []

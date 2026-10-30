@@ -1712,17 +1712,81 @@ class SelfLearnAgent:
             return "在。你想聊什么？"
         return "我刚才没接上模型回复，不想假装听懂。你再说一次？"
 
+    @staticmethod
+    def _polarity(text: str) -> float:
+        """极轻量情绪极性代理（不调模型）：正/负词表计数相等 → 0。"""
+        raw = str(text or "")
+        positive = sum(raw.count(word) for word in
+                       ("哈哈", "开心", "谢谢", "好耶", "喜欢", "爱你", "笑死", "太好了"))
+        negative = sum(raw.count(word) for word in
+                       ("烦", "累", "难过", "生气", "无语", "不想", "算了", "随便", "讨厌"))
+        if positive == negative:
+            return 0.0
+        return 1.0 if positive > negative else -1.0
+
+    def _scoring_signals(self, turn_id: str, reaction: str) -> dict[str, Any]:
+        """把「这一轮之后用户的实际行为」折算成 04 的七维信号。
+
+        旧实现只传 feedback/stage/mood/topic，behavior/length/emotion/retention
+        四维恒 0（judge/recurrence 本来就没有信号源），七维加权事实上退化。
+        这里用同库已有证据补齐，不联网、不调裁判、不伪造：缺失的信号宁可不传，
+        由 scoring 记入 breakdown["missing"]。
+        """
+        signals: dict[str, Any] = {"feedback": reaction, "topic": "生活"}
+        try:
+            st = state.load(self.path)
+            signals["stage"] = st["relationship"]["stage"]
+            signals["mood"] = st["emotion"].get("valence", 0.0)
+        except Exception:  # noqa: BLE001 - 状态读失败不影响打分主体
+            pass
+        try:
+            con = db.connect(self.path)
+            try:
+                turn = con.execute(
+                    "SELECT reply, created_at FROM turns WHERE id=?", (turn_id,)
+                ).fetchone()
+                if turn is None:
+                    return signals
+                reply = str(turn["reply"] or "")
+                created = float(turn["created_at"] or 0.0)
+                prev_rows = con.execute(
+                    "SELECT reply FROM turns WHERE id<>? AND created_at<? AND reply<>'' "
+                    "ORDER BY created_at DESC LIMIT 20", (turn_id, created)
+                ).fetchall()
+                prev_lengths = [len(str(row["reply"] or "")) for row in prev_rows]
+                if prev_lengths and reply:
+                    prev_median = sorted(prev_lengths)[len(prev_lengths) // 2]
+                    signals["length"] = scoring.length_signal(
+                        len(reply), prev_median or 1)
+                next_row = con.execute(
+                    "SELECT ts, text FROM messages WHERE role='user' AND ts>? "
+                    "ORDER BY ts ASC LIMIT 1", (created,)).fetchone()
+                if next_row is None:
+                    # 24h 内没有任何后续用户消息 = 这轮没留住人
+                    signals["behavior"] = -1.0
+                    signals["retention"] = -1.0
+                else:
+                    gap = float(next_row["ts"] or 0.0) - created
+                    if gap <= 12 * 3600:
+                        signals["behavior"] = 1.0
+                    signals["retention"] = 1.0 if gap <= 48 * 3600 else -1.0
+                    if gap <= 3600:
+                        signals["emotion"] = self._polarity(
+                            str(next_row["text"] or ""))
+            finally:
+                con.close()
+        except Exception:  # noqa: BLE001 - 行为信号缺失不影响 feedback 主流程
+            return signals
+        return signals
+
     def feedback(self, turn_id: str, reaction: str, note: str = "") -> dict[str, Any]:
         result = skills.record_feedback(self.path, turn_id, reaction, note)
         if result.get("ok"):
             result["trust"] = trust.update(self.path, reaction, turn_id, note)
             result["mood"] = state.feedback(self.path, reaction)["self"]
             try:
-                st = state.load(self.path)
                 result["scoring"] = scoring.record_score(
-                    self.path, turn_id,
-                    {"feedback": reaction, "stage": st["relationship"]["stage"],
-                     "mood": st["emotion"].get("valence", 0.0), "topic": "生活"})
+                    self.path, turn_id, self._scoring_signals(turn_id, reaction))
             except Exception as exc:  # noqa: BLE001
                 result["scoring"] = {"ok": False, "error": str(exc)[:200]}
             if reaction == "bad":

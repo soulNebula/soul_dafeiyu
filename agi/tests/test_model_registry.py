@@ -117,4 +117,10 @@ def test_validate_registry_no_duplicate():
     assert result["models"] >= 3
     assert result["duplicate_names"] == []
     assert result["duplicate_ports"] == []
-    assert result["missing_files"] == []
+    # qwen05-base / tone_* 是"历史参考位"：权重文件已不在本机，登记时显式标了
+    # missing=True（见 agi/data/local_models.json）。除这些已知归档项外，
+    # 注册表里不允许出现"悄悄丢了文件"的条目。
+    known_missing = {"qwen05-base", "tone_qwen05_v1", "tone_style_qwen05_v3"}
+    unexpected = [item for item in result["missing_files"]
+                  if item.get("name") not in known_missing]
+    assert unexpected == []

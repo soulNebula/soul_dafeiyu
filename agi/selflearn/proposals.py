@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 """04 待审提案状态机：draft → gray → merged / rejected。
 
-本模块只写 ``learning_proposals``，绝不自动改人格/技能：
-灰度与合并都是人的动作，``transition`` 只记录状态和时间。
+``transition`` 仍只负责状态迁移；唯一的"落地"入口是 :func:`apply_merged`：
+- ``merged`` 的 ``persona_trait`` 提案会写入 **core 人格层**（approved_by 记
+  ``proposal:<id>``，changelog 留痕）；重复 apply 幂等返回 ``already_applied``；
+- 其它 kind 一律返回 ``unsupported_kind``（不静默），由人工按类型补 apply 实现；
+- 提案状态变 merged 时 ``transition`` 自动调用 apply，并在返回值里带
+  ``applied`` / ``apply_error``（apply 失败不改写状态迁移本身的成功）。
 """
 from __future__ import annotations
 
@@ -48,8 +52,11 @@ ACTION_ALIASES: dict[str, str] = {
     "deny": "rejected",
     "decline": "rejected",
 }
-#: 04 规格里的提案类型；只作说明，不据此拒绝新类型
-KINDS = ("new_variant", "rule_patch", "knob_adjust", "persona_patch")
+#: 04 规格里的提案类型；``persona_trait`` 是当前唯一有 apply 实现的类型
+KINDS = ("new_variant", "rule_patch", "knob_adjust", "persona_patch",
+         "persona_trait")
+#: 已实现 apply 的 kind；其它 kind 会明确返回 unsupported_kind
+APPLICABLE_KINDS = ("persona_trait",)
 
 _EPSILON = 1e-6
 _MAX_KIND = 64
@@ -166,6 +173,63 @@ def get(path: Path | str = DB_PATH, proposal_id: Any = "") -> dict[str, Any] | N
     return _row_dict(row) if row is not None else None
 
 
+def apply_merged(path: Path | str = DB_PATH, proposal_id: Any = "") -> dict[str, Any]:
+    """把状态为 **merged** 的提案落到线上（当前唯一 apply 点）。
+
+    支持的 kind：``persona_trait`` → core 人格层（``target`` 作 key、
+    ``payload["value"]`` 作 value，approved_by 记 ``proposal:<id>`` 并写 changelog）。
+
+    - 非 merged → ``code="not_merged"``；
+    - 其它 kind → ``code="unsupported_kind"``（明确报错，不静默）；
+    - 已 apply 过 → ``already_applied=True``，不重复写；
+    - 任何异常 → ``code="apply_failed"`` 并把异常摘要放进 ``error``。
+    """
+    pid = _clean_id(proposal_id)
+    if not pid:
+        return {"ok": False, "error": "proposal_id 不能为空", "code": "bad_id"}
+    item = get(path, pid)
+    if item is None:
+        return {"ok": False, "error": "提案不存在", "code": "not_found", "id": pid}
+    status = str(item.get("status") or "").strip().lower()
+    if status != "merged":
+        return {"ok": False, "error": "只有 merged 提案可以 apply",
+                "code": "not_merged", "id": pid, "status": status}
+    kind = str(item.get("kind") or "").strip()
+    if kind not in APPLICABLE_KINDS:
+        return {"ok": False,
+                "error": f"unknown proposal kind: {kind}（no apply implementation）",
+                "code": "unsupported_kind", "id": pid, "kind": kind}
+    payload = item.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    target = str(item.get("target") or "").strip()
+    value = str(payload.get("value") or "").strip()
+    if not target or not value:
+        return {"ok": False, "error": "persona_trait 需要 target 与 payload.value",
+                "code": "invalid_payload", "id": pid, "kind": kind}
+    approved_by = "proposal:" + pid
+    try:
+        # 函数内 import：避免 proposals ↔ persona_layers 的加载顺序环
+        from . import persona_layers
+        result = persona_layers.apply_core(path, target, value, approved_by,
+                                           evidence=[approved_by])
+    except Exception as exc:  # noqa: BLE001 - apply 失败必须可见，不能吞掉
+        return {"ok": False,
+                "error": f"{type(exc).__name__}: {str(exc)[:160]}",
+                "code": "apply_failed", "id": pid, "kind": kind}
+    out: dict[str, Any] = {
+        "ok": bool(result.get("ok")), "id": pid, "kind": kind,
+        "target": target, "value": value, "approved_by": approved_by,
+        "applied": bool(result.get("applied")),
+        "already_applied": bool(result.get("already_applied")),
+    }
+    if result.get("id"):
+        out["persona_layer_id"] = result.get("id")
+    if not result.get("ok"):
+        out["error"] = str(result.get("error") or "apply_failed")
+        out["code"] = str(result.get("code") or "apply_failed")
+    return out
+
+
 def create(path: Path | str = DB_PATH, kind: Any = "", target: Any = "",
            payload: Any = None, evidence: Any = None) -> dict[str, Any]:
     """新建提案，状态固定为 draft；生成 id 与时间，不触发任何学习动作。"""
@@ -265,8 +329,24 @@ def transition(path: Path | str = DB_PATH, proposal_id: Any = "",
         con.close()
     if fresh is None:
         return {"ok": False, "error": "提案不存在", "id": pid}
-    return {"ok": True, **_row_dict(fresh), "action": action_text,
-            "previous_status": current}
+    result: dict[str, Any] = {
+        "ok": True, **_row_dict(fresh), "action": action_text,
+        "previous_status": current,
+    }
+    # merged 是唯一的"落地"时机：自动 apply，并显式回报结果/错误（不静默）。
+    if str(fresh["status"] or "").strip().lower() == "merged":
+        try:
+            applied = apply_merged(path, pid)
+        except Exception as exc:  # noqa: BLE001 - apply 异常不能让 transition 假成功
+            applied = {"ok": False,
+                       "error": f"{type(exc).__name__}: {str(exc)[:160]}",
+                       "code": "apply_failed"}
+        result["applied"] = bool(applied.get("applied"))
+        result["apply"] = applied
+        if not applied.get("ok"):
+            result["apply_error"] = str(
+                applied.get("error") or applied.get("code") or "apply_failed")
+    return result
 
 
 def _status_filter(status: Any) -> tuple[str, ...]:
@@ -321,6 +401,7 @@ def can_transition(status: Any, action: Any) -> bool:
 
 
 __all__ = [
-    "ACTION_ALIASES", "INITIAL", "KINDS", "STATUSES", "TERMINAL", "TRANSITIONS",
-    "can_transition", "create", "get", "list_proposals", "transition",
+    "ACTION_ALIASES", "APPLICABLE_KINDS", "INITIAL", "KINDS", "STATUSES",
+    "TERMINAL", "TRANSITIONS", "apply_merged", "can_transition", "create",
+    "get", "list_proposals", "transition",
 ]

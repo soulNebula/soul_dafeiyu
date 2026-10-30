@@ -88,6 +88,63 @@ def approve(path: Path | str, layer_id: str, approved_by: str) -> dict[str, Any]
         con.close()
 
 
+def apply_core(path: Path | str, key: str, value: str, approved_by: str,
+               evidence=None) -> dict[str, Any]:
+    """幂等写入 core 层（提案 apply 用）：同 key+value 已 active 时不再重复写。
+
+    返回 ``{ok, applied, already_applied, id, key, value, approved_by}``。
+    - core 必须带 ``approved_by``（审计来源，如 ``proposal:P-...``）；
+    - 同 key 的旧 active 值会被标记 ``superseded`` 并写 changelog，再写入新值
+      （保证 core 每个 key 只有一条 active，避免人格自相矛盾）；
+    - 所有写入都走 ``observe``/``approve``，changelog 留痕。
+    """
+    key_text = str(key or "").strip()[:60]
+    value_text = str(value or "").strip()[:240]
+    approver = str(approved_by or "").strip()[:60]
+    if not key_text or not value_text:
+        return {"ok": False, "error": "key/value 不能为空", "code": "bad_input"}
+    if not approver:
+        return {"ok": False, "error": "core 需要 approved_by", "code": "missing_approver"}
+    con = db.connect(path)
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT * FROM persona_layers WHERE layer='core' AND key=? AND status='active'",
+            (key_text,)).fetchall()]
+    finally:
+        con.close()
+    for row in rows:
+        if str(row.get("value") or "") == value_text:
+            return {"ok": True, "applied": False, "already_applied": True,
+                    "id": row.get("id"), "key": key_text, "value": value_text,
+                    "approved_by": str(row.get("approved_by") or "")}
+    if rows:  # 同 key 不同值：旧值退役（保留审计），避免两个 active 打架
+        now = time.time()
+        con = db.connect(path)
+        try:
+            for row in rows:
+                con.execute(
+                    "UPDATE persona_layers SET status='superseded', updated_at=? WHERE id=?",
+                    (now, row.get("id")))
+                _changelog(con, key_text, "supersede", str(row.get("value") or ""),
+                           value_text, "core", now)
+            con.commit()
+        finally:
+            con.close()
+    observed = observe(path, key_text, value_text,
+                       evidence=list(evidence or []), layer="core")
+    if not observed.get("ok"):
+        return {"ok": False, "error": str(observed.get("error") or "observe_failed"),
+                "code": "observe_failed", "key": key_text}
+    row_id = str(observed.get("id") or "")
+    approved = approve(path, row_id, approver)
+    if not approved.get("ok"):
+        return {"ok": False, "error": str(approved.get("error") or "approve_failed"),
+                "code": "approve_failed", "id": row_id, "key": key_text}
+    return {"ok": True, "applied": True, "already_applied": False,
+            "id": row_id, "key": key_text, "value": value_text,
+            "approved_by": approver}
+
+
 def context(path: Path | str) -> str:
     con = db.connect(path)
     try:

@@ -14,14 +14,14 @@
 
 <!-- STATUS:AUTO:BEGIN（由 tools/status_report.py 生成，勿手改）-->
 
-最后生成：2026-10-30T23:58:41（Python 3.14.7）
+最后生成：2026-10-31T00:45:04（Python 3.14.7）
 
 | 套件 | 通过 | 失败 | 跳过 | 耗时 | 结果 |
 | --- | --- | --- | --- | --- | --- |
-| `tests/` | 301 | 0 | 0 | 51.83s | PASS |
-| `agi/tests/` | 2254 | 0 | 4 | 429.98s | PASS |
+| `tests/` | 301 | 0 | 0 | 49.79s | PASS |
+| `agi/tests/` | 2268 | 0 | 4 | 450.93s | PASS |
 
-collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不代表通过数）：`tests/`=301、`agi/tests/`=2258。
+collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不代表通过数）：`tests/`=301、`agi/tests/`=2272。
 
 数据来源：`python scripts/agentb_verify.py`（全量终验，两套 + 静态检查 + 生产文件未被污染）或 `python tools/status_report.py --run`（单套件实测）；`--from-agentb` 可直接导入前者的 JSON，不手抄。
 

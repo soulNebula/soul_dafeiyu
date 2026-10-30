@@ -128,6 +128,8 @@ DEFAULTS = {
     "urges_enabled": True,
     "proactive_until_ts": 0,
     "reply_debounce_ms": 2000,
+    # 一轮回复最多几条气泡（0=按心情自动 1–3；1=每次只发一条）
+    "reply_max_bubbles": 0,
     # 对方多久之前还在说话就不主动（秒）：15 分钟，对齐 qq-bridge 的静默要求
     "proactive_idle_s": 900,
     # P0-2：同内容去重窗口（秒）——窗口内发过相同/高相似文本就跳过

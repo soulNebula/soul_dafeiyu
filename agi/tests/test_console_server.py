@@ -189,9 +189,11 @@ def test_apply_config_whitelist_and_validation(write_env):
                                "inner_mode": "model",
                                "inner_shadow_only": True,
                                "inner_mode_scope": "all",
-                               "inner_schema": "slim"})
+                               "inner_schema": "slim",
+                               "reply_max_bubbles": 1})
     assert ok["ok"] is True
     assert ok["config"]["proactive_enabled"] is False
+    assert ok["config"]["reply_max_bubbles"] == 1
     saved = json.loads(write_env["config"].read_text(encoding="utf-8"))
     assert saved["proactive_enabled"] is False and saved["inner_mode"] == "model"
 
@@ -202,6 +204,8 @@ def test_apply_config_whitelist_and_validation(write_env):
     invalid = console.apply_config({"proactive_interval_min_s": 5000,
                                     "proactive_interval_max_s": 100})
     assert invalid["ok"] is False
+    bad_bubbles = console.apply_config({"reply_max_bubbles": 9})
+    assert bad_bubbles["ok"] is False
 
 
 def test_prompts_state_uses_prompt_store(prompt_env):

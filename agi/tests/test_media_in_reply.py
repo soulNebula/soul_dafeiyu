@@ -83,3 +83,12 @@ def test_explicit_sticker_survives_strict_plan_rejection(tmp_path, monkeypatch):
     assert result["reply"] not in MEANINGFUL_FALLBACKS
     assert result["media"] and result["media"]["bubbles"]
     assert result["media"]["bubbles"][0]["type"] == "sticker"
+
+
+def test_reply_max_bubbles_cap_applies(tmp_path, monkeypatch):
+    """802 设置「一轮回复最多几条」=1 时，长回复也不能拆成多条。"""
+    _patch_media(monkeypatch)
+    agent = SelfLearnAgent(tmp_path / "selflearn.sqlite3",
+                           client=FakeClient("第一句话。第二句话。第三句话。"))
+    result = agent.send("你多说几句", max_bubbles_cap=1)
+    assert len(result["bubbles"]) == 1

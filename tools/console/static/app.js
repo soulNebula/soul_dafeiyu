@@ -1699,11 +1699,15 @@ function configCardHtml(cfg) {
     <div class="grid cols-2">
       <div class="field"><label>主动消息开关</label>
         <label class="switch"><input type="checkbox" id="cfg-proactive" ${cfg.proactive_enabled ? 'checked' : ''}> proactive_enabled</label></div>
+      <div class="field"><label>一轮回复最多几条</label>
+        <select id="cfg-max-bubbles">${[0, 1, 2, 3].map((n) =>
+          `<option value="${n}" ${Number(cfg.reply_max_bubbles || 0) === n ? 'selected' : ''}>${n === 0 ? '0 = 按心情自动（1–3）' : n + ' 条'}</option>`).join('')}</select>
+        <span class="hint">限制每次回复拆成几个气泡；1 = 每次只发一条（表情包另算一条媒体）</span></div>
       <div class="field"><label>概率区间（每轮随机 p）</label>
         <div class="row"><input type="number" id="cfg-pmin" step="0.05" min="0" max="1" value="${esc(cfg.proactive_probability_min)}" style="width:110px">
           <span class="hint">–</span>
           <input type="number" id="cfg-pmax" step="0.05" min="0" max="1" value="${esc(cfg.proactive_probability_max)}" style="width:110px"></div></div>
-      <div class="field"><label>间隔区间（秒）</label>
+      <div class="field"><label>间隔区间（秒，60–86400）</label>
         <div class="row"><input type="number" id="cfg-imin" step="60" min="10" value="${esc(cfg.proactive_interval_min_s)}" style="width:120px">
           <span class="hint">–</span>
           <input type="number" id="cfg-imax" step="60" min="10" value="${esc(cfg.proactive_interval_max_s)}" style="width:120px"></div></div>
@@ -1764,6 +1768,7 @@ async function renderSettings() {
       proactive_interval_min_s: Number($('#cfg-imin').value),
       proactive_interval_max_s: Number($('#cfg-imax').value),
       quiet_hours: [Number($('#cfg-qstart').value), Number($('#cfg-qend').value)],
+      reply_max_bubbles: Number($('#cfg-max-bubbles').value),
     };
     await saveConfig(updates);
     renderSettings();

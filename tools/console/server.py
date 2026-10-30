@@ -87,6 +87,7 @@ EDITABLE_DEFAULTS: dict = {
     "inner_shadow_only": False,
     "inner_mode_scope": "proactive_only",
     "inner_schema": "slim",
+    "reply_max_bubbles": 0,
 }
 #: 其余不可编辑但页面要看的键
 READONLY_CONFIG_KEYS = ("allowed_contacts", "proactive_contacts", "stop", "send_mode",
@@ -1351,6 +1352,11 @@ def _validate_config(updates: dict) -> tuple[dict, list[str]]:
                 if text not in INNER_SCHEMAS:
                     raise ValueError("inner_schema 非法")
                 cleaned[key] = text
+            elif key == "reply_max_bubbles":
+                number = int(value)
+                if not 0 <= number <= 3:
+                    raise ValueError("reply_max_bubbles 取值 0–3（0=自动）")
+                cleaned[key] = number
         except (TypeError, ValueError) as exc:
             errors.append(f"{key}: {exc}")
     merged = {**{key: gateway_config().get(key, default)

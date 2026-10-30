@@ -691,7 +691,8 @@ class SelfLearnAgent:
                 "had_image": had_image}
 
     def send(self, text: str, *, image: str | None = None,
-             proactive: bool = False) -> dict[str, Any]:
+             proactive: bool = False,
+             max_bubbles_cap: int = 0) -> dict[str, Any]:
         # W3-A：延迟埋点起点；到写 turn 为止（不含把回复发出去）
         t0 = time.perf_counter()
         text = str(text or "").strip()
@@ -1291,6 +1292,13 @@ class SelfLearnAgent:
         mood = float(st["self"].get("mood", 0.55))
         sharing = float(st["self"].get("sharing", 0.45))
         max_bubbles = 3 if (mood >= 0.75 or sharing >= 0.7) else (2 if (mood >= 0.6 or sharing >= 0.6) else 1)
+        # 802「设置」里的“回复条数上限”：0=按心情自动；1–3=硬上限。
+        try:
+            cap = int(max_bubbles_cap or 0)
+        except (TypeError, ValueError):
+            cap = 0
+        if cap > 0:
+            max_bubbles = min(max_bubbles, max(1, min(3, cap)))
         raw_bubbles = style_profile.split_bubbles(reply, max_bubbles) or [reply]
         # P3：最终外发文本口语化（去句尾句号/书面词/超长截句）；原始串写事件留档，
         # 只改这里产出的 bubbles/turn_reply，不动 gen_meta 与原始 reply 变量。

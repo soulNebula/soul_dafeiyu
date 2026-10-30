@@ -27,9 +27,21 @@ def port_open(port: int) -> bool:
         return False
 
 
-def spawn(cmd: list[str], log_name: str) -> None:
+def _open_log(log_name: str):
+    """打开日志；上一轮进程仍占着文件时退到带时间戳的新文件，绝不因此启动失败。"""
     LOGS.mkdir(parents=True, exist_ok=True)
-    handle = open(LOGS / log_name, "ab")
+    try:
+        return open(LOGS / log_name, "ab")
+    except PermissionError:
+        alt = LOGS / f"{Path(log_name).stem}-{time.strftime('%Y%m%d-%H%M%S')}.log"
+        try:
+            return open(alt, "ab")
+        except OSError:
+            return open(os.devnull, "wb")
+
+
+def spawn(cmd: list[str], log_name: str) -> None:
+    handle = _open_log(log_name)
     try:
         subprocess.Popen(cmd, cwd=str(ROOT), stdin=subprocess.DEVNULL,
                          stdout=handle, stderr=subprocess.STDOUT,

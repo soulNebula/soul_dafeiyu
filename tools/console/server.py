@@ -174,6 +174,22 @@ def set_stop(enabled: bool, *, client: str = "") -> dict:
     return {"ok": True, "stopped": bool(enabled), "path": str(target)}
 
 
+def gateway_risk_state() -> dict:
+    """801 不通时给出"为什么"：STOP 文件/总开关/发送模式（只读）。"""
+    try:
+        cfg = read_json(GATEWAY_CONFIG, {}) or {}
+    except Exception:  # noqa: BLE001
+        cfg = {}
+    return {
+        "stop_file": Path(STOP_PATH).exists(),
+        "enabled": bool(cfg.get("enabled")),
+        "engine_enabled": bool(cfg.get("engine_enabled")),
+        "auto_reply": bool(cfg.get("auto_reply")),
+        "dry_run": bool(cfg.get("dry_run", True)),
+        "send_mode": str(cfg.get("send_mode") or ""),
+    }
+
+
 def gateway_status() -> dict:
     token = admin_token()
     request = urllib.request.Request(GATEWAY_STATUS_URL)
@@ -187,8 +203,14 @@ def gateway_status() -> dict:
         return {"ok": False, "error": f"gateway http {exc.code}",
                 "gateway_reachable": True}
     except Exception as exc:  # noqa: BLE001
+        risk = gateway_risk_state()
+        stopped = bool(risk.get("stop_file")) or not risk.get("enabled")
+        hint = ("801 已被风控停止（STOP 文件存在或 enabled=false），这是预期状态；"
+                "确认微信已登录后再按安全顺序恢复，不要直接开 auto_reply/自动发送。"
+                if stopped else
+                "确认 python -m agi.wechat_gateway.server 正在 127.0.0.1:801 运行。")
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
-                "gateway_reachable": False}
+                "gateway_reachable": False, "risk_stop": risk, "hint": hint}
 
 
 # --------------------------------------------------------------------------- #

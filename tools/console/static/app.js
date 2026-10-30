@@ -360,12 +360,21 @@ async function renderOverview() {
 
   if (!status || !status.ok) {
     const reason = (status && status.error) || (errors[0] || '未知错误');
+    const risk = (status && status.risk_stop) || null;
+    const stopped = Boolean(risk && (risk.stop_file || !risk.enabled));
+    const title = stopped ? '网关已被风控停止（预期状态）' : '网关未连接';
+    const riskLine = risk
+      ? `<p class="hint">STOP=${risk.stop_file ? '存在' : '未创建'}，enabled=${risk.enabled}，`
+        + `auto_reply=${risk.auto_reply}，dry_run=${risk.dry_run}，send_mode=${esc(risk.send_mode || '未设置')}</p>`
+      : '';
+    const hint = (status && status.hint) ? `<p class="hint"><b>${esc(status.hint)}</b></p>` : '';
     $('#app').innerHTML = wbTopBar({
       title: '消息分析台', subtitle: 'Soul Console · 127.0.0.1:802',
-      pills: `<span class="wb-pill err">● 网关未连接</span>`,
+      pills: `<span class="wb-pill err">● ${stopped ? '网关已停止（风控）' : '网关未连接'}</span>`,
     }) + `<div class="wb-grid"><div class="wb-card wb-span2">
-      <div class="error-text">网关未连接：${esc(reason)}</div>
-      <p class="hint">确认 <code>python -m agi.wechat_gateway.server</code> 正在 127.0.0.1:801 运行；本页数据仍会显示本机文件部分。</p>
+      <div class="error-text">${title}：${esc(reason)}</div>
+      ${hint}${riskLine}
+      <p class="hint">本页其余数据仍会显示本机文件部分。恢复请先确认微信已登录，再按“STOP → 开关 → 启动 801”的顺序处理；不要直接开自动发送。</p>
     </div></div>`;
     return;
   }

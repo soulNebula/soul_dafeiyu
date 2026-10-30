@@ -25,8 +25,9 @@ def _gw(tmp_path, **overrides) -> Gateway:
     return Gateway(cfg)
 
 
-def test_default_timeout_is_twenty_seconds():
-    assert gw_config.DEFAULTS["send_timeout_s"] == 20
+def test_default_timeout_is_forty_five_seconds():
+    # 2026-10-31：20s 在冷启动 UIA 发送时过短（会误落草稿），回调 45s；风控靠熔断兜底。
+    assert gw_config.DEFAULTS["send_timeout_s"] == 45
     assert gw_config.DEFAULTS["send_breaker_enabled"] is True
     assert gw_config.DEFAULTS["send_breaker_threshold"] == 2
 

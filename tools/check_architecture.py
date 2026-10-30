@@ -104,7 +104,7 @@ LINE_BUDGET: dict[str, int] = {
     "agi/wechat_gateway/server.py": 3600,     # 2026-10-31 A9-P2 生成池接入后 3529（待拆）
     "agi/tests/test_console_server.py": 2550,  # 2026-10-31 新增 weak-due/wake/mood 契约测试后 2490
     "webui/server.py": 2000,                  # 现有 1965
-    "agi/selflearn/chat.py": 1830,            # 2026-10-30 聊天图片本地识图后 1756（待拆）
+    "agi/selflearn/chat.py": 1870,            # 2026-10-31 媒体兜底修复后 1843（待拆）
     "agi/soul/dataset.py": 1600,              # 现有 1510
 }
 

@@ -51,6 +51,8 @@ MEANINGFUL_FALLBACKS = (
     "刚才那句没组织好，你再说一次？",
     "这次我没接住，你再说一遍？",
 )
+#: 用户要表情包/图片、模型只给媒体指令或极短正文时的自然承接句（不能吞掉媒体）
+MEDIA_ACK_LINES = ("喏，给你", "给你～", "拿去", "收到，这就给你")
 META_HONEST_LINE = "刚才卡了一下，不是不想回你，你刚说的我没接住，再来一次？"
 META_HONEST_ALT = "刚才真卡住了，不是不理你，你再说一遍，我好好回"
 NO_MEMORY_LINE = "记了点你平时说过的事，一时想不全，你提醒我一句？"
@@ -1283,6 +1285,15 @@ class SelfLearnAgent:
         if not bubbles:
             bubbles = [style_profile.strip_periods(reply) or reply]
         turn_reply = " ".join(bubbles)
+        # 2026-10-31：模型只输出媒体指令时 turn_reply 为空，而 build_plan 对空文本直接
+        # 返回 None（表情包因此被丢掉、最后变成"我没接住"罐头句）。先补一句自然承接话，
+        # 再让 build_plan 正常工作；后续 meaningfulness 分支会保留媒体计划。
+        if (not crisis and chat_media_directives
+                and not re.sub(r"[\W_]+", "", str(turn_reply or ""),
+                              flags=re.UNICODE)):
+            turn_reply = _pick_line(MEDIA_ACK_LINES,
+                                    _recent_assistant_texts(self.path))
+            bubbles = [turn_reply]
         # P5-b：被动回复默认只加 emoji（media_sticker_in_reply=False）；关闭时零变化。
         reply_media = None
         if not crisis:
@@ -1317,13 +1328,25 @@ class SelfLearnAgent:
                         pass
             except Exception:  # noqa: BLE001
                 reply_media = None
-        # P0-26：最终外发文本兜底——纯问号/占位/与最近 5 条完全相同 → 换成有意义的自然话
+        # P0-26：最终外发文本兜底。
+        # P5-b 修正（2026-10-31）：用户明确要表情包时，模型可能只输出
+        # ``[[media:sticker:x]]`` 或极短正文（如"好好"）。旧逻辑把短文本当无意义 →
+        # 换罐头句并清空 reply_media，结果"要表情包"反而只收到"我没接住"。
+        # 有媒体计划时：短文本保留；纯空/纯标点补一句自然话，但**绝不丢媒体计划**。
         if not crisis:
-            meaningful = _ensure_meaningful(turn_reply, user_text=text, path=self.path)
-            if meaningful != turn_reply:
-                bubbles = [meaningful]
-                turn_reply = meaningful
-                reply_media = None
+            has_media = bool(reply_media and reply_media.get("bubbles"))
+            if has_media:
+                plain = str(turn_reply or "").strip()
+                if not re.sub(r"[\W_]+", "", plain, flags=re.UNICODE):
+                    turn_reply = _pick_line(MEDIA_ACK_LINES,
+                                            _recent_assistant_texts(self.path))
+                    bubbles = [turn_reply]
+            else:
+                meaningful = _ensure_meaningful(turn_reply, user_text=text, path=self.path)
+                if meaningful != turn_reply:
+                    bubbles = [meaningful]
+                    turn_reply = meaningful
+                    reply_media = None
         assistant_id = memory.store_message(self.path, "assistant", bubbles[0])
         try:
             live_ingest.record_message(self.path, "assistant", bubbles[0], message_id=assistant_id)

@@ -1094,7 +1094,10 @@ class SelfLearnAgent:
                                    conflict_q=conflict_q, sum_ctx=sum_ctx,
                                    retrieval_ctx=retrieval_ctx, profile_ctx=profile_ctx,
                                    layer_ctx=layer_ctx,
-                                   research_ctx=research.get("context", ""),
+                                   research_ctx=(research.get("context", "") or (
+                                       "本轮实际执行了联网搜索，但没有返回可用结果（0 条）。"
+                                       "只能如实说没搜到/没法确认，不要编造店评、链接或数据。"
+                                       if research.get("attempted") else "")),
                                    inner_ctx=inner_ctx, media_ctx=media_ctx,
                                    web_ctx=web_ctx, bili_ctx=bili_ctx,
                                    budget_out=budget_meta)
@@ -1478,6 +1481,11 @@ class SelfLearnAgent:
                 learned = tool_reply.remember_research(self.path, research, turn_id=turn_id)
             except Exception:  # noqa: BLE001
                 learned = 0
+        # 无论成功/0 结果/失败都留一条“检索尝试”，802 上网记录才看得到
+        try:
+            tool_reply.record_attempt(self.path, text, research, turn_id=turn_id)
+        except Exception:  # noqa: BLE001
+            pass
         summary_info = None
         profile_info = None
         if self.client.available() and self._count_user_messages() % 6 == 0:

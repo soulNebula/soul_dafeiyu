@@ -4046,16 +4046,21 @@ async function renderWeb() {
     const d = await api('/api/web/research?limit=200&q=' + encodeURIComponent(state.web.q || ''));
     state.web.items = d.items || [];
     state.web.total = d.total || 0;
-    const rows = state.web.items.map((item) => `<div class="web-row">
+    const rows = state.web.items.map((item) => {
+      const isAttempt = item.kind === 'attempt';
+      const statusLabel = item.status === 'ok' ? '成功' : (item.status === 'empty' ? '0 结果' : '失败');
+      const statusCls = item.status === 'ok' ? 'ok' : (item.status === 'empty' ? 'orange' : 'red');
+      return `<div class="web-row">
       <div class="web-time">${esc(item.time || fmtDateTime(item.ts))}</div>
       <div class="web-main">
-        <div class="web-query">${esc(item.query || '（无查询词）')}</div>
-        <div class="web-title">${item.title ? esc(item.title) : '<span class="muted">未取到标题</span>'}</div>
+        <div class="web-query">${esc(item.query || '（无查询词）')} ${isAttempt ? badge('检索尝试 · ' + statusLabel, statusCls) : ''}</div>
+        <div class="web-title">${item.title ? esc(item.title) : '<span class="muted">' + (isAttempt ? '没有抓到网页（只发起了搜索）' : '未取到标题') + '</span>'}</div>
         ${item.snippet ? `<div class="web-snippet">${esc(item.snippet)}</div>` : ''}
-        <div class="web-meta"><span class="web-domain">${esc(item.domain || '未知站点')}</span><span class="muted"> · ${esc(item.contact || '本机记录')}</span></div>
+        <div class="web-meta"><span class="web-domain">${isAttempt ? '搜索摘要' : esc(item.domain || '未知站点')}</span><span class="muted"> · ${esc(item.contact || '本机记录')}</span></div>
         <div class="web-url">${item.url ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.url)}</a>` : '<span class="muted">无链接</span>'}</div>
       </div>
-    </div>`).join('');
+    </div>`;
+    }).join('');
     $('#app').innerHTML = `
       <div class="page-head"><div><h2>上网记录</h2><p class="muted">她主动联网查过的内容，按时间倒序；只读。</p></div><button class="btn" id="web-refresh">刷新</button></div>
       <div class="web-search">

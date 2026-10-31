@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from . import agent as agent_mod
+from . import tools as _tools
 from ..textguard import strip_internal_ids
 
 #: 明确要查/查时效信息时直接触发（不含「今天/现在」这类太常见的词，
@@ -120,6 +121,7 @@ def research(client, text: str, *, db_path: Path | str | None = None,
         result = agent_mod.run_agent(
             client, text, db_path=db_path, max_steps=max_steps,
             max_tool_calls=max_tool_calls, deadline_s=deadline_s,
+            force_first_tool=True,
         )
     except Exception as exc:  # noqa: BLE001
         out["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
@@ -127,16 +129,70 @@ def research(client, text: str, *, db_path: Path | str | None = None,
     if not result.get("ok"):
         out["error"] = str(result.get("error") or "工具循环失败")[:200]
         return out
+    tool_calls = int(result.get("tool_calls") or 0)
+    sources = result.get("sources") or []
+    if tool_calls == 0 and not sources:
+        # 2026-10-31 真机：模型直接凭记忆作答（tool_calls=0），却把“检索结论”注入，
+        # 导致它说“搜了下没翻到”但后台没有任何检索记录。此时直接调一次搜索兜底。
+        fallback = _direct_search(text)
+        if fallback.get("used"):
+            out.update(fallback)
+            return out
+        out.update({"used": False, "attempted": True,
+                    "query": fallback.get("query", ""),
+                    "results_count": 0, "error": fallback.get("error", ""),
+                    "fallback": True})
+        return out
     context = _context_from(result)
     if not context.strip():
         out["error"] = "工具循环没有产出"
         return out
     out.update({"used": True, "context": context,
-                "sources": result.get("sources") or [],
+                "sources": sources,
                 "notes": result.get("notes") or [],
-                "tool_calls": int(result.get("tool_calls") or 0),
+                "tool_calls": tool_calls,
+                "attempted": True,
+                "query": str(text or "")[:200],
+                "results_count": len(sources),
                 "steps": result.get("steps") or []})
     return out
+
+
+def _direct_search(text: str) -> dict:
+    """模型没调工具时，直接用 web_search 兜底（查询词去掉口语前缀）。"""
+    query = str(text or "")
+    for filler in ("你去", "帮我", "网上", "搜搜", "搜一下", "搜索", "看看",
+                   "查一下", "查查", "一下", "哪个", "好吃"):
+        query = query.replace(filler, " ")
+    query = re.sub(r"\s+", " ", query).strip(" ，,。.!！?？~～")
+    if len(query) < 2:
+        query = str(text or "")[:60]
+    payload = _tools.web_search(query, count=5)
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list):
+        results = []
+    sources = []
+    lines = []
+    for item in results[:5]:
+        if not isinstance(item, dict):
+            continue
+        title = strip_internal_ids(str(item.get("title") or "")).strip()
+        url = str(item.get("url") or "").strip()
+        snippet = strip_internal_ids(str(item.get("snippet") or "")).strip()
+        if not url:
+            continue
+        sources.append({"title": title, "url": url, "snippet": snippet})
+        lines.append(f"- {title or url}：{snippet[:120]}" if snippet else f"- {title or url}")
+    if not lines:
+        return {"query": query, "results": [],
+                "error": str((payload or {}).get("error") or "")[:200]}
+    context = ("联网检索结果（只依据这些资料回答，不要补充未出现的信息）：\n"
+               + "\n".join(lines))
+    return {"used": True, "context": context, "sources": sources,
+            "notes": [], "tool_calls": 1, "attempted": True,
+            "query": query, "results_count": len(sources),
+            "fallback": True,
+            "steps": [{"tool": "web_search", "fallback": True}]}
 
 
 # ---------------------------------------------------------------- 留痕
@@ -186,6 +242,52 @@ def record_sources(db_path: Path | str, query: str, research: dict,
                     continue
             con.commit()
             return n
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+_ATTEMPT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS research_attempts(
+  id TEXT PRIMARY KEY,
+  ts REAL NOT NULL,
+  query TEXT NOT NULL,
+  status TEXT NOT NULL,
+  results INTEGER DEFAULT 0,
+  error TEXT DEFAULT '',
+  turn_id TEXT DEFAULT ''
+);
+"""
+
+
+def record_attempt(db_path: Path | str, query: str, research: dict,
+                   *, turn_id: str = "") -> int:
+    """记录一次联网检索尝试（含 0 结果/失败），供 802「上网记录」展示。"""
+    if not db_path:
+        return 0
+    data = research or {}
+    if not data.get("attempted"):
+        return 0
+    status = "ok" if data.get("used") else (
+        "failed" if data.get("error") else "empty")
+    try:
+        from . import db as _db
+        con = _db.memory_connect(db_path)
+        try:
+            con.executescript(_ATTEMPT_SCHEMA)
+            rid = "RA-" + hashlib.md5(
+                (str(time.time()) + str(query or "")).encode("utf-8", "replace")
+            ).hexdigest()[:16]
+            con.execute(
+                "INSERT OR REPLACE INTO research_attempts"
+                "(id, ts, query, status, results, error, turn_id) VALUES(?,?,?,?,?,?,?)",
+                (rid, time.time(), str(data.get("query") or query or "")[:200],
+                 status, int(data.get("results_count") or 0),
+                 str(data.get("error") or "")[:200], str(turn_id or "")),
+            )
+            con.commit()
+            return 1
         finally:
             con.close()
     except Exception:  # noqa: BLE001

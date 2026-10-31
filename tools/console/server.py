@@ -712,7 +712,19 @@ def web_records(limit: int = 100, q: str = "") -> dict:
                 for row in rows:
                     item = dict(row)
                     item["db"] = path.name
+                    item["kind"] = "source"
                     items.append(item)
+                # 2026-10-31：检索尝试（含 0 结果/失败）也要显示，否则“他说搜了但没记录”
+                if con.execute("SELECT 1 FROM sqlite_master WHERE name='research_attempts'").fetchone():
+                    attempts = con.execute(
+                        "SELECT id,ts,query,status,results,error FROM research_attempts "
+                        "ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
+                    for row in attempts:
+                        item = dict(row)
+                        item.update({"url": "", "title": "", "db": path.name,
+                                     "kind": "attempt",
+                                     "snippet": str(row["error"] or "")})
+                        items.append(item)
             finally:
                 con.close()
         except sqlite3.Error:
@@ -761,6 +773,9 @@ def web_research(limit: int = 100, q: str = "") -> dict:
             "domain": domain,
             "snippet": item.get("snippet") or "",
             "contact": _contact_label(item.get("db") or ""),
+            "kind": item.get("kind") or "source",
+            "status": item.get("status") or "",
+            "results": item.get("results"),
         })
     return {"ok": True, "items": items, "total": len(items)}
 

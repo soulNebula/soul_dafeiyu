@@ -169,7 +169,8 @@ def _result(*, ok: bool, reply: str, sources: list[dict], steps: list[dict],
 
 def run_agent(client, text: str, *, db_path=None, tools=None, max_steps: int = 5,
               max_tool_calls: int = 6, deadline_s: float = 60.0,
-              on_event: Callable[[dict], Any] | None = None) -> dict:
+              on_event: Callable[[dict], Any] | None = None,
+              force_first_tool: bool = False) -> dict:
     """多步工具循环。
 
     返回 ``{"ok","reply","sources","steps","tool_calls","error","budget_exceeded"}``。
@@ -199,8 +200,12 @@ def run_agent(client, text: str, *, db_path=None, tools=None, max_steps: int = 5
 
     started = time.monotonic()
     deadline = started + deadline_s
+    system_prompt = SYSTEM_PROMPT
+    if force_first_tool:
+        system_prompt += ("\n\n本轮硬性要求：**必须先调用 web_search 工具再回答**；"
+                          "不允许跳过工具直接凭记忆作答。")
     messages: list[dict] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_text},
     ]
     spec_list = _specs(registry)

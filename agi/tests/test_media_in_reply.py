@@ -92,3 +92,13 @@ def test_reply_max_bubbles_cap_applies(tmp_path, monkeypatch):
                            client=FakeClient("第一句话。第二句话。第三句话。"))
     result = agent.send("你多说几句", max_bubbles_cap=1)
     assert len(result["bubbles"]) == 1
+
+
+def test_reply_max_bubbles_allows_more_than_three(tmp_path, monkeypatch):
+    """用户喜欢连发：上限可以超过 3 条（换行切分，直接按上限返回）。"""
+    _patch_media(monkeypatch)
+    lines = chr(10).join(["一", "二", "三", "四", "五"])
+    agent = SelfLearnAgent(tmp_path / "selflearn.sqlite3",
+                           client=FakeClient(lines))
+    result = agent.send("多来几条", max_bubbles_cap=5)
+    assert len(result["bubbles"]) == 5

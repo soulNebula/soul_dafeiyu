@@ -1354,8 +1354,8 @@ def _validate_config(updates: dict) -> tuple[dict, list[str]]:
                 cleaned[key] = text
             elif key == "reply_max_bubbles":
                 number = int(value)
-                if not 0 <= number <= 3:
-                    raise ValueError("reply_max_bubbles 取值 0–3（0=自动）")
+                if not 0 <= number <= 20:
+                    raise ValueError("reply_max_bubbles 取值 0–20（0=自动）")
                 cleaned[key] = number
         except (TypeError, ValueError) as exc:
             errors.append(f"{key}: {exc}")

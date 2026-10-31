@@ -1298,7 +1298,9 @@ class SelfLearnAgent:
         except (TypeError, ValueError):
             cap = 0
         if cap > 0:
-            max_bubbles = min(max_bubbles, max(1, min(3, cap)))
+            # 0=按心情自动（最多 3）；>0 时直接作为硬上限（允许 4–20 条，
+            # 有些用户就喜欢一次连发很多条；split_bubbles 会按换行/句子切）。
+            max_bubbles = max(1, min(20, cap))
         raw_bubbles = style_profile.split_bubbles(reply, max_bubbles) or [reply]
         # P3：最终外发文本口语化（去句尾句号/书面词/超长截句）；原始串写事件留档，
         # 只改这里产出的 bubbles/turn_reply，不动 gen_meta 与原始 reply 变量。

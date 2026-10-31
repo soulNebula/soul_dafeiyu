@@ -204,7 +204,9 @@ def test_apply_config_whitelist_and_validation(write_env):
     invalid = console.apply_config({"proactive_interval_min_s": 5000,
                                     "proactive_interval_max_s": 100})
     assert invalid["ok"] is False
-    bad_bubbles = console.apply_config({"reply_max_bubbles": 9})
+    more = console.apply_config({"reply_max_bubbles": 20})
+    assert more["ok"] is True and more["config"]["reply_max_bubbles"] == 20
+    bad_bubbles = console.apply_config({"reply_max_bubbles": 21})
     assert bad_bubbles["ok"] is False
 
 

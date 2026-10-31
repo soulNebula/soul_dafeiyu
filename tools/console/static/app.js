@@ -1700,9 +1700,9 @@ function configCardHtml(cfg) {
       <div class="field"><label>主动消息开关</label>
         <label class="switch"><input type="checkbox" id="cfg-proactive" ${cfg.proactive_enabled ? 'checked' : ''}> proactive_enabled</label></div>
       <div class="field"><label>一轮回复最多几条</label>
-        <select id="cfg-max-bubbles">${[0, 1, 2, 3].map((n) =>
-          `<option value="${n}" ${Number(cfg.reply_max_bubbles || 0) === n ? 'selected' : ''}>${n === 0 ? '0 = 按心情自动（1–3）' : n + ' 条'}</option>`).join('')}</select>
-        <span class="hint">限制每次回复拆成几个气泡；1 = 每次只发一条（表情包另算一条媒体）</span></div>
+        <input type="number" id="cfg-max-bubbles" min="0" max="20" step="1"
+          value="${esc(Number(cfg.reply_max_bubbles || 0))}" style="width:110px">
+        <span class="hint">0 = 按心情自动（最多 3 条）；可填 1–20，喜欢连发就填大一点（表情包另算一条媒体）</span></div>
       <div class="field"><label>概率区间（每轮随机 p）</label>
         <div class="row"><input type="number" id="cfg-pmin" step="0.05" min="0" max="1" value="${esc(cfg.proactive_probability_min)}" style="width:110px">
           <span class="hint">–</span>

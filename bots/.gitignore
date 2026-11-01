@@ -1,0 +1,4 @@
+# bot 数据/密钥/模型一律不入库
+*
+!.gitignore
+!README.md

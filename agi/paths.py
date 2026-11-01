@@ -218,6 +218,59 @@ def backups_dir() -> Path:
     return _dir("backups_dir", ("backups",))
 
 
+# --------------------------------------------------------------------------- #
+# V1 bot 工作区：bots/<id>/ 是唯一数据源（见 docs/plans/64）
+# --------------------------------------------------------------------------- #
+#: bot 根目录环境变量（优先级最高；803 启动 801/802 时注入）
+BOT_ROOT_ENV = "SOULAGENT_BOT_ROOT"
+BOTS_DIRNAME = "bots"
+
+
+def bots_dir() -> Path:
+    """仓库内 bot 目录：``<repo>/bots``。"""
+    return REPO_ROOT / BOTS_DIRNAME
+
+
+def bot_root() -> Path | None:
+    """当前 bot 工作区：``SOULAGENT_BOT_ROOT`` → ``bots/active`` 指针 → None。
+
+    返回 None 表示沿用旧全局路径（``agi/data`` 等），保证未启用 bot 包的现有
+    安装零变化；V1 迁移/新装才会设置该指针。
+    """
+    value = _env(BOT_ROOT_ENV)
+    if value:
+        resolved = _resolve(value)
+        if resolved is not None:
+            return resolved
+    active = bots_dir() / "active"
+    try:
+        text = active.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    candidate = Path(os.path.expandvars(os.path.expanduser(text)))
+    if not candidate.is_absolute():
+        candidate = bots_dir() / candidate
+    return candidate
+
+
+def bot_path(*parts: str) -> Path:
+    """``bot_root()/parts...``；未配置 bot 时抛 RuntimeError（调用方需给出引导）。"""
+    root = bot_root()
+    if root is None:
+        raise RuntimeError("未配置 bot 工作区：设置 SOULAGENT_BOT_ROOT 或写 bots/active")
+    path = root
+    for part in parts:
+        text = str(part or "").strip().strip("/\\")
+        if not text:
+            continue
+        for piece in text.replace("\\", "/").split("/"):
+            if piece:
+                path = path / piece
+    return path
+
+
 def describe() -> dict:
     """当前解析结果（诊断/控制台用）。"""
     return {
@@ -234,6 +287,8 @@ def describe() -> dict:
         "llama_bin": str(llama_bin()),
         "convert_dir": str(convert_dir()),
         "config_path": str(PATHS_JSON),
+        "bot_root": str(bot_root()) if bot_root() else "",
+        "bots_dir": str(bots_dir()),
         "source": _source(),
     }
 

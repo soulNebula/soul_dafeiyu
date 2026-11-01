@@ -49,6 +49,7 @@ TOP_LEVEL_DIRS: dict[str, str] = {
     "docs": "文档（含历史快照 archive/、来源材料 sources/）",
     "idea": "803 IDEA 工作台（独立 git 历史，subtree 合入；有自己的一套 app/web/tests）",
     "media": "本地素材/媒体数据（运行数据，不入库）",
+    "bots": "V1 bot 工作区（运行数据/密钥/模型，gitignore；路径解析见 agi/paths.py）",
     "__pycache__": "字节码缓存",
     "log": "运行时日志目录（gitignore，不参与代码）",
     "reports": "运行/验收报告（gitignore/可归档）",

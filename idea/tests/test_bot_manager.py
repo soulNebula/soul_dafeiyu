@@ -83,3 +83,12 @@ def test_api_roundtrip(bots_root, monkeypatch):
     assert any(item["id"] == "api-bot" for item in listed["items"])
     assert client.get("/api/bots/api-bot", headers=headers).json()["bot"]["name"] == "API"
     assert client.post("/api/bots/api-bot/validate", headers=headers).json()["ok"] is True
+
+
+def test_load_bot_reports_stages(bots_root):
+    bot_manager.create_bot("loader", llm_key="sk-x")
+    result = bot_manager.load_bot("loader")
+    assert result["bot_id"] == "loader"
+    assert result["stages"] and result["progress"] >= 0
+    names = [item["stage"] for item in result["stages"]]
+    assert "目录" in names and "密钥文件" in names

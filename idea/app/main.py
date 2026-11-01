@@ -712,6 +712,14 @@ def api_bot_save(bot_id: str, body: BotSaveBody,
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/bots/{bot_id}/load")
+def api_bot_load(bot_id: str, _: bool = Depends(require_token)):
+    try:
+        return bot_manager.load_bot(bot_id)
+    except bot_manager.BotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/api/bots/{bot_id}/validate")
 def api_bot_validate(bot_id: str, _: bool = Depends(require_token)):
     try:

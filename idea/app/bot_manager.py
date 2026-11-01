@@ -285,3 +285,37 @@ def launch_bot(bot_id: str, *, port: int = 802, timeout: float = 40.0) -> dict:
                     "log": str(log_path)}
         time.sleep(0.4)
     return {"ok": False, "error": "802 启动超时", "log": str(log_path)}
+
+
+def load_bot(bot_id: str) -> dict:
+    """V1 PR6：加载前分阶段校验（同步返回每阶段结果，供 803 进度条展示）。
+
+    阶段：目录 → bot.json → DB → 密钥 → 配置 → 模型 → 802 端口。
+    只读/不启动服务；失败时给出可操作 message。
+    """
+    target = _bot_dir(bot_id)
+    stages: list[dict] = []
+
+    def add(name: str, ok: bool, message: str = "") -> None:
+        stages.append({"stage": name, "ok": bool(ok), "message": message})
+
+    add("目录", target.is_dir(), str(target))
+    meta = _read_json(target / "bot.json")
+    add("bot.json", isinstance(meta, dict), "缺少/损坏" if not isinstance(meta, dict) else "")
+    add("数据库目录", (target / "db" / "selflearn").is_dir(), "")
+    keys_ok = (target / "secrets" / "keys.json").is_file()
+    add("密钥文件", keys_ok, "" if keys_ok else "secrets/keys.json 缺失")
+    cfg_ok = (target / "config" / "wechat.json").is_file()
+    add("网关配置", cfg_ok, "" if cfg_ok else "config/wechat.json 缺失")
+    soul = str((meta or {}).get("soul_provider") or "cloud")
+    if soul == "local":
+        models = list((target / "models" / "soul").glob("*")) if (target / "models" / "soul").is_dir() else []
+        add("本地灵魂模型", bool(models), "" if models else "models/soul/ 为空；请先在 803 下载模型")
+    else:
+        add("云端灵魂模型", keys_ok, "" if keys_ok else "缺少云端 key")
+    port_busy = _port_open(802)
+    add("802 端口", True, "802 已在运行，将复用" if port_busy else "802 未运行，可启动")
+    ok = all(item["ok"] for item in stages)
+    return {"ok": ok, "bot_id": bot_id, "progress": 100 if ok else int(
+        100 * sum(1 for item in stages if item["ok"]) / max(1, len(stages))),
+        "stages": stages}

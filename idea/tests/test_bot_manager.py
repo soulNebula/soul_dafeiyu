@@ -103,3 +103,13 @@ def test_router_config_maps_soul_provider(bots_root):
     bot_manager.create_bot("r-cloud", soul_provider="cloud")
     cfg2 = bot_manager.router_config("r-cloud")
     assert cfg2["purposes"]["soul"]["backend"] == "api"
+
+
+def test_selfcheck_ports_and_bot(bots_root, monkeypatch):
+    bot_manager.create_bot("self", llm_key="sk-x")
+    monkeypatch.setattr(bot_manager, "_port_open", lambda port: port == 801)
+    result = bot_manager.selfcheck("self")
+    assert result["checks"][0]["name"] == "803"
+    assert any(item["name"] == "port_801" and item["ok"] for item in result["checks"])
+    assert any(item["name"] == "port_802" and not item["ok"] for item in result["checks"])
+    assert any(item["name"] == "bot:self" and item["ok"] for item in result["checks"])

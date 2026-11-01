@@ -348,3 +348,13 @@ def router_config(bot_id: str) -> dict:
             "extract": {"backend": "local" if soul_local else "api", "fallback": ["rule"]},
         },
     }
+
+
+def selfcheck(bot_id: str | None = None) -> dict:
+    """PR10 起步：803/801/802 端口 + 可选 bot 校验（只读，不启动服务）。"""
+    checks = [{"name": "803", "ok": True}]
+    for port in (801, 802):
+        checks.append({"name": f"port_{port}", "ok": _port_open(port)})
+    if bot_id:
+        checks.append({"name": f"bot:{bot_id}", "ok": validate_bot(bot_id)["ok"]})
+    return {"ok": all(item["ok"] for item in checks), "checks": checks}

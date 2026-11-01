@@ -14,14 +14,23 @@ import time
 from pathlib import Path
 from typing import Any
 
+from agi.paths import bot_root as _bot_root
 from agi.paths import data_dir as _default_data_dir
 
 ROOT = Path(__file__).resolve().parents[2]
 # 数据根统一由 agi.paths.data_dir() 解析（SOULAGENT_DATA_DIR 可重定向到 tmp）；
 # 不设环境变量时仍是 <repo>/agi/data，生产路径与历史逐字节一致。
-DATA_DIR = _default_data_dir() / "wechat"
-CONFIG_PATH = DATA_DIR / "config.json"
-CONTACT_DB_DIR = _default_data_dir() / "selflearn" / "wechat_contacts"
+# V1：设置 SOULAGENT_BOT_ROOT / bots/active 后，配置与库切到 bots/<id>/；
+# 未设置时保持历史全局路径（现有安装零变化，可随时回滚）。
+_BOT = _bot_root()
+if _BOT is not None:
+    DATA_DIR = _BOT
+    CONFIG_PATH = _BOT / "config" / "wechat.json"
+    CONTACT_DB_DIR = _BOT / "db" / "selflearn" / "wechat_contacts"
+else:
+    DATA_DIR = _default_data_dir() / "wechat"
+    CONFIG_PATH = DATA_DIR / "config.json"
+    CONTACT_DB_DIR = _default_data_dir() / "selflearn" / "wechat_contacts"
 
 DEFAULTS = {
     "enabled": False,

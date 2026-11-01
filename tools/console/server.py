@@ -91,6 +91,7 @@ EDITABLE_DEFAULTS: dict = {
     "inner_schema": "slim",
     "reply_max_bubbles": 0,
     "user_llm_ratio": "1:2",
+    "proactive_method": "prob",
 }
 #: 其余不可编辑但页面要看的键
 READONLY_CONFIG_KEYS = ("allowed_contacts", "proactive_contacts", "stop", "send_mode",
@@ -1379,6 +1380,11 @@ def _validate_config(updates: dict) -> tuple[dict, list[str]]:
                 text = str(value or "").strip()
                 if text not in ("1:1", "1:2", "1:3"):
                     raise ValueError("user_llm_ratio 只支持 1:1/1:2/1:3")
+                cleaned[key] = text
+            elif key == "proactive_method":
+                text = str(value or "").strip().lower()
+                if text not in ("prob", "timer", "topic"):
+                    raise ValueError("proactive_method 只支持 prob/timer/topic")
                 cleaned[key] = text
         except (TypeError, ValueError) as exc:
             errors.append(f"{key}: {exc}")

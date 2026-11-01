@@ -130,7 +130,10 @@ $('#create').onclick = async () => {
 };
 refresh();
 $('#selfcheck').onclick = async () => {
-  try { show(await api('/api/selfcheck')); } catch (e) { show('自检失败：' + e.message); }
+  // 填了 bot id 就带上：会多查 bot 包 7 个加载阶段（不启动服务）
+  const botId = ($('#bot_id').value || '').trim();
+  const url = '/api/selfcheck' + (botId ? '?bot_id=' + encodeURIComponent(botId) : '');
+  try { show(await api(url)); } catch (e) { show('自检失败：' + e.message); }
 };
 </script>
 </body>

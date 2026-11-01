@@ -82,6 +82,9 @@ tools/desktop/build/
 # 临时/测试产物
 wxdb_*/
 
+# 运行期日志（launch 的 console-*.log、自检快照 selfcheck-*.json）
+logs/
+
 agi/soul/data/soul_sft_web_*.jsonl*
 
 # 发送器本地缓存

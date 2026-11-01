@@ -108,6 +108,7 @@ def test_router_config_maps_soul_provider(bots_root):
 def test_selfcheck_ports_and_bot(bots_root, monkeypatch):
     bot_manager.create_bot("self", llm_key="sk-x")
     monkeypatch.setattr(bot_manager, "_port_open", lambda port: port == 801)
+    monkeypatch.setattr(bot_manager, "_save_selfcheck_log", lambda *a, **k: None)
     result = bot_manager.selfcheck("self")
     assert result["checks"][0]["name"] == "803"
     assert any(item["name"] == "port_801" and item["ok"] for item in result["checks"])
@@ -119,6 +120,7 @@ def test_api_selfcheck(bots_root, monkeypatch):
     from fastapi.testclient import TestClient
     from app.main import app
     bot_manager.create_bot("sc", llm_key="sk-x")
+    monkeypatch.setattr(bot_manager, "_save_selfcheck_log", lambda *a, **k: None)
     monkeypatch.setenv("IDEA_TOKEN", "tok-sc")
     client = TestClient(app)
     res = client.get("/api/selfcheck?bot_id=sc", headers={"X-Admin-Token": "tok-sc"})
@@ -163,3 +165,30 @@ def test_api_model_check_missing_key_is_actionable(bots_root, monkeypatch):
     data = res.json()
     assert data["ok"] is False and data["checks"]
     assert "key" in (data["checks"][0].get("hint") or "").lower()
+
+
+def test_selfcheck_models_and_saved_log(bots_root, monkeypatch, tmp_path):
+    bot_manager.create_bot("scm", llm_key="sk-x", soul_provider="cloud")
+    monkeypatch.setattr(bot_manager, "_port_open", lambda port: True)
+    monkeypatch.setattr(bot_manager, "REPO_ROOT", tmp_path)
+
+    def fake_model_check(bot_id, purposes=("chat", "soul"), transport=None):
+        return {"ok": True, "checks": [
+            {"purpose": purpose, "ok": True, "hint": ""} for purpose in purposes]}
+    monkeypatch.setattr(bot_manager, "model_check", fake_model_check)
+    result = bot_manager.selfcheck("scm", models=True)
+    names = [item["name"] for item in result["checks"]]
+    assert "model:chat" in names and "model:soul" in names
+    assert result["models_checked"] is True
+    assert Path(result["saved"]).is_file()
+    assert Path(result["saved"]).read_text(encoding="utf-8").find("model:chat") >= 0
+
+
+def test_selfcheck_models_off_by_default(bots_root, monkeypatch, tmp_path):
+    bot_manager.create_bot("off", llm_key="sk-x")
+    monkeypatch.setattr(bot_manager, "_port_open", lambda port: True)
+    monkeypatch.setattr(bot_manager, "REPO_ROOT", tmp_path)
+    result = bot_manager.selfcheck("off")
+    assert result["models_checked"] is False
+    assert not any(name.startswith("model:") for name in
+                   [item["name"] for item in result["checks"]])

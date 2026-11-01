@@ -5703,6 +5703,11 @@ def new_session() -> str:
     return token
 
 
+def request_authed(headers) -> bool:
+    """页面请求（登录会话）或机器请求（X-Admin-Token）任一通过即可。"""
+    return session_ok(headers) or token_ok(headers)
+
+
 def session_ok(headers) -> bool:
     if not auth_enabled():
         return False
@@ -6151,11 +6156,11 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
                 self._json(200, bili_config_state()); return
             if path == "/api/bili/display":
-                if not token_ok(self.headers):
+                if not request_authed(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
                 self._json(200, bili_display_settings()); return
             if path == "/api/bili/repo/status":
-                if not token_ok(self.headers):
+                if not request_authed(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
                 result = bili_repo_status()
                 self._json(200 if result.get("ok") else 501, result); return
@@ -6168,12 +6173,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(404, {"ok": False, "error": "qr_not_found"}); return
                 self._bytes(200, Path(BILI_REPO_QR_PNG).read_bytes(), "image/png"); return
             if path == "/api/bili/repo/feed":
-                if not token_ok(self.headers):
+                if not request_authed(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
                 result = bili_repo_feed(self._limit(query, 20))
                 self._json(200 if result.get("ok") else 502, result); return
             if path == "/api/bili/video":
-                if not token_ok(self.headers):
+                if not request_authed(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
                 bvid = str((query.get("bvid") or [""])[0] or "")
                 result = bili_video_display(bvid)

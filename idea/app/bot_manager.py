@@ -410,11 +410,63 @@ def model_check(bot_id: str, *, purposes: tuple[str, ...] = ("chat", "soul"),
                                purposes=tuple(purposes), transport=transport)
 
 
-def selfcheck(bot_id: str | None = None) -> dict:
-    """PR10 起步：803/801/802 端口 + 可选 bot 校验（只读，不启动服务）。"""
-    checks = [{"name": "803", "ok": True}]
+def selfcheck(bot_id: str | None = None, *, models: bool = False) -> dict:
+    """PR10：环境自检（只读；不启动 801/802，不发消息）。
+
+    检查项分三类：
+    - **必需**：803 本身、bot 包能否通过 ``load_bot``（目录/bot.json/DB/密钥/配置/模型）；
+    - **信息**：801/802 是否在监听、bot 是否设了 802 登录密码（缺了会退回旧 token 模式）；
+    - **可选**：``models=True`` 时逐通道测 chat/soul（用户显式触发，才真的发请求）。
+    """
+    checks: list[dict] = [{"name": "803", "ok": True, "required": True, "hint": ""}]
     for port in (801, 802):
-        checks.append({"name": f"port_{port}", "ok": _port_open(port)})
+        open_ = _port_open(port)
+        checks.append({
+            "name": f"port_{port}", "ok": open_, "required": False,
+            "hint": "" if open_ else f"{port} 未监听：跑「开始运行.bat」或先在 803 点「开始运行」",
+        })
     if bot_id:
-        checks.append({"name": f"bot:{bot_id}", "ok": validate_bot(bot_id)["ok"]})
-    return {"ok": all(item["ok"] for item in checks), "checks": checks}
+        loaded = load_bot(bot_id)
+        checks.append({"name": f"bot:{bot_id}", "ok": bool(loaded["ok"]),
+                       "required": True,
+                       "hint": "" if loaded["ok"] else "有阶段失败，见下方 bot/… 明细"})
+        for stage in loaded["stages"]:
+            checks.append({"name": "bot/" + str(stage["stage"]), "ok": bool(stage["ok"]),
+                           "required": bool(stage["ok"]) or stage["stage"] != "802 端口",
+                           "hint": str(stage.get("message") or "")})
+        auth_file = _bot_dir(bot_id) / "secrets" / "auth.json"
+        checks.append({
+            "name": "802 登录密码", "ok": auth_file.is_file(), "required": False,
+            "hint": "" if auth_file.is_file() else "bot 包没设登录密码：802 会退回旧 token 模式",
+        })
+        if models:
+            result = model_check(bot_id, purposes=("chat", "soul"))
+            for item in result.get("checks", []):
+                checks.append({
+                    "name": "model:" + str(item.get("purpose") or "?"),
+                    "ok": bool(item.get("ok")), "required": False,
+                    "hint": str(item.get("hint") or item.get("error") or ""),
+                })
+    required = [item for item in checks if item.get("required", True)]
+    result = {"ok": all(item["ok"] for item in required), "bot_id": bot_id,
+              "models_checked": bool(models), "checks": checks}
+    saved = _save_selfcheck_log(result, bot_id)
+    if saved:
+        result["saved"] = saved
+    return result
+
+
+def _save_selfcheck_log(result: dict, bot_id: str | None = None,
+                        *, root: Path | None = None) -> str | None:
+    """把自检快照存 ``logs/selfcheck-<bot>-<ts>.json``（doc 64 §12）；写不了不阻塞。"""
+    target_root = Path(root) if root is not None else REPO_ROOT
+    suffix = ("-" + bot_id) if bot_id else ""
+    try:
+        log_dir = target_root / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        path = log_dir / f"selfcheck{suffix}-{int(time.time())}.json"
+        path.write_text(json.dumps(result, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+        return str(path)
+    except OSError:
+        return None

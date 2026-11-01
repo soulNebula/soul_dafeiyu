@@ -713,9 +713,11 @@ def api_bot_save(bot_id: str, body: BotSaveBody,
 
 
 @app.get("/api/selfcheck")
-def api_selfcheck(bot_id: str = "", _: bool = Depends(require_token)):
+def api_selfcheck(bot_id: str = "", models: int = 0,
+                  _: bool = Depends(require_token)):
+    """PR10 自检：默认只查端口/bot 包（快、免费）；``models=1`` 才测模型通道。"""
     try:
-        return bot_manager.selfcheck(bot_id or None)
+        return bot_manager.selfcheck(bot_id or None, models=bool(models))
     except bot_manager.BotError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

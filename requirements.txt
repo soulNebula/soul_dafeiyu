@@ -12,6 +12,8 @@
 #
 # Tkinter 是 Python 标准库，不需要在这里安装（官方安装包默认自带）。
 Pillow==12.3.0
+# agi/integrations/web_lookup.py 运行时依赖（CI 只装 requirements.txt）
+requests>=2.31,<3
 psutil==7.2.2
 numpy==2.5.2
 rapidocr-onnxruntime==1.2.3

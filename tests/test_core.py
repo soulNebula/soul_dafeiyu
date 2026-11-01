@@ -9,6 +9,9 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
+
+# Windows-only：依赖 ctypes.WinDLL/wx_core/UIA；CI(Ubuntu) 跳过
+pytestmark = pytest.mark.windows_only
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent.parent

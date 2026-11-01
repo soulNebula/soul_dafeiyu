@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import sys
 
+import pytest
+
 if sys.platform != "win32":
     pytest.skip("Windows-only: wx_core/ctypes.WinDLL", allow_module_level=True)
 
 import queue
 import threading
 import time
-
-import pytest
 
 from agi.wechat_gateway.receiver import ReceiveCursor, WeChatReceiver
 

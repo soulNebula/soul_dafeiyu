@@ -1705,6 +1705,10 @@ function configCardHtml(cfg) {
       <div class="field"><label>主动消息方式</label>
         <select id="cfg-proactive-method">${['prob', 'timer', 'topic'].map((x) =>
           `<option value="${x}" ${(cfg.proactive_method || 'prob') === x ? 'selected' : ''}>${{prob:'概率法',timer:'定时法',topic:'话题触发（V2）'}[x]}</option>`).join('')}</select></div>
+      <div class="field"><label>主动消息每日上限</label>
+        <input type="number" id="cfg-proactive-per-day" min="0" max="20" step="1" value="${esc(Number(cfg.proactive_max_per_day ?? 3))}" style="width:110px"></div>
+      <div class="field"><label>单次主动最多几条</label>
+        <input type="number" id="cfg-proactive-bubbles" min="0" max="5" step="1" value="${esc(Number(cfg.proactive_max_bubbles ?? 1))}" style="width:110px"></div>
       <div class="field"><label>一轮回复最多几条</label>
         <input type="number" id="cfg-max-bubbles" min="0" max="20" step="1"
           value="${esc(Number(cfg.reply_max_bubbles || 0))}" style="width:110px">
@@ -1781,6 +1785,8 @@ async function renderSettings() {
       reply_max_bubbles: Number($('#cfg-max-bubbles').value),
       user_llm_ratio: $('#cfg-ratio').value,
       proactive_method: $('#cfg-proactive-method').value,
+      proactive_max_per_day: Number($('#cfg-proactive-per-day').value),
+      proactive_max_bubbles: Number($('#cfg-proactive-bubbles').value),
     };
     await saveConfig(updates);
     renderSettings();

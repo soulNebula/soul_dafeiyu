@@ -92,6 +92,8 @@ EDITABLE_DEFAULTS: dict = {
     "reply_max_bubbles": 0,
     "user_llm_ratio": "1:2",
     "proactive_method": "prob",
+    "proactive_max_per_day": 3,
+    "proactive_max_bubbles": 1,
 }
 #: 其余不可编辑但页面要看的键
 READONLY_CONFIG_KEYS = ("allowed_contacts", "proactive_contacts", "stop", "send_mode",
@@ -1386,6 +1388,12 @@ def _validate_config(updates: dict) -> tuple[dict, list[str]]:
                 if text not in ("prob", "timer", "topic"):
                     raise ValueError("proactive_method 只支持 prob/timer/topic")
                 cleaned[key] = text
+            elif key in ("proactive_max_per_day", "proactive_max_bubbles"):
+                number = int(value)
+                limit = 20 if key == "proactive_max_per_day" else 5
+                if not 0 <= number <= limit:
+                    raise ValueError(f"{key} 取值 0–{limit}")
+                cleaned[key] = number
         except (TypeError, ValueError) as exc:
             errors.append(f"{key}: {exc}")
     merged = {**{key: gateway_config().get(key, default)

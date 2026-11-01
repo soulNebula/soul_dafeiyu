@@ -94,6 +94,7 @@ EDITABLE_DEFAULTS: dict = {
     "proactive_method": "prob",
     "proactive_max_per_day": 3,
     "proactive_max_bubbles": 1,
+    "media_enabled": False,
 }
 #: 其余不可编辑但页面要看的键
 READONLY_CONFIG_KEYS = ("allowed_contacts", "proactive_contacts", "stop", "send_mode",
@@ -1388,6 +1389,8 @@ def _validate_config(updates: dict) -> tuple[dict, list[str]]:
                 if text not in ("prob", "timer", "topic"):
                     raise ValueError("proactive_method 只支持 prob/timer/topic")
                 cleaned[key] = text
+            elif key == "media_enabled":
+                cleaned[key] = bool(value) if isinstance(value, bool) else _as_bool(value)
             elif key in ("proactive_max_per_day", "proactive_max_bubbles"):
                 number = int(value)
                 limit = 20 if key == "proactive_max_per_day" else 5

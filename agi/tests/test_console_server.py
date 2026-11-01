@@ -194,13 +194,15 @@ def test_apply_config_whitelist_and_validation(write_env):
                                "user_llm_ratio": "1:2",
                                "proactive_method": "prob",
                                "proactive_max_per_day": 3,
-                               "proactive_max_bubbles": 2})
+                               "proactive_max_bubbles": 2,
+                               "media_enabled": True})
     assert ok["ok"] is True
     assert ok["config"]["proactive_enabled"] is False
     assert ok["config"]["reply_max_bubbles"] == 1
     assert ok["config"]["user_llm_ratio"] == "1:2"
     assert ok["config"]["proactive_method"] == "prob"
     assert ok["config"]["proactive_max_bubbles"] == 2
+    assert ok["config"]["media_enabled"] is True
     saved = json.loads(write_env["config"].read_text(encoding="utf-8"))
     assert saved["proactive_enabled"] is False and saved["inner_mode"] == "model"
 

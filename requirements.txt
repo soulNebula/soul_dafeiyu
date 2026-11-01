@@ -14,6 +14,8 @@
 Pillow==12.3.0
 # agi/integrations/web_lookup.py 运行时依赖（CI 只装 requirements.txt）
 requests>=2.31,<3
+# agi/integrations/web_lookup.py 解析网页用（CI 只装 requirements.txt）
+beautifulsoup4>=4.12,<5
 psutil==7.2.2
 numpy==2.5.2
 rapidocr-onnxruntime==1.2.3

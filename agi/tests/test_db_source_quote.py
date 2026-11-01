@@ -2,6 +2,13 @@
 """引用消息解析：<title> 里的实际回复不能丢。"""
 from __future__ import annotations
 
+import sys
+
+import pytest
+
+if sys.platform != "win32":
+    pytest.skip("Windows-only: wx_core/ctypes.WinDLL", allow_module_level=True)
+
 from wx_core import db_source
 
 

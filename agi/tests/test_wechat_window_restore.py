@@ -2,6 +2,13 @@
 """发送前窗口自检：微信最小化/收托盘时要能把主窗口恢复出来。"""
 from __future__ import annotations
 
+import sys
+
+import pytest
+
+if sys.platform != "win32":
+    pytest.skip("Windows-only: wx_core/ctypes.WinDLL", allow_module_level=True)
+
 from types import SimpleNamespace
 
 import wx_core.win as win

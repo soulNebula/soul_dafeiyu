@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Bot 管理 · SoulAgent 803</title>
+<style>
+  :root { color-scheme: dark; --bg:#0f1115; --card:#171a21; --line:#2a2f3a;
+          --text:#e6e8ee; --muted:#8b93a7; --accent:#4c8dff; --ok:#3ecf8e; --err:#ff5d5d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.6 system-ui,"Microsoft YaHei",sans-serif; }
+  header { padding:18px 26px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; }
+  h1 { font-size:18px; margin:0; }
+  .muted { color:var(--muted); }
+  main { max-width:980px; margin:22px auto; padding:0 18px; display:grid; gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  input, select { width:100%; padding:8px 10px; background:#0d1016; color:var(--text);
+                  border:1px solid var(--line); border-radius:8px; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  button { margin-top:14px; padding:9px 16px; border-radius:8px; border:0; cursor:pointer;
+           background:var(--accent); color:#fff; font-weight:600; }
+  button.secondary { background:#222838; color:var(--text); border:1px solid var(--line); }
+  .bot { display:flex; justify-content:space-between; gap:12px; align-items:center;
+         padding:10px 0; border-bottom:1px solid var(--line); }
+  .bot:last-child { border-bottom:0; }
+  .pill { font-size:12px; padding:2px 8px; border-radius:999px; background:#222838; color:var(--muted); }
+  pre { background:#0d1016; border:1px solid var(--line); border-radius:8px; padding:10px;
+        overflow:auto; max-height:260px; font-size:12px; }
+  .ok { color:var(--ok); } .err { color:var(--err); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Bot 管理</h1>
+  <span class="muted">V1 · 每个 bot 一个独立数据包（803 创建，802 加载）</span>
+</header>
+<main>
+  <div class="card">
+    <b>现有 bot</b> <span id="root" class="muted"></span>
+    <div id="list"><span class="muted">加载中…</span></div>
+  </div>
+
+  <div class="card">
+    <b>新建 bot</b>
+    <div class="row">
+      <div><label>bot id（小写字母/数字/连字符）</label><input id="bot_id" placeholder="xiaoyu"></div>
+      <div><label>名称</label><input id="name" placeholder="小鱼"></div>
+    </div>
+    <div class="row">
+      <div><label>方案</label>
+        <select id="plan"><option value="cloud">云端模型</option><option value="hybrid">本地+云端</option></select></div>
+      <div><label>灵魂模型</label>
+        <select id="soul_provider"><option value="cloud">云端（OpenAI 兼容）</option><option value="local">本地（llama.cpp server）</option></select></div>
+    </div>
+    <div class="row">
+      <div><label>DeepSeek API key</label><input id="llm_api_key" type="password" placeholder="sk-…"></div>
+      <div><label>802 登录密码（可留空稍后设）</label><input id="password" type="password"></div>
+    </div>
+    <div class="row">
+      <div><label>灵魂模型 base_url（云端）</label><input id="soul_api_base" placeholder="https://api.example.com/v1"></div>
+      <div><label>灵魂模型名</label><input id="soul_model" placeholder="soul-model"></div>
+    </div>
+    <label>灵魂模型 API key（云端）</label><input id="soul_api_key" type="password">
+    <button id="create">创建 bot</button>
+  </div>
+
+  <div class="card"><b>结果</b><pre id="out">—</pre></div>
+</main>
+<script>
+const token = new URLSearchParams(location.search).get('token') || localStorage.getItem('idea_token') || '';
+if (token) localStorage.setItem('idea_token', token);
+const $ = (s) => document.querySelector(s);
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token, ...(opts.headers || {}) },
+  });
+  const data = await res.json().catch(() => ({ ok: false, error: '非 JSON 响应' }));
+  if (!res.ok) throw new Error((data.detail || data.error || res.status));
+  return data;
+}
+function show(obj) { $('#out').textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); }
+async function refresh() {
+  try {
+    const d = await api('/api/bots');
+    $('#root').textContent = d.root || '';
+    if (!d.items.length) { $('#list').innerHTML = '<span class="muted">还没有 bot，先在下面创建</span>'; return; }
+    $('#list').innerHTML = d.items.map((b) => `
+      <div class="bot">
+        <div><b>${b.id}</b> <span class="muted">${b.name}</span>
+          <span class="pill">${b.plan}</span> <span class="pill">soul:${b.soul_provider}</span>
+          <span class="pill">${b.has_password ? '密码已设' : '未设密码'}</span></div>
+        <div>
+          <button class="secondary" data-validate="${b.id}">校验</button>
+          <button data-launch="${b.id}">打开 802</button>
+        </div>
+      </div>`).join('');
+    document.querySelectorAll('[data-validate]').forEach((el) => el.onclick = async () => {
+      try { show(await api('/api/bots/' + el.dataset.validate + '/validate', { method: 'POST' })); }
+      catch (e) { show('校验失败：' + e.message); }
+    });
+    document.querySelectorAll('[data-launch]').forEach((el) => el.onclick = async () => {
+      try { const r = await api('/api/bots/' + el.dataset.launch + '/launch', { method: 'POST' }); show(r);
+            if (r.url) window.open(r.url, '_blank'); } catch (e) { show('启动失败：' + e.message); }
+    });
+  } catch (e) { show('加载失败：' + e.message); }
+}
+$('#create').onclick = async () => {
+  const payload = {
+    bot_id: $('#bot_id').value.trim(), name: $('#name').value.trim(),
+    plan: $('#plan').value, soul_provider: $('#soul_provider').value,
+    llm_api_key: $('#llm_api_key').value, soul_api_base: $('#soul_api_base').value,
+    soul_model: $('#soul_model').value, soul_api_key: $('#soul_api_key').value,
+    password: $('#password').value,
+  };
+  try { show(await api('/api/bots', { method: 'POST', body: JSON.stringify(payload) })); refresh(); }
+  catch (e) { show('创建失败：' + e.message); }
+};
+refresh();
+</script>
+</body>
+</html>

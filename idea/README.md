@@ -29,6 +29,7 @@ cd C:\Users\Administrator\Desktop\idea
 
 | 视图 | 作用 |
 | --- | --- |
+| `Bot 管理`（`/bots?token=…`） | V1：创建/校验 bot 包、保存云端/本地灵魂配置、一键打开 802 |
 | `welcome` | 欢迎页与快捷任务入口（默认） |
 | `overview` | 服务、模型、最近训练概览 |
 | `services` | 801/802/803/8123/8125 状态、启停、日志 |

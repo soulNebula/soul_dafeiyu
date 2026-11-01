@@ -17,9 +17,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (annotstudio, audit, config_store, corpusstudio, datastudio,
-               distillstudio, idea_config, modelstudio, paths, services, termlog,
-               trainstudio)
+from . import (annotstudio, audit, bot_manager, config_store, corpusstudio,
+               datastudio, distillstudio, idea_config, modelstudio, paths,
+               services, termlog, trainstudio)
 
 app = FastAPI(title="IDEA · SoulAgent Workbench", version="0.2.0")
 
@@ -645,6 +645,88 @@ def models_convert(body: dict):
 @app.get("/api/wb/audit", dependencies=[Depends(require_token)])
 def audit_list(limit: int = Query(default=100, ge=1, le=500)):
     return {"ok": True, "items": audit.list_recent(limit)}
+
+
+# ------------------------------------------------------------------ V1 Bot Manager
+class BotCreateBody(BaseModel):
+    bot_id: str
+    name: str = ""
+    plan: str = "cloud"
+    soul_provider: str = "cloud"
+    llm_api_key: str = ""
+    soul_api_base: str = ""
+    soul_model: str = ""
+    soul_api_key: str = ""
+    password: str = ""
+
+
+class BotSaveBody(BaseModel):
+    name: str | None = None
+    plan: str | None = None
+    soul_provider: str | None = None
+    llm_api_key: str | None = None
+    soul_api_base: str | None = None
+    soul_model: str | None = None
+    soul_api_key: str | None = None
+    password: str | None = None
+    settings: dict | None = None
+
+
+@app.get("/bots")
+def bots_page():
+    return FileResponse(str(paths.WEB_DIR / "bots.html"))
+
+
+@app.get("/api/bots")
+def api_bots(_: bool = Depends(require_token)):
+    return {"ok": True, "items": bot_manager.list_bots(),
+            "root": str(bot_manager.bots_root())}
+
+
+@app.post("/api/bots")
+def api_bot_create(body: BotCreateBody, _: bool = Depends(require_token)):
+    try:
+        return bot_manager.create_bot(
+            body.bot_id, name=body.name, plan=body.plan,
+            soul_provider=body.soul_provider, llm_key=body.llm_api_key,
+            soul_base=body.soul_api_base, soul_model=body.soul_model,
+            soul_key=body.soul_api_key, password=body.password)
+    except bot_manager.BotError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/bots/{bot_id}")
+def api_bot_get(bot_id: str, _: bool = Depends(require_token)):
+    try:
+        return {"ok": True, "bot": bot_manager.get_bot(bot_id)}
+    except bot_manager.BotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/bots/{bot_id}/save")
+def api_bot_save(bot_id: str, body: BotSaveBody,
+                 _: bool = Depends(require_token)):
+    try:
+        return bot_manager.save_bot(bot_id, body.model_dump(exclude_none=True))
+    except bot_manager.BotError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/bots/{bot_id}/validate")
+def api_bot_validate(bot_id: str, _: bool = Depends(require_token)):
+    try:
+        return bot_manager.validate_bot(bot_id)
+    except bot_manager.BotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/bots/{bot_id}/launch")
+def api_bot_launch(bot_id: str, port: int = 802,
+                   _: bool = Depends(require_token)):
+    try:
+        return bot_manager.launch_bot(bot_id, port=port)
+    except bot_manager.BotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.exception_handler(Exception)

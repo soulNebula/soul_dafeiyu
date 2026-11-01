@@ -2404,6 +2404,16 @@ def drafts_pending() -> dict:
             "source": "gateway:801"}
 
 
+def refresh_contacts(*, client: str = "") -> dict:
+    """V1：转发 801 的联系人刷新（只读，落 contacts.sqlite3）。"""
+    result = _gateway_proxy("/api/wechat/refresh_contacts", {}, method="POST",
+                            timeout=60.0)
+    audit("contacts_refresh", {"ok": bool(result.get("ok")),
+                               "count": result.get("count")},
+          ok=bool(result.get("ok")), client=client)
+    return result
+
+
 def draft_decide(draft_id: str, approve: bool, *, client: str = "") -> dict:
     """批准（真实发送）或驳回一条草稿；失败必须带具体 error 给前端显示。"""
     target = str(draft_id or "").strip()
@@ -6092,6 +6102,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = set_send_mode(str(body.get("mode") or ""), client=client)
                 self._json(200 if result.get("ok") else 400, result); return
             # A4：草稿批准 / 驳回（转发 801，失败把具体 error 原样回给前端）
+            if path == "/api/contacts/refresh":
+                self._json(200, refresh_contacts(client=client)); return
             if path in ("/api/draft/approve", "/api/draft/reject"):
                 result = draft_decide(str(body.get("id") or ""),
                                       path.endswith("approve"), client=client)

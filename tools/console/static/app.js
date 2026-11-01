@@ -1743,6 +1743,10 @@ async function renderSettings() {
       <p class="hint">当前：${esc(enumLabel('send_mode',
         (state.sendMode && state.sendMode.mode) || cfg.send_mode || 'confirm'))}
         ${state.sendMode && state.sendMode.note ? '· ' + esc(state.sendMode.note) : ''}</p>`)}
+    ${card('微信联系人（只读）', `
+      <p class="hint">从本机微信数据库读取当前账号的联系人；不改白名单、不发消息。白名单含 wxid 时按稳定 ID 匹配。</p>
+      <button class="btn" id="btn-refresh-contacts">刷新联系人</button>
+      <pre class="json" id="contacts-out">—</pre>`)}
     ${card('紧急停止（停止文件）', `
       <div class="row between">
         <div>${stopped ? pill('紧急停止已启用：所有外发被拦截', 'err') : pill('未停发', 'ok')}
@@ -1773,6 +1777,20 @@ async function renderSettings() {
     await saveConfig(updates);
     renderSettings();
   };
+  const refreshBtn = $('#btn-refresh-contacts');
+  if (refreshBtn) refreshBtn.onclick = async () => {
+    if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }
+    refreshBtn.disabled = true;
+    try {
+      const result = await api('/api/contacts/refresh', { method: 'POST', body: {} });
+      const out = $('#contacts-out');
+      if (out) out.textContent = JSON.stringify(result, null, 2);
+      toast(result.ok ? ('已刷新 ' + (result.count || 0) + ' 个联系人') : (result.error || '刷新失败'),
+            result.ok ? 'ok' : 'err');
+    } catch (e) { toast(e.message, 'err'); }
+    finally { refreshBtn.disabled = false; }
+  };
+
   const stopBtn = $('#btn-stop');
   if (stopBtn) stopBtn.onclick = async () => {
     if (!state.token) { toast('先在右上角填 admin token', 'err'); return; }

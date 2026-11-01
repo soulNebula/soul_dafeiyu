@@ -2262,7 +2262,8 @@ class Gateway:
         if not allowed:
             self._record("send_blocked", {"friend": contact, "reason": "no_allowlist"})
             return {"ok": False, "status": "blocked", "error": "no_allowlist"}
-        if str(contact or "").strip() not in allowed:
+        from . import contacts as contacts_mod
+        if not contacts_mod.is_allowed(str(contact or "").strip(), self.cfg):
             self._record("send_blocked", {"friend": contact, "reason": "not_allowed"})
             return {"ok": False, "status": "blocked", "error": "not_allowed"}
         # 纵深防御：出站文本里的微信内部 ID 一律摘掉（2026-10-24 引用事故）
@@ -3330,6 +3331,12 @@ def make_handler(gateway: Gateway):
             if path == "/api/send/breaker/reset":
                 self._json(200, {"ok": True, "send_breaker":
                                  gateway.reset_send_breaker(source="api")})
+                return
+
+            if path == "/api/wechat/refresh_contacts":
+                from . import contacts as contacts_mod
+                result = contacts_mod.refresh()
+                self._json(200 if result.get("ok") else 503, result)
                 return
 
             if path == "/api/approve":

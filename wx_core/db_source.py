@@ -597,3 +597,40 @@ def enumerate_friends(config: dict, mode: str = "recent", log=None) -> list[str]
             reader.close()
         except Exception:
             pass
+
+
+def enumerate_contacts(config: dict, log=None) -> list[dict]:
+    """V1：从 WCDB contact.db 读联系人/群（只读）。
+
+    返回 ``[{"wxid","nickname","local_type"}]``；数据库/密钥不可用时返回 ``[]``。
+    local_type: 1=好友, 2=群（微信侧枚举值，原样返回）。
+    """
+    import sqlite3 as _sqlite3
+
+    log = log or (lambda *a, **k: None)
+    acc = media_cache.active_account_dir()
+    if acc is None:
+        return []
+    wxid = str(config.get("image_wxid") or "")
+    if not wxid and acc.name.startswith("wxid_"):
+        wxid = acc.name.rsplit("_", 1)[0] if acc.name.count("_") >= 2 else acc.name
+    keys = wcdb.ensure_keys(acc, config, log=log)
+    if not keys:
+        return []
+    reader = wcdb.SessionReader(acc, keys, wxid)
+    try:
+        contact_path = reader._materialize("db_storage/contact/contact.db", "_contact_path")
+        if not contact_path:
+            return []
+        con = _sqlite3.connect(f"file:{contact_path}?mode=ro", uri=True)
+        try:
+            rows = con.execute(
+                "select username, local_type, coalesce(nullif(remark,''), nick_name) "
+                "from contact where username is not null and username != ''"
+            ).fetchall()
+        finally:
+            con.close()
+        return [{"wxid": str(row[0]), "nickname": str(row[2] or row[0]),
+                 "local_type": int(row[1] or 0)} for row in rows]
+    except Exception:  # noqa: BLE001 - 只读探测失败退回空列表
+        return []

@@ -14,7 +14,7 @@
 
 <!-- STATUS:AUTO:BEGIN（由 tools/status_report.py 生成，勿手改）-->
 
-最后生成：2026-11-01T01:09:44（Python 3.14.7）
+最后生成：2026-11-01T16:12:29（Python 3.14.7）
 
 | 套件 | 通过 | 失败 | 跳过 | 耗时 | 结果 |
 | --- | --- | --- | --- | --- | --- |
@@ -25,7 +25,7 @@ collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不
 
 数据来源：`python scripts/agentb_verify.py`（全量终验，两套 + 静态检查 + 生产文件未被污染）或 `python tools/status_report.py --run`（单套件实测）；`--from-agentb` 可直接导入前者的 JSON，不手抄。
 
-代码规模（同一命令可复算）：Python 模块 3620 个（agi 151 / selflearn 95 / agi/tests 193）；计划文档 46 份；legacy 归档 37 个文件 / 9151 行。
+代码规模（同一命令可复算）：Python 模块 3620 个（agi 151 / selflearn 95 / agi/tests 193）；计划文档 47 份；legacy 归档 37 个文件 / 9151 行。
 
 <!-- STATUS:AUTO:END -->
 
@@ -94,7 +94,7 @@ collect 数（现场 `pytest --collect-only -q`，只表示用例面大小、不
 7. **发送窗口自检**：微信最小化/收托盘会自动恢复（`wx_core/win.py::ensure_wechat_window_visible`）；
    微信未登录/退出仍会如实报「未找到微信窗口」。
 8. **产品化未开工**：一键安装/803 bot 向导/802 登录/联系人 wxid/本地+云端双模型/训练数据闭环
-   仍是规划（见 [`plans/63-产品化路线图-V1-V3.md`](../plans/63-产品化路线图-V1-V3.md)）；
+   仍是规划（路线图见 [`plans/63`](../plans/63-产品化路线图-V1-V3.md)，V1 施工设计见 [`plans/64`](../plans/64-V1详细技术设计.md)）；
    当前仍是「开发者手动建环境 + 全局单数据目录」形态。
 
 ## 6. 怎么更新本页

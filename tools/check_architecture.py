@@ -90,6 +90,9 @@ UNIMPORTED_ALLOWLIST: dict[str, str] = {
     "agi/soul/scenarios_extra.py": "评测场景数据（被手动评测脚本读取）",
     # 运行期靠字符串/子进程引用的模块
     "agi/media_acquisition.py": "被 agi/tests/test_console_server.py 动态 import，且是可选能力入口",
+    "agi/llm/deepseek.py": "LLM 路由后端（agi/llm/router.py 相对 import 使用）",
+    "agi/llm/openai_local.py": "LLM 路由后端（agi/llm/router.py 相对 import 使用）",
+    "agi/llm/rule.py": "LLM 路由兜底后端（agi/llm/router.py 相对 import 使用）",
     "wx_core/api.py": "Backend 协议定义，主程序用字符串/文档引用（app.py 校验协议）",
     "wx_core/friends.py": "只读 contact.db 的查询库，由 webui/console 按字符串路径调用",
     "webui/moments_worker.py": "子进程脚本（webui/moments.py 用 sys.executable 调起，不可 import）",

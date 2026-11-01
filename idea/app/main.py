@@ -712,6 +712,14 @@ def api_bot_save(bot_id: str, body: BotSaveBody,
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/api/selfcheck")
+def api_selfcheck(bot_id: str = "", _: bool = Depends(require_token)):
+    try:
+        return bot_manager.selfcheck(bot_id or None)
+    except bot_manager.BotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/api/bots/{bot_id}/load")
 def api_bot_load(bot_id: str, _: bool = Depends(require_token)):
     try:

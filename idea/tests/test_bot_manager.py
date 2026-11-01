@@ -113,3 +113,14 @@ def test_selfcheck_ports_and_bot(bots_root, monkeypatch):
     assert any(item["name"] == "port_801" and item["ok"] for item in result["checks"])
     assert any(item["name"] == "port_802" and not item["ok"] for item in result["checks"])
     assert any(item["name"] == "bot:self" and item["ok"] for item in result["checks"])
+
+
+def test_api_selfcheck(bots_root, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    bot_manager.create_bot("sc", llm_key="sk-x")
+    monkeypatch.setenv("IDEA_TOKEN", "tok-sc")
+    client = TestClient(app)
+    res = client.get("/api/selfcheck?bot_id=sc", headers={"X-Admin-Token": "tok-sc"})
+    assert res.status_code == 200, res.text
+    assert res.json()["checks"][0]["name"] == "803"

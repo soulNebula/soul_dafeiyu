@@ -41,6 +41,50 @@ DEFAULT_API_ALIAS = "api"
 DEFAULT_LOCAL_ALIAS = "local"
 DEFAULT_ON_EXCEED = "local"
 
+#: V1 PR8：具体 purpose → bot 通道类别（chat/soul/vision/extract）。
+#: bot 包只定义这 4 类通道（``agi/bot_runtime.router_config``）；801/802 的既有调用
+#: 用的是 ``selflearn_chat`` / ``inner_state`` 这类具体名，靠这张表落回类别。
+#: 未登记的 purpose 在 bot 生效时按 ``chat`` 兜底（打 warning，不静默改道到本地）。
+PURPOSE_CATEGORIES: dict[str, str] = {
+    # 聊天主链
+    "chat": "chat",
+    "chat_reply": "chat",
+    "selflearn_chat": "chat",
+    "selflearn_proactive": "chat",
+    "selflearn_proactive_simple": "chat",
+    "agent_final": "chat",
+    "share_copy": "chat",
+    # 灵魂 / 人格 / 内状态
+    "soul": "soul",
+    "inner_state": "soul",
+    "mood_judge": "soul",
+    "persona_reflect": "soul",
+    "selflearn_reflect": "soul",
+    "self_narrative_weekly": "soul",
+    "self_narrative_extract": "soul",
+    # 识图 / 图片描述
+    "vision": "vision",
+    "selflearn_image_understanding": "vision",
+    "selflearn_chat_vision": "vision",
+    "selflearn_chat_caption": "vision",
+    "video_understanding": "vision",
+    # 提取 / 摘要 / 记忆（省钱的走本地）
+    "extract": "extract",
+    "keyword_extract": "extract",
+    "ingest_summary": "extract",
+    "comment_cluster": "extract",
+    "selflearn_memory": "extract",
+    "selflearn_summary": "extract",
+    "selflearn_monthly_batch": "extract",
+    "selflearn_monthly_merge": "extract",
+    "selflearn_evidence_stage": "extract",
+}
+
+
+def purpose_category(purpose: str) -> str:
+    """具体 purpose → bot 通道类别；未登记返回空串。"""
+    return PURPOSE_CATEGORIES.get(str(purpose or ""), "")
+
 
 class RouterConfigError(ValueError):
     """路由配置非法（JSON 坏 / 缺字段 / 未知 backend kind）——明确报错，不静默。"""
@@ -248,13 +292,24 @@ class Router:
              timeout: float | None = None, json_mode: bool = False) -> dict:
         started = time.perf_counter()
         purpose = str(purpose or "")
-        pcfg = (self.config.get("purposes") or {}).get(purpose)
+        purposes_cfg = self.config.get("purposes") or {}
+        pcfg = purposes_cfg.get(purpose)
+        # V1 PR8：bot 配置只声明 chat/soul/vision/extract 四类通道；
+        # 具体调用名（selflearn_chat / inner_state …）按 PURPOSE_CATEGORIES 落回类别。
+        category = ""
+        if not isinstance(pcfg, dict):
+            category = purpose_category(purpose)
+            if not category and "chat" in purposes_cfg:
+                category = "chat"
+            pcfg = purposes_cfg.get(category) if category else None
+            if not isinstance(pcfg, dict):
+                category = ""
         if not isinstance(pcfg, dict):
             error = f"unknown_purpose:{purpose}"
             record = self._base_record(purpose, "", "", 0, 0, started, False, error)
             usage_mod.append_record(self.log_path, record)
             return {"ok": False, "text": "", "backend": "", "purpose": purpose,
-                    "usage": {"tokens_in": 0, "tokens_out": 0},
+                    "category": "", "usage": {"tokens_in": 0, "tokens_out": 0},
                     "latency_ms": self._elapsed(started), "fallback_used": False,
                     "budget_exceeded": False, "error": error,
                     "warnings": list(self.warnings), "attempts": []}
@@ -267,7 +322,8 @@ class Router:
             chosen = self._api_alias()
             if not chosen:
                 return self._fail(purpose, "must_api_no_api_backend", started,
-                                  must_api=True, warnings=call_warnings)
+                                  must_api=True, warnings=call_warnings,
+                                  category=category)
             if configured != chosen:
                 call_warnings.append(
                     f"must_api_forced_api: purpose={purpose} configured={configured}")
@@ -287,7 +343,7 @@ class Router:
             if must_api:
                 return self._fail(purpose, "budget_exceeded:must_api", started,
                                   must_api=True, budget_exceeded=True,
-                                  warnings=call_warnings)
+                                  warnings=call_warnings, category=category)
             on_exceed = str(budget_cfg.get("on_exceed") or DEFAULT_ON_EXCEED)
             if on_exceed == "local":
                 local = self._local_alias()
@@ -299,7 +355,8 @@ class Router:
                     call_warnings.append("budget_exceeded:no_local_backend")
             elif on_exceed == "none":
                 return self._fail(purpose, "budget_exceeded", started,
-                                  budget_exceeded=True, warnings=call_warnings)
+                                  budget_exceeded=True, warnings=call_warnings,
+                                  category=category)
             # 其它值按 local 处理（安全默认）
 
         attempts: list[dict] = []
@@ -334,11 +391,12 @@ class Router:
                 record.update({"fallback": bool(fallback_used),
                                "budget_exceeded": bool(budget_exceeded),
                                "must_api": must_api,
+                               "purpose_category": category,
                                "warnings": call_warnings})
                 usage_mod.append_record(self.log_path, record)
                 return {"ok": True, "text": text, "backend": alias,
                         "backend_kind": self.backend_kind(alias),
-                        "purpose": purpose,
+                        "purpose": purpose, "category": category,
                         "usage": {"tokens_in": tokens_in, "tokens_out": tokens_out},
                         "latency_ms": latency, "fallback_used": bool(fallback_used),
                         "budget_exceeded": bool(budget_exceeded),
@@ -352,12 +410,12 @@ class Router:
         return self._fail(purpose, error, started, attempts=attempts,
                           fallback_used=fallback_used,
                           budget_exceeded=budget_exceeded, must_api=must_api,
-                          warnings=call_warnings)
+                          warnings=call_warnings, category=category)
 
     def _fail(self, purpose: str, error: str, started: float, *,
               attempts: list[dict] | None = None, fallback_used: bool = False,
               budget_exceeded: bool = False, must_api: bool = False,
-              warnings: list[str] | None = None) -> dict:
+              warnings: list[str] | None = None, category: str = "") -> dict:
         latency = self._elapsed(started)
         record = self._base_record(purpose, "", "", 0, 0, started, False, error)
         record.update({"fallback": bool(fallback_used),
@@ -366,7 +424,7 @@ class Router:
                        "warnings": list(warnings or [])})
         usage_mod.append_record(self.log_path, record)
         return {"ok": False, "text": "", "backend": "", "purpose": purpose,
-                "usage": {"tokens_in": 0, "tokens_out": 0},
+                "category": category, "usage": {"tokens_in": 0, "tokens_out": 0},
                 "latency_ms": latency, "fallback_used": bool(fallback_used),
                 "budget_exceeded": bool(budget_exceeded), "error": error,
                 "warnings": list(self.warnings) + list(warnings or []),
@@ -415,7 +473,32 @@ def _config_key(path: Path | None = None) -> tuple:
         return (str(target), 0, 0)
 
 
+def _bot_runtime():
+    """V1 PR8：bot 运行期模块（import 失败/未装 bot 时返回 None，不破坏旧行为）。"""
+    try:
+        from agi import bot_runtime
+    except Exception:  # noqa: BLE001 - 路由层不因 bot 模块故障而不可用
+        return None
+    return bot_runtime
+
+
 def default_router() -> Router:
+    # V1 PR8：bot 工作区生效时，默认实例用 bot 包的模型配置（chat/soul 通道），
+    # 用量记到 bot 包 logs/ 里；显式 LLM_ROUTER_CONFIG 仍然优先（运维口）。
+    env_path = str(os.environ.get("LLM_ROUTER_CONFIG") or "").strip()
+    bot = _bot_runtime()
+    if not env_path and bot is not None:
+        try:
+            cfg = bot.active_router_config()
+            key = ("bot",) + tuple(bot.config_key())
+        except Exception:  # noqa: BLE001 - bot 配置坏了就回退旧默认
+            cfg, key = None, ()
+        if isinstance(cfg, dict):
+            if _DEFAULT_ROUTER["router"] is None or _DEFAULT_ROUTER["key"] != key:
+                _DEFAULT_ROUTER["router"] = Router(
+                    config=cfg, usage_path=bot.usage_path())
+                _DEFAULT_ROUTER["key"] = key
+            return _DEFAULT_ROUTER["router"]
     key = _config_key()
     if _DEFAULT_ROUTER["router"] is None or _DEFAULT_ROUTER["key"] != key:
         _DEFAULT_ROUTER["router"] = Router()

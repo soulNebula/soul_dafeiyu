@@ -94,6 +94,20 @@ def _warn_plaintext_key(path: Path, source: str) -> None:
     )
 
 
+def bot_api_key() -> str:
+    """V1 PR8：bot 工作区生效时，bot 包 ``secrets/keys.json`` 的 ``llm_api_key``。
+
+    只在本进程内解密；未启用 bot / 解密失败一律空串（调用方继续走旧来源链）。
+    """
+    try:
+        from agi import bot_runtime
+        if bot_runtime.bot_dir() is None:
+            return ""
+        return str(bot_runtime.load_secrets().get("llm_api_key") or "").strip()
+    except Exception:  # noqa: BLE001 - 旧部署/测试环境不因 bot 模块异常而失效
+        return ""
+
+
 def load_config() -> dict[str, Any]:
     """解析 LLM 配置（api_key 取值顺序：env → secrets.json → web_config.json）。
 
@@ -119,6 +133,11 @@ def load_config() -> dict[str, Any]:
         # 此时不能再回落去读磁盘上的旧 key（那正是要淘汰的东西）。
         config["api_key"] = env_key.strip()
         config["api_key_source"] = "env"
+    elif bot_api_key():
+        # V1 PR8：bot 包（SOULAGENT_BOT_ROOT）里的 key 优先于全局密钥库/明文配置，
+        # 这样 801/802 的既有 LLM 调用点实际用的是当前 bot 的模型凭证。
+        config["api_key"] = bot_api_key()
+        config["api_key_source"] = "bot"
     elif secrets_store.llm_api_key():
         config["api_key"] = secrets_store.llm_api_key()
         config["api_key_source"] = "secrets"

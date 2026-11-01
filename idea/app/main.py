@@ -728,6 +728,21 @@ def api_bot_load(bot_id: str, _: bool = Depends(require_token)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+class ModelCheckBody(BaseModel):
+    purposes: list[str] = ["chat", "soul"]
+
+
+@app.post("/api/bots/{bot_id}/model_check")
+def api_bot_model_check(bot_id: str, body: ModelCheckBody | None = None,
+                        _: bool = Depends(require_token)):
+    """PR8：按 bot 既有路由做最小模型调用，返回各通道连通性（不含密钥）。"""
+    try:
+        purposes = tuple(body.purposes) if body else ("chat", "soul")
+        return bot_manager.model_check(bot_id, purposes=purposes)
+    except bot_manager.BotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/api/bots/{bot_id}/validate")
 def api_bot_validate(bot_id: str, _: bool = Depends(require_token)):
     try:

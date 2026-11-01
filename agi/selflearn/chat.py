@@ -13,6 +13,7 @@ from typing import Any
 
 from ..inner import inject as inner_inject
 from . import affect, citation, claim_ingest, context, db, error_three, errors, generation, guard, image_understanding, live_ingest, media, memory, memory_decay, mood_judge, nli, persona_layers, personality, profile, proposal_bridge, retrieval, scoring, search, skills, skilltree, state, style_profile, summary, timefuzz, tool_reply, trace, trust, vision_chat
+from . import bot_client
 from .config import DB_PATH, MODEL_LABEL
 from .llm import Client
 
@@ -523,7 +524,8 @@ class SelfLearnAgent:
     def __init__(self, path: Path | str = DB_PATH, client=None, rng=None,
                  inner_client=None) -> None:
         self.path = Path(path)
-        self.client = client if client is not None else Client()
+        # V1 PR8：bot 生效时默认 client 走路由（见 agi/selflearn/bot_client.py）
+        self.client = client if client is not None else bot_client.default_client()
         self.rng = rng
         # P3-a：内状态专用 client（本地灵魂模型）。显式注入时优先使用；
         # 未注入且主 client 也是显式注入的（测试/离线消融）→ 沿用主 client，
@@ -537,6 +539,9 @@ class SelfLearnAgent:
             return self.inner_client
         if self._client_injected:
             return self.client
+        routed = bot_client.cloud_soul_client()   # V1 PR8：云端灵魂走 bot 通道
+        if routed is not None:
+            return routed
         return inner_inject.make_local_client(settings)
 
     def _count_user_messages(self) -> int:

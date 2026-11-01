@@ -3531,6 +3531,18 @@ def main(argv=None) -> int:
     parser.add_argument("--config", default=str(cfg.CONFIG_PATH))
     parser.add_argument("--port", type=int)
     args = parser.parse_args(argv)
+    # V1 PR8：bot 工作区生效时解析 bot 包的模型配置（chat/soul 通道），
+    # 后面的既有 LLM 调用点（SelfLearnAgent 默认 client / agi.llm 默认 Router）自动使用它。
+    try:
+        from agi import bot_runtime
+        info = bot_runtime.initialize()
+        if info.get("active"):
+            print(f"[gateway] bot={info.get('bot_id')} soul={info.get('soul_provider')} "
+                  f"chat_backend={info.get('chat_backend')} "
+                  f"soul_backend={info.get('soul_backend')} "
+                  f"llm_key={'set' if info.get('has_llm_key') else 'missing'}", flush=True)
+    except Exception as exc:  # noqa: BLE001 - bot 配置故障不阻塞旧路径
+        print(f"[gateway] bot 配置解析失败（继续用旧全局配置）：{exc}", flush=True)
     cfg_obj = cfg.load()
     if args.port:
         cfg_obj["port"] = args.port

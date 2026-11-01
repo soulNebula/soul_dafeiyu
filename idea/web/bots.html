@@ -93,6 +93,7 @@ async function refresh() {
           <span class="pill">${b.has_password ? '密码已设' : '未设密码'}</span></div>
         <div>
           <button class="secondary" data-validate="${b.id}">校验</button>
+          <button class="secondary" data-model="${b.id}">测模型</button>
           <button class="secondary" data-load="${b.id}">加载</button>
           <button data-launch="${b.id}">打开 802</button>
         </div>
@@ -104,6 +105,11 @@ async function refresh() {
     document.querySelectorAll('[data-validate]').forEach((el) => el.onclick = async () => {
       try { show(await api('/api/bots/' + el.dataset.validate + '/validate', { method: 'POST' })); }
       catch (e) { show('校验失败：' + e.message); }
+    });
+    document.querySelectorAll('[data-model]').forEach((el) => el.onclick = async () => {
+      try { show(await api('/api/bots/' + el.dataset.model + '/model_check', { method: 'POST',
+            body: JSON.stringify({ purposes: ['chat', 'soul'] }) })); }
+      catch (e) { show('模型连通测试失败：' + e.message); }
     });
     document.querySelectorAll('[data-launch]').forEach((el) => el.onclick = async () => {
       try { const r = await api('/api/bots/' + el.dataset.launch + '/launch', { method: 'POST' }); show(r);

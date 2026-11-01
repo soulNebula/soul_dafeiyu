@@ -6399,6 +6399,17 @@ def main(argv=None) -> int:
     parser.add_argument("--port", type=int, default=PORT)
     parser.add_argument("--contact-db", default=None, help="联系人 sqlite（默认自动挑最近有新消息的）")
     args = parser.parse_args(argv)
+    # V1 PR8：bot 工作区生效时解析 bot 包的模型配置；802 的聊天测试/模型页
+    # 以及 console 内部的 agi.llm 默认 Router 都跟着 bot 走（旧安装零变化）。
+    try:
+        from agi import bot_runtime
+        info = bot_runtime.initialize()
+        if info.get("active"):
+            print(f"[802] bot={info.get('bot_id')} soul={info.get('soul_provider')} "
+                  f"chat_backend={info.get('chat_backend')} "
+                  f"soul_backend={info.get('soul_backend')}", flush=True)
+    except Exception as exc:  # noqa: BLE001 - bot 配置故障不阻塞旧路径
+        print(f"[802] bot 配置解析失败（继续用旧全局配置）：{exc}", flush=True)
     server = make_server(args.host, args.port, args.contact_db)
     print(f"Soul Console: http://{args.host}:{args.port}/  (Ctrl+C 停止)", flush=True)
     try:

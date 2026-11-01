@@ -39,6 +39,22 @@ def bots_root() -> Path:
     return Path(raw) if raw else REPO_ROOT / "bots"
 
 
+def _runtime():
+    """repo 根的 ``agi.bot_runtime``（801/802 用的同一份实现）；不可用时 None。
+
+    PR8：router_config / secrets 编解码 / 模型连通检查都收敛到运行时模块，
+    避免 803 与 801/802 各写一套转换逻辑（文档写了代码没有）。
+    """
+    try:
+        root = str(REPO_ROOT)
+        if root not in sys.path:
+            sys.path.append(root)      # 追加而非插队：不能顶掉 idea/ 自己的模块
+        from agi import bot_runtime
+        return bot_runtime
+    except Exception:  # noqa: BLE001 - 独立部署的 803 也要能降级
+        return None
+
+
 def _bot_dir(bot_id: str) -> Path:
     text = str(bot_id or "").strip()
     if not BOT_ID_RE.match(text):
@@ -90,6 +106,9 @@ def _dpapi(data: bytes, decrypt: bool = False) -> bytes | None:
 
 
 def _encode_secrets(payload: dict) -> dict:
+    runtime = _runtime()
+    if runtime is not None:
+        return runtime.encode_secrets(payload)
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     blob = _dpapi(raw)
     if blob is not None:
@@ -99,6 +118,9 @@ def _encode_secrets(payload: dict) -> dict:
 
 
 def decode_secrets(encoded: dict) -> dict:
+    runtime = _runtime()
+    if runtime is not None:
+        return runtime.decode_secrets(encoded)
     try:
         data = base64.b64decode(str((encoded or {}).get("data") or ""))
     except Exception:  # noqa: BLE001
@@ -324,14 +346,24 @@ def load_bot(bot_id: str) -> dict:
 def router_config(bot_id: str) -> dict:
     """PR8：把 bot 包配置翻译成既有 ``agi/llm/router.py`` 的配置结构。
 
-    只做纯转换（不写文件）：chat 走云端 API；soul 按 soul_provider 选 local/api；
-    vision/extract 默认跟随 soul 的本地能力，否则走 api。
+    实现收敛在 ``agi/bot_runtime.py``（801/802 用同一份），803 这里只做转发；
+    运行时模块不可导入时退回进程内最小实现（保证独立部署的 803 仍能用）。
+    纯转换，不写文件、不返回明文密钥。
     """
+    target = _bot_dir(bot_id)
+    runtime = _runtime()
+    if runtime is not None:
+        return runtime.router_config(target)
+    return _fallback_router_config(bot_id)
+
+
+def _fallback_router_config(bot_id: str) -> dict:
     bot = get_bot(bot_id)
     keys = decode_secrets(_read_json(_bot_dir(bot_id) / "secrets" / "keys.json", {}))
     soul_local = bot["soul_provider"] == "local"
     backends = {
-        "api": {"kind": "deepseek", "model": "deepseek-flash", "timeout_s": 30},
+        "api": {"kind": "deepseek", "model": "deepseek-flash",
+                "key_source": "llm", "timeout_s": 30},
         "local": {"kind": "openai",
                   "base_url": str(keys.get("soul_api_base") or "http://127.0.0.1:8123/v1"),
                   "model": str(keys.get("soul_model") or "soul-local"),
@@ -339,15 +371,43 @@ def router_config(bot_id: str) -> dict:
         "rule": {"kind": "rule"},
     }
     soul_backend = "local" if soul_local else "api"
+    if not soul_local and (keys.get("soul_api_key") or keys.get("soul_api_base")):
+        backends["soul_api"] = {
+            "kind": "deepseek",
+            "model": str(keys.get("soul_model") or "deepseek-flash"),
+            "base_url": str(keys.get("soul_api_base") or "https://api.deepseek.com"),
+            "key_source": "soul", "timeout_s": 30,
+        }
+        soul_backend = "soul_api"
     return {
         "backends": backends,
         "purposes": {
             "chat": {"backend": "api", "fallback": ["local", "rule"]},
             "soul": {"backend": soul_backend, "fallback": ["rule"]},
             "vision": {"backend": soul_backend, "fallback": ["api"]},
-            "extract": {"backend": "local" if soul_local else "api", "fallback": ["rule"]},
+            "extract": {"backend": "local" if soul_local else "api",
+                        "fallback": ["rule"]},
         },
     }
+
+
+def model_check(bot_id: str, *, purposes: tuple[str, ...] = ("chat", "soul"),
+                transport=None) -> dict:
+    """PR8：对 bot 的模型通道做一次最小连通调用（真实 key，返回脱敏结果）。
+
+    - 走的是 ``agi/bot_runtime.model_check``：与 801/802 完全同一份路由实现；
+    - ``transport`` 供单测/CI 注入，不联网；
+    - 没填 key 的后端不会打网络，直接给可操作 error。
+    """
+    target = _bot_dir(bot_id)
+    get_bot(bot_id)                     # 校验 bot 存在/结构合法
+    runtime = _runtime()
+    if runtime is None:
+        return {"ok": False, "bot_id": bot_id, "checks": [],
+                "error": "agi_runtime_unavailable"}
+    cfg = router_config(bot_id)
+    return runtime.model_check(target, config=cfg,
+                               purposes=tuple(purposes), transport=transport)
 
 
 def selfcheck(bot_id: str | None = None) -> dict:

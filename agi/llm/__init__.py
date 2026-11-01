@@ -18,12 +18,14 @@ from __future__ import annotations
 
 from .router import (
     DEFAULT_CONFIG_PATH,
+    PURPOSE_CATEGORIES,
     Router,
     RouterConfigError,
     available_backends,
     chat,
     default_router,
     load_config,
+    purpose_category,
     purposes,
     reset_default_router,
     usage_summary,
@@ -32,12 +34,14 @@ from .router import (
 
 __all__ = [
     "DEFAULT_CONFIG_PATH",
+    "PURPOSE_CATEGORIES",
     "Router",
     "RouterConfigError",
     "available_backends",
     "chat",
     "default_router",
     "load_config",
+    "purpose_category",
     "purposes",
     "reset_default_router",
     "usage_summary",

@@ -124,3 +124,42 @@ def test_api_selfcheck(bots_root, monkeypatch):
     res = client.get("/api/selfcheck?bot_id=sc", headers={"X-Admin-Token": "tok-sc"})
     assert res.status_code == 200, res.text
     assert res.json()["checks"][0]["name"] == "803"
+
+
+# --------------------------------------------------------------------------- #
+# PR8：模型连通测试（离线 transport，不联网）
+# --------------------------------------------------------------------------- #
+def _ok_transport(messages, body, timeout=None):
+    return {"choices": [{"message": {"content": "在。"}}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1}}
+
+
+def test_model_check_offline_transport(bots_root):
+    bot_manager.create_bot("mc", llm_key="sk-x", soul_provider="cloud")
+    result = bot_manager.model_check("mc", purposes=("chat",), transport=_ok_transport)
+    assert result["ok"] is True
+    assert result["checks"][0]["purpose"] == "chat"
+    assert result["checks"][0]["backend"] == "api"
+
+
+def test_router_config_uses_runtime_module(bots_root):
+    """803 的 router_config 与 801/802 共用 agi/bot_runtime 的实现（同一份结构）。"""
+    bot_manager.create_bot("rt", soul_provider="cloud")
+    cfg = bot_manager.router_config("rt")
+    assert cfg["backends"]["api"]["key_source"] == "llm"
+    assert cfg["purposes"]["soul"]["backend"] == "api"
+
+
+def test_api_model_check_missing_key_is_actionable(bots_root, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    bot_manager.create_bot("nokey")
+    monkeypatch.setenv("IDEA_TOKEN", "tok-mc")
+    client = TestClient(app)
+    res = client.post("/api/bots/nokey/model_check",
+                      headers={"X-Admin-Token": "tok-mc"},
+                      json={"purposes": ["chat"]})
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["ok"] is False and data["checks"]
+    assert "key" in (data["checks"][0].get("hint") or "").lower()

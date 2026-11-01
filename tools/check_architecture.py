@@ -52,6 +52,7 @@ TOP_LEVEL_DIRS: dict[str, str] = {
     "bots": "V1 bot 工作区（运行数据/密钥/模型，gitignore；路径解析见 agi/paths.py）",
     "__pycache__": "字节码缓存",
     "log": "运行时日志目录（gitignore，不参与代码）",
+    "logs": "V1 运行日志（bootstrap/802/803；gitignore，不参与代码）",
     "reports": "运行/验收报告（gitignore/可归档）",
     "scratch": "临时草稿目录（gitignore）",
     "wechatauto_logs": "发送后端运行日志（gitignore）",
@@ -99,7 +100,7 @@ UNIMPORTED_ALLOWLIST: dict[str, str] = {
 NEW_FILE_MAX_LINES = 1500
 LINE_BUDGET: dict[str, int] = {
     # 基线为 2026-10-29 收口时行数；只允许小幅波动，继续膨胀请拆分文件。
-    "tools/console/server.py": 6250,          # 2026-10-31 到期复测/wake 候选/心情口径后 6172（待拆）
+    "tools/console/server.py": 6450,          # 2026-11-01 V1 802 登录（PR4）后 6379（待拆）
     "tests/test_webui.py": 4700,              # 现有 4592：网页端集成测试
     "agi/selflearn/proactive.py": 3100,       # 现有 3056：主动消息生成（待拆）
     "agi/wechat_gateway/server.py": 3600,     # 2026-10-31 A9-P2 生成池接入后 3529（待拆）

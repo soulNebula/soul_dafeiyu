@@ -18,6 +18,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import sys
@@ -27,6 +28,7 @@ import urllib.error
 import http.cookiejar
 import urllib.request
 import zipfile
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -39,7 +41,7 @@ from pathlib import Path as _Path
 _ROOT = _Path(__file__).resolve().parents[2]
 if str(_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_ROOT))
-from agi.paths import agent_path
+from agi.paths import agent_path, bot_root as _bot_root
 DATA_DIR = ROOT / "agi" / "data"
 GATEWAY_DIR = DATA_DIR / "wechat"
 GATEWAY_LOG = GATEWAY_DIR / "gateway.log"
@@ -5449,6 +5451,106 @@ def token_ok(headers) -> bool:
     return hmac.compare_digest(expected, presented)
 
 
+# --------------------------------------------------------------------------- #
+# V1 PR4：802 登录（bot 包里有 secrets/auth.json 才启用；无则保持旧 token 模式）
+# --------------------------------------------------------------------------- #
+SESSION_TTL_S = 12 * 3600
+_SESSIONS: dict[str, float] = {}
+_LOGIN_FAILS: dict[str, list[float]] = {}
+AUTH_PATH = (Path(_bot_root()) / "secrets" / "auth.json") if _bot_root() else None
+
+
+def auth_enabled() -> bool:
+    return bool(AUTH_PATH and Path(AUTH_PATH).is_file())
+
+
+def _password_record() -> dict:
+    try:
+        return json.loads(Path(AUTH_PATH).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def verify_password(password: str) -> bool:
+    record = _password_record()
+    try:
+        salt = bytes.fromhex(str(record.get("salt") or ""))
+        expected = str(record.get("hash") or "")
+        digest = hashlib.pbkdf2_hmac("sha256", str(password).encode("utf-8"), salt, 200_000)
+        return hmac.compare_digest(digest.hex(), expected)
+    except (ValueError, TypeError):
+        return False
+
+
+def _login_allowed(client: str) -> bool:
+    now = time.time()
+    hits = [t for t in _LOGIN_FAILS.get(client, []) if now - t < 60]
+    _LOGIN_FAILS[client] = hits
+    return len(hits) < 5
+
+
+def _record_login_fail(client: str) -> None:
+    _LOGIN_FAILS.setdefault(client, []).append(time.time())
+
+
+def new_session() -> str:
+    token = secrets.token_urlsafe(32)
+    _SESSIONS[token] = time.time() + SESSION_TTL_S
+    return token
+
+
+def session_ok(headers) -> bool:
+    if not auth_enabled():
+        return False
+    raw = str(headers.get("Cookie") or "")
+    jar = SimpleCookie()
+    try:
+        jar.load(raw)
+    except Exception:  # noqa: BLE001
+        return False
+    morsel = jar.get("soul_session")
+    if morsel is None:
+        return False
+    expiry = _SESSIONS.get(str(morsel.value))
+    if not expiry or expiry < time.time():
+        _SESSIONS.pop(str(morsel.value), None)
+        return False
+    return True
+
+
+def _session_cookie(token: str, *, clear: bool = False) -> str:
+    if clear:
+        return "soul_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+    return (f"soul_session={token}; Path=/; HttpOnly; SameSite=Strict; "
+            f"Max-Age={SESSION_TTL_S}")
+
+
+LOGIN_HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>登录 · Soul Console</title><style>
+body{background:#0f1115;color:#e6e8ee;font:15px/1.6 system-ui,"Microsoft YaHei";display:flex;
+min-height:100vh;align-items:center;justify-content:center;margin:0}
+.card{background:#171a21;border:1px solid #2a2f3a;border-radius:14px;padding:28px;width:340px}
+h1{font-size:18px;margin:0 0 6px}.muted{color:#8b93a7;font-size:13px}
+input{width:100%;padding:10px;margin:14px 0;background:#0d1016;color:#e6e8ee;
+border:1px solid #2a2f3a;border-radius:8px;box-sizing:border-box}
+button{width:100%;padding:10px;background:#4c8dff;color:#fff;border:0;border-radius:8px;
+font-weight:600;cursor:pointer}.err{color:#ff5d5d;font-size:13px;min-height:18px}
+</style></head><body><div class="card">
+<h1>Soul Console</h1><div class="muted">本机单用户 · 输入 802 密码</div>
+<form id="f"><input id="pw" type="password" autofocus placeholder="密码">
+<button type="submit">登录</button></form><div class="err" id="err"></div></div>
+<script>
+document.getElementById('f').onsubmit = async (e) => {
+  e.preventDefault();
+  const r = await fetch('/api/auth/login', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({password:document.getElementById('pw').value})});
+  const d = await r.json().catch(()=>({ok:false}));
+  if (r.ok && d.ok) location.href = '/'; else document.getElementById('err').textContent =
+    (d.error || '密码错误');
+};
+</script></body></html>"""
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "SoulConsole/1.0"
 
@@ -5461,6 +5563,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _redirect(self, location: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _json_auth(self, code: int, payload: dict, cookie: str) -> None:
+        body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Set-Cookie", cookie)
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
@@ -5552,6 +5670,21 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         query = self._query()
         try:
+            if path == "/login":
+                self._bytes(200, LOGIN_HTML.encode("utf-8"),
+                            "text/html; charset=utf-8")
+                return
+            if path == "/api/auth/state":
+                self._json(200, {"ok": True, "auth_enabled": auth_enabled(),
+                                 "logged_in": session_ok(self.headers)})
+                return
+            if auth_enabled() and not (session_ok(self.headers) or token_ok(self.headers)):
+                if path.startswith("/api/"):
+                    self._json(401, {"ok": False, "error": "login required",
+                                     "auth_enabled": True})
+                else:
+                    self._redirect("/login")
+                return
             if path in ("/", "/index.html"):
                 if not self._serve_static("index.html"):
                     self._json(500, {"ok": False, "error": "static/index.html 缺失"})
@@ -5901,6 +6034,37 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = self.path.split("?", 1)[0]
         client = self._client()
+        if path == "/api/auth/login":
+            try:
+                body = self._read_body()
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)}); return
+            if not auth_enabled():
+                self._json(400, {"ok": False, "error": "auth_disabled"}); return
+            if not _login_allowed(client):
+                self._json(429, {"ok": False, "error": "too many attempts"}); return
+            if verify_password(str(body.get("password") or "")):
+                token = new_session()
+                audit("login", {"ok": True}, ok=True, client=client)
+                self._json_auth(200, {"ok": True}, _session_cookie(token)); return
+            _record_login_fail(client)
+            audit("login", {"ok": False}, ok=False, client=client)
+            self._json(401, {"ok": False, "error": "password incorrect"}); return
+        if path == "/api/auth/logout":
+            raw = str(self.headers.get("Cookie") or "")
+            jar = SimpleCookie()
+            try:
+                jar.load(raw)
+                morsel = jar.get("soul_session")
+                if morsel is not None:
+                    _SESSIONS.pop(str(morsel.value), None)
+            except Exception:  # noqa: BLE001
+                pass
+            self._json_auth(200, {"ok": True}, _session_cookie("", clear=True)); return
+        if auth_enabled() and not (session_ok(self.headers) or token_ok(self.headers)):
+            self._json(401, {"ok": False, "error": "login required",
+                             "auth_enabled": True})
+            return
         if path == "/api/factory/preview":
             # 只读统计：不需要 token（But 仍需回环 Host；不删除任何东西）
             try:

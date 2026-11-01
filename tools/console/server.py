@@ -90,6 +90,7 @@ EDITABLE_DEFAULTS: dict = {
     "inner_mode_scope": "proactive_only",
     "inner_schema": "slim",
     "reply_max_bubbles": 0,
+    "user_llm_ratio": "1:2",
 }
 #: 其余不可编辑但页面要看的键
 READONLY_CONFIG_KEYS = ("allowed_contacts", "proactive_contacts", "stop", "send_mode",
@@ -1374,6 +1375,11 @@ def _validate_config(updates: dict) -> tuple[dict, list[str]]:
                 if not 0 <= number <= 20:
                     raise ValueError("reply_max_bubbles 取值 0–20（0=自动）")
                 cleaned[key] = number
+            elif key == "user_llm_ratio":
+                text = str(value or "").strip()
+                if text not in ("1:1", "1:2", "1:3"):
+                    raise ValueError("user_llm_ratio 只支持 1:1/1:2/1:3")
+                cleaned[key] = text
         except (TypeError, ValueError) as exc:
             errors.append(f"{key}: {exc}")
     merged = {**{key: gateway_config().get(key, default)

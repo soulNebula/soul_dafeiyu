@@ -190,10 +190,12 @@ def test_apply_config_whitelist_and_validation(write_env):
                                "inner_shadow_only": True,
                                "inner_mode_scope": "all",
                                "inner_schema": "slim",
-                               "reply_max_bubbles": 1})
+                               "reply_max_bubbles": 1,
+                               "user_llm_ratio": "1:2"})
     assert ok["ok"] is True
     assert ok["config"]["proactive_enabled"] is False
     assert ok["config"]["reply_max_bubbles"] == 1
+    assert ok["config"]["user_llm_ratio"] == "1:2"
     saved = json.loads(write_env["config"].read_text(encoding="utf-8"))
     assert saved["proactive_enabled"] is False and saved["inner_mode"] == "model"
 
@@ -208,6 +210,8 @@ def test_apply_config_whitelist_and_validation(write_env):
     assert more["ok"] is True and more["config"]["reply_max_bubbles"] == 20
     bad_bubbles = console.apply_config({"reply_max_bubbles": 21})
     assert bad_bubbles["ok"] is False
+    bad_ratio = console.apply_config({"user_llm_ratio": "2:1"})
+    assert bad_ratio["ok"] is False
 
 
 def test_prompts_state_uses_prompt_store(prompt_env):

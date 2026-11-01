@@ -40,21 +40,38 @@ def test_auth_disabled_without_bot(tmp_path):
     assert lines == ["False", "False"]
 
 
+def _code(lines):
+    return chr(10).join(lines)
+
+
 def test_auth_enabled_and_password_roundtrip(tmp_path):
     bot = tmp_path / "bots" / "demo"
     (bot / "secrets").mkdir(parents=True)
     (bot / "secrets" / "auth.json").write_text(
         json.dumps(_auth_record()), encoding="utf-8")
-    lines = _run(tmp_path, bot, (
-        "from tools.console import server\n"
-        "print(server.auth_enabled())\n"
-        "print(server.verify_password('pw123456'))\n"
-        "print(server.verify_password('wrong'))\n"
-        "s = server.new_session()\n"
-        "print(server.session_ok({'Cookie': 'soul_session=' + s}))\n"
-        "print(server.session_ok({'Cookie': 'soul_session=bad'}))\n"))
-    assert lines[0] == "True"
-    assert lines[1] == "True"
-    assert lines[2] == "False"
-    assert lines[3] == "True"
-    assert lines[4] == "False"
+    lines = _run(tmp_path, bot, _code([
+        "from tools.console import server",
+        "print(server.auth_enabled())",
+        "print(server.verify_password('pw123456'))",
+        "print(server.verify_password('wrong'))",
+        "s = server.new_session()",
+        "print(server.session_ok({'Cookie': 'soul_session=' + s}))",
+        "print(server.session_ok({'Cookie': 'soul_session=bad'}))",
+    ]))
+    assert lines == ["True", "True", "False", "True", "False"]
+
+
+def test_request_authed_cookie_or_token(tmp_path):
+    bot = tmp_path / "bots" / "demo2"
+    (bot / "secrets").mkdir(parents=True)
+    (bot / "secrets" / "auth.json").write_text(
+        json.dumps(_auth_record()), encoding="utf-8")
+    lines = _run(tmp_path, bot, _code([
+        "from tools.console import server",
+        "server.session_ok = lambda h: h.get('Cookie') == 'ok'",
+        "server.token_ok = lambda h: h.get('X-Admin-Token') == 'tok'",
+        "print(server.request_authed({'Cookie': 'ok'}))",
+        "print(server.request_authed({'X-Admin-Token': 'tok'}))",
+        "print(server.request_authed({}))",
+    ]))
+    assert lines == ["True", "True", "False"]

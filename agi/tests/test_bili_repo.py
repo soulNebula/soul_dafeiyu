@@ -263,3 +263,17 @@ def test_credential_state_reports_legacy_source(tmp_path, monkeypatch):
     assert common.credential_state()["source"] == "legacy"
     common.save_credential({"sessdata": "new"})
     assert common.credential_state()["source"] == "repo"
+
+
+def test_save_credential_plain_fallback_roundtrip(tmp_path, monkeypatch):
+    """PR9: encode_secrets 不可用时的 plain 回退必须仍能被 load_credential 读回。"""
+    monkeypatch.setattr(common, "credential_path", lambda: tmp_path / "cred.json")
+    import agi.bot_runtime as bot_runtime
+    def boom(_payload):
+        raise RuntimeError("dpapi unavailable")
+    monkeypatch.setattr(bot_runtime, "encode_secrets", boom)
+    common.save_credential({"sessdata": "S1", "bili_jct": "J1"})
+    raw = json.loads((tmp_path / "cred.json").read_text(encoding="utf-8"))
+    assert raw["scheme"] == "plain" and isinstance(raw["data"], str)
+    loaded = common.load_credential()
+    assert loaded["sessdata"] == "S1" and loaded["bili_jct"] == "J1"

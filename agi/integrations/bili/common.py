@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
@@ -210,7 +211,12 @@ def save_credential(credential: dict, *, path: Path | None = None) -> Path:
         from agi import bot_runtime
         encoded = bot_runtime.encode_secrets(normalized)
     except Exception:  # noqa: BLE001 - 极端情况下退化为明文（仅本机权限保护）
-        encoded = {"scheme": "plain", "data": normalized}
+        # 必须与 bot_runtime.decode_secrets 的 plain 格式一致：data=base64(json)，
+        # 否则写进去的凭证读不回来（2026-11-01 验收发现）。
+        raw = json.dumps(normalized, ensure_ascii=False).encode("utf-8")
+        encoded = {"scheme": "plain",
+                   "data": base64.b64encode(raw).decode("ascii"),
+                   "warning": "encode_secrets 不可用，仅本机文件权限保护"}
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(json.dumps(encoded, ensure_ascii=False, indent=2) + "\n",
                    encoding="utf-8")

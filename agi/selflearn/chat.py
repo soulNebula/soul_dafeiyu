@@ -1346,7 +1346,9 @@ class SelfLearnAgent:
                 has_media_bubble = bool(reply_media and any(
                     str(b.get("type")) in ("sticker", "gif", "image")
                     for b in (reply_media.get("bubbles") or [])))
-                if chat_media_directives and not has_media_bubble:
+                if (chat_media_directives and not has_media_bubble
+                        and settings.get("enabled")
+                        and settings.get("sticker_in_reply")):
                     fallback_plan = _explicit_sticker_plan(
                         media_choice, self.path, chat_media_directives)
                     if fallback_plan:

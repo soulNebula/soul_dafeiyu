@@ -5,6 +5,11 @@
 """
 from __future__ import annotations
 
+import sys
+
+if sys.platform != "win32":
+    pytest.skip("Windows-only: wx_core/ctypes.WinDLL", allow_module_level=True)
+
 import queue
 import threading
 import time

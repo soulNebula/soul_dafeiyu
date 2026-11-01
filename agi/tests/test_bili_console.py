@@ -9,6 +9,9 @@ from pathlib import Path
 
 import pytest
 
+# 旧 B 站链路依赖 Windows 侧 bili-duty 插件；CI(Ubuntu) 跳过
+pytestmark = pytest.mark.windows_only
+
 ROOT = Path(__file__).resolve().parents[2]
 _SPEC = importlib.util.spec_from_file_location(
     "console_server_bili", ROOT / "tools" / "console" / "server.py")

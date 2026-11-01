@@ -7,6 +7,9 @@ import time
 
 import pytest
 
+# 旧 B 站链路依赖 Windows 侧 bili-duty 插件；CI(Ubuntu) 跳过
+pytestmark = pytest.mark.windows_only
+
 from agi.integrations import bili_ingest
 
 

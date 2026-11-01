@@ -1795,8 +1795,15 @@ class Gateway:
             image_data = self._image_data_url(str(msg.get("media_path") or ""))
             if not text.strip():
                 text = "发了个表情包" if kind == "emoji" else "发了张图片"
-        result = agent.send(text, image=image_data or None,
-                            max_bubbles_cap=int(self.cfg.get("reply_max_bubbles") or 0))
+        try:
+            result = agent.send(
+                text, image=image_data or None,
+                max_bubbles_cap=int(self.cfg.get("reply_max_bubbles") or 0))
+        except TypeError as exc:
+            # 兼容旧插件/测试替身：只在缺少该关键字时回退，不吞真实 TypeError
+            if "max_bubbles_cap" not in str(exc):
+                raise
+            result = agent.send(text, image=image_data or None)
         turn_id = str(result.get("turn_id") or "")
         if turn_id:
             self.last_turns[contact] = turn_id

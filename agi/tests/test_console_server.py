@@ -1672,6 +1672,7 @@ def _bili_console_env(tmp_path, monkeypatch, write_env):
     return home
 
 
+@pytest.mark.windows_only
 def test_console_bili_qr_poll_status_config_http(tmp_path, write_env, monkeypatch):
     home = _bili_console_env(tmp_path, monkeypatch, write_env)
     status, _ = _call("POST", "/api/bili/login/qr", {})

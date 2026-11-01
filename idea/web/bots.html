@@ -62,6 +62,7 @@
     </div>
     <label>灵魂模型 API key（云端）</label><input id="soul_api_key" type="password">
     <button id="create">创建 bot</button>
+    <button class="secondary" id="selfcheck">环境自检</button>
   </div>
 
   <div class="card"><b>结果</b><pre id="out">—</pre></div>
@@ -122,6 +123,9 @@ $('#create').onclick = async () => {
   catch (e) { show('创建失败：' + e.message); }
 };
 refresh();
+$('#selfcheck').onclick = async () => {
+  try { show(await api('/api/selfcheck')); } catch (e) { show('自检失败：' + e.message); }
+};
 </script>
 </body>
 </html>

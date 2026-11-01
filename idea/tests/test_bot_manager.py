@@ -92,3 +92,14 @@ def test_load_bot_reports_stages(bots_root):
     assert result["stages"] and result["progress"] >= 0
     names = [item["stage"] for item in result["stages"]]
     assert "目录" in names and "密钥文件" in names
+
+
+def test_router_config_maps_soul_provider(bots_root):
+    bot_manager.create_bot("r-local", soul_provider="local", soul_model="soul-x",
+                           soul_base="http://127.0.0.1:9000/v1")
+    cfg = bot_manager.router_config("r-local")
+    assert cfg["purposes"]["soul"]["backend"] == "local"
+    assert cfg["backends"]["local"]["base_url"].endswith(":9000/v1")
+    bot_manager.create_bot("r-cloud", soul_provider="cloud")
+    cfg2 = bot_manager.router_config("r-cloud")
+    assert cfg2["purposes"]["soul"]["backend"] == "api"

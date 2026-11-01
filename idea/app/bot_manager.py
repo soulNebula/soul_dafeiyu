@@ -319,3 +319,32 @@ def load_bot(bot_id: str) -> dict:
     return {"ok": ok, "bot_id": bot_id, "progress": 100 if ok else int(
         100 * sum(1 for item in stages if item["ok"]) / max(1, len(stages))),
         "stages": stages}
+
+
+def router_config(bot_id: str) -> dict:
+    """PR8：把 bot 包配置翻译成既有 ``agi/llm/router.py`` 的配置结构。
+
+    只做纯转换（不写文件）：chat 走云端 API；soul 按 soul_provider 选 local/api；
+    vision/extract 默认跟随 soul 的本地能力，否则走 api。
+    """
+    bot = get_bot(bot_id)
+    keys = decode_secrets(_read_json(_bot_dir(bot_id) / "secrets" / "keys.json", {}))
+    soul_local = bot["soul_provider"] == "local"
+    backends = {
+        "api": {"kind": "deepseek", "model": "deepseek-flash", "timeout_s": 30},
+        "local": {"kind": "openai",
+                  "base_url": str(keys.get("soul_api_base") or "http://127.0.0.1:8123/v1"),
+                  "model": str(keys.get("soul_model") or "soul-local"),
+                  "timeout_s": 60},
+        "rule": {"kind": "rule"},
+    }
+    soul_backend = "local" if soul_local else "api"
+    return {
+        "backends": backends,
+        "purposes": {
+            "chat": {"backend": "api", "fallback": ["local", "rule"]},
+            "soul": {"backend": soul_backend, "fallback": ["rule"]},
+            "vision": {"backend": soul_backend, "fallback": ["api"]},
+            "extract": {"backend": "local" if soul_local else "api", "fallback": ["rule"]},
+        },
+    }

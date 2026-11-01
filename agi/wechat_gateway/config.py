@@ -106,6 +106,13 @@ DEFAULTS = {
     "send_media_timeout_s": 120,
     # P5-a 发送层多媒体（默认关闭：用户/决策层显式开启前，send_bubbles 一律 blocked）
     "media_enabled": False,
+    # V1 PR9：B站能力已收进仓库（agi/integrations/bili）；弹幕/评论只是 802 展示开关，
+    # 默认关，不进训练/入库主链（docs/plans/64 §10）。bili_keywords 留空 = LLM 自选。
+    "bili_enabled": False,
+    "bili_keywords": [],
+    "bili_ingest_enabled": False,
+    "bili_show_danmaku": False,
+    "bili_show_comments": False,
     "media_dirs": [],              # 追加白名单目录（默认三个目录见 agi/wechat_gateway/media.py）
     "media_max_mb": 10,            # 单文件大小上限（MB）
     "media_file_max_mb": 50,       # P0-144：文档（file）大小上限（MB）

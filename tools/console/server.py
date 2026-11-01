@@ -95,6 +95,9 @@ EDITABLE_DEFAULTS: dict = {
     "proactive_max_per_day": 3,
     "proactive_max_bubbles": 1,
     "media_enabled": False,
+    # V1 PR9：B站展示开关（默认关；只影响 802 展示，不做抓取/入库）
+    "bili_show_danmaku": False,
+    "bili_show_comments": False,
 }
 #: 其余不可编辑但页面要看的键
 READONLY_CONFIG_KEYS = ("allowed_contacts", "proactive_contacts", "stop", "send_mode",
@@ -984,6 +987,172 @@ def bili_duty_log(lines: int = 200) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# V1 PR9：仓库内 B站模块（agi/integrations/bili）—— 不再依赖 ~/.dsh/bili-duty
+# --------------------------------------------------------------------------- #
+BILI_REPO_QR_PNG = DATA_DIR / "selflearn" / "bili_repo_login_qr.png"
+
+
+def _bili_repo_modules():
+    """延迟 import；缺依赖/模块坏了返回 None（802 页面给可操作提示）。"""
+    try:
+        from agi.integrations.bili import auth, feed, video, worker
+        from agi.integrations.bili import common as bili_common
+    except Exception:  # noqa: BLE001 - 旧部署/裁剪包
+        return None
+    return {"auth": auth, "feed": feed, "video": video, "worker": worker,
+            "common": bili_common}
+
+
+def bili_repo_available() -> dict:
+    modules = _bili_repo_modules()
+    if modules is None:
+        return {"ok": False, "error": "bili_repo_unavailable"}
+    try:
+        path = str(modules["common"].credential_path())
+    except Exception:  # noqa: BLE001
+        path = ""
+    return {"ok": True, "credential_path": path}
+
+
+def bili_repo_status() -> dict:
+    modules = _bili_repo_modules()
+    if modules is None:
+        return {"ok": False, "error": "bili_repo_unavailable"}
+    try:
+        status = modules["auth"].login_status()
+    except Exception as exc:  # noqa: BLE001 - 状态查询失败不 500
+        status = {"ok": False, "logged_in": False,
+                  "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        source = modules["common"].credential_state()
+    except Exception:  # noqa: BLE001
+        source = {"source": "unknown", "path": ""}
+    return {"ok": True, "status": status,
+            "credential_path": bili_repo_available().get("credential_path", ""),
+            "credential_source": source.get("source", "unknown"),
+            "credential_source_path": source.get("path", ""),
+            "display": bili_display_settings()}
+
+
+def bili_repo_login_qr(*, client: str = "") -> dict:
+    modules = _bili_repo_modules()
+    if modules is None:
+        return {"ok": False, "error": "bili_repo_unavailable"}
+    try:
+        data = modules["auth"].qr_generate()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "network",
+                "hint": f"{type(exc).__name__}: {exc}"}
+    _BILI_LAST_KEY["key"] = data["key"]
+    _BILI_LAST_KEY["repo"] = True
+    try:
+        _render_qr_png(data["url"], Path(BILI_REPO_QR_PNG))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "qr_render_failed",
+                "hint": f"{type(exc).__name__}: {exc}"}
+    audit("bili_repo_login_qr", {"key": data["key"][:8] + "…"}, ok=True, client=client)
+    return {"ok": True, "key": data["key"], "expires_in": data.get("expires_in_s", 180),
+            "image": f"/api/bili/repo/login/qr/image?ts={int(time.time())}"}
+
+
+def bili_repo_login_poll(key: str = "") -> dict:
+    modules = _bili_repo_modules()
+    if modules is None:
+        return {"ok": False, "error": "bili_repo_unavailable"}
+    target = str(key or _BILI_LAST_KEY.get("key") or "")
+    try:
+        data = modules["auth"].qr_poll(target)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "state": "error",
+                "hint": f"{type(exc).__name__}: {exc}"}
+    if data.get("state") == "ok" and data.get("credential"):
+        try:
+            data["saved"] = modules["auth"].save_login(data["credential"])
+        except Exception as exc:  # noqa: BLE001
+            data["saved"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        data.pop("credential", None)      # 凭证绝不回给前端
+        _BILI_LAST_KEY["key"] = ""
+    return data
+
+
+def bili_repo_feed(limit: int = 20) -> dict:
+    modules = _bili_repo_modules()
+    if modules is None:
+        return {"ok": False, "error": "bili_repo_unavailable"}
+    try:
+        return modules["feed"].recommend(limit)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "network",
+                "hint": f"{type(exc).__name__}: {exc}"}
+
+
+def bili_repo_run(*, client: str = "") -> dict:
+    modules = _bili_repo_modules()
+    if modules is None:
+        return {"ok": False, "error": "bili_repo_unavailable"}
+    cfg = gateway_config()
+    try:
+        result = modules["worker"].run_once(
+            enabled=True, keywords=list(cfg.get("bili_keywords") or []),
+            limit=int(cfg.get("bili_run_limit") or 5))
+    except Exception as exc:  # noqa: BLE001
+        audit("bili_repo_run", {"ok": False}, ok=False,
+              note=str(exc)[:200], client=client)
+        return {"ok": False, "error": "network",
+                "hint": f"{type(exc).__name__}: {exc}"}
+    audit("bili_repo_run", {"ok": True, "picked": len(result.get("items") or [])},
+          ok=True, client=client)
+    return result
+
+
+def bili_display_settings() -> dict:
+    cfg = gateway_config()
+    return {"ok": True,
+            "show_danmaku": bool(cfg.get("bili_show_danmaku")),
+            "show_comments": bool(cfg.get("bili_show_comments")),
+            "note": "只影响 802 展示；默认关，不做抓取/入库"}
+
+
+def bili_display_update(body: dict, *, client: str = "") -> dict:
+    updates = {}
+    if "show_danmaku" in body:
+        updates["bili_show_danmaku"] = body.get("show_danmaku")
+    if "show_comments" in body:
+        updates["bili_show_comments"] = body.get("show_comments")
+    if not updates:
+        return {"ok": False, "error": "缺少 show_danmaku/show_comments"}
+    result = apply_config(updates, client=client)
+    if not result.get("ok"):
+        return result
+    return {"ok": True, "display": bili_display_settings()}
+
+
+def bili_video_display(bvid: str, *, limit: int = 20) -> dict:
+    """802 B站页「看评论/弹幕」：受两个展示开关约束，只展示不落库。"""
+    modules = _bili_repo_modules()
+    if modules is None:
+        return {"ok": False, "error": "bili_repo_unavailable"}
+    settings = bili_display_settings()
+    if not settings["show_comments"] and not settings["show_danmaku"]:
+        return {"ok": False, "error": "display_disabled",
+                "hint": "先在 B站页打开「显示弹幕」或「显示评论」开关"}
+    try:
+        result = modules["video"].display(
+            bvid, show_comments=settings["show_comments"],
+            show_danmaku=settings["show_danmaku"],
+            comment_limit=max(1, min(int(limit or 20), 20)),
+            danmaku_limit=100)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": "network",
+                "hint": f"{type(exc).__name__}: {exc}"}
+    audit("bili_video_display", {"bvid": bvid,
+                                 "comments": len(result.get("comments") or []),
+                                 "danmaku": len(result.get("danmaku") or [])},
+          ok=bool(result.get("ok")))
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # 日记（只读）
 # --------------------------------------------------------------------------- #
 _DIARY_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -1390,6 +1559,8 @@ def _validate_config(updates: dict) -> tuple[dict, list[str]]:
                     raise ValueError("proactive_method 只支持 prob/timer/topic")
                 cleaned[key] = text
             elif key == "media_enabled":
+                cleaned[key] = bool(value) if isinstance(value, bool) else _as_bool(value)
+            elif key in ("bili_show_danmaku", "bili_show_comments"):
                 cleaned[key] = bool(value) if isinstance(value, bool) else _as_bool(value)
             elif key in ("proactive_max_per_day", "proactive_max_bubbles"):
                 number = int(value)
@@ -5979,6 +6150,34 @@ class Handler(BaseHTTPRequestHandler):
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
                 self._json(200, bili_config_state()); return
+            if path == "/api/bili/display":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                self._json(200, bili_display_settings()); return
+            if path == "/api/bili/repo/status":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                result = bili_repo_status()
+                self._json(200 if result.get("ok") else 501, result); return
+            if path == "/api/bili/repo/login/poll":
+                # 与插件扫码一致：只读轮询不强制 token（真机扫码才算确认）
+                key = str((query.get("key") or [""])[0] or "")
+                self._json(200, bili_repo_login_poll(key)); return
+            if path == "/api/bili/repo/login/qr/image":
+                if not Path(BILI_REPO_QR_PNG).is_file():
+                    self._json(404, {"ok": False, "error": "qr_not_found"}); return
+                self._bytes(200, Path(BILI_REPO_QR_PNG).read_bytes(), "image/png"); return
+            if path == "/api/bili/repo/feed":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                result = bili_repo_feed(self._limit(query, 20))
+                self._json(200 if result.get("ok") else 502, result); return
+            if path == "/api/bili/video":
+                if not token_ok(self.headers):
+                    self._json(401, {"ok": False, "error": "admin token required"}); return
+                bvid = str((query.get("bvid") or [""])[0] or "")
+                result = bili_video_display(bvid)
+                self._json(200 if result.get("ok") else 502, result); return
             if path == "/api/bili/report":
                 if not token_ok(self.headers):
                     self._json(401, {"ok": False, "error": "admin token required"}); return
@@ -6278,6 +6477,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/bili/login/qr":
                 result = bili_login_qr(client=client)
                 self._json(200 if result.get("ok") else 502, result); return
+            if path == "/api/bili/repo/login/qr":
+                result = bili_repo_login_qr(client=client)
+                self._json(200 if result.get("ok") else 502, result); return
+            if path == "/api/bili/repo/run":
+                result = bili_repo_run(client=client)
+                self._json(200 if result.get("ok") else 502, result); return
+            if path == "/api/bili/display":
+                result = bili_display_update(body, client=client)
+                self._json(200 if result.get("ok") else 400, result); return
             if path == "/api/bili/config":
                 updates = body.get("updates", body)
                 result = bili_config_update(

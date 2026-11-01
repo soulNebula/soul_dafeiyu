@@ -3296,6 +3296,273 @@ function biliHomeMissingHtml(message) {
     <button class="btn" id="bili-home-retry">重新检测</button>`;
 }
 
+/* ---------------- B站（V1 PR9：仓库内置模式，不依赖 bili-duty 插件） ---------------- */
+function biliRepoState() {
+  if (!state.biliRepo) {
+    state.biliRepo = { status: null, display: null, feed: null, feedNote: '',
+                       video: null, qr: null, loginState: '', timer: null, polling: false,
+                       expired: false };
+  }
+  return state.biliRepo;
+}
+
+function biliRepoDisplayCard(repo) {
+  const display = repo.display || {};
+  return card('展示开关（默认关，只影响本页展示）', `
+    <div class="row" style="gap:18px;align-items:center;flex-wrap:wrap">
+      <label class="switch"><input type="checkbox" id="repo-show-danmaku" ${display.show_danmaku ? 'checked' : ''}>
+        <span>显示弹幕</span></label>
+      <label class="switch"><input type="checkbox" id="repo-show-comments" ${display.show_comments ? 'checked' : ''}>
+        <span>显示评论</span></label>
+      <button class="btn small" id="repo-display-save">保存开关</button>
+    </div>
+    <div class="hint" style="margin-top:6px">只做 802 展示级拉取（评论 ≤20、弹幕 ≤100，过限频）；
+      不进训练/入库主链。两个都关时「看评论/弹幕」不发任何请求。</div>`);
+}
+
+function biliRepoLoginCard(repo) {
+  const status = (repo.status || {}).status || {};
+  const loggedIn = !!status.logged_in;
+  const qr = repo.qr;
+  return card('B站登录（仓库内置，凭证加密落本机）', `
+    ${loggedIn ? `<div class="kv">
+        <span class="k">账号</span><span class="v"><b>${esc(status.uname || '（已登录）')}</b></span>
+        <span class="k">mid</span><span class="v">${esc(status.mid ?? '—')}</span>
+        <span class="k">凭证</span><span class="v mono">${esc((repo.status || {}).credential_path || '')}</span>
+        <span class="k">来源</span><span class="v">${esc(({repo: '仓库/bot 包', legacy: '旧插件（只读，扫码会写入仓库）', none: '无'})[(repo.status || {}).credential_source] || (repo.status || {}).credential_source || '—')}</span>
+      </div><div class="row"><button class="btn small" id="repo-relogin">重新登录</button></div>`
+      : `<div class="hint">手机 B站 → 我的 → 扫一扫（确认时选「记住我」）。登录后推荐流才有个人化；
+          没登录也能用热门/搜索。</div>
+         <div class="row" style="gap:8px;margin-top:8px">
+           <button class="btn primary" id="repo-qr-btn">${qr ? '刷新二维码' : '生成二维码'}</button>
+           <button class="btn small" id="repo-check">我已扫码，检查状态</button>
+         </div>`}
+    <div id="repo-login-area" style="margin-top:10px">
+      ${qr ? `<div class="bili-qr"><img src="${esc(qr.image)}" alt="B站登录二维码">
+        <div class="hint" id="repo-login-state">${esc(repo.loginState || '等待扫码…')}</div></div>` : ''}
+    </div>`);
+}
+
+function biliRepoFeedCard(repo) {
+  const feed = repo.feed;
+  if (!feed) {
+    return card('推荐流 / 关键词', `<div class="hint">还没拉取。点「刷一轮」会按配置的关键词挑几条
+      （关键词留空 → 让 LLM 按标题自选；LLM 不可用退化为词频）。</div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" id="repo-run">刷一轮</button>
+        <button class="btn small" id="repo-feed">只拉推荐流</button>
+        <span class="hint" id="repo-feed-note"></span></div>`);
+  }
+  const items = feed.items || [];
+  const rows = items.map((item, index) => `
+    <tr>
+      <td class="mono">${esc(item.bvid || '')}</td>
+      <td><a href="${esc(item.url || '#')}" target="_blank" rel="noopener">${esc(item.title || '')}</a></td>
+      <td>${esc(item.owner || '')}</td>
+      <td>${esc(fmtDuration(item.duration))}</td>
+      <td><button class="btn small" data-repo-video="${esc(item.bvid || '')}">看评论/弹幕</button></td>
+    </tr>`).join('');
+  return card('推荐流 / 关键词', `
+    <div class="hint">${esc(repo.feedNote || '')}</div>
+    <div class="row" style="margin:8px 0">
+      <button class="btn primary" id="repo-run">刷一轮</button>
+      <button class="btn small" id="repo-feed">只拉推荐流</button>
+      <span class="hint" id="repo-feed-note"></span></div>
+    ${items.length ? `<table class="table"><thead><tr><th>BV</th><th>标题</th><th>UP</th><th>时长</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table>` : '<div class="empty">没有拉到视频（网络或接口限流，稍后再试）</div>'}
+    <div id="repo-video-panel"></div>`);
+}
+
+function biliRepoVideoHtml(video) {
+  if (!video) return '';
+  if (!video.ok) {
+    return `<div class="error-text">${esc(video.hint || video.error || '拉取失败')}</div>`;
+  }
+  const comments = (video.comments || []).map((item) =>
+    `<li><b>${esc(item.uname || '匿名')}</b>（赞 ${num(item.like)}）：${esc(item.text || '')}</li>`).join('');
+  const danmaku = (video.danmaku || []).map((item) =>
+    `<li class="mono">${esc(item.time)}s ${esc(item.text || '')}</li>`).join('');
+  return `<div class="card" style="margin-top:10px">
+    <div><b>${esc((video.video || {}).title || (video.video || {}).bvid || '')}</b></div>
+    ${comments ? `<h4>评论（${num((video.comments || []).length)}）</h4><ul>${comments}</ul>`
+      : '<div class="hint">没有评论或评论开关关着。</div>'}
+    ${danmaku ? `<h4>弹幕（${num((video.danmaku || []).length)}）</h4><ul class="mono">${danmaku}</ul>`
+      : '<div class="hint">没有弹幕或弹幕开关关着。</div>'}
+    ${(video.errors || []).length ? `<div class="error-text">${esc((video.errors || []).join('；'))}</div>` : ''}
+  </div>`;
+}
+
+function renderBiliRepoPage(repo) {
+  $('#app').innerHTML = `
+    ${card('B站 · 仓库内置模式', `
+      <div class="hint">当前没有装仓库外的 bili-duty 插件（或家目录不可用），802 直接用仓库内的
+        <code>agi/integrations/bili</code>：扫码登录、推荐流、关键词筛选、展示级评论/弹幕。
+        装回插件后自动回到插件页，两条路径不互相污染。</div>`)}
+    ${biliRepoLoginCard(repo)}
+    ${biliRepoDisplayCard(repo)}
+    ${biliRepoFeedCard(repo)}
+    ${card('插件模式（可选）', `<div class="hint">如果之后安装了 <code>~/.dsh/bili-duty</code> 插件，
+      点「重新检测」会切回插件页（日报/定时刷仍由插件负责）。</div>
+      <button class="btn small" id="repo-home-retry" style="margin-top:8px">重新检测</button>`)}`;
+
+  const qrBtn = $('#repo-qr-btn');
+  if (qrBtn) qrBtn.onclick = startBiliRepoQr;
+  const checkBtn = $('#repo-check');
+  if (checkBtn) checkBtn.onclick = checkBiliRepoLogin;
+  const relogin = $('#repo-relogin');
+  if (relogin) relogin.onclick = () => { repo.qr = null; repo.loginState = ''; renderBiliRepoPage(repo); };
+  const displaySave = $('#repo-display-save');
+  if (displaySave) displaySave.onclick = saveBiliRepoDisplay;
+  const run = $('#repo-run');
+  if (run) run.onclick = () => runBiliRepo(true);
+  const feedBtn = $('#repo-feed');
+  if (feedBtn) feedBtn.onclick = () => runBiliRepo(false);
+  $$('[data-repo-video]').forEach((btn) => {
+    btn.onclick = () => showBiliRepoVideo(btn.dataset.repoVideo);
+  });
+  const homeRetry = $('#repo-home-retry');
+  if (homeRetry) homeRetry.onclick = () => renderBili();
+  if (repo.video) {
+    const panel = $('#repo-video-panel');
+    if (panel) panel.innerHTML = biliRepoVideoHtml(repo.video);
+  }
+}
+
+async function renderBiliRepo(reason) {
+  const repo = biliRepoState();
+  repo.video = null;
+  $('#app').innerHTML = '<div class="empty">加载 B站（仓库内置）…</div>';
+  if (!state.token) {
+    $('#app').innerHTML = card('B站', '<div class="error-text">B站页需要 admin token：请在右上角填写。</div>');
+    return;
+  }
+  if (repo.timer) { clearInterval(repo.timer); repo.timer = null; }
+  try {
+    const status = await api('/api/bili/repo/status');
+    repo.status = status;
+    repo.display = status.display || await api('/api/bili/display');
+  } catch (err) {
+    $('#app').innerHTML = card('B站 · 仓库内置', `<div class="error-text">${esc(err.message)}</div>
+      <div class="hint">${esc(reason || '')}</div>
+      <button class="btn" id="repo-home-retry" style="margin-top:8px">重新检测</button>`);
+    const retry = $('#repo-home-retry');
+    if (retry) retry.onclick = () => renderBili();
+    return;
+  }
+  if (state.page !== 'bili') return;
+  renderBiliRepoPage(repo);
+  if (repo.qr && !repo.timer) startBiliRepoPoll();
+}
+
+async function startBiliRepoQr() {
+  const repo = biliRepoState();
+  try {
+    const result = await api('/api/bili/repo/login/qr', { method: 'POST', body: {} });
+    if (!result.ok) { toast(result.hint || result.error || '生成二维码失败', 'err'); return; }
+    repo.qr = { key: result.key, image: result.image, expires_in: result.expires_in || 180 };
+    repo.loginState = '等待扫码…';
+    repo.expired = false;
+    renderBiliRepoPage(repo);
+    startBiliRepoPoll();
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+async function checkBiliRepoLogin() {
+  const repo = biliRepoState();
+  if (!repo.qr) { toast('先点「生成二维码」', 'err'); return; }
+  try {
+    const result = await api('/api/bili/repo/login/poll?key=' + encodeURIComponent(repo.qr.key));
+    if (result.state === 'ok') {
+      toast('B站登录成功', 'ok');
+      repo.qr = null;
+      if (repo.timer) { clearInterval(repo.timer); repo.timer = null; }
+      await renderBiliRepo('');
+      return;
+    }
+    repo.loginState = result.state === 'scanned' ? '已扫码，请在手机上确认…'
+      : result.state === 'expired' ? '二维码已过期，请刷新重扫'
+      : '还没扫到（或二维码已换新）';
+    const node = $('#repo-login-state');
+    if (node) node.textContent = repo.loginState;
+  } catch (err) { toast('检查失败：' + err.message, 'err'); }
+}
+
+function startBiliRepoPoll() {
+  const repo = biliRepoState();
+  if (repo.timer) clearInterval(repo.timer);
+  repo.timer = setInterval(async () => {
+    if (state.page !== 'bili' || !repo.qr) {
+      if (repo.timer) { clearInterval(repo.timer); repo.timer = null; }
+      return;
+    }
+    try {
+      const result = await api('/api/bili/repo/login/poll?key=' + encodeURIComponent(repo.qr.key));
+      if (result.state === 'ok') {
+        if (repo.timer) { clearInterval(repo.timer); repo.timer = null; }
+        repo.qr = null;
+        toast('B站登录成功', 'ok');
+        await renderBiliRepo('');
+        return;
+      }
+      repo.loginState = result.state === 'scanned' ? '已扫码，请在手机上确认…'
+        : result.state === 'waiting' ? '等待扫码…'
+        : result.state === 'expired' ? '二维码已过期，请刷新重扫'
+        : (result.hint || result.state || '未知状态');
+      const node = $('#repo-login-state');
+      if (node) node.textContent = repo.loginState;
+    } catch (err) {
+      repo.loginState = err.message;
+      const node = $('#repo-login-state');
+      if (node) node.textContent = repo.loginState;
+    }
+  }, 3000);
+}
+
+async function saveBiliRepoDisplay() {
+  const danmaku = !!($('#repo-show-danmaku') || {}).checked;
+  const comments = !!($('#repo-show-comments') || {}).checked;
+  try {
+    const result = await api('/api/bili/display', { method: 'POST',
+      body: { show_danmaku: danmaku, show_comments: comments } });
+    if (!result.ok) { toast(result.error || '保存失败', 'err'); return; }
+    biliRepoState().display = result.display;
+    toast('展示开关已保存', 'ok');
+    await renderBiliRepo('');
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+async function runBiliRepo(useWorker) {
+  const repo = biliRepoState();
+  try {
+    const result = useWorker
+      ? await api('/api/bili/repo/run', { method: 'POST', body: {} })
+      : await api('/api/bili/repo/feed?limit=20');
+    if (!result.ok) { toast(result.hint || result.error || '拉取失败', 'err'); return; }
+    repo.feed = result;
+    repo.feedNote = useWorker
+      ? `关键词：${(result.keywords || []).join('、') || '（无）'} · 来源 ${result.keywords_source || '—'}`
+      : `推荐流来源：${result.source || '—'}${result.fallback ? '（rcmd 不可用，已降级热门）' : ''}`;
+    renderBiliRepoPage(repo);
+    toast(useWorker ? '刷完一轮' : '推荐流已拉取', 'ok');
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+async function showBiliRepoVideo(bvid) {
+  const repo = biliRepoState();
+  if (!bvid) return;
+  try {
+    const result = await api('/api/bili/video?bvid=' + encodeURIComponent(bvid));
+    repo.video = result;
+    renderBiliRepoPage(repo);
+    if (!result.ok) {
+      toast(result.hint || result.error || '拉取失败', 'err');
+      return;
+    }
+    const panel = $('#repo-video-panel');
+    if (panel) panel.innerHTML = biliRepoVideoHtml(repo.video);
+  } catch (err) { toast(err.message, 'err'); }
+}
+
 async function renderBili() {
   $('#app').innerHTML = '<div class="empty">加载 B站…</div>';
   if (!state.token) {
@@ -3317,9 +3584,8 @@ async function renderBili() {
     else errors.push('配置: ' + err.message);
   }
   if (homeMissing) {
-    $('#app').innerHTML = card('B站 · 未安装 bili-duty 插件', biliHomeMissingHtml(homeMissing));
-    const homeRetry = $('#bili-home-retry');
-    if (homeRetry) homeRetry.onclick = () => renderBili();
+    // V1 PR9：插件缺失不再是死路——用仓库内的 agi/integrations/bili
+    renderBiliRepo(homeMissing);
     return;
   }
   const prev = state.bili || {};

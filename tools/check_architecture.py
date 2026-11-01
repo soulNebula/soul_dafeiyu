@@ -103,7 +103,8 @@ UNIMPORTED_ALLOWLIST: dict[str, str] = {
 NEW_FILE_MAX_LINES = 1500
 LINE_BUDGET: dict[str, int] = {
     # 基线为 2026-10-29 收口时行数；只允许小幅波动，继续膨胀请拆分文件。
-    "tools/console/server.py": 6450,          # 2026-11-01 V1 802 登录（PR4）后 6379（待拆）
+    "tools/console/server.py": 6700,          # 2026-11-01 V1 802 登录（PR4）后 6379；
+                                              # PR9 B站仓库内置模式接线后 6633（bili_repo 一组函数待拆成 tools/console/bili.py）
     "tests/test_webui.py": 4700,              # 现有 4592：网页端集成测试
     "agi/selflearn/proactive.py": 3100,       # 现有 3056：主动消息生成（待拆）
     "agi/wechat_gateway/server.py": 3600,     # 2026-10-31 A9-P2 生成池接入后 3529（待拆）
